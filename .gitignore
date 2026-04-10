@@ -1,0 +1,6 @@
+.claude/settings.local.json
+.claude/*.local.md
+.env
+.idea/
+.conductor/
+events.jsonl

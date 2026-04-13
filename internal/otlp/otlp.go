@@ -52,18 +52,26 @@ type Attribute struct {
 
 type AttrValue struct {
 	StringValue *string `json:"stringValue,omitempty"`
+	IntValue    *string `json:"intValue,omitempty"`
 }
 
 func StringVal(s string) AttrValue {
 	return AttrValue{StringValue: &s}
 }
 
+func IntVal(n int64) AttrValue {
+	s := strconv.FormatInt(n, 10)
+	return AttrValue{IntValue: &s}
+}
+
 // Config holds the OTLP export configuration.
 type Config struct {
-	OTLPUrl   string
-	AuthToken string
-	Dataset   string
-	AgentName string
+	OTLPUrl      string
+	AuthToken    string
+	Dataset      string
+	AgentName    string
+	OmitUserInfo bool // when true, omit user.name and user.email resource attributes
+	OmitIO       bool // when true, omit tool inputs/outputs and prompt/response content
 }
 
 // SendLog sends the event as an OTLP log record to the configured endpoint.
@@ -82,7 +90,7 @@ func SendLog(event map[string]any, cfg Config) error {
 		}
 	}
 
-	attrs := eventAttributes(event)
+	attrs := eventAttributes(event, cfg)
 
 	serviceName := "claude-code"
 	if cfg.AgentName != "" {
@@ -95,7 +103,7 @@ func SendLog(event map[string]any, cfg Config) error {
 	if cfg.AgentName != "" {
 		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})
 	}
-	resourceAttrs = append(resourceAttrs, vcsResourceAttributes()...)
+	resourceAttrs = append(resourceAttrs, vcsResourceAttributes(cfg)...)
 
 	req := ExportLogsRequest{
 		ResourceLogs: []ResourceLogs{{
@@ -163,6 +171,15 @@ var attrSkipKeys = map[string]bool{
 	"source":                true,
 }
 
+// contentKeys lists event fields that contain input/output content.
+// These are omitted when Config.OmitIO is true.
+var contentKeys = map[string]bool{
+	"tool_input":             true,
+	"tool_response":          true,
+	"last_assistant_message": true,
+	"prompt":                 true,
+}
+
 // attrKeyMap maps event field names to OTLP semantic convention attribute keys.
 var attrKeyMap = map[string]string{
 	"session_id":    "gen_ai.conversation.id",
@@ -212,10 +229,13 @@ func transformAssistantMessage(v any) string { return transformMessage("assistan
 func transformUserMessage(v any) string      { return transformMessage("user", v) }
 
 // eventAttributes converts all fields in the event map to OTLP log attributes.
-func eventAttributes(event map[string]any) []Attribute {
+func eventAttributes(event map[string]any, cfg Config) []Attribute {
 	var attrs []Attribute
 	for k, v := range event {
 		if attrSkipKeys[k] {
+			continue
+		}
+		if cfg.OmitIO && contentKeys[k] {
 			continue
 		}
 		if t, ok := attrTransformMap[k]; ok {
@@ -225,16 +245,46 @@ func eventAttributes(event map[string]any) []Attribute {
 			}
 			continue
 		}
-		s := stringifyValue(v)
-		if s != "" {
-			key := k
-			if mapped, ok := attrKeyMap[k]; ok {
-				key = mapped
-			}
-			attrs = append(attrs, Attribute{Key: key, Value: StringVal(s)})
+		key := k
+		if mapped, ok := attrKeyMap[k]; ok {
+			key = mapped
+		}
+		av := toAttrValue(v)
+		if av.StringValue != nil || av.IntValue != nil {
+			attrs = append(attrs, Attribute{Key: key, Value: av})
 		}
 	}
 	return attrs
+}
+
+// toAttrValue converts a Go value to an OTLP attribute value. Explicitly typed
+// int64 values (injected programmatically) produce IntVal; float64 from JSON
+// unmarshaling produces StringVal for backward compatibility.
+func toAttrValue(v any) AttrValue {
+	switch val := v.(type) {
+	case int64:
+		return IntVal(val)
+	case string:
+		if val == "" {
+			return AttrValue{}
+		}
+		return StringVal(val)
+	case float64:
+		if val == float64(int64(val)) {
+			return StringVal(strconv.FormatInt(int64(val), 10))
+		}
+		return StringVal(strconv.FormatFloat(val, 'f', -1, 64))
+	case bool:
+		return StringVal(strconv.FormatBool(val))
+	case nil:
+		return AttrValue{}
+	default:
+		b, err := json.Marshal(val)
+		if err != nil {
+			return StringVal(fmt.Sprintf("%v", val))
+		}
+		return StringVal(string(b))
+	}
 }
 
 func stringifyValue(v any) string {
@@ -259,7 +309,7 @@ func stringifyValue(v any) string {
 	}
 }
 
-func vcsResourceAttributes() []Attribute {
+func vcsResourceAttributes(cfg Config) []Attribute {
 	info := vcs.Detect()
 	if info == nil {
 		return nil
@@ -291,11 +341,13 @@ func vcsResourceAttributes() []Attribute {
 	if info.RefHeadType != "" {
 		attrs = append(attrs, attr("vcs.ref.head.type", info.RefHeadType))
 	}
-	if info.UserName != "" {
-		attrs = append(attrs, attr("user.name", info.UserName))
-	}
-	if info.UserEmail != "" {
-		attrs = append(attrs, attr("user.email", info.UserEmail))
+	if !cfg.OmitUserInfo {
+		if info.UserName != "" {
+			attrs = append(attrs, attr("user.name", info.UserName))
+		}
+		if info.UserEmail != "" {
+			attrs = append(attrs, attr("user.email", info.UserEmail))
+		}
 	}
 
 	return attrs

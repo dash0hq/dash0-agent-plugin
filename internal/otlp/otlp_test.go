@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -136,6 +137,30 @@ func TestSendLogReturnsErrorOnHTTPFailure(t *testing.T) {
 	assert.Error(t, SendLog(map[string]any{"event": "test"}, cfg))
 }
 
+func TestIntValAttribute(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name":            "Stop",
+		"gen_ai.usage.input_tokens":  int64(100),
+		"gen_ai.usage.output_tokens": int64(50),
+	}
+	cfg := Config{OTLPUrl: srv.URL}
+
+	require.NoError(t, SendLog(event, cfg))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertIntAttr(t, lr.Attributes, "gen_ai.usage.input_tokens", 100)
+	assertIntAttr(t, lr.Attributes, "gen_ai.usage.output_tokens", 50)
+}
+
 func TestSendLogMinimalEvent(t *testing.T) {
 	var received ExportLogsRequest
 
@@ -151,6 +176,42 @@ func TestSendLogMinimalEvent(t *testing.T) {
 
 	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
 	assertAttr(t, lr.Attributes, "foo", "bar")
+}
+
+func TestSendLogOmitIO(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name":        "PostToolUse",
+		"session_id":             "sess-123",
+		"tool_name":              "Bash",
+		"tool_input":             map[string]any{"command": "ls"},
+		"tool_response":          "file1.go\nfile2.go",
+		"last_assistant_message": "Here are the files.",
+		"prompt":                 "list files",
+	}
+	cfg := Config{OTLPUrl: srv.URL, OmitIO: true}
+
+	require.NoError(t, SendLog(event, cfg))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+
+	// Non-content attributes are still present.
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "sess-123")
+	assertAttr(t, lr.Attributes, "gen_ai.tool.name", "Bash")
+
+	// Content attributes are omitted.
+	assertNoAttr(t, lr.Attributes, "gen_ai.tool.call.arguments")
+	assertNoAttr(t, lr.Attributes, "gen_ai.tool.call.result")
+	assertNoAttr(t, lr.Attributes, "gen_ai.output.messages")
+	assertNoAttr(t, lr.Attributes, "gen_ai.input.messages")
 }
 
 func assertNoAttr(t *testing.T, attrs []Attribute, key string) {
@@ -169,6 +230,18 @@ func assertAttr(t *testing.T, attrs []Attribute, key, want string) {
 		if a.Key == key {
 			require.NotNil(t, a.Value.StringValue, "attribute %s: stringValue is nil", key)
 			assert.Equal(t, want, *a.Value.StringValue, "attribute %s", key)
+			return
+		}
+	}
+	t.Errorf("attribute %s not found", key)
+}
+
+func assertIntAttr(t *testing.T, attrs []Attribute, key string, want int64) {
+	t.Helper()
+	for _, a := range attrs {
+		if a.Key == key {
+			require.NotNil(t, a.Value.IntValue, "attribute %s: intValue is nil", key)
+			assert.Equal(t, strconv.FormatInt(want, 10), *a.Value.IntValue, "attribute %s", key)
 			return
 		}
 	}

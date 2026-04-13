@@ -84,6 +84,54 @@ func TestPreservesNestedJSON(t *testing.T) {
 	assert.Equal(t, float64(42), nested["value"])
 }
 
+func TestFindEventMatchesFromEnd(t *testing.T) {
+	dir := t.TempDir()
+
+	require.NoError(t, WriteEvent(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_use_id":     "tu_1",
+		"timestamp":       "2025-06-15T12:00:00Z",
+	}, dir))
+	require.NoError(t, WriteEvent(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_use_id":     "tu_2",
+		"timestamp":       "2025-06-15T12:01:00Z",
+	}, dir))
+
+	got, err := FindEvent(dir, func(e map[string]any) bool {
+		name, _ := e["hook_event_name"].(string)
+		id, _ := e["tool_use_id"].(string)
+		return name == "PreToolUse" && id == "tu_1"
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "tu_1", got["tool_use_id"])
+	assert.Equal(t, "2025-06-15T12:00:00Z", got["timestamp"])
+}
+
+func TestFindEventReturnsNilWhenNoMatch(t *testing.T) {
+	dir := t.TempDir()
+
+	require.NoError(t, WriteEvent(map[string]any{
+		"hook_event_name": "SessionStart",
+	}, dir))
+
+	got, err := FindEvent(dir, func(e map[string]any) bool {
+		name, _ := e["hook_event_name"].(string)
+		return name == "PreToolUse"
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestFindEventReturnsNilForMissingFile(t *testing.T) {
+	dir := t.TempDir()
+
+	got, err := FindEvent(dir, func(e map[string]any) bool { return true })
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
 // Suppress unused warning for fmt import.
 var _ = fmt.Sprintf
 

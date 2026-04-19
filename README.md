@@ -74,6 +74,7 @@ These can also be set as environment variables instead of (or in addition to) th
 | `DASH0_OMIT_USER_INFO` | Omit `user.name` and `user.email` from telemetry (`true`/`false`) |
 | `DASH0_OMIT_IO` | Omit tool inputs/outputs and prompt content (`true`/`false`) |
 | `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
+| `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
 
 ### Debug mode
 
@@ -81,6 +82,15 @@ Set `DASH0_DEBUG=true` to print all OTel payloads to stderr. Works with or witho
 
 ```bash
 DASH0_DEBUG=true claude --debug --plugin-dir /path/to/dash0-agent-plugin
+```
+
+To write debug output to a file (useful for tailing in a separate terminal without `--debug`):
+
+```bash
+DASH0_DEBUG=true DASH0_DEBUG_FILE=/tmp/dash0-debug.log claude --plugin-dir /path/to/dash0-agent-plugin
+
+# In another terminal:
+tail -f /tmp/dash0-debug.log
 ```
 
 Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering:

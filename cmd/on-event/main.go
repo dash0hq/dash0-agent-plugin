@@ -331,6 +331,7 @@ func run() error {
 		OmitUserInfo: envBool("DASH0_OMIT_USER_INFO"),
 		OmitIO:       envBool("DASH0_OMIT_IO"),
 		Debug:        envBool("DASH0_DEBUG"),
+		DebugFile:    os.Getenv("DASH0_DEBUG_FILE"),
 	}
 	if err := otlp.SendLog(event, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: otlp export: %v\n", err)

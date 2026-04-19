@@ -60,3 +60,32 @@ agent_name: "my-coding-agent"
 | `auth_token` | Dash0 authentication token | Yes |
 | `dataset` | Dash0 dataset to send data to | No |
 | `agent_name` | Name for this agent, used as `service.name` and `gen_ai.agent.name` resource attributes | No (defaults to `claude-code`) |
+
+### Environment variables
+
+These can also be set as environment variables instead of (or in addition to) the configuration file:
+
+| Variable | Description |
+|---|---|
+| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL |
+| `DASH0_AUTH_TOKEN` | Dash0 authentication token |
+| `DASH0_DATASET` | Dash0 dataset |
+| `DASH0_AGENT_NAME` | Agent name |
+| `DASH0_OMIT_USER_INFO` | Omit `user.name` and `user.email` from telemetry (`true`/`false`) |
+| `DASH0_OMIT_IO` | Omit tool inputs/outputs and prompt content (`true`/`false`) |
+| `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
+
+### Debug mode
+
+Set `DASH0_DEBUG=true` to print all OTel payloads to stderr. Works with or without an OTLP endpoint configured — useful for verifying what telemetry the plugin produces.
+
+```bash
+DASH0_DEBUG=true claude --debug --plugin-dir /path/to/dash0-agent-plugin
+```
+
+Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering:
+
+```
+[dash0:trace] {"resourceSpans":[...]}
+[dash0:log]   {"resourceLogs":[...]}
+```

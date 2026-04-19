@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -72,12 +73,13 @@ type Config struct {
 	AgentName    string
 	OmitUserInfo bool // when true, omit user.name and user.email resource attributes
 	OmitIO       bool // when true, omit tool inputs/outputs and prompt/response content
+	Debug        bool // when true, print OTel payloads to stderr
 }
 
 // SendLog sends the event as an OTLP log record to the configured endpoint.
-// Returns nil without sending if OTLPUrl is empty.
+// Returns nil without sending if OTLPUrl is empty and debug is off.
 func SendLog(event map[string]any, cfg Config) error {
-	if cfg.OTLPUrl == "" {
+	if cfg.OTLPUrl == "" && !cfg.Debug {
 		return nil
 	}
 
@@ -129,6 +131,14 @@ func SendLog(event map[string]any, cfg Config) error {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("marshalling OTLP request: %w", err)
+	}
+
+	if cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[dash0:log] %s\n", payload)
+	}
+
+	if cfg.OTLPUrl == "" {
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

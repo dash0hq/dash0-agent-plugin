@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 )
@@ -149,7 +148,7 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 	}
 
 	if cfg.Debug {
-		fmt.Fprintf(os.Stderr, "[dash0:trace] %s\n", payload)
+		debugLog(cfg, "trace", payload)
 	}
 
 	if cfg.OTLPUrl == "" {

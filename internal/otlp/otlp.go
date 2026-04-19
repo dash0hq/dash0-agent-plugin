@@ -56,6 +56,20 @@ type AttrValue struct {
 	IntValue    *string `json:"intValue,omitempty"`
 }
 
+// debugLog writes a debug line to stderr and optionally to a file.
+func debugLog(cfg Config, prefix string, payload []byte) {
+	line := fmt.Sprintf("[dash0:%s] %s\n", prefix, payload)
+	fmt.Fprint(os.Stderr, line)
+	if cfg.DebugFile != "" {
+		f, err := os.OpenFile(cfg.DebugFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return
+		}
+		f.WriteString(line)
+		f.Close()
+	}
+}
+
 func StringVal(s string) AttrValue {
 	return AttrValue{StringValue: &s}
 }
@@ -71,9 +85,10 @@ type Config struct {
 	AuthToken    string
 	Dataset      string
 	AgentName    string
-	OmitUserInfo bool // when true, omit user.name and user.email resource attributes
-	OmitIO       bool // when true, omit tool inputs/outputs and prompt/response content
-	Debug        bool // when true, print OTel payloads to stderr
+	OmitUserInfo bool   // when true, omit user.name and user.email resource attributes
+	OmitIO       bool   // when true, omit tool inputs/outputs and prompt/response content
+	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
+	DebugFile    string // optional file path to append debug output to
 }
 
 // SendLog sends the event as an OTLP log record to the configured endpoint.
@@ -134,7 +149,7 @@ func SendLog(event map[string]any, cfg Config) error {
 	}
 
 	if cfg.Debug {
-		fmt.Fprintf(os.Stderr, "[dash0:log] %s\n", payload)
+		debugLog(cfg, "log", payload)
 	}
 
 	if cfg.OTLPUrl == "" {

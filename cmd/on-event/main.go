@@ -330,6 +330,7 @@ func run() error {
 		AgentName:    os.Getenv("DASH0_AGENT_NAME"),
 		OmitUserInfo: envBool("DASH0_OMIT_USER_INFO"),
 		OmitIO:       envBool("DASH0_OMIT_IO"),
+		Debug:        envBool("DASH0_DEBUG"),
 	}
 	if err := otlp.SendLog(event, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: otlp export: %v\n", err)

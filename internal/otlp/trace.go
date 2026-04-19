@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 )
@@ -108,9 +109,9 @@ func GenerateSpanID() (string, error) {
 }
 
 // SendTrace sends a single span as an OTLP trace to the configured endpoint.
-// Returns nil without sending if OTLPUrl is empty.
+// Returns nil without sending if OTLPUrl is empty and debug is off.
 func SendTrace(span Span, event map[string]any, cfg Config) error {
-	if cfg.OTLPUrl == "" {
+	if cfg.OTLPUrl == "" && !cfg.Debug {
 		return nil
 	}
 
@@ -145,6 +146,14 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("marshalling OTLP traces request: %w", err)
+	}
+
+	if cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[dash0:trace] %s\n", payload)
+	}
+
+	if cfg.OTLPUrl == "" {
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

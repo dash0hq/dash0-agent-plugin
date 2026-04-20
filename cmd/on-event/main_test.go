@@ -19,6 +19,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// sessionPath returns the path to a file inside the session-scoped directory.
+func sessionPath(dataDir, sessionID, file string) string {
+	return filepath.Join(dataDir, sessionID, file)
+}
+
 func TestIntegrationWritesAndTimestamps(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
@@ -27,7 +32,7 @@ func TestIntegrationWritesAndTimestamps(t *testing.T) {
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"abc123"}`)
 	after := time.Now().UTC()
 
-	lines := readLines(t, filepath.Join(dataDir, "events.jsonl"))
+	lines := readLines(t, sessionPath(dataDir, "abc123", "events.jsonl"))
 	require.Len(t, lines, 1)
 
 	var got map[string]any
@@ -43,13 +48,13 @@ func TestIntegrationWritesAndTimestamps(t *testing.T) {
 	assert.WithinRange(t, parsed, before.Truncate(time.Millisecond), after.Add(time.Millisecond))
 }
 
-func TestIntegrationCreatesDataDirectory(t *testing.T) {
+func TestIntegrationCreatesSessionDirectory(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "nested", "path")
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 
-	feed(t, `{"event":"test"}`)
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-create"}`)
 
-	assert.FileExists(t, filepath.Join(dataDir, "events.jsonl"))
+	assert.FileExists(t, sessionPath(dataDir, "sess-create", "events.jsonl"))
 }
 
 func TestIntegrationFailsWithoutPluginData(t *testing.T) {
@@ -240,7 +245,7 @@ func TestSubAgentToolSpansNestUnderAgentSpan(t *testing.T) {
 	assert.Equal(t, expectedParent, agentToolSpan.SpanID)
 
 	// Agent tool span's parent is the chat span (from trace context).
-	ctx, err := otlp.LoadTraceContext(dataDir)
+	ctx, err := otlp.LoadTraceContext(filepath.Join(dataDir, "sess-3"))
 	require.NoError(t, err)
 	require.NotNil(t, ctx)
 	assert.Equal(t, ctx.SpanID, agentToolSpan.ParentSpanID)
@@ -257,8 +262,8 @@ func TestSessionStartDoesNotEmitSpan(t *testing.T) {
 	// No span emitted for SessionStart.
 	assert.Empty(t, *spans)
 
-	// But model is saved to trace context.
-	ctx, err := otlp.LoadTraceContext(dataDir)
+	// But model is saved to trace context in the session directory.
+	ctx, err := otlp.LoadTraceContext(filepath.Join(dataDir, "sess-no-span"))
 	require.NoError(t, err)
 	require.NotNil(t, ctx)
 	assert.Equal(t, "claude-sonnet-4-20250514", ctx.Model)
@@ -285,32 +290,135 @@ func TestNoLogsEmitted(t *testing.T) {
 	assert.Equal(t, 0, logRequests, "no log records should be sent")
 }
 
-func TestMissingSessionIDUsesRandomTraceID(t *testing.T) {
+func TestMissingSessionIDDoesNotCrash(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+
+	// Events without session_id should not crash. A random session_id is
+	// generated, so the event is written to a random session directory.
+	feed(t, `{"hook_event_name":"SessionStart","model":"opus"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu-1"}`)
+
+	// Verify session directories were created (with random names).
+	entries, err := os.ReadDir(dataDir)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(entries), 1, "at least one session directory should exist")
+}
+
+func TestMissingSessionIDSetsWarningAttribute(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+
+	// Full turn without session_id — use the same random ID for all events
+	// by feeding SessionStart first (which sets trace context in a random dir),
+	// then capture that dir for subsequent events.
+	// In practice this can't produce a span since each event gets a different
+	// random session_id. But we verify the event log has the warning.
+	feed(t, `{"hook_event_name":"SessionStart","model":"opus"}`)
+
+	entries, err := os.ReadDir(dataDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// Read the event log from the random session directory.
+	eventsFile := filepath.Join(dataDir, entries[0].Name(), "events.jsonl")
+	lines := readLines(t, eventsFile)
+	require.Len(t, lines, 1)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &got))
+	assert.Equal(t, "session_id was missing from hook payload", got["dash0.warning"])
+}
+
+func TestConcurrentSessionsAreIsolated(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, mu := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	// Session A
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-A","model":"opus"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-A","prompt":"task A"}`)
+	// Session B starts while A is still running
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-B","model":"sonnet"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-B","prompt":"task B"}`)
+	// Tool calls interleaved
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-A","tool_name":"Read","tool_use_id":"tu-A1"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-B","tool_name":"Bash","tool_use_id":"tu-B1"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-B","tool_name":"Bash","tool_use_id":"tu-B1","tool_response":"ok-B"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-A","tool_name":"Read","tool_use_id":"tu-A1","tool_response":"ok-A"}`)
+	// Both stop
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-A"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-B"}`)
+
+	mu.Lock()
+	allSpans := make([]otlp.Span, len(*spans))
+	copy(allSpans, *spans)
+	mu.Unlock()
+
+	// Should have 4 spans: 2 tool + 2 chat
+	require.Len(t, allSpans, 4)
+
+	// Separate spans by conversation ID.
+	var spansA, spansB []otlp.Span
+	for _, s := range allSpans {
+		for _, a := range s.Attributes {
+			if a.Key == "gen_ai.conversation.id" {
+				if *a.Value.StringValue == "sess-A" {
+					spansA = append(spansA, s)
+				} else if *a.Value.StringValue == "sess-B" {
+					spansB = append(spansB, s)
+				}
+			}
+		}
+	}
+
+	require.Len(t, spansA, 2, "session A should have 2 spans (tool + chat)")
+	require.Len(t, spansB, 2, "session B should have 2 spans (tool + chat)")
+
+	// Spans within each session share a trace ID.
+	assert.Equal(t, spansA[0].TraceID, spansA[1].TraceID, "session A spans should share trace ID")
+	assert.Equal(t, spansB[0].TraceID, spansB[1].TraceID, "session B spans should share trace ID")
+
+	// Sessions have different trace IDs.
+	assert.NotEqual(t, spansA[0].TraceID, spansB[0].TraceID, "sessions should have different trace IDs")
+
+	// Verify separate session directories exist.
+	assert.DirExists(t, filepath.Join(dataDir, "sess-A"))
+	assert.DirExists(t, filepath.Join(dataDir, "sess-B"))
+}
+
+func TestSessionEndCleansUpDirectory(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-cleanup","model":"opus"}`)
+	assert.DirExists(t, filepath.Join(dataDir, "sess-cleanup"))
+
+	feed(t, `{"hook_event_name":"SessionEnd","session_id":"sess-cleanup"}`)
+	assert.NoDirExists(t, filepath.Join(dataDir, "sess-cleanup"))
+}
+
+func TestResumedSessionPicksUpExistingState(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
 
-	// UserPromptSubmit + Stop without session_id.
-	feed(t, `{"hook_event_name":"UserPromptSubmit","prompt":"hello"}`)
-	feed(t, `{"hook_event_name":"Stop"}`)
+	// First invocation — SessionStart saves model.
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-resume","model":"claude-opus-4-6"}`)
 
-	// Chat span should still be emitted.
-	require.Len(t, *spans, 1)
+	// Second invocation (resumed) — UserPromptSubmit should pick up model.
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-resume","prompt":"continue work"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-resume","tool_name":"Bash","tool_use_id":"tu-r1"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-resume","tool_name":"Bash","tool_use_id":"tu-r1","tool_response":"ok"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-resume"}`)
 
-	span := (*spans)[0]
-	assert.NotEmpty(t, span.TraceID)
-	assert.Len(t, span.TraceID, 32)
+	chatSpan := findSpan(*spans, "chat")
+	require.NotNil(t, chatSpan)
 
-	// Should have the warning attribute.
-	found := false
-	for _, a := range span.Attributes {
-		if a.Key == "dash0.warning" {
-			found = true
-			assert.Equal(t, "session_id was missing from hook payload", *a.Value.StringValue)
-		}
-	}
-	assert.True(t, found, "dash0.warning attribute should be present")
+	// Chat span should have the model from SessionStart.
+	assert.Contains(t, chatSpan.Name, "claude-opus-4-6")
 }
 
 func TestEnvBool(t *testing.T) {
@@ -373,7 +481,7 @@ func TestUserPromptSubmitStampsChatSpanID(t *testing.T) {
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-stamp","model":"opus"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-stamp","prompt":"hello"}`)
 
-	lines := readLines(t, filepath.Join(dataDir, "events.jsonl"))
+	lines := readLines(t, sessionPath(dataDir, "sess-stamp", "events.jsonl"))
 	require.Len(t, lines, 2) // SessionStart + UserPromptSubmit
 
 	var got map[string]any
@@ -383,8 +491,8 @@ func TestUserPromptSubmitStampsChatSpanID(t *testing.T) {
 	require.True(t, ok, "chat_span_id should be stamped on event")
 	assert.Len(t, chatSpanID, 16) // 8 bytes = 16 hex chars
 
-	// Trace context should also be saved.
-	ctx, err := otlp.LoadTraceContext(dataDir)
+	// Trace context should also be saved in the session directory.
+	ctx, err := otlp.LoadTraceContext(filepath.Join(dataDir, "sess-stamp"))
 	require.NoError(t, err)
 	require.NotNil(t, ctx)
 	assert.Equal(t, chatSpanID, ctx.SpanID)

@@ -44,6 +44,8 @@ type LogRecord struct {
 	SeverityText   string      `json:"severityText"`
 	Body           AttrValue   `json:"body"`
 	Attributes     []Attribute `json:"attributes"`
+	TraceID        string      `json:"traceId,omitempty"`
+	SpanID         string      `json:"spanId,omitempty"`
 }
 
 type Attribute struct {
@@ -122,6 +124,13 @@ func SendLog(event map[string]any, cfg Config) error {
 	}
 	resourceAttrs = append(resourceAttrs, vcsResourceAttributes(cfg)...)
 
+	// Correlate log record with the session trace.
+	var traceID, spanID string
+	if sessionID, _ := event["session_id"].(string); sessionID != "" {
+		traceID = TraceIDFromSessionID(sessionID)
+		spanID = SpanIDFromSessionID(sessionID)
+	}
+
 	req := ExportLogsRequest{
 		ResourceLogs: []ResourceLogs{{
 			Resource: Resource{
@@ -138,6 +147,8 @@ func SendLog(event map[string]any, cfg Config) error {
 					SeverityText:   "INFO",
 					Body:           StringVal(hookEventName),
 					Attributes:     attrs,
+					TraceID:        traceID,
+					SpanID:         spanID,
 				}},
 			}},
 		}},

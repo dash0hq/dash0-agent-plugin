@@ -156,7 +156,7 @@ func findSpan(spans []otlp.Span, namePrefix string) *otlp.Span {
 	return nil
 }
 
-func TestToolSpansNestedUnderChatSpan(t *testing.T) {
+func TestChatSpanIsRootWithToolChildren(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
@@ -168,45 +168,47 @@ func TestToolSpansNestedUnderChatSpan(t *testing.T) {
 	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-1","tool_name":"Bash","tool_use_id":"tu1","tool_response":"ok"}`)
 	feed(t, `{"hook_event_name":"Stop","session_id":"sess-1","model":"claude-sonnet-4-20250514"}`)
 
-	require.Len(t, *spans, 3) // session + tool + chat
+	require.Len(t, *spans, 2) // chat + tool (no session span)
 
-	sessionSpan := findSpan(*spans, "session_start")
 	toolSpan := findSpan(*spans, "execute_tool")
 	chatSpan := findSpan(*spans, "chat")
 
-	require.NotNil(t, sessionSpan)
 	require.NotNil(t, toolSpan)
 	require.NotNil(t, chatSpan)
 
-	// Chat span is child of session.
-	assert.Equal(t, sessionSpan.SpanID, chatSpan.ParentSpanID)
+	// Chat span is root (no parent).
+	assert.Empty(t, chatSpan.ParentSpanID)
 	// Tool span is child of chat span.
 	assert.Equal(t, chatSpan.SpanID, toolSpan.ParentSpanID)
-	// Tool span is NOT child of session directly.
-	assert.NotEqual(t, sessionSpan.SpanID, toolSpan.ParentSpanID)
+	// Both share the same trace ID.
+	assert.Equal(t, chatSpan.TraceID, toolSpan.TraceID)
+	// Trace ID is random (not derived from session_id).
+	assert.NotEqual(t, otlp.TraceIDFromSessionID("sess-1"), chatSpan.TraceID)
 }
 
-func TestToolSpansFallBackToSessionWithoutUserPromptSubmit(t *testing.T) {
+func TestEachTurnGetsNewTraceID(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
 
-	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-2","model":"claude-sonnet-4-20250514"}`)
-	// No UserPromptSubmit — simulate missing hook event.
-	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-2","tool_name":"Read","tool_use_id":"tu2"}`)
-	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-2","tool_name":"Read","tool_use_id":"tu2","tool_response":"ok"}`)
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-multi","model":"claude-sonnet-4-20250514"}`)
 
-	require.Len(t, *spans, 2) // session + tool
+	// Turn 1
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-multi","prompt":"first"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-multi"}`)
 
-	sessionSpan := findSpan(*spans, "session_start")
-	toolSpan := findSpan(*spans, "execute_tool")
+	// Turn 2
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-multi","prompt":"second"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-multi"}`)
 
-	require.NotNil(t, sessionSpan)
-	require.NotNil(t, toolSpan)
+	require.Len(t, *spans, 2) // two chat spans
 
-	// Without a chat span ID, tool falls back to session as parent.
-	assert.Equal(t, sessionSpan.SpanID, toolSpan.ParentSpanID)
+	// Each turn has a different trace ID.
+	assert.NotEqual(t, (*spans)[0].TraceID, (*spans)[1].TraceID)
+	// Both are roots.
+	assert.Empty(t, (*spans)[0].ParentSpanID)
+	assert.Empty(t, (*spans)[1].ParentSpanID)
 }
 
 func TestSubAgentToolSpansNestUnderAgentSpan(t *testing.T) {
@@ -224,7 +226,7 @@ func TestSubAgentToolSpansNestUnderAgentSpan(t *testing.T) {
 	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-3","tool_name":"Bash","tool_use_id":"tu-sub","agent_id":"agent-42"}`)
 	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-3","tool_name":"Bash","tool_use_id":"tu-sub","tool_response":"ok","agent_id":"agent-42"}`)
 
-	require.Len(t, *spans, 3) // session + Agent tool + sub-agent Bash tool
+	require.Len(t, *spans, 2) // Agent tool + sub-agent Bash tool
 
 	agentToolSpan := findSpan(*spans, "execute_tool Agent")
 	subToolSpan := findSpan(*spans, "execute_tool Bash")
@@ -237,56 +239,78 @@ func TestSubAgentToolSpansNestUnderAgentSpan(t *testing.T) {
 	assert.Equal(t, expectedParent, subToolSpan.ParentSpanID)
 	assert.Equal(t, expectedParent, agentToolSpan.SpanID)
 
-	// Verify Agent tool span parent is the chat span (not session directly).
-	sessionSpanID := otlp.SpanIDFromSessionID("sess-3")
-	assert.NotEqual(t, sessionSpanID, agentToolSpan.ParentSpanID)
-	assert.NotEmpty(t, agentToolSpan.ParentSpanID)
+	// Agent tool span's parent is the chat span (from trace context).
+	ctx, err := otlp.LoadTraceContext(dataDir)
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	assert.Equal(t, ctx.SpanID, agentToolSpan.ParentSpanID)
 }
 
-func TestSessionStartMidTurnDoesNotBreakNesting(t *testing.T) {
+func TestSessionStartDoesNotEmitSpan(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
 
-	// Reproduce the real-world sequence: SessionStart fires mid-turn
-	// (e.g. session restart or sub-agent lifecycle). Because chat_span_id
-	// lives in the event log (not trace_context.json), the SessionStart
-	// cannot stomp on it.
-	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-mid","model":"claude-sonnet-4-20250514"}`)
-	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-mid","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-no-span","model":"claude-sonnet-4-20250514"}`)
 
-	// Tool call before mid-turn SessionStart.
-	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-mid","tool_name":"Bash","tool_use_id":"tu-early"}`)
-	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-mid","tool_name":"Bash","tool_use_id":"tu-early","tool_response":"ok"}`)
+	// No span emitted for SessionStart.
+	assert.Empty(t, *spans)
 
-	// Another SessionStart mid-turn — must NOT break nesting.
-	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-mid","model":"claude-sonnet-4-20250514"}`)
+	// But model is saved to trace context.
+	ctx, err := otlp.LoadTraceContext(dataDir)
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	assert.Equal(t, "claude-sonnet-4-20250514", ctx.Model)
+}
 
-	// Tool call after the mid-turn SessionStart.
-	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-mid","tool_name":"Read","tool_use_id":"tu-late"}`)
-	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-mid","tool_name":"Read","tool_use_id":"tu-late","tool_response":"ok"}`)
-	feed(t, `{"hook_event_name":"Stop","session_id":"sess-mid","model":"claude-sonnet-4-20250514"}`)
+func TestNoLogsEmitted(t *testing.T) {
+	var logRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/logs" {
+			logRequests++
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 
-	// session(2) + Bash + Read + chat = 5 spans
-	require.Len(t, *spans, 5)
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
 
-	chatSpan := findSpan(*spans, "chat")
-	require.NotNil(t, chatSpan)
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-nolog","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-nolog","prompt":"hi"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-nolog"}`)
 
-	// Both tool spans must be children of the same chat span.
-	var toolSpans []otlp.Span
-	for _, s := range *spans {
-		if strings.HasPrefix(s.Name, "execute_tool") {
-			toolSpans = append(toolSpans, s)
+	assert.Equal(t, 0, logRequests, "no log records should be sent")
+}
+
+func TestMissingSessionIDUsesRandomTraceID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	// UserPromptSubmit + Stop without session_id.
+	feed(t, `{"hook_event_name":"UserPromptSubmit","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"Stop"}`)
+
+	// Chat span should still be emitted.
+	require.Len(t, *spans, 1)
+
+	span := (*spans)[0]
+	assert.NotEmpty(t, span.TraceID)
+	assert.Len(t, span.TraceID, 32)
+
+	// Should have the warning attribute.
+	found := false
+	for _, a := range span.Attributes {
+		if a.Key == "dash0.warning" {
+			found = true
+			assert.Equal(t, "session_id was missing from hook payload", *a.Value.StringValue)
 		}
 	}
-	require.Len(t, toolSpans, 2)
-
-	for _, ts := range toolSpans {
-		assert.Equal(t, chatSpan.SpanID, ts.ParentSpanID,
-			"tool span %q should be child of chat span", ts.Name)
-	}
+	assert.True(t, found, "dash0.warning attribute should be present")
 }
 
 func TestEnvBool(t *testing.T) {
@@ -346,51 +370,25 @@ func TestUserPromptSubmitStampsChatSpanID(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-stamp","model":"opus"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-stamp","prompt":"hello"}`)
 
 	lines := readLines(t, filepath.Join(dataDir, "events.jsonl"))
-	require.Len(t, lines, 1)
+	require.Len(t, lines, 2) // SessionStart + UserPromptSubmit
 
 	var got map[string]any
-	require.NoError(t, json.Unmarshal([]byte(lines[0]), &got))
+	require.NoError(t, json.Unmarshal([]byte(lines[1]), &got))
 
 	chatSpanID, ok := got["chat_span_id"].(string)
 	require.True(t, ok, "chat_span_id should be stamped on event")
 	assert.Len(t, chatSpanID, 16) // 8 bytes = 16 hex chars
-}
 
-func TestUserPromptSubmitSubAgentDoesNotStampChatSpanID(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
-
-	// Sub-agent UserPromptSubmit (if it ever fires) should NOT get a chat_span_id.
-	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-sub","prompt":"hi","agent_id":"agent-99"}`)
-
-	lines := readLines(t, filepath.Join(dataDir, "events.jsonl"))
-	require.Len(t, lines, 1)
-
-	var got map[string]any
-	require.NoError(t, json.Unmarshal([]byte(lines[0]), &got))
-
-	_, hasChatSpanID := got["chat_span_id"]
-	assert.False(t, hasChatSpanID, "sub-agent event should not get chat_span_id")
-}
-
-func TestLookupChatSpanID(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
-
-	// No events — returns empty.
-	assert.Empty(t, lookupChatSpanID(dataDir))
-
-	// After a main-agent UserPromptSubmit — returns the stamped ID.
-	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-lu","prompt":"hello"}`)
-	id := lookupChatSpanID(dataDir)
-	assert.Len(t, id, 16)
-
-	// Survives a SessionStart (event log is append-only, not overwritten).
-	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-lu"}`)
-	assert.Equal(t, id, lookupChatSpanID(dataDir))
+	// Trace context should also be saved.
+	ctx, err := otlp.LoadTraceContext(dataDir)
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	assert.Equal(t, chatSpanID, ctx.SpanID)
+	assert.Len(t, ctx.TraceID, 32)
 }
 
 func assertIntAttr(t *testing.T, attrs []otlp.Attribute, key string, want int64) {
@@ -436,31 +434,6 @@ func TestTokenUsageOnLLMSpan(t *testing.T) {
 	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.cache_read_input_tokens", 300)
 }
 
-func TestTokenUsageAggregatesMultipleIterations(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
-	srv, spans, _ := collectingServer(t)
-	t.Setenv("DASH0_OTLP_URL", srv.URL)
-
-	// Transcript with two iterations (agentic loop).
-	transcriptPath := filepath.Join(dataDir, "transcript.jsonl")
-	writeTranscript(t, transcriptPath, []string{
-		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"do it"}]}}`,
-		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"thinking"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
-		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":200,"output_tokens":80,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
-	})
-
-	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-agg","model":"claude-sonnet-4-20250514"}`)
-	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-agg","prompt":"do it"}`)
-	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-agg","model":"claude-sonnet-4-20250514","transcript_path":"%s"}`, transcriptPath))
-
-	chatSpan := findSpan(*spans, "chat")
-	require.NotNil(t, chatSpan)
-
-	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.input_tokens", 300)
-	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.output_tokens", 130)
-}
-
 func TestTokenUsageMissingTranscriptDoesNotBreakSpan(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
@@ -474,4 +447,31 @@ func TestTokenUsageMissingTranscriptDoesNotBreakSpan(t *testing.T) {
 	// Span should still be created despite transcript read failure.
 	chatSpan := findSpan(*spans, "chat")
 	require.NotNil(t, chatSpan)
+}
+
+func TestConversationIDOnAllSpans(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-conv","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-conv","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-conv","tool_name":"Bash","tool_use_id":"tu1"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-conv","tool_name":"Bash","tool_use_id":"tu1","tool_response":"ok"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-conv"}`)
+
+	require.Len(t, *spans, 2)
+
+	// All spans carry gen_ai.conversation.id for session grouping.
+	for _, span := range *spans {
+		found := false
+		for _, a := range span.Attributes {
+			if a.Key == "gen_ai.conversation.id" {
+				found = true
+				assert.Equal(t, "sess-conv", *a.Value.StringValue)
+			}
+		}
+		assert.True(t, found, "span %q should have gen_ai.conversation.id", span.Name)
+	}
 }

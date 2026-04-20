@@ -67,6 +67,48 @@ func TestIntegrationFailsOnInvalidJSON(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestMissingSessionIDUsesRandomTraceID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	// Event without session_id.
+	feed(t, `{"hook_event_name":"SessionStart","model":"claude-sonnet-4-20250514"}`)
+
+	// Span should still be emitted (not skipped).
+	require.Len(t, *spans, 1)
+
+	span := (*spans)[0]
+	// Should have a non-empty trace ID (random, not hash of empty string).
+	assert.NotEmpty(t, span.TraceID)
+	assert.Len(t, span.TraceID, 32) // 16 bytes hex
+
+	// Should have the warning attribute.
+	found := false
+	for _, a := range span.Attributes {
+		if a.Key == "dash0.warning" {
+			found = true
+			assert.Equal(t, "session_id was missing from hook payload", *a.Value.StringValue)
+		}
+	}
+	assert.True(t, found, "dash0.warning attribute should be present")
+}
+
+func TestTwoMissingSessionIDEventsGetDifferentTraceIDs(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"SessionStart","model":"claude-sonnet-4-20250514"}`)
+
+	require.Len(t, *spans, 2)
+	// Each should get a different trace ID (not merging).
+	assert.NotEqual(t, (*spans)[0].TraceID, (*spans)[1].TraceID)
+}
+
 func TestExtractAgentIDFromResponseString(t *testing.T) {
 	resp := `{"agentId":"a13ff1c4e70c41cd1","agentType":"general-purpose","content":[]}`
 	assert.Equal(t, "a13ff1c4e70c41cd1", extractAgentIDFromResponse(resp))

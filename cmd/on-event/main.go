@@ -323,6 +323,20 @@ func run() error {
 		return err
 	}
 
+	// If session_id is missing, generate a random one so spans don't all
+	// merge into the same trace. Log a warning so the user knows.
+	sessionID, _ := event["session_id"].(string)
+	if sessionID == "" {
+		fmt.Fprintf(os.Stderr, "on-event: session_id missing in %s event, using random trace ID\n", hookEvent)
+		randID, err := otlp.GenerateTraceID()
+		if err != nil {
+			return err
+		}
+		// Use first 16 chars as a synthetic session_id for this event.
+		event["session_id"] = randID[:16]
+		event["dash0.warning"] = "session_id was missing from hook payload"
+	}
+
 	cfg := otlp.Config{
 		OTLPUrl:      os.Getenv("DASH0_OTLP_URL"),
 		AuthToken:    os.Getenv("DASH0_AUTH_TOKEN"),

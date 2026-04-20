@@ -70,6 +70,10 @@ func TestSendLog(t *testing.T) {
 	require.NotNil(t, lr.Body.StringValue)
 	assert.Equal(t, "PostToolUse", *lr.Body.StringValue)
 
+	// Log record is correlated with the session trace.
+	assert.Equal(t, TraceIDFromSessionID("sess-123"), lr.TraceID)
+	assert.Equal(t, SpanIDFromSessionID("sess-123"), lr.SpanID)
+
 	// Skipped fields should not appear as attributes.
 	assertNoAttr(t, lr.Attributes, "hook_event_name")
 	assertNoAttr(t, lr.Attributes, "timestamp")
@@ -84,6 +88,29 @@ func TestSendLog(t *testing.T) {
 	assertNoAttr(t, lr.Attributes, "last_assistant_message")
 	assertAttr(t, lr.Attributes, "gen_ai.output.messages",
 		`[{"parts":[{"content":"Here are the files.","type":"text"}],"role":"assistant"}]`)
+}
+
+func TestSendLogNoSessionIDOmitsTraceCorrelation(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "Notification",
+		"message":         "hello",
+	}
+	cfg := Config{OTLPUrl: srv.URL}
+
+	require.NoError(t, SendLog(event, cfg))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assert.Empty(t, lr.TraceID)
+	assert.Empty(t, lr.SpanID)
 }
 
 func TestSendLogWithAgentName(t *testing.T) {

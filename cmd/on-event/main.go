@@ -21,64 +21,19 @@ func main() {
 	}
 }
 
-func sendSessionTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir string) error {
-	sessionID, _ := event["session_id"].(string)
-	model, _ := event["model"].(string)
-
-	var traceID, spanID string
-	if sessionID != "" {
-		traceID = otlp.TraceIDFromSessionID(sessionID)
-		spanID = otlp.SpanIDFromSessionID(sessionID)
-	} else {
-		var err error
-		traceID, err = otlp.GenerateTraceID()
-		if err != nil {
-			return err
-		}
-		spanID, err = otlp.GenerateSpanID()
-		if err != nil {
-			return err
-		}
-	}
-
-	span := otlp.NewSessionSpan(traceID, spanID, ts, event, cfg)
-	if err := otlp.SendTrace(span, event, cfg); err != nil {
-		return err
-	}
-
-	return otlp.SaveTraceContext(otlp.TraceContext{
-		TraceID:   traceID,
-		SpanID:    spanID,
-		SessionID: sessionID,
-		Model:     model,
-	}, dataDir)
-}
-
 func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir string, failed bool) error {
-	sessionID, _ := event["session_id"].(string)
-
-	var traceID, parentSpanID, model string
-	if sessionID != "" {
-		traceID = otlp.TraceIDFromSessionID(sessionID)
-		parentSpanID = otlp.SpanIDFromSessionID(sessionID)
-	}
-
-	// Always try to load trace context for model and as fallback for IDs.
+	// Load trace context (trace_id, chat_span_id, model) from current turn.
 	ctx, err := otlp.LoadTraceContext(dataDir)
-	if err == nil && ctx != nil {
-		model = ctx.Model
-		if traceID == "" {
-			traceID = ctx.TraceID
-			parentSpanID = ctx.SpanID
-		}
-	}
-	if traceID == "" {
+	if err != nil || ctx == nil {
 		return fmt.Errorf("no trace context available for tool span")
 	}
 
-	// Inject model from session context if the event doesn't have one.
-	if _, hasModel := event["model"]; !hasModel && model != "" {
-		event["model"] = model
+	traceID := ctx.TraceID
+	parentSpanID := ctx.SpanID // chat span is the default parent
+
+	// Inject model from context if the event doesn't have one.
+	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
+		event["model"] = ctx.Model
 	}
 
 	// Look up matching PreToolUse event to get the start timestamp.
@@ -112,14 +67,12 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 			// Set the spawned agent's ID as a span attribute.
 			event["agent_id"] = resultAgentID
 		} else {
-			var err error
 			spanID, err = otlp.GenerateSpanID()
 			if err != nil {
 				return err
 			}
 		}
 	} else {
-		var err error
 		spanID, err = otlp.GenerateSpanID()
 		if err != nil {
 			return err
@@ -130,43 +83,26 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		// This tool call was made by a sub-agent: nest it under the Agent
 		// tool call span.
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
-	} else if agentID == "" {
-		// Main-agent tool call: nest under the chat span whose ID was
-		// stamped onto the most recent UserPromptSubmit event.
-		if chatID := lookupChatSpanID(dataDir); chatID != "" {
-			parentSpanID = chatID
-		}
 	}
+	// Main-agent tool calls: parentSpanID stays as chat span (from context).
 
 	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
 }
 
 func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir string, failed bool) error {
-	sessionID, _ := event["session_id"].(string)
-
-	var traceID, parentSpanID, model string
-	if sessionID != "" {
-		traceID = otlp.TraceIDFromSessionID(sessionID)
-		parentSpanID = otlp.SpanIDFromSessionID(sessionID)
-	}
-
-	// Always try to load trace context for model and as fallback for IDs.
+	// Load trace context (trace_id, chat_span_id, model) from current turn.
 	ctx, err := otlp.LoadTraceContext(dataDir)
-	if err == nil && ctx != nil {
-		model = ctx.Model
-		if traceID == "" {
-			traceID = ctx.TraceID
-			parentSpanID = ctx.SpanID
-		}
-	}
-	if traceID == "" {
+	if err != nil || ctx == nil {
 		return fmt.Errorf("no trace context available for LLM span")
 	}
 
-	// Inject model from session context if the event doesn't have one.
-	if _, hasModel := event["model"]; !hasModel && model != "" {
-		event["model"] = model
+	traceID := ctx.TraceID
+	spanID := ctx.SpanID // chat span ID (stamped at UserPromptSubmit)
+
+	// Inject model from context if the event doesn't have one.
+	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
+		event["model"] = ctx.Model
 	}
 
 	// Look up matching UserPromptSubmit event to get the start timestamp.
@@ -192,25 +128,9 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	// If this LLM invocation belongs to a sub-agent, nest it under the
 	// Agent tool call span.
 	agentID, _ := event["agent_id"].(string)
+	parentSpanID := "" // chat span is root by default
 	if agentID != "" {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
-	}
-
-	var spanID string
-	if agentID == "" {
-		// Main-agent chat: use the chat span ID that was stamped onto the
-		// UserPromptSubmit event so tool spans referencing it as parent
-		// are correctly nested.
-		if chatID := lookupChatSpanID(dataDir); chatID != "" {
-			spanID = chatID
-		}
-	}
-	if spanID == "" {
-		var err error
-		spanID, err = otlp.GenerateSpanID()
-		if err != nil {
-			return err
-		}
 	}
 
 	// Extract token usage from the transcript file.
@@ -237,25 +157,6 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	return otlp.SendTrace(span, event, cfg)
 }
 
-// lookupChatSpanID finds the chat_span_id stamped onto the most recent
-// UserPromptSubmit event (for the main agent) in the event log. This avoids
-// relying on shared mutable file state that concurrent sessions can stomp on.
-func lookupChatSpanID(dataDir string) string {
-	evt, _ := filelog.FindEvent(dataDir, func(e map[string]any) bool {
-		name, _ := e["hook_event_name"].(string)
-		if name != "UserPromptSubmit" {
-			return false
-		}
-		// Sub-agent events carry an agent_id — skip them.
-		agentID, _ := e["agent_id"].(string)
-		return agentID == ""
-	})
-	if evt == nil {
-		return ""
-	}
-	id, _ := evt["chat_span_id"].(string)
-	return id
-}
 
 // extractAgentIDFromResponse parses the agentId from an Agent tool's response.
 // The response may be a JSON string or an already-decoded map.
@@ -306,17 +207,62 @@ func run() error {
 	now := time.Now().UTC()
 	event["timestamp"] = now.Format(time.RFC3339Nano)
 
-	// Stamp a chat_span_id onto main-agent UserPromptSubmit events before
-	// they are logged, so that later tool/LLM spans can look it up from the
-	// event log without relying on shared mutable file state.
 	hookEvent, _ := event["hook_event_name"].(string)
 	agentID, _ := event["agent_id"].(string)
+
+	// If session_id is missing, generate a random one so spans don't all
+	// merge. Log a warning so the user knows.
+	sessionID, _ := event["session_id"].(string)
+	if sessionID == "" {
+		fmt.Fprintf(os.Stderr, "on-event: session_id missing in %s event, using random ID\n", hookEvent)
+		randID, err := otlp.GenerateTraceID()
+		if err != nil {
+			return err
+		}
+		event["session_id"] = randID[:16]
+		event["dash0.warning"] = "session_id was missing from hook payload"
+	}
+
+	// At SessionStart, save the model to trace context for later turns.
+	if hookEvent == "SessionStart" {
+		model, _ := event["model"].(string)
+		sid, _ := event["session_id"].(string)
+		if err := otlp.SaveTraceContext(otlp.TraceContext{
+			SessionID: sid,
+			Model:     model,
+		}, dataDir); err != nil {
+			return err
+		}
+	}
+
+	// At UserPromptSubmit, generate a new trace_id and chat_span_id for this
+	// turn. Save to trace context so tool spans and the chat span can use them.
 	if hookEvent == "UserPromptSubmit" && agentID == "" {
+		traceID, err := otlp.GenerateTraceID()
+		if err != nil {
+			return err
+		}
 		chatSpanID, err := otlp.GenerateSpanID()
 		if err != nil {
 			return err
 		}
 		event["chat_span_id"] = chatSpanID
+
+		// Get model from existing context (set at SessionStart).
+		model := ""
+		if ctx, err := otlp.LoadTraceContext(dataDir); err == nil && ctx != nil {
+			model = ctx.Model
+		}
+
+		sid, _ := event["session_id"].(string)
+		if err := otlp.SaveTraceContext(otlp.TraceContext{
+			TraceID:   traceID,
+			SpanID:    chatSpanID,
+			SessionID: sid,
+			Model:     model,
+		}, dataDir); err != nil {
+			return err
+		}
 	}
 
 	if err := filelog.WriteEvent(event, dataDir); err != nil {
@@ -333,15 +279,8 @@ func run() error {
 		Debug:        envBool("DASH0_DEBUG"),
 		DebugFile:    os.Getenv("DASH0_DEBUG_FILE"),
 	}
-	if err := otlp.SendLog(event, cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "on-event: otlp export: %v\n", err)
-	}
 
 	switch hookEvent {
-	case "SessionStart":
-		if err := sendSessionTrace(event, cfg, now, dataDir); err != nil {
-			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
-		}
 	case "PostToolUse", "PostToolUseFailure":
 		if err := sendToolTrace(event, cfg, now, dataDir, hookEvent == "PostToolUseFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)

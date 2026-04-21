@@ -99,3 +99,14 @@ Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering:
 [dash0:trace] {"resourceSpans":[...]}
 [dash0:log]   {"resourceLogs":[...]}
 ```
+
+## Releasing
+
+Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release:
+
+```bash
+git tag v0.1.0
+git push --tags
+```
+
+This triggers the release workflow which cross-compiles binaries for `darwin/linux × amd64/arm64` and publishes them to [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases). The `on-event.sh` script downloads the matching binary on first run.

@@ -67,7 +67,6 @@ func TestDetect(t *testing.T) {
 	assert.NotEmpty(t, info.RepositoryURLFull)
 	assert.NotEmpty(t, info.RepositoryName)
 	assert.NotEmpty(t, info.OwnerName)
-	assert.NotEmpty(t, info.UserName)
-	assert.NotEmpty(t, info.UserEmail)
+	// UserName and UserEmail depend on local git config — may be empty in CI.
 	t.Logf("UserName=%q UserEmail=%q", info.UserName, info.UserEmail)
 }

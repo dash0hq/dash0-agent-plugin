@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+project_name: on-event
+
+version: 2
+
+builds:
+  - id: on-event
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    dir: ./
+    main: ./cmd/on-event
+    binary: "on-event-{{ .Os }}-{{ .Arch }}"
+    no_unique_dist_dir: true
+
+archives:
+  - formats: ["binary"]
+    name_template: "{{ .Binary }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  prerelease: auto
+  mode: replace
+
+changelog:
+  disable: false

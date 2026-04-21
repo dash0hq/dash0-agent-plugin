@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -220,17 +221,24 @@ func run() error {
 			return err
 		}
 		event["session_id"] = randID[:16]
+		sessionID = event["session_id"].(string)
 		event["dash0.warning"] = "session_id was missing from hook payload"
+	}
+
+	// Scope the data directory per session to prevent concurrent sessions
+	// from corrupting each other's state.
+	sessionDir := filepath.Join(dataDir, sessionID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		return fmt.Errorf("creating session directory: %w", err)
 	}
 
 	// At SessionStart, save the model to trace context for later turns.
 	if hookEvent == "SessionStart" {
 		model, _ := event["model"].(string)
-		sid, _ := event["session_id"].(string)
 		if err := otlp.SaveTraceContext(otlp.TraceContext{
-			SessionID: sid,
+			SessionID: sessionID,
 			Model:     model,
-		}, dataDir); err != nil {
+		}, sessionDir); err != nil {
 			return err
 		}
 	}
@@ -250,23 +258,27 @@ func run() error {
 
 		// Get model from existing context (set at SessionStart).
 		model := ""
-		if ctx, err := otlp.LoadTraceContext(dataDir); err == nil && ctx != nil {
+		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil {
 			model = ctx.Model
 		}
 
-		sid, _ := event["session_id"].(string)
 		if err := otlp.SaveTraceContext(otlp.TraceContext{
 			TraceID:   traceID,
 			SpanID:    chatSpanID,
-			SessionID: sid,
+			SessionID: sessionID,
 			Model:     model,
-		}, dataDir); err != nil {
+		}, sessionDir); err != nil {
 			return err
 		}
 	}
 
-	if err := filelog.WriteEvent(event, dataDir); err != nil {
+	if err := filelog.WriteEvent(event, sessionDir); err != nil {
 		return err
+	}
+
+	// Clean up session directory at SessionEnd.
+	if hookEvent == "SessionEnd" {
+		os.RemoveAll(sessionDir)
 	}
 
 	cfg := otlp.Config{
@@ -282,11 +294,11 @@ func run() error {
 
 	switch hookEvent {
 	case "PostToolUse", "PostToolUseFailure":
-		if err := sendToolTrace(event, cfg, now, dataDir, hookEvent == "PostToolUseFailure"); err != nil {
+		if err := sendToolTrace(event, cfg, now, sessionDir, hookEvent == "PostToolUseFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
 	case "Stop", "StopFailure":
-		if err := sendLLMTrace(event, cfg, now, dataDir, hookEvent == "StopFailure"); err != nil {
+		if err := sendLLMTrace(event, cfg, now, sessionDir, hookEvent == "StopFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
 	}

@@ -4,6 +4,5 @@
   "description": "Dash0 observability plugin for Claude Code. Captures all agent activity and logs events to a newline-delimited JSON file.",
   "author": {
     "name": "Dash0"
-  },
-  "hooks": "./hooks/hooks.json"
+  }
 }

@@ -8,6 +8,9 @@ Claude Code plugin that captures all agent activity and logs hook events to a ne
 # Test locally during development
 claude --plugin-dir /path/to/dash0-agent-plugin
 
+# Note: To build the binary for local development purposes you can run: 
+# go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-0.1.0-darwin-arm64 ./cmd/on-event/
+
 # Install for all projects
 claude plugin install /path/to/dash0-agent-plugin --scope user
 
@@ -46,7 +49,7 @@ Create `.claude/dash0-agent-plugin.local.md` in your project root:
 ```markdown
 ---
 enabled: true
-otlp_url: "https://ingress.us1.dash0.com/v1/traces"
+otlp_url: "https://ingress.us1.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "your-dataset"
 agent_name: "my-coding-agent"
@@ -67,7 +70,7 @@ These can also be set as environment variables instead of (or in addition to) th
 
 | Variable | Description |
 |---|---|
-| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL |
+| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL (https://ingress.us1.dash0.com) |
 | `DASH0_AUTH_TOKEN` | Dash0 authentication token |
 | `DASH0_DATASET` | Dash0 dataset |
 | `DASH0_AGENT_NAME` | Agent name |

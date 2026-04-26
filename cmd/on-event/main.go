@@ -152,6 +152,12 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 			event["gen_ai.usage.cache_creation_input_tokens"] = int64(usage.CacheCreationInputTokens)
 			event["gen_ai.usage.cache_read_input_tokens"] = int64(usage.CacheReadInputTokens)
 		}
+
+		// Extract session title from transcript (custom-title set by user or auto-generated).
+		// Falls back to the user prompt (already set above from UserPromptSubmit).
+		if title := transcript.ReadSessionTitle(transcriptPath); title != "" {
+			event["gen_ai.conversation.name"] = title
+		}
 	}
 
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)

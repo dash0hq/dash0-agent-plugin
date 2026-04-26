@@ -101,6 +101,35 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	return &usage, nil
 }
 
+// titleEntry captures the custom-title field from transcript JSONL entries.
+type titleEntry struct {
+	Type        string `json:"type"`
+	CustomTitle string `json:"customTitle"`
+}
+
+// ReadSessionTitle reads the transcript file and returns the most recent
+// custom-title value, or empty string if none is found.
+func ReadSessionTitle(transcriptPath string) string {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	var title string
+	for dec.More() {
+		var entry titleEntry
+		if err := dec.Decode(&entry); err != nil {
+			continue
+		}
+		if entry.Type == "custom-title" && entry.CustomTitle != "" {
+			title = entry.CustomTitle
+		}
+	}
+	return title
+}
+
 // isRealUserMessage returns true if the entry is a user message that is NOT
 // a tool_result relay. Tool-result messages have content[0].type == "tool_result"
 // and should not reset the turn boundary.

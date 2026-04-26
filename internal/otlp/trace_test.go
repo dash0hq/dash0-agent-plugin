@@ -295,3 +295,35 @@ func TestSendTraceReturnsErrorOnHTTPFailure(t *testing.T) {
 	cfg := Config{OTLPUrl: srv.URL}
 	assert.Error(t, SendTrace(span, map[string]any{}, cfg))
 }
+
+func TestSendTraceRetries5xx(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	span := Span{Name: "test"}
+	cfg := Config{OTLPUrl: srv.URL}
+	assert.NoError(t, SendTrace(span, map[string]any{}, cfg))
+	assert.Equal(t, 2, attempts, "should retry once on 5xx")
+}
+
+func TestSendTraceDoesNotRetry4xx(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	span := Span{Name: "test"}
+	cfg := Config{OTLPUrl: srv.URL}
+	assert.Error(t, SendTrace(span, map[string]any{}, cfg))
+	assert.Equal(t, 1, attempts, "should not retry on 4xx")
+}

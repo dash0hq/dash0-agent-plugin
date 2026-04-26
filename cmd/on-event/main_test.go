@@ -485,6 +485,50 @@ func TestResumedSessionPicksUpExistingState(t *testing.T) {
 	assert.Contains(t, chatSpan.Name, "claude-opus-4-6")
 }
 
+func TestPluginOptionPrefersClaudePluginOption(t *testing.T) {
+	t.Setenv("CLAUDE_PLUGIN_OPTION_OTLP_URL", "https://from-plugin-config")
+	t.Setenv("DASH0_OTLP_URL", "https://from-env-var")
+
+	assert.Equal(t, "https://from-plugin-config", pluginOption("OTLP_URL"))
+}
+
+func TestPluginOptionFallsToDash0Env(t *testing.T) {
+	// No CLAUDE_PLUGIN_OPTION set.
+	t.Setenv("DASH0_OTLP_URL", "https://from-env-var")
+
+	assert.Equal(t, "https://from-env-var", pluginOption("OTLP_URL"))
+}
+
+func TestPluginOptionReturnsEmptyWhenNeitherSet(t *testing.T) {
+	assert.Empty(t, pluginOption("NONEXISTENT_KEY"))
+}
+
+func TestPluginOptionBool(t *testing.T) {
+	t.Setenv("CLAUDE_PLUGIN_OPTION_DEBUG", "true")
+	assert.True(t, pluginOptionBool("DEBUG"))
+
+	t.Setenv("CLAUDE_PLUGIN_OPTION_DEBUG", "")
+	t.Setenv("DASH0_DEBUG", "1")
+	assert.True(t, pluginOptionBool("DEBUG"))
+}
+
+func TestConfigUsesPluginOptions(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+
+	// Set config via CLAUDE_PLUGIN_OPTION (userConfig path).
+	t.Setenv("CLAUDE_PLUGIN_OPTION_OTLP_URL", srv.URL)
+	t.Setenv("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", "test-token")
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-cfg","model":"opus"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-cfg","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-cfg"}`)
+
+	// Spans should be sent via the plugin option URL.
+	require.Len(t, *spans, 1)
+}
+
 func TestEnvBool(t *testing.T) {
 	for _, tc := range []struct {
 		val  string

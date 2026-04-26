@@ -189,6 +189,22 @@ func envBool(key string) bool {
 	return v == "true" || v == "1"
 }
 
+// pluginOption reads a config value, checking CLAUDE_PLUGIN_OPTION_{key} first
+// (set by userConfig), then falling back to DASH0_{key} (env var).
+func pluginOption(key string) string {
+	if v := os.Getenv("CLAUDE_PLUGIN_OPTION_" + key); v != "" {
+		return v
+	}
+	return os.Getenv("DASH0_" + key)
+}
+
+// pluginOptionBool reads a boolean config value with the same fallback logic.
+func pluginOptionBool(key string) bool {
+	v := pluginOption(key)
+	v = strings.ToLower(strings.TrimSpace(v))
+	return v == "true" || v == "1"
+}
+
 func run() error {
 	dotenv.Load(".env")
 
@@ -283,14 +299,14 @@ func run() error {
 	}
 
 	cfg := otlp.Config{
-		OTLPUrl:      os.Getenv("DASH0_OTLP_URL"),
-		AuthToken:    os.Getenv("DASH0_AUTH_TOKEN"),
-		Dataset:      os.Getenv("DASH0_DATASET"),
-		AgentName:    os.Getenv("DASH0_AGENT_NAME"),
-		OmitUserInfo: envBool("DASH0_OMIT_USER_INFO"),
-		OmitIO:       envBool("DASH0_OMIT_IO"),
-		Debug:        envBool("DASH0_DEBUG"),
-		DebugFile:    os.Getenv("DASH0_DEBUG_FILE"),
+		OTLPUrl:      pluginOption("OTLP_URL"),
+		AuthToken:    pluginOption("AUTH_TOKEN"),
+		Dataset:      pluginOption("DATASET"),
+		AgentName:    pluginOption("AGENT_NAME"),
+		OmitUserInfo: pluginOptionBool("OMIT_USER_INFO"),
+		OmitIO:       pluginOptionBool("OMIT_IO"),
+		Debug:        pluginOptionBool("DEBUG"),
+		DebugFile:    pluginOption("DEBUG_FILE"),
 	}
 
 	switch hookEvent {

@@ -44,40 +44,25 @@ The plugin registers a hook for every supported Claude Code event. Each event's 
 
 ## Configuration
 
-Create `.claude/dash0-agent-plugin.local.md` in your project root:
+Set these environment variables before starting Claude Code:
 
-```markdown
----
-enabled: true
-otlp_url: "https://ingress.us1.dash0.com"
-auth_token: "your-dash0-auth-token"
-dataset: "your-dataset"
-agent_name: "my-coding-agent"
----
+```bash
+export DASH0_OTLP_URL="https://ingress.us1.dash0.com:4318"
+export DASH0_AUTH_TOKEN="your-token"
+export DASH0_DATASET="your-dataset"          # optional
+export DASH0_AGENT_NAME="my-coding-agent"    # optional
 ```
 
-| Setting | Description | Required |
+| Variable | Description | Required |
 |---|---|---|
-| `enabled` | Enable or disable the plugin for this project (`true`/`false`) | No (defaults to `true`) |
-| `otlp_url` | Dash0 OTLP endpoint URL | Yes |
-| `auth_token` | Dash0 authentication token | Yes |
-| `dataset` | Dash0 dataset to send data to | No |
-| `agent_name` | Name for this agent, used as `service.name` and `gen_ai.agent.name` resource attributes | No (defaults to `claude-code`) |
-
-### Environment variables
-
-These can also be set as environment variables instead of (or in addition to) the configuration file:
-
-| Variable | Description |
-|---|---|
-| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL (https://ingress.us1.dash0.com) |
-| `DASH0_AUTH_TOKEN` | Dash0 authentication token |
-| `DASH0_DATASET` | Dash0 dataset |
-| `DASH0_AGENT_NAME` | Agent name |
-| `DASH0_OMIT_USER_INFO` | Omit `user.name` and `user.email` from telemetry (`true`/`false`) |
-| `DASH0_OMIT_IO` | Omit tool inputs/outputs and prompt content (`true`/`false`) |
-| `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
-| `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
+| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL (e.g. `https://ingress.us1.dash0.com:4318`) | Yes |
+| `DASH0_AUTH_TOKEN` | Dash0 authentication token | Yes |
+| `DASH0_DATASET` | Dash0 dataset | No |
+| `DASH0_AGENT_NAME` | Agent name, used as `service.name` and `gen_ai.agent.name` | No (defaults to `claude-code`) |
+| `DASH0_OMIT_USER_INFO` | Omit `user.name` and `user.email` from telemetry (`true`/`false`) | No |
+| `DASH0_OMIT_IO` | Omit tool inputs/outputs and prompt content (`true`/`false`) | No |
+| `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) | No |
+| `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) | No |
 
 ### Debug mode
 

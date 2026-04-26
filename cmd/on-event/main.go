@@ -282,11 +282,6 @@ func run() error {
 		return err
 	}
 
-	// Clean up session directory at SessionEnd.
-	if hookEvent == "SessionEnd" {
-		os.RemoveAll(sessionDir)
-	}
-
 	cfg := otlp.Config{
 		OTLPUrl:      os.Getenv("DASH0_OTLP_URL"),
 		AuthToken:    os.Getenv("DASH0_AUTH_TOKEN"),
@@ -307,6 +302,22 @@ func run() error {
 		if err := sendLLMTrace(event, cfg, now, sessionDir, hookEvent == "StopFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
+		// Clear trace context so SessionEnd knows the chat span was already emitted.
+		otlp.ClearTraceContext(sessionDir)
+	case "SessionEnd":
+		// If trace context exists, Stop never fired — emit a partial chat
+		// span with error status so orphaned tool spans have a parent.
+		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
+			event["error"] = "session ended before completion"
+			if err := sendLLMTrace(event, cfg, now, sessionDir, true); err != nil {
+				fmt.Fprintf(os.Stderr, "on-event: trace export (session end fallback): %v\n", err)
+			}
+		}
+	}
+
+	// Clean up session directory at SessionEnd.
+	if hookEvent == "SessionEnd" {
+		os.RemoveAll(sessionDir)
 	}
 
 	return nil

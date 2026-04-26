@@ -399,6 +399,70 @@ func TestSessionEndCleansUpDirectory(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(dataDir, "sess-cleanup"))
 }
 
+func TestSessionEndEmitsChatSpanOnInterrupt(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	// User starts a session, submits a prompt, but Ctrl+C before Stop fires.
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-interrupt","model":"claude-opus-4-6"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-interrupt","prompt":"do something"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-interrupt","tool_name":"Bash","tool_use_id":"tu-int"}`)
+	feed(t, `{"hook_event_name":"PostToolUseFailure","session_id":"sess-interrupt","tool_name":"Bash","tool_use_id":"tu-int","error":"interrupted","is_interrupt":true}`)
+	// SessionEnd fires (Ctrl+C) — no Stop was received.
+	feed(t, `{"hook_event_name":"SessionEnd","session_id":"sess-interrupt"}`)
+
+	// Should have 2 spans: tool (error) + chat (error fallback from SessionEnd).
+	require.Len(t, *spans, 2)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	chatSpan := findSpan(*spans, "chat")
+
+	require.NotNil(t, toolSpan)
+	require.NotNil(t, chatSpan)
+
+	// Tool span has error status.
+	assert.Equal(t, otlp.StatusCodeError, toolSpan.Status.Code)
+
+	// Chat span has error status with message.
+	assert.Equal(t, otlp.StatusCodeError, chatSpan.Status.Code)
+	assert.Equal(t, "session ended before completion", chatSpan.Status.Message)
+	assert.Empty(t, chatSpan.ParentSpanID, "chat span should be root")
+}
+
+func TestSessionEndBeforePromptDoesNotEmitSpan(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	// User starts a session but exits before submitting any prompt.
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-early-exit","model":"opus"}`)
+	feed(t, `{"hook_event_name":"SessionEnd","session_id":"sess-early-exit"}`)
+
+	// No spans — no UserPromptSubmit means no trace context, nothing to emit.
+	assert.Empty(t, *spans)
+}
+
+func TestSessionEndAfterNormalStopDoesNotDuplicate(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	// Normal flow followed by SessionEnd.
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-normal-end","model":"claude-opus-4-6"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-normal-end","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-normal-end","tool_name":"Read","tool_use_id":"tu-ne"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-normal-end","tool_name":"Read","tool_use_id":"tu-ne","tool_response":"ok"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-normal-end"}`)
+	feed(t, `{"hook_event_name":"SessionEnd","session_id":"sess-normal-end"}`)
+
+	// Should have exactly 2 spans (tool + chat). No duplicate chat span from SessionEnd.
+	require.Len(t, *spans, 2)
+}
+
 func TestResumedSessionPicksUpExistingState(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)

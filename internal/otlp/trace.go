@@ -1,14 +1,11 @@
 package otlp
 
 import (
-	"bytes"
-	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"time"
 )
@@ -155,32 +152,7 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.OTLPUrl+"/v1/traces", bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("creating HTTP request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if cfg.AuthToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
-	}
-	if cfg.Dataset != "" {
-		httpReq.Header.Set("Dash0-Dataset", cfg.Dataset)
-	}
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("sending OTLP traces request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("OTLP traces endpoint returned %s", resp.Status)
-	}
-
-	return nil
+	return sendOTLP(cfg, "/v1/traces", payload)
 }
 
 // NewToolSpan creates a child span for a PostToolUse or PostToolUseFailure event.

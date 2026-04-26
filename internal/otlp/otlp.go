@@ -167,32 +167,59 @@ func SendLog(event map[string]any, cfg Config) error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	return sendOTLP(cfg, "/v1/logs", payload)
+}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.OTLPUrl+"/v1/logs", bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("creating HTTP request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if cfg.AuthToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
-	}
-	if cfg.Dataset != "" {
-		httpReq.Header.Set("Dash0-Dataset", cfg.Dataset)
-	}
+// sendOTLP sends a payload to the configured OTLP endpoint with a single retry
+// on transient failures (network errors or 5xx responses).
+func sendOTLP(cfg Config, path string, payload []byte) error {
+	const maxAttempts = 2
+	const retryDelay = 500 * time.Millisecond
 
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("sending OTLP request: %w", err)
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("OTLP endpoint returned %s", resp.Status)
-	}
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.OTLPUrl+path, bytes.NewReader(payload))
+		if err != nil {
+			cancel()
+			return fmt.Errorf("creating HTTP request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		if cfg.AuthToken != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+		}
+		if cfg.Dataset != "" {
+			httpReq.Header.Set("Dash0-Dataset", cfg.Dataset)
+		}
 
-	return nil
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			cancel()
+			lastErr = fmt.Errorf("sending OTLP request: %w", err)
+			if attempt < maxAttempts {
+				time.Sleep(retryDelay)
+				continue
+			}
+			return lastErr
+		}
+		resp.Body.Close()
+		cancel()
+
+		if resp.StatusCode < 300 {
+			return nil
+		}
+
+		lastErr = fmt.Errorf("OTLP endpoint returned %s", resp.Status)
+
+		// Retry on 5xx (server errors). Don't retry on 4xx (client errors).
+		if resp.StatusCode >= 500 && attempt < maxAttempts {
+			time.Sleep(retryDelay)
+			continue
+		}
+		return lastErr
+	}
+	return lastErr
 }
 
 // attrSkipKeys lists event fields that should not appear as log attributes.

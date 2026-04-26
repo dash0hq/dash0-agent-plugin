@@ -187,3 +187,39 @@ func TestReadTurnUsagePartialUsageFields(t *testing.T) {
 	assert.Equal(t, int64(0), usage.CacheCreationInputTokens)
 	assert.Equal(t, int64(0), usage.CacheReadInputTokens)
 }
+
+func TestReadSessionTitleFound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`,
+		`{"type":"custom-title","customTitle":"my session name","sessionId":"sess-1"}`,
+	})
+
+	assert.Equal(t, "my session name", ReadSessionTitle(path))
+}
+
+func TestReadSessionTitleUsesLatest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"custom-title","customTitle":"first name","sessionId":"sess-1"}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"rename"}]}}`,
+		`{"type":"custom-title","customTitle":"renamed session","sessionId":"sess-1"}`,
+	})
+
+	assert.Equal(t, "renamed session", ReadSessionTitle(path))
+}
+
+func TestReadSessionTitleMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`,
+	})
+
+	assert.Empty(t, ReadSessionTitle(path))
+}
+
+func TestReadSessionTitleMissingFile(t *testing.T) {
+	assert.Empty(t, ReadSessionTitle("/nonexistent/path.jsonl"))
+}

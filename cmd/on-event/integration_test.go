@@ -246,3 +246,14 @@ func TestIntegrationParallelToolCallsWithinSession(t *testing.T) {
 	assert.Contains(t, toolNames, "execute_tool Read")
 	assert.Contains(t, toolNames, "execute_tool Grep")
 }
+
+func TestIntegrationInvalidOTLPUrlLogsWarning(t *testing.T) {
+	dataDir := t.TempDir()
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL=not-a-url",
+	)
+
+	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-badurl","model":"opus"}`, env)
+	assert.Contains(t, stderr, `DASH0_OTLP_URL is not a valid URL: "not-a-url"`)
+}

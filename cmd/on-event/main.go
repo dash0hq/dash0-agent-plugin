@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -291,6 +292,14 @@ func run() error {
 		OmitIO:       envBool("DASH0_OMIT_IO"),
 		Debug:        envBool("DASH0_DEBUG"),
 		DebugFile:    os.Getenv("DASH0_DEBUG_FILE"),
+	}
+
+	if cfg.OTLPUrl != "" {
+		u, err := url.Parse(cfg.OTLPUrl)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			fmt.Fprintf(os.Stderr, "on-event: DASH0_OTLP_URL is not a valid URL: %q\n", cfg.OTLPUrl)
+			cfg.OTLPUrl = "" // disable export to prevent cryptic errors
+		}
 	}
 
 	switch hookEvent {

@@ -485,6 +485,28 @@ func TestResumedSessionPicksUpExistingState(t *testing.T) {
 	assert.Contains(t, chatSpan.Name, "claude-opus-4-6")
 }
 
+func TestInvalidOTLPUrlDoesNotCrash(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	t.Setenv("DASH0_OTLP_URL", "not-a-url")
+
+	// Should not crash — invalid URL is logged and export is disabled.
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-badurl","model":"opus"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-badurl","prompt":"test"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-badurl"}`)
+}
+
+func TestMissingSchemeInOTLPUrl(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	t.Setenv("DASH0_OTLP_URL", "ingress.dash0.com:4318")
+
+	// Missing scheme — should not crash.
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-noscheme","model":"opus"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-noscheme","prompt":"test"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-noscheme"}`)
+}
+
 func TestEnvBool(t *testing.T) {
 	for _, tc := range []struct {
 		val  string

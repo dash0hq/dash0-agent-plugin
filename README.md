@@ -70,7 +70,7 @@ These can also be set as environment variables instead of (or in addition to) th
 
 | Variable | Description |
 |---|---|
-| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL (https://ingress.us1.dash0.com) |
+| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL — must include scheme (e.g. `https://ingress.us1.dash0.com`) |
 | `DASH0_AUTH_TOKEN` | Dash0 authentication token |
 | `DASH0_DATASET` | Dash0 dataset |
 | `DASH0_AGENT_NAME` | Agent name |
@@ -102,6 +102,18 @@ Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering:
 [dash0:trace] {"resourceSpans":[...]}
 [dash0:log]   {"resourceLogs":[...]}
 ```
+
+### Troubleshooting
+
+If telemetry isn't arriving in Dash0, run Claude Code with `--debug` to see plugin error messages:
+
+```bash
+DASH0_OTLP_URL="https://ingress.us1.dash0.com:4318" \
+  DASH0_AUTH_TOKEN="your-token" \
+  claude --debug --plugin-dir /path/to/dash0-agent-plugin 2>&1 | grep "on-event:"
+```
+
+Plugin errors are prefixed with `on-event:` in the output.
 
 ## Releasing
 

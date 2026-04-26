@@ -1,9 +1,13 @@
 {
   "name": "dash0-agent-plugin",
   "version": "0.1.0",
-  "description": "Dash0 observability plugin for Claude Code. Captures all agent activity and logs events to a newline-delimited JSON file.",
+  "description": "OpenTelemetry observability for Claude Code sessions. Captures tool calls, LLM invocations, token usage, and errors as OTel traces.",
   "author": {
     "name": "Dash0"
   },
+  "homepage": "https://dash0.com",
+  "repository": "https://github.com/dash0hq/dash0-agent-plugin",
+  "license": "Apache-2.0",
+  "keywords": ["observability", "tracing", "opentelemetry", "dash0", "otel"],
   "hooks": "./hooks/hooks.json"
 }

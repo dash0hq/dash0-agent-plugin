@@ -32,6 +32,8 @@ jobs:
         run: claude plugin validate .
 
       - name: Test marketplace install
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           claude plugin marketplace add dash0hq/claude-marketplace --scope user
           claude plugin install dash0-agent-plugin@dash0 --scope user

@@ -5,17 +5,21 @@ Claude Code plugin that captures all agent activity and logs hook events to a ne
 ## Installation
 
 ```bash
-# Test locally during development
+# Add the Dash0 marketplace
+/plugin marketplace add dash0hq/dash0-agent-plugin
+
+# Install the plugin
+/plugin install dash0-agent-plugin@dash0-marketplace
+```
+
+### Local development
+
+```bash
+# Test locally without marketplace
 claude --plugin-dir /path/to/dash0-agent-plugin
 
-# Note: To build the binary for local development purposes you can run: 
-# go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-0.1.0-darwin-arm64 ./cmd/on-event/
-
-# Install for all projects
-claude plugin install /path/to/dash0-agent-plugin --scope user
-
-# Install for a single project
-claude plugin install /path/to/dash0-agent-plugin --scope project
+# Build the binary locally (instead of downloading from GitHub Releases)
+go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-0.1.0-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/on-event/
 ```
 
 ## What it does

@@ -26,7 +26,7 @@ fi
 PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.0"
+VERSION="0.1.2"
 
 # Detect OS and architecture.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

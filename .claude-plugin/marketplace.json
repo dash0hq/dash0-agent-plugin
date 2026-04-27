@@ -9,7 +9,7 @@
       "name": "dash0-agent-plugin",
       "source": "./",
       "description": "OpenTelemetry observability for Claude Code sessions. Captures tool calls, LLM invocations, token usage, and errors as OTel traces.",
-      "version": "0.1.0"
+      "version": "0.1.2"
     }
   ]
 }

@@ -9,5 +9,30 @@
   "repository": "https://github.com/dash0hq/dash0-agent-plugin",
   "license": "Apache-2.0",
   "keywords": ["observability", "tracing", "opentelemetry", "dash0", "otel"],
-  "hooks": "./hooks/hooks.json"
+  "userConfig": {
+    "OTLP_URL": {
+      "title": "OTLP Endpoint URL",
+      "description": "Dash0 OTLP endpoint URL (e.g. https://ingress.us1.dash0.com:4318)",
+      "type": "string",
+      "sensitive": false
+    },
+    "AUTH_TOKEN": {
+      "title": "Auth Token",
+      "description": "Dash0 authentication token",
+      "type": "string",
+      "sensitive": true
+    },
+    "DATASET": {
+      "title": "Dataset",
+      "description": "Dash0 dataset name (optional)",
+      "type": "string",
+      "sensitive": false
+    },
+    "AGENT_NAME": {
+      "title": "Agent Name",
+      "description": "Agent name, used as service.name (optional, defaults to claude-code)",
+      "type": "string",
+      "sensitive": false
+    }
+  }
 }

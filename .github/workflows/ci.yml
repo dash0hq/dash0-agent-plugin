@@ -24,3 +24,14 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate plugin
+        run: claude plugin validate .
+
+      - name: Test marketplace install
+        run: |
+          claude plugin marketplace add "$GITHUB_WORKSPACE" --scope user
+          claude plugin install dash0-agent-plugin@dash0-marketplace --scope user

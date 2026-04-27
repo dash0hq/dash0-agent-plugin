@@ -36,5 +36,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
           claude plugin marketplace add dash0hq/claude-marketplace --scope user
           claude plugin install dash0-agent-plugin@dash0 --scope user

@@ -6,10 +6,10 @@ Claude Code plugin that captures all agent activity and logs hook events to a ne
 
 ```bash
 # Add the Dash0 marketplace
-/plugin marketplace add dash0hq/dash0-agent-plugin
+/plugin marketplace add dash0hq/claude-marketplace
 
 # Install the plugin
-/plugin install dash0-agent-plugin@dash0-marketplace
+/plugin install dash0-agent-plugin@dash0
 ```
 
 ### Local development

@@ -38,22 +38,10 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		event["model"] = ctx.Model
 	}
 
-	// Look up matching PreToolUse event to get the start timestamp.
-	toolUseID, _ := event["tool_use_id"].(string)
+	// Compute start time from duration_ms (always present on PostToolUse).
 	startTime := ts
-	if toolUseID != "" {
-		preEvent, _ := filelog.FindEvent(dataDir, func(e map[string]any) bool {
-			name, _ := e["hook_event_name"].(string)
-			id, _ := e["tool_use_id"].(string)
-			return name == "PreToolUse" && id == toolUseID
-		})
-		if preEvent != nil {
-			if raw, ok := preEvent["timestamp"].(string); ok {
-				if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
-					startTime = parsed
-				}
-			}
-		}
+	if durationMs, ok := event["duration_ms"].(float64); ok && durationMs > 0 {
+		startTime = ts.Add(-time.Duration(durationMs) * time.Millisecond)
 	}
 
 	toolName, _ := event["tool_name"].(string)

@@ -232,6 +232,7 @@ var attrSkipKeys = map[string]bool{
 	"is_interrupt":          true,
 	"timestamp":             true,
 	"source":                true,
+	"duration_ms":           true,
 }
 
 // contentKeys lists event fields that contain input/output content.

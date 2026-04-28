@@ -191,6 +191,29 @@ func TestChatSpanIsRootWithToolChildren(t *testing.T) {
 	assert.NotEqual(t, otlp.TraceIDFromSessionID("sess-1"), chatSpan.TraceID)
 }
 
+func TestToolSpanUsesDurationMsFallback(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-dur","model":"opus"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-dur","prompt":"test"}`)
+	// PostToolUse with a different tool_use_id than any PreToolUse (simulates mismatched IDs).
+	// The fallback should use duration_ms to compute start time.
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-dur","tool_name":"Read","tool_use_id":"mismatched-id","tool_response":"ok","duration_ms":500}`)
+
+	require.Len(t, *spans, 1)
+	toolSpan := (*spans)[0]
+
+	// Start time should be ~500ms before end time (not equal).
+	start, _ := strconv.ParseInt(toolSpan.StartTimeUnixNano, 10, 64)
+	end, _ := strconv.ParseInt(toolSpan.EndTimeUnixNano, 10, 64)
+	durationNs := end - start
+	// 500ms = 500_000_000 ns. Allow some tolerance for timestamp precision.
+	assert.InDelta(t, 500_000_000, durationNs, 10_000_000, "duration should be ~500ms from duration_ms fallback")
+}
+
 func TestEachTurnGetsNewTraceID(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)

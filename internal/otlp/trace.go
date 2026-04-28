@@ -202,7 +202,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 		SpanID:            spanID,
 		ParentSpanID:      parentSpanID,
 		Name:              "chat " + model,
-		Kind:              SpanKindClient,
+		Kind:              SpanKindInternal,
 		StartTimeUnixNano: strconv.FormatInt(startTime.UnixNano(), 10),
 		EndTimeUnixNano:   strconv.FormatInt(endTime.UnixNano(), 10),
 		Attributes:        attrs,

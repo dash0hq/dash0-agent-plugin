@@ -152,7 +152,7 @@ func TestNewLLMSpan(t *testing.T) {
 	assert.Equal(t, "span1234span1234", span.SpanID)
 	assert.Equal(t, "parentidparentid", span.ParentSpanID)
 	assert.Equal(t, "chat claude-sonnet-4-20250514", span.Name)
-	assert.Equal(t, SpanKindClient, span.Kind)
+	assert.Equal(t, SpanKindInternal, span.Kind)
 	assert.Equal(t, "1749988800000000000", span.StartTimeUnixNano)
 	assert.Equal(t, "1749988845000000000", span.EndTimeUnixNano)
 	assert.Equal(t, SpanStatus{Code: StatusCodeUnset, Message: ""}, span.Status)
@@ -174,7 +174,7 @@ func TestNewLLMSpanFailure(t *testing.T) {
 	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid", startTime, endTime, event, true, Config{})
 
 	assert.Equal(t, "chat claude-sonnet-4-20250514", span.Name)
-	assert.Equal(t, SpanKindClient, span.Kind)
+	assert.Equal(t, SpanKindInternal, span.Kind)
 	assert.Equal(t, StatusCodeError, span.Status.Code)
 	assert.Equal(t, "context window exceeded", span.Status.Message)
 }

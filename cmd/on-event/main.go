@@ -147,6 +147,13 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		if title := transcript.ReadSessionTitle(transcriptPath); title != "" {
 			event["gen_ai.conversation.name"] = title
 		}
+
+		// Extract model from transcript when not already set (SessionStart may omit it).
+		if _, hasModel := event["model"]; !hasModel {
+			if m := transcript.ReadModel(transcriptPath); m != "" {
+				event["model"] = m
+			}
+		}
 	}
 
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)

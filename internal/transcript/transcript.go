@@ -22,9 +22,10 @@ type transcriptEntry struct {
 }
 
 type messageEnvelope struct {
-	Role  string              `json:"role"`
-	Usage *usageData          `json:"usage"`
-	Content []json.RawMessage `json:"content"`
+	Role    string              `json:"role"`
+	Model   string              `json:"model"`
+	Usage   *usageData          `json:"usage"`
+	Content []json.RawMessage   `json:"content"`
 }
 
 type usageData struct {
@@ -128,6 +129,29 @@ func ReadSessionTitle(transcriptPath string) string {
 		}
 	}
 	return title
+}
+
+// ReadModel reads the transcript file and returns the model from the most
+// recent assistant message, or empty string if none is found.
+func ReadModel(transcriptPath string) string {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	var model string
+	for dec.More() {
+		var entry transcriptEntry
+		if err := dec.Decode(&entry); err != nil {
+			continue
+		}
+		if entry.Type == "assistant" && entry.Message != nil && entry.Message.Model != "" {
+			model = entry.Message.Model
+		}
+	}
+	return model
 }
 
 // isRealUserMessage returns true if the entry is a user message that is NOT

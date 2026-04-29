@@ -223,3 +223,37 @@ func TestReadSessionTitleMissing(t *testing.T) {
 func TestReadSessionTitleMissingFile(t *testing.T) {
 	assert.Empty(t, ReadSessionTitle("/nonexistent/path.jsonl"))
 }
+
+func TestReadModelFound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"hi"}]}}`,
+	})
+
+	assert.Equal(t, "claude-sonnet-4-6", ReadModel(path))
+}
+
+func TestReadModelUsesLatest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"hi"}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"switch model"}]}}`,
+		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"ok"}]}}`,
+	})
+
+	assert.Equal(t, "claude-opus-4-7", ReadModel(path))
+}
+
+func TestReadModelMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+	})
+
+	assert.Empty(t, ReadModel(path))
+}
+
+func TestReadModelMissingFile(t *testing.T) {
+	assert.Empty(t, ReadModel("/nonexistent/path.jsonl"))
+}

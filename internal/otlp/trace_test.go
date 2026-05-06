@@ -228,7 +228,7 @@ func TestSendTrace(t *testing.T) {
 	require.Len(t, rs.ScopeSpans, 1)
 	ss := rs.ScopeSpans[0]
 	assert.Equal(t, "dash0-agent-plugin", ss.Scope.Name)
-	assert.Equal(t, "0.1.0", ss.Scope.Version)
+	assert.Equal(t, "dev", ss.Scope.Version)
 
 	require.Len(t, ss.Spans, 1)
 	s := ss.Spans[0]

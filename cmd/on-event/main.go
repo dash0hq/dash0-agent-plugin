@@ -38,6 +38,15 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		event["model"] = ctx.Model
 	}
 
+	// Fall back to reading model from transcript if still missing.
+	if _, hasModel := event["model"]; !hasModel {
+		if tp, _ := event["transcript_path"].(string); tp != "" {
+			if m := transcript.ReadModel(tp); m != "" {
+				event["model"] = m
+			}
+		}
+	}
+
 	// Compute start time from duration_ms (always present on PostToolUse).
 	startTime := ts
 	if durationMs, ok := event["duration_ms"].(float64); ok && durationMs > 0 {

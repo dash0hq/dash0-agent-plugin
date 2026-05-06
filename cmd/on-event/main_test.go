@@ -692,3 +692,47 @@ func TestConversationIDOnAllSpans(t *testing.T) {
 		assert.True(t, found, "span %q should have gen_ai.conversation.id", span.Name)
 	}
 }
+
+func TestModelOnToolSpanFromTranscriptWhenSessionStartOmitsModel(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	// Create transcript with model info.
+	transcriptPath := filepath.Join(dataDir, "transcript.jsonl")
+	writeTranscript(t, transcriptPath, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5}}}`,
+	})
+
+	// SessionStart WITHOUT model — simulates the real-world bug.
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-no-model"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-no-model","prompt":"hello"}`)
+	feed(t, fmt.Sprintf(`{"hook_event_name":"PostToolUse","session_id":"sess-no-model","tool_name":"Bash","tool_use_id":"tu1","tool_response":"ok","transcript_path":"%s"}`, transcriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-no-model","transcript_path":"%s"}`, transcriptPath))
+
+	require.Len(t, *spans, 2, "expected tool span + chat span")
+
+	// Tool span should have model from transcript fallback.
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan, "tool span should exist")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.request.model", "claude-opus-4-7")
+
+	// Chat span should also have model from transcript.
+	chatSpan := findSpan(*spans, "chat")
+	require.NotNil(t, chatSpan, "chat span should exist")
+	assertStringAttr(t, chatSpan.Attributes, "gen_ai.request.model", "claude-opus-4-7")
+}
+
+func assertStringAttr(t *testing.T, attrs []otlp.Attribute, key, want string) {
+	t.Helper()
+	for _, a := range attrs {
+		if a.Key == key {
+			require.NotNil(t, a.Value.StringValue, "attribute %q should have string value", key)
+			assert.Equal(t, want, *a.Value.StringValue)
+			return
+		}
+	}
+	t.Errorf("attribute %q not found", key)
+}

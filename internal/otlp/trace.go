@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
 
 // OTLP JSON wire format types for traces.
@@ -132,7 +134,7 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 			ScopeSpans: []ScopeSpans{{
 				Scope: Scope{
 					Name:    "dash0-agent-plugin",
-					Version: "0.1.0",
+					Version: version.Version,
 				},
 				Spans: []Span{span},
 			}},

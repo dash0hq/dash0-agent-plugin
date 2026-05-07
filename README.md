@@ -42,7 +42,6 @@ The plugin registers a hook for every supported Claude Code event. Each event's 
 | Task | `TaskCreated`, `TaskCompleted`, `TeammateIdle` |
 | Config | `ConfigChange`, `CwdChanged`, `FileChanged`, `InstructionsLoaded` |
 | Compaction | `PreCompact`, `PostCompact` |
-| Worktree | `WorktreeCreate`, `WorktreeRemove` |
 | Elicitation | `Elicitation`, `ElicitationResult` |
 | Notification | `Notification` |
 

@@ -200,6 +200,16 @@
         ]
       }
     ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/on-event.sh"
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [

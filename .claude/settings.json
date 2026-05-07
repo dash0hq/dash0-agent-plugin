@@ -203,26 +203,6 @@
         ]
       }
     ],
-    "WorktreeCreate": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "CLAUDE_PLUGIN_DATA=. go run ./cmd/on-event/"
-          }
-        ]
-      }
-    ],
-    "WorktreeRemove": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "CLAUDE_PLUGIN_DATA=. go run ./cmd/on-event/"
-          }
-        ]
-      }
-    ],
     "PreCompact": [
       {
         "hooks": [

@@ -255,5 +255,5 @@ func TestIntegrationInvalidOTLPUrlLogsWarning(t *testing.T) {
 	)
 
 	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-badurl","model":"opus"}`, env)
-	assert.Contains(t, stderr, `DASH0_OTLP_URL is not a valid URL: "not-a-url"`)
+	assert.Contains(t, stderr, `OTLP URL is not valid: "not-a-url"`)
 }

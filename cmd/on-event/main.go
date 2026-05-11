@@ -194,6 +194,22 @@ func envBool(key string) bool {
 	return v == "true" || v == "1"
 }
 
+// pluginOption returns the configured value for the given key, preferring
+// the userConfig-derived CLAUDE_PLUGIN_OPTION_<key> over the legacy DASH0_<key>.
+// An empty CLAUDE_PLUGIN_OPTION_<key> falls through to DASH0_<key>.
+func pluginOption(key string) string {
+	if v := os.Getenv("CLAUDE_PLUGIN_OPTION_" + key); v != "" {
+		return v
+	}
+	return os.Getenv("DASH0_" + key)
+}
+
+// pluginOptionBool is the boolean counterpart of pluginOption.
+func pluginOptionBool(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(pluginOption(key)))
+	return v == "true" || v == "1"
+}
+
 func run() error {
 	dotenv.Load(".env")
 
@@ -288,22 +304,26 @@ func run() error {
 	}
 
 	cfg := otlp.Config{
-		OTLPUrl:      os.Getenv("DASH0_OTLP_URL"),
-		AuthToken:    os.Getenv("DASH0_AUTH_TOKEN"),
-		Dataset:      os.Getenv("DASH0_DATASET"),
-		AgentName:    os.Getenv("DASH0_AGENT_NAME"),
-		OmitUserInfo: envBool("DASH0_OMIT_USER_INFO"),
-		OmitIO:       envBool("DASH0_OMIT_IO"),
-		Debug:        envBool("DASH0_DEBUG"),
-		DebugFile:    os.Getenv("DASH0_DEBUG_FILE"),
+		OTLPUrl:      pluginOption("OTLP_URL"),
+		AuthToken:    pluginOption("AUTH_TOKEN"),
+		Dataset:      pluginOption("DATASET"),
+		AgentName:    pluginOption("AGENT_NAME"),
+		OmitUserInfo: pluginOptionBool("OMIT_USER_INFO"),
+		OmitIO:       pluginOptionBool("OMIT_IO"),
+		Debug:        pluginOptionBool("DEBUG"),
+		DebugFile:    pluginOption("DEBUG_FILE"),
 	}
 
 	if cfg.OTLPUrl != "" {
 		u, err := url.Parse(cfg.OTLPUrl)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			fmt.Fprintf(os.Stderr, "on-event: DASH0_OTLP_URL is not a valid URL: %q\n", cfg.OTLPUrl)
+			fmt.Fprintf(os.Stderr, "on-event: OTLP URL is not valid: %q\n", cfg.OTLPUrl)
 			cfg.OTLPUrl = "" // disable export to prevent cryptic errors
 		}
+	}
+
+	if cfg.OTLPUrl == "" && hookEvent == "SessionStart" {
+		fmt.Fprintln(os.Stderr, "dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.")
 	}
 
 	switch hookEvent {

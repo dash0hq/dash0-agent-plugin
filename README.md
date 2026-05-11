@@ -4,12 +4,36 @@ Claude Code plugin that captures all agent activity and logs hook events to a ne
 
 ## Installation
 
-```bash
-# Add the Dash0 marketplace
-/plugin marketplace add dash0hq/claude-marketplace
+### From the official Claude Code marketplace (recommended)
 
-# Install the plugin
+```
+/plugin install dash0@claude-plugins-official
+```
+
+### From the Dash0 marketplace
+
+```
+/plugin marketplace add dash0hq/claude-marketplace
 /plugin install dash0-agent-plugin@dash0
+```
+
+> The plugin is registered as `dash0` in the official marketplace and `dash0-agent-plugin` in the Dash0 marketplace. Both install the same plugin; do not enable both at once or hooks will fire twice.
+
+### First-time setup
+
+After installing, **the plugin does not start sending telemetry until you complete two steps**:
+
+1. **Configure credentials.** Run `/plugin` → **Installed** → **dash0** → **Configure**. Enter:
+   - `OTLP_URL` — your Dash0 OTLP endpoint, e.g. `https://ingress.us1.dash0.com:4318`
+   - `AUTH_TOKEN` — your Dash0 auth token (sensitive — stored in your OS keychain, not in `settings.json`)
+   - `DATASET` *(optional)*
+   - `AGENT_NAME` *(optional)*
+2. **Reload the running session.** Run `/reload-plugins`. Without this, the current session's hooks still have empty config and silently emit nothing.
+
+If you start a session before completing setup, the plugin writes this line to stderr on `SessionStart`:
+
+```
+dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.
 ```
 
 ### Local development
@@ -47,29 +71,20 @@ The plugin registers a hook for every supported Claude Code event. Each event's 
 
 ## Configuration
 
-Create `.claude/dash0-agent-plugin.local.md` in your project root:
+The plugin declares its configuration via Claude Code's `userConfig` mechanism. Values are entered in the Configure UI described in [First-time setup](#first-time-setup) above. Claude Code stores non-sensitive values in `~/.claude/settings.json` under `pluginConfigs[<plugin>@<marketplace>].options`; sensitive values go to the OS keychain (or `~/.claude/.credentials.json` as a fallback). The plugin's hook subprocess receives them as `CLAUDE_PLUGIN_OPTION_<KEY>` environment variables.
 
-```markdown
----
-enabled: true
-otlp_url: "https://ingress.us1.dash0.com"
-auth_token: "your-dash0-auth-token"
-dataset: "your-dataset"
-agent_name: "my-coding-agent"
----
-```
+| Option | Description | Required | Sensitive |
+|---|---|---|---|
+| `OTLP_URL` | Dash0 OTLP endpoint URL (e.g. `https://ingress.us1.dash0.com:4318`) | Yes | No |
+| `AUTH_TOKEN` | Dash0 authentication token | Yes | Yes (stored in keychain) |
+| `DATASET` | Dash0 dataset name | No | No |
+| `AGENT_NAME` | Used as `service.name` and `gen_ai.agent.name` resource attributes (defaults to `claude-code`) | No | No |
 
-| Setting | Description | Required |
-|---|---|---|
-| `enabled` | Enable or disable the plugin for this project (`true`/`false`) | No (defaults to `true`) |
-| `otlp_url` | Dash0 OTLP endpoint URL | Yes |
-| `auth_token` | Dash0 authentication token | Yes |
-| `dataset` | Dash0 dataset to send data to | No |
-| `agent_name` | Name for this agent, used as `service.name` and `gen_ai.agent.name` resource attributes | No (defaults to `claude-code`) |
+After changing any value via Configure, run `/reload-plugins` to apply it to the current session.
 
-### Environment variables
+### Environment variable fallback
 
-These can also be set as environment variables instead of (or in addition to) the configuration file:
+When a `userConfig` value is not set, the plugin falls back to the matching `DASH0_*` environment variable. This is useful for `--plugin-dir` development, CI, or when you'd rather manage credentials outside of Claude Code's storage.
 
 | Variable | Description |
 |---|---|
@@ -81,6 +96,22 @@ These can also be set as environment variables instead of (or in addition to) th
 | `DASH0_OMIT_IO` | Omit tool inputs/outputs and prompt content (`true`/`false`) |
 | `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
+
+### Per-project overrides
+
+For project-specific overrides (e.g. a different dataset per repo), create `.claude/dash0-agent-plugin.local.md`:
+
+```markdown
+---
+enabled: true
+otlp_url: "https://ingress.us1.dash0.com"
+auth_token: "your-dash0-auth-token"
+dataset: "your-dataset"
+agent_name: "my-coding-agent"
+---
+```
+
+The local file sets `DASH0_*` env vars for the hook subprocess, so it acts as the lowest-priority fallback. Set `enabled: false` to disable the plugin for a single project without uninstalling it.
 
 ### Debug mode
 
@@ -108,15 +139,24 @@ Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering:
 
 ### Troubleshooting
 
-If telemetry isn't arriving in Dash0, run Claude Code with `--debug` to see plugin error messages:
+**No spans in Dash0 after install.** The plugin was likely installed but not configured, or configured but not reloaded. Check:
+
+1. Look for this line in Claude Code's stderr on `SessionStart`:
+   ```
+   dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.
+   ```
+   If you see it, follow [First-time setup](#first-time-setup).
+2. If you've already configured but spans still don't appear, run `/reload-plugins`. Saved values are not picked up by an already-running session until reload.
+
+**More verbose debugging.** Run Claude Code with `--debug` to see plugin error messages:
 
 ```bash
 DASH0_OTLP_URL="https://ingress.us1.dash0.com:4318" \
   DASH0_AUTH_TOKEN="your-token" \
-  claude --debug --plugin-dir /path/to/dash0-agent-plugin 2>&1 | grep "on-event:"
+  claude --debug --plugin-dir /path/to/dash0-agent-plugin 2>&1 | grep "on-event:\|dash0:"
 ```
 
-Plugin errors are prefixed with `on-event:` in the output.
+Plugin errors are prefixed with `on-event:` or `dash0:` in the output.
 
 ## Releasing
 

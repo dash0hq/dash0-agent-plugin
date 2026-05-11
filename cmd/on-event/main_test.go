@@ -551,6 +551,81 @@ func TestEnvBool(t *testing.T) {
 	}
 }
 
+func TestPluginOption(t *testing.T) {
+	t.Run("prefers CLAUDE_PLUGIN_OPTION over DASH0", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_KEY", "from-user-config")
+		t.Setenv("DASH0_TEST_KEY", "from-env-var")
+		assert.Equal(t, "from-user-config", pluginOption("TEST_KEY"))
+	})
+
+	t.Run("falls back to DASH0 when CLAUDE_PLUGIN_OPTION unset", func(t *testing.T) {
+		t.Setenv("DASH0_TEST_KEY", "from-env-var")
+		assert.Equal(t, "from-env-var", pluginOption("TEST_KEY"))
+	})
+
+	t.Run("falls back to DASH0 when CLAUDE_PLUGIN_OPTION empty", func(t *testing.T) {
+		// userConfig may set an empty string when the user skips an optional
+		// field; that must fall through, not shadow, the env-var fallback.
+		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_KEY", "")
+		t.Setenv("DASH0_TEST_KEY", "from-env-var")
+		assert.Equal(t, "from-env-var", pluginOption("TEST_KEY"))
+	})
+
+	t.Run("returns empty when neither set", func(t *testing.T) {
+		assert.Equal(t, "", pluginOption("TEST_KEY"))
+	})
+}
+
+func TestPluginOptionBool(t *testing.T) {
+	t.Run("prefers CLAUDE_PLUGIN_OPTION over DASH0", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_BOOL", "true")
+		t.Setenv("DASH0_TEST_BOOL", "false")
+		assert.True(t, pluginOptionBool("TEST_BOOL"))
+	})
+
+	t.Run("falls back to DASH0 when CLAUDE_PLUGIN_OPTION empty", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_BOOL", "")
+		t.Setenv("DASH0_TEST_BOOL", "1")
+		assert.True(t, pluginOptionBool("TEST_BOOL"))
+	})
+}
+
+func TestSessionStartHintWhenNotConfigured(t *testing.T) {
+	dataDir := t.TempDir()
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		// No OTLP_URL via either mechanism. Hint should fire on SessionStart.
+		"DASH0_OTLP_URL=",
+		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
+	)
+	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-unconfigured","model":"opus"}`, env)
+	assert.Contains(t, stderr, "dash0: not configured")
+	assert.Contains(t, stderr, "/plugin")
+	assert.Contains(t, stderr, "/reload-plugins")
+}
+
+func TestSessionStartHintSuppressedWhenConfigured(t *testing.T) {
+	dataDir := t.TempDir()
+	srv, _, _ := collectingServer(t)
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL="+srv.URL,
+	)
+	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-configured","model":"opus"}`, env)
+	assert.NotContains(t, stderr, "dash0: not configured")
+}
+
+func TestHintNotEmittedOnNonSessionStartEvents(t *testing.T) {
+	// Only fires on SessionStart so we don't spam every tool call.
+	dataDir := t.TempDir()
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL=",
+	)
+	_, stderr := execBinary(t, `{"hook_event_name":"PreToolUse","session_id":"sess-x","tool_name":"Bash","tool_use_id":"tu1"}`, env)
+	assert.NotContains(t, stderr, "dash0: not configured")
+}
+
 func TestOmitIOOmitsContentAttributes(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)

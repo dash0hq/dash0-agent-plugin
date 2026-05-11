@@ -31,13 +31,29 @@ jobs:
       - name: Validate plugin
         run: claude plugin validate .
 
-      - name: Test marketplace install (Dash0 custom)
+      - name: Test marketplace install (Dash0 custom, published)
         run: |
           git config --global url."https://github.com/".insteadOf "git@github.com:"
           claude plugin marketplace add dash0hq/claude-marketplace --scope user
           claude plugin install dash0-agent-plugin@dash0 --scope user
 
-      - name: Test marketplace install (Anthropic official)
+      - name: Test marketplace install (workspace, PR code)
+        # Stage the workspace as a local marketplace and install from it. Unlike
+        # the published-marketplace step above, this exercises THIS PR's plugin
+        # files end-to-end through the marketplace install path — catching
+        # regressions in plugin.json, marketplace metadata, or the install flow
+        # before they ship to a real marketplace.
         run: |
-          claude plugin marketplace add anthropics/claude-plugins-official --scope user
-          claude plugin install dash0@claude-plugins-official --scope user
+          mkdir -p /tmp/local-mp/.claude-plugin
+          ln -s "$GITHUB_WORKSPACE" /tmp/local-mp/dash0-agent-plugin
+          cat > /tmp/local-mp/.claude-plugin/marketplace.json <<'JSON'
+          {
+            "name": "local",
+            "owner": { "name": "ci-local-test" },
+            "plugins": [
+              { "name": "dash0-agent-plugin", "source": "./dash0-agent-plugin" }
+            ]
+          }
+          JSON
+          claude plugin marketplace add /tmp/local-mp --scope user
+          claude plugin install dash0-agent-plugin@local --scope user

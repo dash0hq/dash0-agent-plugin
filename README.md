@@ -99,12 +99,13 @@ After changing any value via Configure, run `/reload-plugins` to apply it to the
 
 ### Environment variable fallback
 
-When a `userConfig` value is not set, the plugin falls back to the matching `DASH0_*` environment variable. This is useful for `--plugin-dir` development, CI, or when you'd rather manage credentials outside of Claude Code's storage.
+For non-sensitive options, the plugin falls back to `DASH0_*` environment variables when the `userConfig` value is not set. This is useful for `--plugin-dir` development or CI.
+
+> **Note:** `AUTH_TOKEN` has no env var fallback — it must be configured via `/plugin → Configure` (stored in the OS keychain). This prevents the token from leaking into tool-spawned shell environments where other tools (e.g. Dash0 CLI) might pick it up.
 
 | Variable | Description |
 |---|---|
 | `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL — must include scheme (e.g. `https://ingress.us1.dash0.com`) |
-| `DASH0_AUTH_TOKEN` | Dash0 authentication token |
 | `DASH0_DATASET` | Dash0 dataset |
 | `DASH0_AGENT_NAME` | Agent name |
 | `DASH0_OMIT_USER_INFO` | Anonymize user identity (default: `true`). When true, `user.name` is emitted as a hash and `user.email` is omitted. Set to `false` to include real identity. |

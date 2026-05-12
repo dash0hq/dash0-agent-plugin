@@ -118,6 +118,7 @@ func TestNewToolSpan(t *testing.T) {
 
 	assertAttr(t, span.Attributes, "gen_ai.tool.name", "Bash")
 	assertAttr(t, span.Attributes, "gen_ai.tool.call.arguments", "ls -la")
+	assertAttr(t, span.Attributes, "gen_ai.tool.type", "function")
 }
 
 func TestNewToolSpanFailure(t *testing.T) {

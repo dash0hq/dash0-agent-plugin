@@ -576,6 +576,24 @@ func TestPluginOption(t *testing.T) {
 	})
 }
 
+func TestPluginOptionSecure(t *testing.T) {
+	t.Run("reads only from CLAUDE_PLUGIN_OPTION", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", "secure-token")
+		t.Setenv("DASH0_AUTH_TOKEN", "leaked-token")
+		assert.Equal(t, "secure-token", pluginOptionSecure("AUTH_TOKEN"))
+	})
+
+	t.Run("does NOT fall back to DASH0 env var", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", "")
+		t.Setenv("DASH0_AUTH_TOKEN", "leaked-token")
+		assert.Equal(t, "", pluginOptionSecure("AUTH_TOKEN"))
+	})
+
+	t.Run("returns empty when nothing set", func(t *testing.T) {
+		assert.Equal(t, "", pluginOptionSecure("AUTH_TOKEN"))
+	})
+}
+
 func TestPluginOptionBool(t *testing.T) {
 	t.Run("prefers CLAUDE_PLUGIN_OPTION over DASH0", func(t *testing.T) {
 		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_BOOL", "true")

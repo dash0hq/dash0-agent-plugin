@@ -16,7 +16,7 @@ if [[ -f "$SETTINGS_FILE" ]]; then
   val=$(echo "$FRONTMATTER" | grep '^otlp_url:' | sed 's/otlp_url: *//' | sed 's/^"\(.*\)"$/\1/')
   [[ -n "$val" ]] && export DASH0_OTLP_URL="$val"
   val=$(echo "$FRONTMATTER" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/')
-  [[ -n "$val" ]] && export DASH0_AUTH_TOKEN="$val"
+  [[ -n "$val" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$val"
   val=$(echo "$FRONTMATTER" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/')
   [[ -n "$val" ]] && export DASH0_DATASET="$val"
   val=$(echo "$FRONTMATTER" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/')

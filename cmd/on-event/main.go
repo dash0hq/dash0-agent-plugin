@@ -197,11 +197,21 @@ func envBool(key string) bool {
 // pluginOption returns the configured value for the given key, preferring
 // the userConfig-derived CLAUDE_PLUGIN_OPTION_<key> over the legacy DASH0_<key>.
 // An empty CLAUDE_PLUGIN_OPTION_<key> falls through to DASH0_<key>.
+//
+// Note: sensitive values (AUTH_TOKEN) must use pluginOptionSecure instead to
+// prevent env var leakage into tool-spawned shells.
 func pluginOption(key string) string {
 	if v := os.Getenv("CLAUDE_PLUGIN_OPTION_" + key); v != "" {
 		return v
 	}
 	return os.Getenv("DASH0_" + key)
+}
+
+// pluginOptionSecure reads only from CLAUDE_PLUGIN_OPTION_<key> without falling
+// back to DASH0_<key>. Use for sensitive values like auth tokens that must not
+// leak into tool-spawned shell environments.
+func pluginOptionSecure(key string) string {
+	return os.Getenv("CLAUDE_PLUGIN_OPTION_" + key)
 }
 
 // pluginOptionBool is the boolean counterpart of pluginOption.
@@ -315,7 +325,7 @@ func run() error {
 
 	cfg := otlp.Config{
 		OTLPUrl:      pluginOption("OTLP_URL"),
-		AuthToken:    pluginOption("AUTH_TOKEN"),
+		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
 		Dataset:      pluginOption("DATASET"),
 		AgentName:    pluginOption("AGENT_NAME"),
 		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", true),

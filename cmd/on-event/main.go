@@ -210,6 +210,16 @@ func pluginOptionBool(key string) bool {
 	return v == "true" || v == "1"
 }
 
+// pluginOptionBoolDefault returns defaultVal when the option is unset/empty,
+// and parses as boolean otherwise.
+func pluginOptionBoolDefault(key string, defaultVal bool) bool {
+	v := strings.ToLower(strings.TrimSpace(pluginOption(key)))
+	if v == "" {
+		return defaultVal
+	}
+	return v == "true" || v == "1"
+}
+
 func run() error {
 	dotenv.Load(".env")
 
@@ -308,8 +318,8 @@ func run() error {
 		AuthToken:    pluginOption("AUTH_TOKEN"),
 		Dataset:      pluginOption("DATASET"),
 		AgentName:    pluginOption("AGENT_NAME"),
-		OmitUserInfo: pluginOptionBool("OMIT_USER_INFO"),
-		OmitIO:       pluginOptionBool("OMIT_IO"),
+		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", true),
+		OmitIO:       pluginOptionBoolDefault("OMIT_IO", true),
 		Debug:        pluginOptionBool("DEBUG"),
 		DebugFile:    pluginOption("DEBUG_FILE"),
 	}

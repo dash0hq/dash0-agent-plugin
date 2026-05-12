@@ -3,6 +3,8 @@ package otlp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -87,8 +89,8 @@ type Config struct {
 	AuthToken    string
 	Dataset      string
 	AgentName    string
-	OmitUserInfo bool   // when true, omit user.name and user.email resource attributes
-	OmitIO       bool   // when true, omit tool inputs/outputs and prompt/response content
+	OmitUserInfo bool   // when true (default), hash user.name and omit user.email
+	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to
 }
@@ -405,14 +407,23 @@ func vcsResourceAttributes(cfg Config) []Attribute {
 	if info.RefHeadType != "" {
 		attrs = append(attrs, attr("vcs.ref.head.type", info.RefHeadType))
 	}
-	if !cfg.OmitUserInfo {
-		if info.UserName != "" {
+	if info.UserName != "" {
+		if cfg.OmitUserInfo {
+			attrs = append(attrs, attr("user.name", hashIdentity(info.UserName)))
+		} else {
 			attrs = append(attrs, attr("user.name", info.UserName))
 		}
-		if info.UserEmail != "" {
-			attrs = append(attrs, attr("user.email", info.UserEmail))
-		}
+	}
+	if info.UserEmail != "" && !cfg.OmitUserInfo {
+		attrs = append(attrs, attr("user.email", info.UserEmail))
 	}
 
 	return attrs
+}
+
+// hashIdentity returns a short, stable, non-reversible identifier derived from
+// the input string. Used to anonymize user.name while preserving groupability.
+func hashIdentity(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:8])
 }

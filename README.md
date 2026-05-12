@@ -69,6 +69,21 @@ The plugin registers a hook for every supported Claude Code event. Each event's 
 | Elicitation | `Elicitation`, `ElicitationResult` |
 | Notification | `Notification` |
 
+### Privacy defaults
+
+By default, the plugin anonymizes telemetry:
+
+| Setting | Default | Behavior |
+|---|---|---|
+| `OMIT_USER_INFO` | `true` | `user.name` is emitted as a SHA-256 hash (stable per-user grouping without revealing identity). `user.email` is omitted. |
+| `OMIT_IO` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
+
+**What is always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
+
+**What is omitted by default**: real user name, email, prompt text, tool call arguments and responses.
+
+To opt in to full data collection, set either option to `"false"` via `/plugin` → Installed → dash0-agent-plugin → Configure.
+
 ## Configuration
 
 The plugin declares its configuration via Claude Code's `userConfig` mechanism. Values are entered in the Configure UI described in [First-time setup](#first-time-setup) above. Claude Code stores non-sensitive values in `~/.claude/settings.json` under `pluginConfigs[<plugin>@<marketplace>].options`; sensitive values go to the OS keychain (or `~/.claude/.credentials.json` as a fallback). The plugin's hook subprocess receives them as `CLAUDE_PLUGIN_OPTION_<KEY>` environment variables.
@@ -92,8 +107,8 @@ When a `userConfig` value is not set, the plugin falls back to the matching `DAS
 | `DASH0_AUTH_TOKEN` | Dash0 authentication token |
 | `DASH0_DATASET` | Dash0 dataset |
 | `DASH0_AGENT_NAME` | Agent name |
-| `DASH0_OMIT_USER_INFO` | Omit `user.name` and `user.email` from telemetry (`true`/`false`) |
-| `DASH0_OMIT_IO` | Omit tool inputs/outputs and prompt content (`true`/`false`) |
+| `DASH0_OMIT_USER_INFO` | Anonymize user identity (default: `true`). When true, `user.name` is emitted as a hash and `user.email` is omitted. Set to `false` to include real identity. |
+| `DASH0_OMIT_IO` | Omit prompts and tool I/O (default: `true`). When true, prompt content and tool call inputs/outputs are stripped from spans. Set to `false` to include full content. |
 | `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
 

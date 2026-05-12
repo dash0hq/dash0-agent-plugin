@@ -590,6 +590,25 @@ func TestPluginOptionBool(t *testing.T) {
 	})
 }
 
+func TestPluginOptionBoolDefault(t *testing.T) {
+	t.Run("returns default when env is unset", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_MY_FLAG", "")
+		t.Setenv("DASH0_MY_FLAG", "")
+		assert.True(t, pluginOptionBoolDefault("MY_FLAG", true))
+		assert.False(t, pluginOptionBoolDefault("MY_FLAG", false))
+	})
+
+	t.Run("explicit false overrides default true", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_MY_FLAG", "false")
+		assert.False(t, pluginOptionBoolDefault("MY_FLAG", true))
+	})
+
+	t.Run("explicit true overrides default false", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_MY_FLAG", "true")
+		assert.True(t, pluginOptionBoolDefault("MY_FLAG", false))
+	})
+}
+
 func TestSessionStartHintWhenNotConfigured(t *testing.T) {
 	dataDir := t.TempDir()
 	env := append(os.Environ(),

@@ -274,3 +274,20 @@ func assertIntAttr(t *testing.T, attrs []Attribute, key string, want int64) {
 	}
 	t.Errorf("attribute %s not found", key)
 }
+
+func TestHashIdentity(t *testing.T) {
+	t.Run("produces stable 16-char hex output", func(t *testing.T) {
+		result := hashIdentity("Guy Moses")
+		assert.Len(t, result, 16)
+		assert.Equal(t, result, hashIdentity("Guy Moses"))
+	})
+
+	t.Run("different inputs produce different hashes", func(t *testing.T) {
+		assert.NotEqual(t, hashIdentity("Alice"), hashIdentity("Bob"))
+	})
+
+	t.Run("empty string still produces a hash", func(t *testing.T) {
+		result := hashIdentity("")
+		assert.Len(t, result, 16)
+	})
+}

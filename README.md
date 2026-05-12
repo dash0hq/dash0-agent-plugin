@@ -1,6 +1,6 @@
 # Dash0 Agent Plugin
 
-Claude Code plugin that captures all agent activity and logs hook events to a newline-delimited JSON file for observability.
+Claude Code plugin that captures agent activity as OpenTelemetry traces — tool calls, LLM invocations, token usage, and errors.
 
 ## Installation
 
@@ -68,6 +68,42 @@ The plugin registers a hook for every supported Claude Code event. Each event's 
 | Compaction | `PreCompact`, `PostCompact` |
 | Elicitation | `Elicitation`, `ElicitationResult` |
 | Notification | `Notification` |
+
+### Telemetry attributes
+
+The plugin emits OpenTelemetry spans following [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/). Key attributes:
+
+**Resource attributes** (on all spans):
+
+| Attribute | Description |
+|---|---|
+| `service.name` | Agent name (configurable via `AGENT_NAME`, defaults to `claude-code`) |
+| `gen_ai.provider.name` | LLM provider |
+| `vcs.repository.name` | Git repository name |
+| `vcs.ref.head.name` | Git branch |
+| `vcs.repository.url.full` | Full repository URL |
+| `user.name` | Real name or SHA-256 hash depending on privacy setting |
+
+**Span attributes (LLM / chat spans)**:
+
+| Attribute | Description |
+|---|---|
+| `gen_ai.conversation.id` | Session identifier |
+| `gen_ai.conversation.name` | Session title |
+| `gen_ai.request.model` | Model used |
+| `gen_ai.usage.input_tokens` | Input tokens consumed |
+| `gen_ai.usage.output_tokens` | Output tokens produced |
+| `gen_ai.usage.cache_read_input_tokens` | Tokens read from prompt cache |
+| `gen_ai.usage.cache_creation_input_tokens` | Tokens written to prompt cache |
+
+**Span attributes (tool spans)**:
+
+| Attribute | Description |
+|---|---|
+| `gen_ai.tool.name` | Tool name (e.g. `Bash`, `Read`, `mcp__server__tool`) |
+| `gen_ai.tool.type` | Always `function` for Claude Code tools |
+| `gen_ai.tool.call.arguments` | Tool input (omitted when `OMIT_IO=true`) |
+| `gen_ai.tool.call.result` | Tool output (omitted when `OMIT_IO=true`) |
 
 ### Privacy defaults
 

@@ -57,3 +57,83 @@ jobs:
           JSON
           claude plugin marketplace add /tmp/local-mp --scope user
           claude plugin install dash0-agent-plugin@local --scope user
+
+      - name: Test marketplace install (official, published)
+        run: |
+          claude plugin marketplace add anthropics/claude-plugins-official --scope user
+          claude plugin install dash0@claude-plugins-official --scope user
+
+  consistency-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Version consistency (plugin.json == on-event.sh)
+        run: |
+          PLUGIN_VERSION=$(jq -r '.version' .claude-plugin/plugin.json)
+          SCRIPT_VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          echo "plugin.json: $PLUGIN_VERSION"
+          echo "on-event.sh: $SCRIPT_VERSION"
+          if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
+            echo "::error::Version mismatch: plugin.json=$PLUGIN_VERSION, on-event.sh=$SCRIPT_VERSION"
+            exit 1
+          fi
+
+      - name: Release assets exist for configured version
+        run: |
+          VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          echo "Checking release assets for v$VERSION"
+          for BINARY in on-event-linux-amd64 on-event-linux-arm64 on-event-darwin-amd64 on-event-darwin-arm64; do
+            URL="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${VERSION}/${BINARY}"
+            STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "$URL")
+            echo "  $BINARY: $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              echo "::error::Binary $BINARY not found at $URL (HTTP $STATUS)"
+              exit 1
+            fi
+          done
+
+      - name: userConfig covers all plugin options
+        run: |
+          # Extract option keys used in Go code via pluginOption/pluginOptionSecure/pluginOptionBool/pluginOptionBoolDefault
+          USED_KEYS=$(grep -ohE 'pluginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' cmd/on-event/main.go | \
+            sed 's/pluginOption[^"]*"//' | sed 's/"$//' | sort -u)
+          # Extract keys declared in plugin.json userConfig
+          DECLARED_KEYS=$(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json | sort -u)
+          echo "Used in code: $USED_KEYS"
+          echo "Declared in plugin.json: $DECLARED_KEYS"
+          MISSING=""
+          for key in $USED_KEYS; do
+            # Skip DEBUG and DEBUG_FILE — dev-only, not user-facing
+            if [ "$key" = "DEBUG" ] || [ "$key" = "DEBUG_FILE" ]; then
+              continue
+            fi
+            if ! echo "$DECLARED_KEYS" | grep -qx "$key"; then
+              MISSING="$MISSING $key"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Options used in code but missing from plugin.json userConfig:$MISSING"
+            exit 1
+          fi
+
+      - name: Hook script is valid
+        run: |
+          # Check on-event.sh is executable and has valid shebang
+          if [ ! -x scripts/on-event.sh ]; then
+            echo "::error::scripts/on-event.sh is not executable"
+            exit 1
+          fi
+          HEAD=$(head -1 scripts/on-event.sh)
+          if [[ "$HEAD" != "#!/"* ]]; then
+            echo "::error::scripts/on-event.sh missing shebang"
+            exit 1
+          fi
+          # Check hooks.json references an existing script
+          HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command' hooks/hooks.json)
+          EXPECTED='${CLAUDE_PLUGIN_ROOT}/scripts/on-event.sh'
+          if [ "$HOOK_CMD" != "$EXPECTED" ]; then
+            echo "::error::hooks.json command ($HOOK_CMD) does not match expected ($EXPECTED)"
+            exit 1
+          fi

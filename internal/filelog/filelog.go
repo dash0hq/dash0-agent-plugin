@@ -11,42 +11,28 @@ import (
 const MaxEvents = 100
 
 // WriteEvent marshals the event as JSON and appends it to events.jsonl in
-// dataDir, keeping only the last MaxEvents lines.
+// dataDir. Uses O_APPEND for atomic appends — safe under concurrent writers.
 func WriteEvent(event map[string]any, dataDir string) error {
 	line, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshalling JSON: %w", err)
 	}
+	line = append(line, '\n')
 
 	logFile := filepath.Join(dataDir, "events.jsonl")
 
-	// Read existing lines.
-	var lines [][]byte
-	if data, err := os.ReadFile(logFile); err == nil {
-		for _, l := range bytes.Split(data, []byte("\n")) {
-			if len(l) > 0 {
-				lines = append(lines, l)
-			}
-		}
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", logFile, err)
 	}
-
-	lines = append(lines, line)
-
-	// Keep only the last MaxEvents lines.
-	if len(lines) > MaxEvents {
-		lines = lines[len(lines)-MaxEvents:]
+	_, writeErr := f.Write(line)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("writing %s: %w", logFile, writeErr)
 	}
-
-	var buf bytes.Buffer
-	for _, l := range lines {
-		buf.Write(l)
-		buf.WriteByte('\n')
+	if closeErr != nil {
+		return fmt.Errorf("closing %s: %w", logFile, closeErr)
 	}
-
-	if err := os.WriteFile(logFile, buf.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", logFile, err)
-	}
-
 	return nil
 }
 

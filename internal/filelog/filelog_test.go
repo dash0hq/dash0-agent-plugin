@@ -2,7 +2,6 @@ package filelog
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +42,7 @@ func TestAppendsMultipleEvents(t *testing.T) {
 	}
 }
 
-func TestRotatesAtMaxEvents(t *testing.T) {
+func TestDoesNotLimitFileSize(t *testing.T) {
 	dir := t.TempDir()
 
 	for i := range 105 {
@@ -51,15 +50,7 @@ func TestRotatesAtMaxEvents(t *testing.T) {
 	}
 
 	lines := readLines(t, filepath.Join(dir, "events.jsonl"))
-	require.Len(t, lines, MaxEvents)
-
-	var first map[string]any
-	require.NoError(t, json.Unmarshal([]byte(lines[0]), &first))
-	assert.Equal(t, float64(5), first["seq"], "first retained event")
-
-	var last map[string]any
-	require.NoError(t, json.Unmarshal([]byte(lines[len(lines)-1]), &last))
-	assert.Equal(t, float64(104), last["seq"], "last event")
+	assert.Len(t, lines, 105, "all events retained — session dir is cleaned up at SessionEnd")
 }
 
 func TestPreservesNestedJSON(t *testing.T) {
@@ -132,8 +123,32 @@ func TestFindEventReturnsNilForMissingFile(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-// Suppress unused warning for fmt import.
-var _ = fmt.Sprintf
+func TestConcurrentWritesDoNotLoseEvents(t *testing.T) {
+	dir := t.TempDir()
+	const goroutines = 20
+
+	errs := make(chan error, goroutines)
+	for i := range goroutines {
+		go func(seq int) {
+			errs <- WriteEvent(map[string]any{"seq": seq}, dir)
+		}(i)
+	}
+
+	for range goroutines {
+		require.NoError(t, <-errs)
+	}
+
+	lines := readLines(t, filepath.Join(dir, "events.jsonl"))
+	assert.Len(t, lines, goroutines, "all events must be present — no lost writes")
+
+	seen := make(map[float64]bool)
+	for _, line := range lines {
+		var got map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &got))
+		seen[got["seq"].(float64)] = true
+	}
+	assert.Len(t, seen, goroutines, "all distinct sequence numbers must be present")
+}
 
 func readLines(t *testing.T, path string) []string {
 	t.Helper()

@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -239,6 +241,61 @@ func TestSendLogOmitIO(t *testing.T) {
 	assertNoAttr(t, lr.Attributes, "gen_ai.tool.call.result")
 	assertNoAttr(t, lr.Attributes, "gen_ai.output.messages")
 	assertNoAttr(t, lr.Attributes, "gen_ai.input.messages")
+}
+
+func TestTruncateContent(t *testing.T) {
+	t.Run("short content is not truncated", func(t *testing.T) {
+		result := truncateContent("hello world")
+		assert.Equal(t, "hello world", result)
+	})
+
+	t.Run("content at exactly max size is not truncated", func(t *testing.T) {
+		exact := strings.Repeat("x", MaxContentBytes)
+		result := truncateContent(exact)
+		assert.Equal(t, exact, result)
+	})
+
+	t.Run("content over max size is truncated with marker", func(t *testing.T) {
+		large := strings.Repeat("a", MaxContentBytes+5000)
+		result := truncateContent(large)
+		assert.True(t, len(result) < len(large), "result should be smaller than input")
+		assert.Contains(t, result, "... [truncated,")
+		assert.Contains(t, result, "total]")
+	})
+
+	t.Run("truncation preserves the beginning of the content", func(t *testing.T) {
+		large := "IMPORTANT_PREFIX_" + strings.Repeat("x", MaxContentBytes+1000)
+		result := truncateContent(large)
+		assert.True(t, strings.HasPrefix(result, "IMPORTANT_PREFIX_"))
+	})
+
+	t.Run("empty string is unchanged", func(t *testing.T) {
+		assert.Equal(t, "", truncateContent(""))
+	})
+}
+
+func TestToolIOTruncatedInSpan(t *testing.T) {
+	largeOutput := strings.Repeat("Z", MaxContentBytes+5000)
+
+	event := map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "sess-trunc",
+		"tool_name":       "Bash",
+		"tool_input":      largeOutput,
+		"tool_response":   largeOutput,
+	}
+
+	cfg := Config{OmitIO: false}
+	span := NewToolSpan("aabbccdd"+"eeff0011"+"22334455"+"66778899", "span1234span1234", "parentidparentid",
+		time.Now().Add(-100*time.Millisecond), time.Now(), event, false, cfg)
+
+	for _, a := range span.Attributes {
+		if a.Key == "gen_ai.tool.call.arguments" || a.Key == "gen_ai.tool.call.result" {
+			assert.LessOrEqual(t, len(*a.Value.StringValue), MaxContentBytes+100,
+				"attribute %s should be truncated", a.Key)
+			assert.Contains(t, *a.Value.StringValue, "... [truncated,")
+		}
+	}
 }
 
 func assertNoAttr(t *testing.T, attrs []Attribute, key string) {

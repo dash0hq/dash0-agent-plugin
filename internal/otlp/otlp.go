@@ -247,8 +247,13 @@ var attrSkipKeys = map[string]bool{
 	"duration_ms":           true,
 }
 
+// MaxContentBytes is the maximum size for content attributes (tool I/O, prompts).
+// Larger values are truncated with a marker. 16KB balances useful context
+// (stack traces, build errors) against payload size (50 tool calls at max = ~800KB).
+const MaxContentBytes = 16 * 1024
+
 // contentKeys lists event fields that contain input/output content.
-// These are omitted when Config.OmitIO is true.
+// These are omitted when Config.OmitIO is true, or truncated when included.
 var contentKeys = map[string]bool{
 	"tool_input":             true,
 	"tool_response":          true,
@@ -317,6 +322,9 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 		if t, ok := attrTransformMap[k]; ok {
 			s := t.transform(v)
 			if s != "" {
+				if contentKeys[k] {
+					s = truncateContent(s)
+				}
 				attrs = append(attrs, Attribute{Key: t.key, Value: StringVal(s)})
 			}
 			continue
@@ -326,11 +334,24 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			key = mapped
 		}
 		av := toAttrValue(v)
+		if av.StringValue != nil && contentKeys[k] {
+			truncated := truncateContent(*av.StringValue)
+			av = StringVal(truncated)
+		}
 		if av.StringValue != nil || av.IntValue != nil {
 			attrs = append(attrs, Attribute{Key: key, Value: av})
 		}
 	}
 	return attrs
+}
+
+// truncateContent caps a string to MaxContentBytes, appending a marker if truncated.
+func truncateContent(s string) string {
+	if len(s) <= MaxContentBytes {
+		return s
+	}
+	marker := fmt.Sprintf("... [truncated, %dKB total]", len(s)/1024)
+	return s[:MaxContentBytes-len(marker)] + marker
 }
 
 // toAttrValue converts a Go value to an OTLP attribute value. Explicitly typed

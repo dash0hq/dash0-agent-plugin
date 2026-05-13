@@ -104,8 +104,8 @@ The plugin emits OpenTelemetry spans following [GenAI semantic conventions](http
 |---|---|
 | `gen_ai.tool.name` | Tool name (e.g. `Bash`, `Read`, `mcp__server__tool`) |
 | `gen_ai.tool.type` | Always `function` for Claude Code tools |
-| `gen_ai.tool.call.arguments` | Tool input (omitted when `OMIT_IO=true`) |
-| `gen_ai.tool.call.result` | Tool output (omitted when `OMIT_IO=true`) |
+| `gen_ai.tool.call.arguments` | Tool input (omitted when `OMIT_IO=true`, truncated to 16KB otherwise) |
+| `gen_ai.tool.call.result` | Tool output (omitted when `OMIT_IO=true`, truncated to 16KB otherwise) |
 
 ### Privacy defaults
 

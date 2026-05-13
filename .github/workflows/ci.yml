@@ -112,6 +112,13 @@ jobs:
         run: |
           VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//' | sed 's/"//')
           echo "Checking release assets for v$VERSION"
+          # Check if the release tag exists at all — if not, this is a
+          # version bump PR preparing for a future release. Warn but don't fail.
+          TAG_STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "https://github.com/dash0hq/dash0-agent-plugin/releases/tag/v${VERSION}")
+          if [ "$TAG_STATUS" = "404" ]; then
+            echo "::warning::Release v$VERSION does not exist yet — this is expected for version bump PRs. Will be validated after release."
+            exit 0
+          fi
           for BINARY in on-event-linux-amd64 on-event-linux-arm64 on-event-darwin-amd64 on-event-darwin-arm64; do
             URL="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${VERSION}/${BINARY}"
             STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "$URL")

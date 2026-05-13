@@ -174,6 +174,16 @@ func SendLog(event map[string]any, cfg Config) error {
 
 // sendOTLP sends a payload to the configured OTLP endpoint with a single retry
 // on transient failures (network errors or 5xx responses).
+// CheckConnectivity verifies the OTLP endpoint is reachable and the auth token
+// is valid by sending an empty traces export. Returns nil on success.
+func CheckConnectivity(cfg Config) error {
+	if cfg.OTLPUrl == "" {
+		return fmt.Errorf("no OTLP_URL configured")
+	}
+	empty := []byte(`{"resourceSpans":[]}`)
+	return sendOTLP(cfg, "/v1/traces", empty)
+}
+
 func sendOTLP(cfg Config, path string, payload []byte) error {
 	const maxAttempts = 2
 	const retryDelay = 500 * time.Millisecond

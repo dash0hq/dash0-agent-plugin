@@ -342,8 +342,14 @@ func run() error {
 		}
 	}
 
-	if cfg.OTLPUrl == "" && hookEvent == "SessionStart" {
-		fmt.Fprintln(os.Stderr, "dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.")
+	if hookEvent == "SessionStart" {
+		if cfg.OTLPUrl == "" {
+			fmt.Fprintln(os.Stderr, "dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.")
+		} else if err := otlp.CheckConnectivity(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "dash0: connectivity check failed — %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "dash0: connected")
+		}
 	}
 
 	switch hookEvent {

@@ -650,6 +650,18 @@ func TestSessionStartHintSuppressedWhenConfigured(t *testing.T) {
 	)
 	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-configured","model":"opus"}`, env)
 	assert.NotContains(t, stderr, "dash0: not configured")
+	assert.Contains(t, stderr, "dash0: connected")
+}
+
+func TestSessionStartConnectivityFailure(t *testing.T) {
+	dataDir := t.TempDir()
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL=http://localhost:1", // unreachable port
+		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
+	)
+	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-connfail","model":"opus"}`, env)
+	assert.Contains(t, stderr, "dash0: connectivity check failed")
 }
 
 func TestHintNotEmittedOnNonSessionStartEvents(t *testing.T) {

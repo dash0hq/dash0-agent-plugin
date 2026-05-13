@@ -10,6 +10,8 @@ Claude Code plugin that captures agent activity as OpenTelemetry traces — tool
 /plugin install dash0@claude-plugins-official
 ```
 
+> If you get "Plugin not found in marketplace", the official marketplace may not be registered yet. Run `/plugin marketplace add anthropics/claude-plugins-official` first, then retry the install.
+
 ### From the Dash0 marketplace
 
 ```

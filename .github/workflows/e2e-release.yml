@@ -1,15 +1,15 @@
 name: E2E Release Verification
 
-# Runs after a release is published or on merge to main.
-# Tests the full flow: on-event.sh downloads the real binary from GitHub
-# Releases, invokes it with a SessionStart event, and verifies the mock
-# OTLP server receives the connectivity check.
+# Runs after a release is published. Tests the full flow: on-event.sh
+# downloads the real binary from GitHub Releases, invokes it with events,
+# and verifies the mock OTLP server receives the expected requests.
+#
+# Does NOT run on push to main — the binary won't exist until a release
+# is cut. Use workflow_dispatch for manual testing.
 
 on:
   release:
     types: [published]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:

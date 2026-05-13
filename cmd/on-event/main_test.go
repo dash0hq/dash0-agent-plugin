@@ -635,10 +635,10 @@ func TestSessionStartHintWhenNotConfigured(t *testing.T) {
 		"DASH0_OTLP_URL=",
 		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
 	)
-	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-unconfigured","model":"opus"}`, env)
-	assert.Contains(t, stderr, "dash0: not configured")
-	assert.Contains(t, stderr, "/plugin")
-	assert.Contains(t, stderr, "/reload-plugins")
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-unconfigured","model":"opus"}`, env)
+	assert.Contains(t, stdout, `"systemMessage"`)
+	assert.Contains(t, stdout, "telemetry is not active")
+	assert.Contains(t, stdout, "/reload-plugins")
 }
 
 func TestSessionStartHintSuppressedWhenConfigured(t *testing.T) {
@@ -648,9 +648,10 @@ func TestSessionStartHintSuppressedWhenConfigured(t *testing.T) {
 		"CLAUDE_PLUGIN_DATA="+dataDir,
 		"DASH0_OTLP_URL="+srv.URL,
 	)
-	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-configured","model":"opus"}`, env)
-	assert.NotContains(t, stderr, "dash0: not configured")
-	assert.Contains(t, stderr, "dash0: connected")
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-configured","model":"opus"}`, env)
+	assert.NotContains(t, stdout, "telemetry is not active")
+	assert.Contains(t, stdout, `"systemMessage"`)
+	assert.Contains(t, stdout, "dash0: connected")
 }
 
 func TestSessionStartConnectivityFailure(t *testing.T) {
@@ -660,8 +661,8 @@ func TestSessionStartConnectivityFailure(t *testing.T) {
 		"DASH0_OTLP_URL=http://localhost:1", // unreachable port
 		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
 	)
-	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-connfail","model":"opus"}`, env)
-	assert.Contains(t, stderr, "dash0: connectivity check failed")
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-connfail","model":"opus"}`, env)
+	assert.Contains(t, stdout, "connectivity check failed")
 }
 
 func TestHintNotEmittedOnNonSessionStartEvents(t *testing.T) {
@@ -671,8 +672,8 @@ func TestHintNotEmittedOnNonSessionStartEvents(t *testing.T) {
 		"CLAUDE_PLUGIN_DATA="+dataDir,
 		"DASH0_OTLP_URL=",
 	)
-	_, stderr := execBinary(t, `{"hook_event_name":"PreToolUse","session_id":"sess-x","tool_name":"Bash","tool_use_id":"tu1"}`, env)
-	assert.NotContains(t, stderr, "dash0: not configured")
+	stdout, _ := execBinary(t, `{"hook_event_name":"PreToolUse","session_id":"sess-x","tool_name":"Bash","tool_use_id":"tu1"}`, env)
+	assert.NotContains(t, stdout, "systemMessage")
 }
 
 func TestOmitIOOmitsContentAttributes(t *testing.T) {

@@ -188,6 +188,20 @@ func extractAgentIDFromResponse(v any) string {
 	return id
 }
 
+// printHookResponse outputs a JSON response that Claude Code renders as both
+// a user-visible message (systemMessage) and model context (additionalContext).
+func printHookResponse(userMessage, modelContext string) {
+	resp := map[string]string{}
+	if userMessage != "" {
+		resp["systemMessage"] = userMessage
+	}
+	if modelContext != "" {
+		resp["additionalContext"] = modelContext
+	}
+	out, _ := json.Marshal(resp)
+	fmt.Fprintln(os.Stdout, string(out))
+}
+
 // envBool returns true when the environment variable is set to "true" or "1".
 func envBool(key string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
@@ -344,11 +358,17 @@ func run() error {
 
 	if hookEvent == "SessionStart" {
 		if cfg.OTLPUrl == "" {
-			fmt.Fprintln(os.Stderr, "dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.")
+			printHookResponse(
+				"dash0: telemetry is not active — configure the plugin to start sending data. Run /plugin → Installed → dash0 → Configure, then /reload-plugins.",
+				"",
+			)
 		} else if err := otlp.CheckConnectivity(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "dash0: connectivity check failed — %v\n", err)
+			printHookResponse(
+				fmt.Sprintf("dash0: connectivity check failed — %v", err),
+				"",
+			)
 		} else {
-			fmt.Fprintln(os.Stderr, "dash0: connected")
+			printHookResponse("dash0: connected", "")
 		}
 	}
 

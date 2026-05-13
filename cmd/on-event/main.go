@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -202,6 +205,49 @@ func printHookResponse(userMessage, modelContext string) {
 	fmt.Fprintln(os.Stdout, string(out))
 }
 
+// deriveAppURL maps an OTLP ingress URL to the corresponding Dash0 app URL.
+// Returns empty string if the URL doesn't match a known Dash0 pattern.
+func deriveAppURL(otlpURL string) string {
+	if otlpURL == "" {
+		return ""
+	}
+	u, err := url.Parse(otlpURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	switch {
+	case strings.HasSuffix(host, ".dash0.com"):
+		return "https://app.dash0.com"
+	case strings.HasSuffix(host, ".dash0-dev.com"):
+		return "https://app.dash0-dev.com"
+	default:
+		return ""
+	}
+}
+
+// buildSessionURL constructs a full Dash0 session details URL with the encoded
+// URL state parameter that the Dash0 UI expects.
+func buildSessionURL(appURL, sessionID string) string {
+	state := map[string]any{
+		"/agent-monitoring/claude-code/sessions/details": map[string]any{
+			"agentSession": map[string]any{
+				"sessionId": sessionID,
+			},
+		},
+	}
+	stateJSON, err := json.Marshal(state)
+	if err != nil {
+		return appURL + "/agent-monitoring/claude-code/sessions/details"
+	}
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	w.Write(stateJSON)
+	w.Close()
+	encoded := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(buf.Bytes())
+	return appURL + "/agent-monitoring/claude-code/sessions/details?s=" + encoded
+}
+
 // envBool returns true when the environment variable is set to "true" or "1".
 func envBool(key string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
@@ -380,6 +426,10 @@ func run() error {
 	case "Stop", "StopFailure":
 		if err := sendLLMTrace(event, cfg, now, sessionDir, hookEvent == "StopFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
+		}
+		if appURL := deriveAppURL(cfg.OTLPUrl); appURL != "" {
+			sessionURL := buildSessionURL(appURL, sessionID)
+			printHookResponse(fmt.Sprintf("dash0: view session → %s", sessionURL), "")
 		}
 		// Clear trace context so SessionEnd knows the chat span was already emitted.
 		otlp.ClearTraceContext(sessionDir)

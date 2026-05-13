@@ -42,15 +42,39 @@ BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}"
 # Download the binary on first run.
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR"
-  URL="https://github.com/${REPO}/releases/download/v${VERSION}/on-event-${OS}-${ARCH}"
+  BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
+  ASSET="on-event-${OS}-${ARCH}"
+  URL="${BASE_URL}/${ASSET}"
+  CHECKSUMS_URL="${BASE_URL}/checksums.txt"
+
   if command -v curl &>/dev/null; then
     curl -fsSL -o "$BINARY" "$URL"
+    CHECKSUMS=$(curl -fsSL "$CHECKSUMS_URL")
   elif command -v wget &>/dev/null; then
     wget -qO "$BINARY" "$URL"
+    CHECKSUMS=$(wget -qO- "$CHECKSUMS_URL")
   else
     echo "on-event: neither curl nor wget found" >&2
     exit 1
   fi
+
+  # Verify checksum.
+  EXPECTED=$(echo "$CHECKSUMS" | grep "  ${ASSET}$" | cut -d' ' -f1)
+  if [ -n "$EXPECTED" ]; then
+    if command -v sha256sum &>/dev/null; then
+      ACTUAL=$(sha256sum "$BINARY" | cut -d' ' -f1)
+    elif command -v shasum &>/dev/null; then
+      ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
+    else
+      ACTUAL=""
+    fi
+    if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+      echo "on-event: checksum mismatch (expected $EXPECTED, got $ACTUAL)" >&2
+      rm -f "$BINARY"
+      exit 1
+    fi
+  fi
+
   chmod +x "$BINARY"
 fi
 

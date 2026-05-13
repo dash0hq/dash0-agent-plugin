@@ -627,6 +627,26 @@ func TestPluginOptionBoolDefault(t *testing.T) {
 	})
 }
 
+func TestDeriveAppURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		otlpURL string
+		want    string
+	}{
+		{"dash0 prod us1", "https://ingress.us1.dash0.com:4318", "https://app.dash0.com"},
+		{"dash0 prod eu1", "https://ingress.eu1.dash0.com:4318", "https://app.dash0.com"},
+		{"dash0 dev", "https://ingress.eu-west-1.aws.dash0-dev.com:4318", "https://app.dash0-dev.com"},
+		{"dash0 dev no port", "https://ingress.eu-west-1.aws.dash0-dev.com", "https://app.dash0-dev.com"},
+		{"unknown endpoint", "https://otel.example.com:4318", ""},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, deriveAppURL(tt.otlpURL))
+		})
+	}
+}
+
 func TestSessionStartHintWhenNotConfigured(t *testing.T) {
 	dataDir := t.TempDir()
 	env := append(os.Environ(),

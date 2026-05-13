@@ -60,7 +60,7 @@ jobs:
 
       - name: Test marketplace install (official, published)
         run: |
-          claude plugin marketplace update claude-plugins-official
+          claude plugin marketplace add anthropics/claude-plugins-official --scope user
           claude plugin install dash0@claude-plugins-official --scope user
 
   consistency-checks:

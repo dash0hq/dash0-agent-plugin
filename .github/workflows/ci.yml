@@ -63,6 +63,34 @@ jobs:
           claude plugin marketplace add anthropics/claude-plugins-official --scope user
           claude plugin install dash0@claude-plugins-official --scope user
 
+  e2e:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Build plugin binary
+        run: go build -o bin/on-event-linux-amd64 ./cmd/on-event
+
+      - name: Run E2E tests
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY not set — skipping E2E tests"
+            exit 0
+          fi
+          go test -tags=e2e -v -timeout=60s ./test/e2e/
+
   consistency-checks:
     runs-on: ubuntu-latest
     steps:

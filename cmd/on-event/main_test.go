@@ -715,17 +715,13 @@ func TestOmitIOOmitsContentAttributes(t *testing.T) {
 	require.NotNil(t, toolSpan)
 	require.NotNil(t, chatSpan)
 
-	// Tool span should not have input/output content.
-	for _, a := range toolSpan.Attributes {
-		assert.NotEqual(t, "gen_ai.tool.call.arguments", a.Key)
-		assert.NotEqual(t, "gen_ai.tool.call.result", a.Key)
-	}
+	// Tool span should have redacted input/output content.
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
 
-	// Chat span should not have prompt/response content.
-	for _, a := range chatSpan.Attributes {
-		assert.NotEqual(t, "gen_ai.input.messages", a.Key)
-		assert.NotEqual(t, "gen_ai.output.messages", a.Key)
-	}
+	// Chat span should have redacted prompt/response content.
+	assertStringAttr(t, chatSpan.Attributes, "gen_ai.input.messages", "<REDACTED>")
+	assertStringAttr(t, chatSpan.Attributes, "gen_ai.output.messages", "<REDACTED>")
 }
 
 func TestUserPromptSubmitStampsChatSpanID(t *testing.T) {

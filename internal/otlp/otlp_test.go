@@ -236,11 +236,11 @@ func TestSendLogOmitIO(t *testing.T) {
 	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "sess-123")
 	assertAttr(t, lr.Attributes, "gen_ai.tool.name", "Bash")
 
-	// Content attributes are omitted.
-	assertNoAttr(t, lr.Attributes, "gen_ai.tool.call.arguments")
-	assertNoAttr(t, lr.Attributes, "gen_ai.tool.call.result")
-	assertNoAttr(t, lr.Attributes, "gen_ai.output.messages")
-	assertNoAttr(t, lr.Attributes, "gen_ai.input.messages")
+	// Content attributes are present but redacted.
+	assertAttr(t, lr.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+	assertAttr(t, lr.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
+	assertAttr(t, lr.Attributes, "gen_ai.output.messages", "<REDACTED>")
+	assertAttr(t, lr.Attributes, "gen_ai.input.messages", "<REDACTED>")
 }
 
 func TestTruncateContent(t *testing.T) {

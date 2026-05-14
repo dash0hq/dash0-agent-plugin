@@ -252,8 +252,10 @@ var attrSkipKeys = map[string]bool{
 // (stack traces, build errors) against payload size (50 tool calls at max = ~800KB).
 const MaxContentBytes = 16 * 1024
 
+const redactedValue = "<REDACTED>"
+
 // contentKeys lists event fields that contain input/output content.
-// These are omitted when Config.OmitIO is true, or truncated when included.
+// These are redacted when Config.OmitIO is true, or truncated when included.
 var contentKeys = map[string]bool{
 	"tool_input":             true,
 	"tool_response":          true,
@@ -317,6 +319,14 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			continue
 		}
 		if cfg.OmitIO && contentKeys[k] {
+			key := k
+			if mapped, ok := attrKeyMap[k]; ok {
+				key = mapped
+			}
+			if t, ok := attrTransformMap[k]; ok {
+				key = t.key
+			}
+			attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactedValue)})
 			continue
 		}
 		if t, ok := attrTransformMap[k]; ok {

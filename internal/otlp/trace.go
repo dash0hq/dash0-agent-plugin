@@ -163,6 +163,7 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Time, event map[string]any, failed bool, cfg Config) Span {
 	toolName, _ := event["tool_name"].(string)
 	attrs := eventAttributes(event, cfg)
+	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal("execute_tool")})
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
 	if failed {
@@ -192,6 +193,7 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Time, event map[string]any, failed bool, cfg Config) Span {
 	model, _ := event["model"].(string)
 	attrs := eventAttributes(event, cfg)
+	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal("chat")})
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
 	if failed {

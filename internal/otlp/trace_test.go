@@ -118,6 +118,7 @@ func TestNewToolSpan(t *testing.T) {
 
 	assertAttr(t, span.Attributes, "gen_ai.tool.name", "Bash")
 	assertAttr(t, span.Attributes, "gen_ai.tool.call.arguments", "ls -la")
+	assertAttr(t, span.Attributes, "gen_ai.operation.name", "execute_tool")
 }
 
 func TestNewToolSpanFailure(t *testing.T) {
@@ -159,6 +160,7 @@ func TestNewLLMSpan(t *testing.T) {
 
 	assertAttr(t, span.Attributes, "gen_ai.request.model", "claude-sonnet-4-20250514")
 	assertAttr(t, span.Attributes, "gen_ai.conversation.id", "sess-123")
+	assertAttr(t, span.Attributes, "gen_ai.operation.name", "chat")
 }
 
 func TestNewLLMSpanFailure(t *testing.T) {

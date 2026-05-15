@@ -3,6 +3,8 @@ package otlp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -87,8 +89,8 @@ type Config struct {
 	AuthToken    string
 	Dataset      string
 	AgentName    string
-	OmitUserInfo bool   // when true, omit user.name and user.email resource attributes
-	OmitIO       bool   // when true, omit tool inputs/outputs and prompt/response content
+	OmitUserInfo bool   // when true (default), hash user.name and omit user.email
+	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to
 }
@@ -172,6 +174,16 @@ func SendLog(event map[string]any, cfg Config) error {
 
 // sendOTLP sends a payload to the configured OTLP endpoint with a single retry
 // on transient failures (network errors or 5xx responses).
+// CheckConnectivity verifies the OTLP endpoint is reachable and the auth token
+// is valid by sending an empty traces export. Returns nil on success.
+func CheckConnectivity(cfg Config) error {
+	if cfg.OTLPUrl == "" {
+		return fmt.Errorf("no OTLP_URL configured")
+	}
+	empty := []byte(`{"resourceSpans":[]}`)
+	return sendOTLP(cfg, "/v1/traces", empty)
+}
+
 func sendOTLP(cfg Config, path string, payload []byte) error {
 	const maxAttempts = 2
 	const retryDelay = 500 * time.Millisecond
@@ -235,8 +247,15 @@ var attrSkipKeys = map[string]bool{
 	"duration_ms":           true,
 }
 
+// MaxContentBytes is the maximum size for content attributes (tool I/O, prompts).
+// Larger values are truncated with a marker. 16KB balances useful context
+// (stack traces, build errors) against payload size (50 tool calls at max = ~800KB).
+const MaxContentBytes = 16 * 1024
+
+const redactedValue = "<REDACTED>"
+
 // contentKeys lists event fields that contain input/output content.
-// These are omitted when Config.OmitIO is true.
+// These are redacted when Config.OmitIO is true, or truncated when included.
 var contentKeys = map[string]bool{
 	"tool_input":             true,
 	"tool_response":          true,
@@ -300,11 +319,22 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			continue
 		}
 		if cfg.OmitIO && contentKeys[k] {
+			key := k
+			if mapped, ok := attrKeyMap[k]; ok {
+				key = mapped
+			}
+			if t, ok := attrTransformMap[k]; ok {
+				key = t.key
+			}
+			attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactedValue)})
 			continue
 		}
 		if t, ok := attrTransformMap[k]; ok {
 			s := t.transform(v)
 			if s != "" {
+				if contentKeys[k] {
+					s = truncateContent(s)
+				}
 				attrs = append(attrs, Attribute{Key: t.key, Value: StringVal(s)})
 			}
 			continue
@@ -314,11 +344,24 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			key = mapped
 		}
 		av := toAttrValue(v)
+		if av.StringValue != nil && contentKeys[k] {
+			truncated := truncateContent(*av.StringValue)
+			av = StringVal(truncated)
+		}
 		if av.StringValue != nil || av.IntValue != nil {
 			attrs = append(attrs, Attribute{Key: key, Value: av})
 		}
 	}
 	return attrs
+}
+
+// truncateContent caps a string to MaxContentBytes, appending a marker if truncated.
+func truncateContent(s string) string {
+	if len(s) <= MaxContentBytes {
+		return s
+	}
+	marker := fmt.Sprintf("... [truncated, %dKB total]", len(s)/1024)
+	return s[:MaxContentBytes-len(marker)] + marker
 }
 
 // toAttrValue converts a Go value to an OTLP attribute value. Explicitly typed
@@ -405,14 +448,23 @@ func vcsResourceAttributes(cfg Config) []Attribute {
 	if info.RefHeadType != "" {
 		attrs = append(attrs, attr("vcs.ref.head.type", info.RefHeadType))
 	}
-	if !cfg.OmitUserInfo {
-		if info.UserName != "" {
+	if info.UserName != "" {
+		if cfg.OmitUserInfo {
+			attrs = append(attrs, attr("user.name", hashIdentity(info.UserName)))
+		} else {
 			attrs = append(attrs, attr("user.name", info.UserName))
 		}
-		if info.UserEmail != "" {
-			attrs = append(attrs, attr("user.email", info.UserEmail))
-		}
+	}
+	if info.UserEmail != "" && !cfg.OmitUserInfo {
+		attrs = append(attrs, attr("user.email", info.UserEmail))
 	}
 
 	return attrs
+}
+
+// hashIdentity returns a short, stable, non-reversible identifier derived from
+// the input string. Used to anonymize user.name while preserving groupability.
+func hashIdentity(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:8])
 }

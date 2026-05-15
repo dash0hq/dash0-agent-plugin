@@ -119,6 +119,7 @@ func TestNewToolSpan(t *testing.T) {
 	assertAttr(t, span.Attributes, "gen_ai.tool.name", "Bash")
 	assertAttr(t, span.Attributes, "gen_ai.tool.call.arguments", "ls -la")
 	assertAttr(t, span.Attributes, "gen_ai.operation.name", "execute_tool")
+	assertAttr(t, span.Attributes, "gen_ai.tool.type", "function")
 }
 
 func TestNewToolSpanFailure(t *testing.T) {
@@ -257,9 +258,9 @@ func TestNewToolSpanOmitIO(t *testing.T) {
 
 	// Tool name is still present.
 	assertAttr(t, span.Attributes, "gen_ai.tool.name", "Bash")
-	// Content attributes are omitted.
-	assertNoAttr(t, span.Attributes, "gen_ai.tool.call.arguments")
-	assertNoAttr(t, span.Attributes, "gen_ai.tool.call.result")
+	// Content attributes are present but redacted.
+	assertAttr(t, span.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+	assertAttr(t, span.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
 }
 
 func TestNewLLMSpanOmitIO(t *testing.T) {
@@ -277,9 +278,9 @@ func TestNewLLMSpanOmitIO(t *testing.T) {
 
 	// Model is still present.
 	assertAttr(t, span.Attributes, "gen_ai.request.model", "claude-sonnet-4-20250514")
-	// Content attributes are omitted.
-	assertNoAttr(t, span.Attributes, "gen_ai.input.messages")
-	assertNoAttr(t, span.Attributes, "gen_ai.output.messages")
+	// Content attributes are present but redacted.
+	assertAttr(t, span.Attributes, "gen_ai.input.messages", "<REDACTED>")
+	assertAttr(t, span.Attributes, "gen_ai.output.messages", "<REDACTED>")
 }
 
 func TestSendTraceSkipsWhenNotConfigured(t *testing.T) {

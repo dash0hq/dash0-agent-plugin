@@ -165,6 +165,8 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 	attrs := eventAttributes(event, cfg)
 	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal("execute_tool")})
 
+	attrs = append(attrs, Attribute{Key: "gen_ai.tool.type", Value: StringVal("function")})
+
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
 	if failed {
 		errMsg, _ := event["error"].(string)

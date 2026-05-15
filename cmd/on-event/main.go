@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -188,9 +191,102 @@ func extractAgentIDFromResponse(v any) string {
 	return id
 }
 
+// printHookResponse outputs a JSON response that Claude Code renders as both
+// a user-visible message (systemMessage) and model context (additionalContext).
+func printHookResponse(userMessage, modelContext string) {
+	resp := map[string]string{}
+	if userMessage != "" {
+		resp["systemMessage"] = userMessage
+	}
+	if modelContext != "" {
+		resp["additionalContext"] = modelContext
+	}
+	out, _ := json.Marshal(resp)
+	fmt.Fprintln(os.Stdout, string(out))
+}
+
+// deriveAppURL maps an OTLP ingress URL to the corresponding Dash0 app URL.
+// Returns empty string if the URL doesn't match a known Dash0 pattern.
+func deriveAppURL(otlpURL string) string {
+	if otlpURL == "" {
+		return ""
+	}
+	u, err := url.Parse(otlpURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	switch {
+	case strings.HasSuffix(host, ".dash0.com"):
+		return "https://app.dash0.com"
+	case strings.HasSuffix(host, ".dash0-dev.com"):
+		return "https://app.dash0-dev.com"
+	default:
+		return ""
+	}
+}
+
+// buildSessionURL constructs a full Dash0 session details URL with the encoded
+// URL state parameter that the Dash0 UI expects.
+func buildSessionURL(appURL, sessionID string) string {
+	state := map[string]any{
+		"/agent-monitoring/claude-code/sessions/details": map[string]any{
+			"agentSession": map[string]any{
+				"sessionId": sessionID,
+			},
+		},
+	}
+	stateJSON, err := json.Marshal(state)
+	if err != nil {
+		return appURL + "/agent-monitoring/claude-code/sessions/details"
+	}
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	w.Write(stateJSON)
+	w.Close()
+	encoded := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(buf.Bytes())
+	return appURL + "/agent-monitoring/claude-code/sessions/details?s=" + encoded
+}
+
 // envBool returns true when the environment variable is set to "true" or "1".
 func envBool(key string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "true" || v == "1"
+}
+
+// pluginOption returns the configured value for the given key, preferring
+// the userConfig-derived CLAUDE_PLUGIN_OPTION_<key> over the legacy DASH0_<key>.
+// An empty CLAUDE_PLUGIN_OPTION_<key> falls through to DASH0_<key>.
+//
+// Note: sensitive values (AUTH_TOKEN) must use pluginOptionSecure instead to
+// prevent env var leakage into tool-spawned shells.
+func pluginOption(key string) string {
+	if v := os.Getenv("CLAUDE_PLUGIN_OPTION_" + key); v != "" {
+		return v
+	}
+	return os.Getenv("DASH0_" + key)
+}
+
+// pluginOptionSecure reads only from CLAUDE_PLUGIN_OPTION_<key> without falling
+// back to DASH0_<key>. Use for sensitive values like auth tokens that must not
+// leak into tool-spawned shell environments.
+func pluginOptionSecure(key string) string {
+	return os.Getenv("CLAUDE_PLUGIN_OPTION_" + key)
+}
+
+// pluginOptionBool is the boolean counterpart of pluginOption.
+func pluginOptionBool(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(pluginOption(key)))
+	return v == "true" || v == "1"
+}
+
+// pluginOptionBoolDefault returns defaultVal when the option is unset/empty,
+// and parses as boolean otherwise.
+func pluginOptionBoolDefault(key string, defaultVal bool) bool {
+	v := strings.ToLower(strings.TrimSpace(pluginOption(key)))
+	if v == "" {
+		return defaultVal
+	}
 	return v == "true" || v == "1"
 }
 
@@ -288,21 +384,37 @@ func run() error {
 	}
 
 	cfg := otlp.Config{
-		OTLPUrl:      os.Getenv("DASH0_OTLP_URL"),
-		AuthToken:    os.Getenv("DASH0_AUTH_TOKEN"),
-		Dataset:      os.Getenv("DASH0_DATASET"),
-		AgentName:    os.Getenv("DASH0_AGENT_NAME"),
-		OmitUserInfo: envBool("DASH0_OMIT_USER_INFO"),
-		OmitIO:       envBool("DASH0_OMIT_IO"),
-		Debug:        envBool("DASH0_DEBUG"),
-		DebugFile:    os.Getenv("DASH0_DEBUG_FILE"),
+		OTLPUrl:      pluginOption("OTLP_URL"),
+		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
+		Dataset:      pluginOption("DATASET"),
+		AgentName:    pluginOption("AGENT_NAME"),
+		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", true),
+		OmitIO:       pluginOptionBoolDefault("OMIT_IO", true),
+		Debug:        pluginOptionBool("DEBUG"),
+		DebugFile:    pluginOption("DEBUG_FILE"),
 	}
 
 	if cfg.OTLPUrl != "" {
 		u, err := url.Parse(cfg.OTLPUrl)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			fmt.Fprintf(os.Stderr, "on-event: DASH0_OTLP_URL is not a valid URL: %q\n", cfg.OTLPUrl)
+			fmt.Fprintf(os.Stderr, "on-event: OTLP URL is not valid: %q\n", cfg.OTLPUrl)
 			cfg.OTLPUrl = "" // disable export to prevent cryptic errors
+		}
+	}
+
+	if hookEvent == "SessionStart" {
+		if cfg.OTLPUrl == "" {
+			printHookResponse(
+				"dash0: telemetry is not active — configure the plugin to start sending data. Run /plugin → Installed → dash0 → Configure, then /reload-plugins.",
+				"",
+			)
+		} else if err := otlp.CheckConnectivity(cfg); err != nil {
+			printHookResponse(
+				fmt.Sprintf("dash0: connectivity check failed — %v", err),
+				"",
+			)
+		} else {
+			printHookResponse("dash0: connected", "")
 		}
 	}
 
@@ -314,6 +426,10 @@ func run() error {
 	case "Stop", "StopFailure":
 		if err := sendLLMTrace(event, cfg, now, sessionDir, hookEvent == "StopFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
+		}
+		if appURL := deriveAppURL(cfg.OTLPUrl); appURL != "" {
+			sessionURL := buildSessionURL(appURL, sessionID)
+			printHookResponse(fmt.Sprintf("dash0: view session → %s", sessionURL), "")
 		}
 		// Clear trace context so SessionEnd knows the chat span was already emitted.
 		otlp.ClearTraceContext(sessionDir)

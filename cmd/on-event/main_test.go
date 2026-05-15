@@ -551,6 +551,151 @@ func TestEnvBool(t *testing.T) {
 	}
 }
 
+func TestPluginOption(t *testing.T) {
+	t.Run("prefers CLAUDE_PLUGIN_OPTION over DASH0", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_KEY", "from-user-config")
+		t.Setenv("DASH0_TEST_KEY", "from-env-var")
+		assert.Equal(t, "from-user-config", pluginOption("TEST_KEY"))
+	})
+
+	t.Run("falls back to DASH0 when CLAUDE_PLUGIN_OPTION unset", func(t *testing.T) {
+		t.Setenv("DASH0_TEST_KEY", "from-env-var")
+		assert.Equal(t, "from-env-var", pluginOption("TEST_KEY"))
+	})
+
+	t.Run("falls back to DASH0 when CLAUDE_PLUGIN_OPTION empty", func(t *testing.T) {
+		// userConfig may set an empty string when the user skips an optional
+		// field; that must fall through, not shadow, the env-var fallback.
+		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_KEY", "")
+		t.Setenv("DASH0_TEST_KEY", "from-env-var")
+		assert.Equal(t, "from-env-var", pluginOption("TEST_KEY"))
+	})
+
+	t.Run("returns empty when neither set", func(t *testing.T) {
+		assert.Equal(t, "", pluginOption("TEST_KEY"))
+	})
+}
+
+func TestPluginOptionSecure(t *testing.T) {
+	t.Run("reads only from CLAUDE_PLUGIN_OPTION", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", "secure-token")
+		t.Setenv("DASH0_AUTH_TOKEN", "leaked-token")
+		assert.Equal(t, "secure-token", pluginOptionSecure("AUTH_TOKEN"))
+	})
+
+	t.Run("does NOT fall back to DASH0 env var", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", "")
+		t.Setenv("DASH0_AUTH_TOKEN", "leaked-token")
+		assert.Equal(t, "", pluginOptionSecure("AUTH_TOKEN"))
+	})
+
+	t.Run("returns empty when nothing set", func(t *testing.T) {
+		assert.Equal(t, "", pluginOptionSecure("AUTH_TOKEN"))
+	})
+}
+
+func TestPluginOptionBool(t *testing.T) {
+	t.Run("prefers CLAUDE_PLUGIN_OPTION over DASH0", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_BOOL", "true")
+		t.Setenv("DASH0_TEST_BOOL", "false")
+		assert.True(t, pluginOptionBool("TEST_BOOL"))
+	})
+
+	t.Run("falls back to DASH0 when CLAUDE_PLUGIN_OPTION empty", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_TEST_BOOL", "")
+		t.Setenv("DASH0_TEST_BOOL", "1")
+		assert.True(t, pluginOptionBool("TEST_BOOL"))
+	})
+}
+
+func TestPluginOptionBoolDefault(t *testing.T) {
+	t.Run("returns default when env is unset", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_MY_FLAG", "")
+		t.Setenv("DASH0_MY_FLAG", "")
+		assert.True(t, pluginOptionBoolDefault("MY_FLAG", true))
+		assert.False(t, pluginOptionBoolDefault("MY_FLAG", false))
+	})
+
+	t.Run("explicit false overrides default true", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_MY_FLAG", "false")
+		assert.False(t, pluginOptionBoolDefault("MY_FLAG", true))
+	})
+
+	t.Run("explicit true overrides default false", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_MY_FLAG", "true")
+		assert.True(t, pluginOptionBoolDefault("MY_FLAG", false))
+	})
+}
+
+func TestDeriveAppURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		otlpURL string
+		want    string
+	}{
+		{"dash0 prod us1", "https://ingress.us1.dash0.com:4318", "https://app.dash0.com"},
+		{"dash0 prod eu1", "https://ingress.eu1.dash0.com:4318", "https://app.dash0.com"},
+		{"dash0 dev", "https://ingress.eu-west-1.aws.dash0-dev.com:4318", "https://app.dash0-dev.com"},
+		{"dash0 dev no port", "https://ingress.eu-west-1.aws.dash0-dev.com", "https://app.dash0-dev.com"},
+		{"unknown endpoint", "https://otel.example.com:4318", ""},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, deriveAppURL(tt.otlpURL))
+		})
+	}
+}
+
+func TestSessionStartHintWhenNotConfigured(t *testing.T) {
+	dataDir := t.TempDir()
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		// No OTLP_URL via either mechanism. Hint should fire on SessionStart.
+		"DASH0_OTLP_URL=",
+		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
+	)
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-unconfigured","model":"opus"}`, env)
+	assert.Contains(t, stdout, `"systemMessage"`)
+	assert.Contains(t, stdout, "telemetry is not active")
+	assert.Contains(t, stdout, "/reload-plugins")
+}
+
+func TestSessionStartHintSuppressedWhenConfigured(t *testing.T) {
+	dataDir := t.TempDir()
+	srv, _, _ := collectingServer(t)
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL="+srv.URL,
+	)
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-configured","model":"opus"}`, env)
+	assert.NotContains(t, stdout, "telemetry is not active")
+	assert.Contains(t, stdout, `"systemMessage"`)
+	assert.Contains(t, stdout, "dash0: connected")
+}
+
+func TestSessionStartConnectivityFailure(t *testing.T) {
+	dataDir := t.TempDir()
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL=http://localhost:1", // unreachable port
+		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
+	)
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-connfail","model":"opus"}`, env)
+	assert.Contains(t, stdout, "connectivity check failed")
+}
+
+func TestHintNotEmittedOnNonSessionStartEvents(t *testing.T) {
+	// Only fires on SessionStart so we don't spam every tool call.
+	dataDir := t.TempDir()
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL=",
+	)
+	stdout, _ := execBinary(t, `{"hook_event_name":"PreToolUse","session_id":"sess-x","tool_name":"Bash","tool_use_id":"tu1"}`, env)
+	assert.NotContains(t, stdout, "systemMessage")
+}
+
 func TestOmitIOOmitsContentAttributes(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
@@ -570,17 +715,13 @@ func TestOmitIOOmitsContentAttributes(t *testing.T) {
 	require.NotNil(t, toolSpan)
 	require.NotNil(t, chatSpan)
 
-	// Tool span should not have input/output content.
-	for _, a := range toolSpan.Attributes {
-		assert.NotEqual(t, "gen_ai.tool.call.arguments", a.Key)
-		assert.NotEqual(t, "gen_ai.tool.call.result", a.Key)
-	}
+	// Tool span should have redacted input/output content.
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
 
-	// Chat span should not have prompt/response content.
-	for _, a := range chatSpan.Attributes {
-		assert.NotEqual(t, "gen_ai.input.messages", a.Key)
-		assert.NotEqual(t, "gen_ai.output.messages", a.Key)
-	}
+	// Chat span should have redacted prompt/response content.
+	assertStringAttr(t, chatSpan.Attributes, "gen_ai.input.messages", "<REDACTED>")
+	assertStringAttr(t, chatSpan.Attributes, "gen_ai.output.messages", "<REDACTED>")
 }
 
 func TestUserPromptSubmitStampsChatSpanID(t *testing.T) {

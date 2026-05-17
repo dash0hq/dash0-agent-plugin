@@ -6,3 +6,7 @@
 events.jsonl
 dist/
 bin/
+
+# Session-scoped data directories created by the hook when CLAUDE_PLUGIN_DATA
+# is set to the repo root (e.g. during local dev via .claude/settings.json).
+[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*/

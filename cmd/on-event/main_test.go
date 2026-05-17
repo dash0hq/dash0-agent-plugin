@@ -649,8 +649,10 @@ func TestDeriveAppURL(t *testing.T) {
 
 func TestSessionStartHintWhenNotConfigured(t *testing.T) {
 	dataDir := t.TempDir()
+	configDir := t.TempDir()
 	env := append(os.Environ(),
 		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_CONFIG_DIR="+configDir,
 		// No OTLP_URL via either mechanism. Hint should fire on SessionStart.
 		"DASH0_OTLP_URL=",
 		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
@@ -658,28 +660,50 @@ func TestSessionStartHintWhenNotConfigured(t *testing.T) {
 	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-unconfigured","model":"opus"}`, env)
 	assert.Contains(t, stdout, `"systemMessage"`)
 	assert.Contains(t, stdout, "telemetry is not active")
-	assert.Contains(t, stdout, "/reload-plugins")
+	assert.Contains(t, stdout, "/dash0-agent-plugin:login")
+}
+
+func TestSessionStartHintWhenUnauthenticated(t *testing.T) {
+	dataDir := t.TempDir()
+	configDir := t.TempDir()
+	srv, _, _ := collectingServer(t)
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_CONFIG_DIR="+configDir,
+		"DASH0_OTLP_URL="+srv.URL,
+		"CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=",
+	)
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-noauth","model":"opus"}`, env)
+	assert.Contains(t, stdout, "not authenticated")
+	assert.Contains(t, stdout, "/dash0-agent-plugin:login")
 }
 
 func TestSessionStartHintSuppressedWhenConfigured(t *testing.T) {
 	dataDir := t.TempDir()
+	configDir := t.TempDir()
 	srv, _, _ := collectingServer(t)
 	env := append(os.Environ(),
 		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_CONFIG_DIR="+configDir,
 		"DASH0_OTLP_URL="+srv.URL,
+		"CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=test-token",
 	)
 	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-configured","model":"opus"}`, env)
 	assert.NotContains(t, stdout, "telemetry is not active")
+	assert.NotContains(t, stdout, "not authenticated")
 	assert.Contains(t, stdout, `"systemMessage"`)
 	assert.Contains(t, stdout, "dash0: connected")
 }
 
 func TestSessionStartConnectivityFailure(t *testing.T) {
 	dataDir := t.TempDir()
+	configDir := t.TempDir()
 	env := append(os.Environ(),
 		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_CONFIG_DIR="+configDir,
 		"DASH0_OTLP_URL=http://localhost:1", // unreachable port
 		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
+		"CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=test-token",
 	)
 	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-connfail","model":"opus"}`, env)
 	assert.Contains(t, stdout, "connectivity check failed")

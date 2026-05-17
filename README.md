@@ -23,20 +23,34 @@ Claude Code plugin that captures agent activity as OpenTelemetry traces — tool
 
 ### First-time setup
 
-After installing, **the plugin does not start sending telemetry until you complete two steps**:
-
-1. **Configure credentials.** Run `/plugin` → **Installed** → **dash0** → **Configure**. Enter:
-   - `OTLP_URL` — your Dash0 OTLP endpoint, e.g. `https://ingress.us1.dash0.com:4318`
-   - `AUTH_TOKEN` — your Dash0 auth token (sensitive — stored in your OS keychain, not in `settings.json`)
-   - `DATASET` *(optional)*
-   - `AGENT_NAME` *(optional)*
-2. **Reload the running session.** Run `/reload-plugins`. Without this, the current session's hooks still have empty config and silently emit nothing.
-
-If you start a session before completing setup, the plugin writes this line to stderr on `SessionStart`:
+After installing, sign in with your browser:
 
 ```
-dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.
+/dash0-agent-plugin:login
 ```
+
+A Dash0 sign-in page opens in your browser. **New to Dash0?** Click **Sign up** on the next page to start a free trial. The plugin signs in against `https://api.eu-west-1.aws.dash0.com` (the EU-West regional API) by default; override with `--auth-url <url>` or `DASH0_AUTH_URL=<url>` (e.g. for a dev environment or a different region).
+
+Once you've signed in:
+- A long-lived ingestion token is minted and saved to your OS config dir under `dash0/credentials.json` (mode `0600`): `~/Library/Application Support/dash0/` on macOS, `$XDG_CONFIG_HOME/dash0` or `~/.config/dash0` on Linux, `%AppData%\dash0\` on Windows.
+- Your organization's ingestion URL is recorded automatically; you don't need to set `OTLP_URL` unless you're self-hosting.
+- The next time a Claude Code session starts, you'll see `dash0: connected`.
+
+If you start a session before logging in, the plugin prints the hint:
+
+```
+dash0: not authenticated — run /dash0-agent-plugin:login to sign in or start a free trial.
+```
+
+#### Advanced: pre-existing token (CI, shared machines)
+
+If you have a Dash0 ingestion token already and prefer not to use the browser flow, you can paste it via `/plugin` → **Installed** → **dash0** → **Configure**:
+
+- `AUTH_TOKEN` — your Dash0 token (sensitive — stored in your OS keychain)
+- `OTLP_URL` — explicit OTLP endpoint (overrides what `/dash0-agent-plugin:login` recorded)
+- `DATASET`, `AGENT_NAME` — optional
+
+Manually-set values take precedence over what `/dash0-agent-plugin:login` wrote.
 
 ### Local development
 
@@ -128,10 +142,21 @@ The plugin declares its configuration via Claude Code's `userConfig` mechanism. 
 
 | Option | Description | Required | Sensitive |
 |---|---|---|---|
-| `OTLP_URL` | Dash0 OTLP endpoint URL (e.g. `https://ingress.us1.dash0.com:4318`) | Yes | No |
-| `AUTH_TOKEN` | Dash0 authentication token | Yes | Yes (stored in keychain) |
+| `OTLP_URL` | Override the Dash0 OTLP endpoint URL (e.g. `https://ingress.us1.dash0.com:4318`). Populated automatically by `/dash0-agent-plugin:login`; only set this manually for self-hosting or custom endpoints. | No (set via login) | No |
+| `AUTH_TOKEN` | Dash0 authentication token. Prefer `/dash0-agent-plugin:login` over setting this manually. | No (set via login) | Yes (stored in keychain) |
 | `DATASET` | Dash0 dataset name | No | No |
 | `AGENT_NAME` | Used as `service.name` and `gen_ai.agent.name` resource attributes (defaults to `claude-code`) | No | No |
+
+### Authentication storage
+
+`/dash0-agent-plugin:login` writes two files (mode `0600`) under the OS config dir (`~/Library/Application Support/dash0/` on macOS, `$XDG_CONFIG_HOME/dash0` or `~/.config/dash0` on Linux, `%AppData%\dash0\` on Windows):
+
+| File | Contents |
+|---|---|
+| `credentials.json` | Minted machine token, organization ID, auth URL, and ingestion URL. Read by the hook on every event — **no `/reload-plugins` required** after re-login. |
+| `clients.json` | OAuth Dynamic Client Registration result, keyed by auth URL. Reused across logins so the plugin doesn't re-register on every run. |
+
+Delete `credentials.json` from your OS config dir and re-run `/dash0-agent-plugin:login` to switch organizations.
 
 After changing any value via Configure, run `/reload-plugins` to apply it to the current session.
 
@@ -139,7 +164,7 @@ After changing any value via Configure, run `/reload-plugins` to apply it to the
 
 For non-sensitive options, the plugin falls back to `DASH0_*` environment variables when the `userConfig` value is not set. This is useful for `--plugin-dir` development or CI.
 
-> **Note:** `AUTH_TOKEN` has no env var fallback — it must be configured via `/plugin → Configure` (stored in the OS keychain). This prevents the token from leaking into tool-spawned shell environments where other tools (e.g. Dash0 CLI) might pick it up.
+> **Note:** `AUTH_TOKEN` has no env var fallback — it must be configured via `/plugin → Configure` (stored in the OS keychain) or by running `/dash0-agent-plugin:login`. This prevents the token from leaking into tool-spawned shell environments where other tools (e.g. Dash0 CLI) might pick it up.
 
 | Variable | Description |
 |---|---|
@@ -150,6 +175,9 @@ For non-sensitive options, the plugin falls back to `DASH0_*` environment variab
 | `DASH0_OMIT_IO` | Omit prompts and tool I/O (default: `true`). When true, prompt content and tool call inputs/outputs are stripped from spans. Set to `false` to include full content. |
 | `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
+| `DASH0_CONFIG_DIR` | Override the directory for `credentials.json` / `clients.json` (defaults to OS config dir / `dash0`). Mainly for testing. |
+| `DASH0_AUTH_URL` | Dash0 regional API URL for `/dash0-agent-plugin:login` (default: `https://api.eu-west-1.aws.dash0.com`). Inferred as `https://api.eu-west-1.aws.dash0-dev.com` when `DASH0_OTLP_URL` points at a `.dash0-dev.com` host. |
+| `DASH0_AUTH_NO_BROWSER` | When `1`, `/dash0-agent-plugin:login` prints the authorize URL instead of opening a browser. Useful for headless setups. |
 
 ### Per-project overrides
 

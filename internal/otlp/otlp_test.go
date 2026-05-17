@@ -29,12 +29,12 @@ func TestSendLog(t *testing.T) {
 	defer srv.Close()
 
 	event := map[string]any{
-		"hook_event_name": "PostToolUse",
-		"session_id":      "sess-123",
-		"cwd":             "/tmp/project",
-		"tool_name":       "Bash",
-		"tool_use_id":     "tu-456",
-		"tool_input":      map[string]any{"command": "ls"},
+		"hook_event_name":        "PostToolUse",
+		"session_id":             "sess-123",
+		"cwd":                    "/tmp/project",
+		"tool_name":              "Bash",
+		"tool_use_id":            "tu-456",
+		"tool_input":             map[string]any{"command": "ls"},
 		"tool_response":          "file1.go\nfile2.go",
 		"timestamp":              "2025-06-15T12:00:00Z",
 		"last_assistant_message": "Here are the files.",

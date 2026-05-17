@@ -22,10 +22,10 @@ type transcriptEntry struct {
 }
 
 type messageEnvelope struct {
-	Role    string              `json:"role"`
-	Model   string              `json:"model"`
-	Usage   *usageData          `json:"usage"`
-	Content []json.RawMessage   `json:"content"`
+	Role    string            `json:"role"`
+	Model   string            `json:"model"`
+	Usage   *usageData        `json:"usage"`
+	Content []json.RawMessage `json:"content"`
 }
 
 type usageData struct {

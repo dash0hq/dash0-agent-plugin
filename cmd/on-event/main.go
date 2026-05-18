@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/auth"
 	"github.com/dash0hq/dash0-agent-plugin/internal/dotenv"
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
@@ -20,6 +22,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "login" {
+		if err := runLogin(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "dash0: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: %v\n", err)
 		os.Exit(1)
@@ -172,7 +181,6 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	return otlp.SendTrace(span, event, cfg)
 }
 
-
 // extractAgentIDFromResponse parses the agentId from an Agent tool's response.
 // The response may be a JSON string or an already-decoded map.
 func extractAgentIDFromResponse(v any) string {
@@ -217,13 +225,12 @@ func deriveAppURL(otlpURL string) string {
 	}
 	host := u.Hostname()
 	switch {
-	case strings.HasSuffix(host, ".dash0.com"):
-		return "https://app.dash0.com"
 	case strings.HasSuffix(host, ".dash0-dev.com"):
 		return "https://app.dash0-dev.com"
-	default:
-		return ""
+	case strings.HasSuffix(host, ".dash0.com"):
+		return "https://app.dash0.com"
 	}
+	return ""
 }
 
 // buildSessionURL constructs a full Dash0 session details URL with the encoded
@@ -288,6 +295,55 @@ func pluginOptionBoolDefault(key string, defaultVal bool) bool {
 		return defaultVal
 	}
 	return v == "true" || v == "1"
+}
+
+// resolveAuthToken returns the auth token for OTLP ingestion. Precedence:
+//  1. CLAUDE_PLUGIN_OPTION_AUTH_TOKEN (manual paste in /plugin Configure)
+//  2. credentials.json written by /dash0-agent-plugin:login
+func resolveAuthToken(creds *auth.Credentials) string {
+	if v := pluginOptionSecure("AUTH_TOKEN"); v != "" {
+		return v
+	}
+	if creds != nil {
+		return creds.AuthToken
+	}
+	return ""
+}
+
+// resolveOtlpURL picks the OTLP ingestion URL. Precedence:
+//  1. CLAUDE_PLUGIN_OPTION_OTLP_URL / DASH0_OTLP_URL (explicit override)
+//  2. credentials.json ingress_url (recorded at login)
+func resolveOtlpURL(creds *auth.Credentials) string {
+	if v := pluginOption("OTLP_URL"); v != "" {
+		return v
+	}
+	if creds != nil && creds.IngressURL != "" {
+		return creds.IngressURL
+	}
+	return ""
+}
+
+// loadCredentialsForHook is a non-fatal credential reader for hook events.
+// Returns nil on any error — the hook should still emit telemetry where
+// possible, just without the auto-discovered region/token.
+func loadCredentialsForHook() *auth.Credentials {
+	creds, err := auth.LoadCredentials()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "on-event: reading credentials: %v\n", err)
+		return nil
+	}
+	return creds
+}
+
+// isUnauthorized reports whether an OTLP connectivity-check error indicates
+// a rejected bearer token (HTTP 401 or 403). Matches the error format used
+// by sendOTLP in internal/otlp.
+func isUnauthorized(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "401") || strings.Contains(msg, "403")
 }
 
 func run() error {
@@ -383,9 +439,10 @@ func run() error {
 		return err
 	}
 
+	creds := loadCredentialsForHook()
 	cfg := otlp.Config{
-		OTLPUrl:      pluginOption("OTLP_URL"),
-		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
+		OTLPUrl:      resolveOtlpURL(creds),
+		AuthToken:    resolveAuthToken(creds),
 		Dataset:      pluginOption("DATASET"),
 		AgentName:    pluginOption("AGENT_NAME"),
 		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", true),
@@ -403,18 +460,55 @@ func run() error {
 	}
 
 	if hookEvent == "SessionStart" {
-		if cfg.OTLPUrl == "" {
+		const loginNudge = "The Dash0 agent plugin is installed but the user is not authenticated against Dash0. Telemetry will not be sent until they sign in. Before proceeding with whatever the user actually asked for, invoke the `dash0-agent-plugin:login` slash command (via the Skill tool) so the OAuth browser flow can complete. Then continue with the user's original request."
+		orgSuffix := ""
+		if creds != nil && creds.OrganizationTechnicalID != "" {
+			orgSuffix = " as " + creds.OrganizationTechnicalID
+		}
+		switch {
+		case cfg.OTLPUrl == "":
 			printHookResponse(
-				"dash0: telemetry is not active — configure the plugin to start sending data. Run /plugin → Installed → dash0 → Configure, then /reload-plugins.",
-				"",
+				"dash0: telemetry is not active — sign in by running /dash0-agent-plugin:login (or set OTLP_URL manually via /plugin → Configure).",
+				loginNudge,
 			)
-		} else if err := otlp.CheckConnectivity(cfg); err != nil {
+		case cfg.AuthToken == "":
 			printHookResponse(
-				fmt.Sprintf("dash0: connectivity check failed — %v", err),
-				"",
+				"dash0: not authenticated — run /dash0-agent-plugin:login to sign in or start a free trial.",
+				loginNudge,
 			)
-		} else {
-			printHookResponse("dash0: connected", "")
+		default:
+			refreshed := false
+			if err := otlp.CheckConnectivity(cfg); err != nil {
+				if isUnauthorized(err) && creds != nil && creds.RefreshToken != "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					nc, rerr := auth.RefreshCredentials(ctx, creds)
+					cancel()
+					if rerr == nil {
+						creds = nc
+						cfg.AuthToken = nc.AuthToken
+						err = otlp.CheckConnectivity(cfg)
+						refreshed = true
+					} else {
+						fmt.Fprintf(os.Stderr, "on-event: refresh failed: %v\n", rerr)
+					}
+				}
+				if err != nil {
+					if isUnauthorized(err) {
+						printHookResponse(
+							"dash0: auth token rejected — run /dash0-agent-plugin:login to re-authenticate.",
+							loginNudge,
+						)
+					} else {
+						printHookResponse(fmt.Sprintf("dash0: connectivity check failed — %v", err), "")
+					}
+				} else if refreshed {
+					printHookResponse("dash0: connected"+orgSuffix+" (token refreshed)", "")
+				} else {
+					printHookResponse("dash0: connected"+orgSuffix, "")
+				}
+			} else {
+				printHookResponse("dash0: connected"+orgSuffix, "")
+			}
 		}
 	}
 

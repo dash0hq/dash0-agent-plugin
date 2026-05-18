@@ -414,7 +414,7 @@ func stringifyValue(v any) string {
 	}
 }
 
-// vcsSpanAttributes returns vcs.* and user.* span attributes derived from the
+// vcsSpanAttributes returns dash0.gen_ai.vcs.* and user.* span attributes derived from the
 // current git state. Returns nil if not inside a git repository.
 func vcsSpanAttributes(cfg Config) []Attribute {
 	info := vcs.Detect()
@@ -428,25 +428,25 @@ func vcsSpanAttributes(cfg Config) []Attribute {
 
 	var attrs []Attribute
 	if info.RepositoryURLFull != "" {
-		attrs = append(attrs, attr("vcs.repository.url.full", info.RepositoryURLFull))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.repository.url.full", info.RepositoryURLFull))
 	}
 	if info.RepositoryName != "" {
-		attrs = append(attrs, attr("vcs.repository.name", info.RepositoryName))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.repository.name", info.RepositoryName))
 	}
 	if info.OwnerName != "" {
-		attrs = append(attrs, attr("vcs.owner.name", info.OwnerName))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.owner.name", info.OwnerName))
 	}
 	if info.ProviderName != "" {
-		attrs = append(attrs, attr("vcs.provider.name", info.ProviderName))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.provider.name", info.ProviderName))
 	}
 	if info.RefHeadName != "" {
-		attrs = append(attrs, attr("vcs.ref.head.name", info.RefHeadName))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.name", info.RefHeadName))
 	}
 	if info.RefHeadRevision != "" {
-		attrs = append(attrs, attr("vcs.ref.head.revision", info.RefHeadRevision))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.revision", info.RefHeadRevision))
 	}
 	if info.RefHeadType != "" {
-		attrs = append(attrs, attr("vcs.ref.head.type", info.RefHeadType))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.type", info.RefHeadType))
 	}
 	if info.UserName != "" {
 		if cfg.OmitUserInfo {

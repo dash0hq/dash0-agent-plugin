@@ -119,6 +119,7 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 	}
 	resourceAttrs := []Attribute{
 		{Key: "service.name", Value: StringVal(serviceName)},
+		{Key: "service.version", Value: StringVal(version.Version)},
 		{Key: "gen_ai.provider.name", Value: StringVal("anthropic")},
 	}
 	if cfg.AgentName != "" {

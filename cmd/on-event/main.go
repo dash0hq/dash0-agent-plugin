@@ -17,6 +17,7 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/transcript"
+	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
 
 func main() {
@@ -414,7 +415,7 @@ func run() error {
 				"",
 			)
 		} else {
-			printHookResponse("dash0: connected", "")
+			printHookResponse(fmt.Sprintf("dash0: connected (v%s)", version.Version), "")
 		}
 	}
 

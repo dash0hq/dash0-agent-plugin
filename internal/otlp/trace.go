@@ -124,7 +124,6 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 	if cfg.AgentName != "" {
 		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})
 	}
-	resourceAttrs = append(resourceAttrs, vcsResourceAttributes(cfg)...)
 
 	req := ExportTracesRequest{
 		ResourceSpans: []ResourceSpans{{
@@ -163,8 +162,10 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Time, event map[string]any, failed bool, cfg Config) Span {
 	toolName, _ := event["tool_name"].(string)
 	attrs := eventAttributes(event, cfg)
+	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal("execute_tool")})
 
 	attrs = append(attrs, Attribute{Key: "gen_ai.tool.type", Value: StringVal("function")})
+	attrs = append(attrs, vcsSpanAttributes(cfg)...)
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
 	if failed {
@@ -194,6 +195,8 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Time, event map[string]any, failed bool, cfg Config) Span {
 	model, _ := event["model"].(string)
 	attrs := eventAttributes(event, cfg)
+	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal("chat")})
+	attrs = append(attrs, vcsSpanAttributes(cfg)...)
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
 	if failed {
@@ -221,6 +224,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 // NewSessionSpan creates a root span for a session start event.
 func NewSessionSpan(traceID, spanID string, ts time.Time, event map[string]any, cfg Config) Span {
 	attrs := eventAttributes(event, cfg)
+	attrs = append(attrs, vcsSpanAttributes(cfg)...)
 	tsNano := strconv.FormatInt(ts.UnixNano(), 10)
 
 	return Span{

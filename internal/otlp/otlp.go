@@ -89,7 +89,7 @@ type Config struct {
 	AuthToken    string
 	Dataset      string
 	AgentName    string
-	OmitUserInfo bool   // when true (default), hash user.name and omit user.email
+	OmitUserInfo bool   // when true (default), hash user.name and omit user.email (both span attributes)
 	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to
@@ -124,8 +124,6 @@ func SendLog(event map[string]any, cfg Config) error {
 	if cfg.AgentName != "" {
 		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})
 	}
-	resourceAttrs = append(resourceAttrs, vcsResourceAttributes(cfg)...)
-
 	// Correlate log record with the session trace.
 	var traceID, spanID string
 	if sessionID, _ := event["session_id"].(string); sessionID != "" {
@@ -416,7 +414,9 @@ func stringifyValue(v any) string {
 	}
 }
 
-func vcsResourceAttributes(cfg Config) []Attribute {
+// vcsSpanAttributes returns dash0.gen_ai.vcs.* and user.* span attributes derived from the
+// current git state. Returns nil if not inside a git repository.
+func vcsSpanAttributes(cfg Config) []Attribute {
 	info := vcs.Detect()
 	if info == nil {
 		return nil
@@ -428,25 +428,25 @@ func vcsResourceAttributes(cfg Config) []Attribute {
 
 	var attrs []Attribute
 	if info.RepositoryURLFull != "" {
-		attrs = append(attrs, attr("vcs.repository.url.full", info.RepositoryURLFull))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.repository.url.full", info.RepositoryURLFull))
 	}
 	if info.RepositoryName != "" {
-		attrs = append(attrs, attr("vcs.repository.name", info.RepositoryName))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.repository.name", info.RepositoryName))
 	}
 	if info.OwnerName != "" {
-		attrs = append(attrs, attr("vcs.owner.name", info.OwnerName))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.owner.name", info.OwnerName))
 	}
 	if info.ProviderName != "" {
-		attrs = append(attrs, attr("vcs.provider.name", info.ProviderName))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.provider.name", info.ProviderName))
 	}
 	if info.RefHeadName != "" {
-		attrs = append(attrs, attr("vcs.ref.head.name", info.RefHeadName))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.name", info.RefHeadName))
 	}
 	if info.RefHeadRevision != "" {
-		attrs = append(attrs, attr("vcs.ref.head.revision", info.RefHeadRevision))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.revision", info.RefHeadRevision))
 	}
 	if info.RefHeadType != "" {
-		attrs = append(attrs, attr("vcs.ref.head.type", info.RefHeadType))
+		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.type", info.RefHeadType))
 	}
 	if info.UserName != "" {
 		if cfg.OmitUserInfo {

@@ -9,7 +9,6 @@ jobs:
   goreleaser:
     name: Release with GoReleaser
     runs-on: ubuntu-latest
-    environment: release
     permissions:
       contents: write
     steps:

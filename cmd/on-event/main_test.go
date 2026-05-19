@@ -719,9 +719,11 @@ func TestOmitIOOmitsContentAttributes(t *testing.T) {
 	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
 	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
 
-	// Chat span should have redacted prompt/response content.
-	assertStringAttr(t, chatSpan.Attributes, "gen_ai.input.messages", "<REDACTED>")
-	assertStringAttr(t, chatSpan.Attributes, "gen_ai.output.messages", "<REDACTED>")
+	// Chat span should have redacted prompt/response content but preserve JSON structure.
+	assertAttrContains(t, chatSpan.Attributes, "gen_ai.input.messages", `"role":"user"`)
+	assertAttrContains(t, chatSpan.Attributes, "gen_ai.input.messages", `REDACTED`)
+	assertAttrContains(t, chatSpan.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
+	assertAttrContains(t, chatSpan.Attributes, "gen_ai.output.messages", `REDACTED`)
 }
 
 func TestUserPromptSubmitStampsChatSpanID(t *testing.T) {
@@ -872,6 +874,18 @@ func assertStringAttr(t *testing.T, attrs []otlp.Attribute, key, want string) {
 		if a.Key == key {
 			require.NotNil(t, a.Value.StringValue, "attribute %q should have string value", key)
 			assert.Equal(t, want, *a.Value.StringValue)
+			return
+		}
+	}
+	t.Errorf("attribute %q not found", key)
+}
+
+func assertAttrContains(t *testing.T, attrs []otlp.Attribute, key, substr string) {
+	t.Helper()
+	for _, a := range attrs {
+		if a.Key == key {
+			require.NotNil(t, a.Value.StringValue, "attribute %q should have string value", key)
+			assert.Contains(t, *a.Value.StringValue, substr, "attribute %q should contain %q", key, substr)
 			return
 		}
 	}

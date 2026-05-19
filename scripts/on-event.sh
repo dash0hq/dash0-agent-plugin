@@ -2,26 +2,43 @@
 
 set -euo pipefail
 
-# Read plugin settings from .claude/dash0-agent-plugin.local.md if present.
-SETTINGS_FILE=".claude/dash0-agent-plugin.local.md"
-if [[ -f "$SETTINGS_FILE" ]]; then
-  FRONTMATTER=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$SETTINGS_FILE")
+# Load settings from a config file. Returns 1 if file doesn't exist.
+load_settings() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+
+  local frontmatter
+  frontmatter=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$file")
 
   # Check enabled flag (default: true if file exists but field is absent).
-  ENABLED=$(echo "$FRONTMATTER" | grep '^enabled:' | sed 's/enabled: *//')
-  if [[ "$ENABLED" == "false" ]]; then
+  local enabled
+  enabled=$(echo "$frontmatter" | grep '^enabled:' | sed 's/enabled: *//' || true)
+  if [[ "$enabled" == "false" ]]; then
     exit 0
   fi
 
-  val=$(echo "$FRONTMATTER" | grep '^otlp_url:' | sed 's/otlp_url: *//' | sed 's/^"\(.*\)"$/\1/')
+  local val
+  val=$(echo "$frontmatter" | grep '^otlp_url:' | sed 's/otlp_url: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_OTLP_URL="$val"
-  val=$(echo "$FRONTMATTER" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/')
+  val=$(echo "$frontmatter" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$val"
-  val=$(echo "$FRONTMATTER" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/')
+  val=$(echo "$frontmatter" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_DATASET="$val"
-  val=$(echo "$FRONTMATTER" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/')
+  val=$(echo "$frontmatter" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_AGENT_NAME="$val"
-fi
+  val=$(echo "$frontmatter" | grep '^omit_io:' | sed 's/omit_io: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_OMIT_IO="$val"
+  val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
+
+  return 0
+}
+
+# Load settings: project-level takes precedence, then global.
+PROJECT_SETTINGS=".claude/dash0-agent-plugin.local.md"
+GLOBAL_SETTINGS="$HOME/.claude/dash0-agent-plugin.local.md"
+
+load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
 
 PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 BIN_DIR="$PLUGIN_DATA/bin"

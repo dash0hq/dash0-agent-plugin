@@ -237,10 +237,14 @@ func TestSendLogOmitIO(t *testing.T) {
 	assertAttr(t, lr.Attributes, "gen_ai.tool.name", "Bash")
 
 	// Content attributes are present but redacted.
+	// Tool I/O uses plain redaction.
 	assertAttr(t, lr.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
 	assertAttr(t, lr.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
-	assertAttr(t, lr.Attributes, "gen_ai.output.messages", "<REDACTED>")
-	assertAttr(t, lr.Attributes, "gen_ai.input.messages", "<REDACTED>")
+	// Message attributes preserve JSON structure for UI parsing.
+	assertAttrContains(t, lr.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
+	assertAttrContains(t, lr.Attributes, "gen_ai.output.messages", `REDACTED`)
+	assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `"role":"user"`)
+	assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `REDACTED`)
 }
 
 func TestTruncateContent(t *testing.T) {
@@ -314,6 +318,18 @@ func assertAttr(t *testing.T, attrs []Attribute, key, want string) {
 		if a.Key == key {
 			require.NotNil(t, a.Value.StringValue, "attribute %s: stringValue is nil", key)
 			assert.Equal(t, want, *a.Value.StringValue, "attribute %s", key)
+			return
+		}
+	}
+	t.Errorf("attribute %s not found", key)
+}
+
+func assertAttrContains(t *testing.T, attrs []Attribute, key, substr string) {
+	t.Helper()
+	for _, a := range attrs {
+		if a.Key == key {
+			require.NotNil(t, a.Value.StringValue, "attribute %s: stringValue is nil", key)
+			assert.Contains(t, *a.Value.StringValue, substr, "attribute %s should contain %q", key, substr)
 			return
 		}
 	}

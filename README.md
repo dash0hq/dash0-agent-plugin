@@ -170,6 +170,8 @@ otlp_url: "https://ingress.us1.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "default"
 agent_name: "claude-code"
+omit_io: true
+omit_user_info: true
 ---
 ```
 
@@ -184,8 +186,22 @@ otlp_url: "https://ingress.us1.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "my-project-dataset"
 agent_name: "my-coding-agent"
+omit_io: false
+omit_user_info: false
 ---
 ```
+
+**Config file options**
+
+| Option | Description | Default |
+|---|---|---|
+| `enabled` | Enable/disable the plugin for this project | `true` |
+| `otlp_url` | Dash0 OTLP endpoint URL | — |
+| `auth_token` | Dash0 authentication token | — |
+| `dataset` | Dash0 dataset name | — |
+| `agent_name` | Agent name (used as `service.name`) | `claude-code` |
+| `omit_io` | Omit prompt content and tool I/O | `true` |
+| `omit_user_info` | Anonymize user identity | `true` |
 
 Set `enabled: false` to disable the plugin for a single project without uninstalling it.
 

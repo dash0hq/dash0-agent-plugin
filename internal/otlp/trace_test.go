@@ -278,9 +278,11 @@ func TestNewLLMSpanOmitIO(t *testing.T) {
 
 	// Model is still present.
 	assertAttr(t, span.Attributes, "gen_ai.request.model", "claude-sonnet-4-20250514")
-	// Content attributes are present but redacted.
-	assertAttr(t, span.Attributes, "gen_ai.input.messages", "<REDACTED>")
-	assertAttr(t, span.Attributes, "gen_ai.output.messages", "<REDACTED>")
+	// Content attributes are present but redacted, preserving JSON structure for UI parsing.
+	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", `"role":"user"`)
+	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", `REDACTED`)
+	assertAttrContains(t, span.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
+	assertAttrContains(t, span.Attributes, "gen_ai.output.messages", `REDACTED`)
 }
 
 func TestSendTraceSkipsWhenNotConfigured(t *testing.T) {

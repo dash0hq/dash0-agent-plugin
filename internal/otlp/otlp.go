@@ -324,9 +324,12 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 				key = mapped
 			}
 			if t, ok := attrTransformMap[k]; ok {
-				key = t.key
+				// Apply transform with redacted placeholder to preserve JSON structure
+				redactedTransformed := t.transform(redactedValue)
+				attrs = append(attrs, Attribute{Key: t.key, Value: StringVal(redactedTransformed)})
+			} else {
+				attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactedValue)})
 			}
-			attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactedValue)})
 			continue
 		}
 		if t, ok := attrTransformMap[k]; ok {

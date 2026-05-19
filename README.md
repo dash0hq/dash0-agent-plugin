@@ -21,6 +21,18 @@ Claude Code plugin that captures agent activity as OpenTelemetry traces — tool
 
 > The plugin is registered as `dash0` in the official marketplace and `dash0-agent-plugin` in the Dash0 marketplace. Both install the same plugin; do not enable both at once or hooks will fire twice.
 
+### Headless / CI installation
+
+In environments without interactive access (containers, CI, scripts), use the CLI:
+
+```bash
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+claude plugin marketplace add dash0hq/claude-marketplace --scope user
+claude plugin install dash0-agent-plugin@dash0 --scope user
+```
+
+> **Note:** Claude Code downloads marketplace plugins via SSH by default. If SSH keys are not configured for GitHub, the `git config` line above forces HTTPS. This is required in Docker containers, CI runners, or any environment without SSH access to GitHub.
+
 ### First-time setup
 
 After installing, configure credentials using **one of these options**:

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/vcs"
+	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
 
 // OTLP JSON wire format types.
@@ -119,6 +120,7 @@ func SendLog(event map[string]any, cfg Config) error {
 	}
 	resourceAttrs := []Attribute{
 		{Key: "service.name", Value: StringVal(serviceName)},
+		{Key: "service.version", Value: StringVal(version.Version)},
 		{Key: "gen_ai.provider.name", Value: StringVal("anthropic")},
 	}
 	if cfg.AgentName != "" {
@@ -139,7 +141,7 @@ func SendLog(event map[string]any, cfg Config) error {
 			ScopeLogs: []ScopeLogs{{
 				Scope: Scope{
 					Name:    "dash0-agent-plugin",
-					Version: "0.1.0",
+					Version: version.Version,
 				},
 				LogRecords: []LogRecord{{
 					TimeUnixNano:   strconv.FormatInt(ts.UnixNano(), 10),

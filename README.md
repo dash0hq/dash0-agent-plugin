@@ -151,21 +151,45 @@ For non-sensitive options, the plugin falls back to `DASH0_*` environment variab
 | `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
 
-### Per-project overrides
+### Configuration file
 
-For project-specific overrides (e.g. a different dataset per repo), create `.claude/dash0-agent-plugin.local.md`:
+You can configure the plugin via a markdown file with YAML frontmatter. The plugin checks two locations:
+
+1. **Project-level**: `.claude/dash0-agent-plugin.local.md` (in current directory)
+2. **Global**: `~/.claude/dash0-agent-plugin.local.md` (user home)
+
+Project-level config takes precedence over global config.
+
+**Global config (recommended for personal use)**
+
+Create `~/.claude/dash0-agent-plugin.local.md` to configure the plugin once for all projects:
+
+```markdown
+---
+otlp_url: "https://ingress.us1.dash0.com"
+auth_token: "your-dash0-auth-token"
+dataset: "default"
+agent_name: "claude-code"
+---
+```
+
+**Project-level config**
+
+Create `.claude/dash0-agent-plugin.local.md` in a project directory for project-specific overrides (e.g. a different dataset per repo):
 
 ```markdown
 ---
 enabled: true
 otlp_url: "https://ingress.us1.dash0.com"
 auth_token: "your-dash0-auth-token"
-dataset: "your-dataset"
+dataset: "my-project-dataset"
 agent_name: "my-coding-agent"
 ---
 ```
 
-The local file sets `DASH0_*` env vars for the hook subprocess, so it acts as the lowest-priority fallback. Set `enabled: false` to disable the plugin for a single project without uninstalling it.
+Set `enabled: false` to disable the plugin for a single project without uninstalling it.
+
+The config file sets environment variables for the hook subprocess, so it acts as a fallback after `/plugin → Configure` values and before `DASH0_*` environment variables.
 
 ### Debug mode
 
@@ -195,12 +219,10 @@ Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering:
 
 **No spans in Dash0 after install.** The plugin was likely installed but not configured, or configured but not reloaded. Check:
 
-1. Look for this line in Claude Code's stderr on `SessionStart`:
-   ```
-   dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.
-   ```
-   If you see it, follow [First-time setup](#first-time-setup).
-2. If you've already configured but spans still don't appear, run `/reload-plugins`. Saved values are not picked up by an already-running session until reload.
+1. Look for a `dash0:` message in the Claude Code UI on session start:
+   - `dash0: telemetry is not active` — OTLP URL is not configured. Set it via `/plugin → Configure` or in the config file.
+   - `dash0: connectivity check failed` — URL is set but connection failed (e.g., invalid auth token returns 401).
+2. If you've configured via `/plugin → Configure` but spans still don't appear, run `/reload-plugins`. Saved values are not picked up by an already-running session until reload.
 
 **More verbose debugging.** Run Claude Code with `--debug` to see plugin error messages:
 

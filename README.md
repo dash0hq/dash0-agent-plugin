@@ -23,19 +23,43 @@ Claude Code plugin that captures agent activity as OpenTelemetry traces — tool
 
 ### First-time setup
 
-After installing, **the plugin does not start sending telemetry until you complete two steps**:
+After installing, configure credentials using **one of these options**:
 
-1. **Configure credentials.** Run `/plugin` → **Installed** → **dash0** → **Configure**. Enter:
-   - `OTLP_URL` — your Dash0 OTLP endpoint, e.g. `https://ingress.us1.dash0.com:4318`
-   - `AUTH_TOKEN` — your Dash0 auth token (sensitive — stored in your OS keychain, not in `settings.json`)
-   - `DATASET` *(optional)*
-   - `AGENT_NAME` *(optional)*
-2. **Reload the running session.** Run `/reload-plugins`. Without this, the current session's hooks still have empty config and silently emit nothing.
+**Option A: Config file (recommended)**
 
-If you start a session before completing setup, the plugin writes this line to stderr on `SessionStart`:
+Create a config file at one of these locations:
+
+| Location | Scope |
+|---|---|
+| `.claude/dash0-agent-plugin.local.md` | Project-level (current directory) |
+| `~/.claude/dash0-agent-plugin.local.md` | User-level (all projects) |
+
+Example:
+
+```markdown
+---
+otlp_url: "https://ingress.us1.dash0.com"
+auth_token: "your-dash0-auth-token"
+dataset: "default"
+---
+```
+
+**Precedence order** (highest to lowest):
+1. `/plugin → Configure` UI settings
+2. Project-level config file
+3. User-level config file
+4. Environment variables (`DASH0_*`)
+
+**Option B: Plugin UI**
+
+Run `/plugin` → **Installed** → **dash0** → **Configure** and enter your credentials. Then run `/reload-plugins` to apply.
+
+---
+
+If credentials are missing, you'll see on session start:
 
 ```
-dash0: not configured — no OTLP_URL set. In Claude Code: /plugin → Installed → dash0 → Configure, then /reload-plugins.
+dash0: telemetry is not active — configure the plugin to start sending data.
 ```
 
 ### Local development

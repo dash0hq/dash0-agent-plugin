@@ -117,21 +117,26 @@ The plugin emits OpenTelemetry spans following [GenAI semantic conventions](http
 |---|---|
 | `service.name` | Agent name (configurable via `AGENT_NAME`, defaults to `claude-code`) |
 | `gen_ai.provider.name` | LLM provider |
-| `vcs.repository.name` | Git repository name |
-| `vcs.ref.head.name` | Git branch |
-| `vcs.repository.url.full` | Full repository URL |
-| `user.name` | Real name or SHA-256 hash depending on privacy setting |
+
+**Span attributes (on all spans)**:
+
+| Attribute                                  | Description |
+|--------------------------------------------|---|
+| `dash0.gen_ai.vcs.repository.name`         | Git repository name |
+| `dash0.gen_ai.vcs.ref.head.name`                        | Git branch |
+| `dash0.gen_ai.vcs.repository.url.full`                  | Full repository URL |
+| `user.name`                                | Real name or SHA-256 hash depending on privacy setting |
 
 **Span attributes (LLM / chat spans)**:
 
-| Attribute | Description |
-|---|---|
-| `gen_ai.conversation.id` | Session identifier |
-| `gen_ai.conversation.name` | Session title |
-| `gen_ai.request.model` | Model used |
-| `gen_ai.usage.input_tokens` | Input tokens consumed |
-| `gen_ai.usage.output_tokens` | Output tokens produced |
-| `gen_ai.usage.cache_read_input_tokens` | Tokens read from prompt cache |
+| Attribute                                  | Description |
+|--------------------------------------------|---|
+| `gen_ai.conversation.id`                   | Session identifier |
+| `gen_ai.conversation.name`                 | Session title |
+| `gen_ai.request.model`                     | Model used |
+| `gen_ai.usage.input_tokens`                | Input tokens consumed |
+| `gen_ai.usage.output_tokens`               | Output tokens produced |
+| `gen_ai.usage.cache_read_input_tokens`     | Tokens read from prompt cache |
 | `gen_ai.usage.cache_creation_input_tokens` | Tokens written to prompt cache |
 
 **Span attributes (tool spans)**:

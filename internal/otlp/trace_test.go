@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -283,6 +284,21 @@ func TestNewLLMSpanOmitIO(t *testing.T) {
 	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", `REDACTED`)
 	assertAttrContains(t, span.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
 	assertAttrContains(t, span.Attributes, "gen_ai.output.messages", `REDACTED`)
+}
+
+func TestNewSessionSpanOmitUserInfoRedactsCwd(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	event := map[string]any{
+		"hook_event_name": "SessionStart",
+		"session_id":      "sess-123",
+		"cwd":             home + "/source/dash0",
+	}
+
+	span := NewSessionSpan("abc123traceabc123traceabc123tr", "span1234span1234", ts, event, Config{OmitUserInfo: true})
+
+	assertAttr(t, span.Attributes, "process.working_directory", "~/source/dash0")
+	assertAttr(t, span.Attributes, "gen_ai.conversation.id", "sess-123")
 }
 
 func TestSendTraceSkipsWhenNotConfigured(t *testing.T) {

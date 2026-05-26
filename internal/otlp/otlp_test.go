@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -346,6 +347,81 @@ func assertIntAttr(t *testing.T, attrs []Attribute, key string, want int64) {
 		}
 	}
 	t.Errorf("attribute %s not found", key)
+}
+
+func TestSendLogOmitUserInfoRedactsCwd(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	home, _ := os.UserHomeDir()
+
+	event := map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "sess-123",
+		"cwd":             home + "/source/my-project",
+		"tool_name":       "Bash",
+	}
+	cfg := Config{OTLPUrl: srv.URL, OmitUserInfo: true}
+
+	require.NoError(t, SendLog(event, cfg))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "process.working_directory", "~/source/my-project")
+	assertAttr(t, lr.Attributes, "gen_ai.tool.name", "Bash")
+}
+
+func TestSendLogOmitUserInfoCwdOutsideHome(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "sess-123",
+		"cwd":             "/opt/ci/workspace",
+		"tool_name":       "Bash",
+	}
+	cfg := Config{OTLPUrl: srv.URL, OmitUserInfo: true}
+
+	require.NoError(t, SendLog(event, cfg))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "process.working_directory", "/opt/ci/workspace")
+}
+
+func TestRedactHomeDir(t *testing.T) {
+	home, _ := os.UserHomeDir()
+
+	t.Run("replaces home prefix with tilde", func(t *testing.T) {
+		result := redactHomeDir(home + "/projects/myapp")
+		assert.Equal(t, "~/projects/myapp", result)
+	})
+
+	t.Run("exact home dir becomes tilde", func(t *testing.T) {
+		result := redactHomeDir(home)
+		assert.Equal(t, "~", result)
+	})
+
+	t.Run("path outside home is unchanged", func(t *testing.T) {
+		result := redactHomeDir("/opt/ci/workspace")
+		assert.Equal(t, "/opt/ci/workspace", result)
+	})
+
+	t.Run("partial prefix match is not redacted", func(t *testing.T) {
+		result := redactHomeDir(home + "-extra/projects")
+		assert.Equal(t, home+"-extra/projects", result)
+	})
 }
 
 func TestHashIdentity(t *testing.T) {

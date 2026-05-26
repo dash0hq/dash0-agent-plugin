@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/vcs"
@@ -263,6 +265,12 @@ var contentKeys = map[string]bool{
 	"prompt":                 true,
 }
 
+// userInfoKeys lists event fields that contain user-identifying information.
+// These are redacted when Config.OmitUserInfo is true.
+var userInfoKeys = map[string]bool{
+	"cwd": true,
+}
+
 // attrKeyMap maps event field names to OTLP semantic convention attribute keys.
 var attrKeyMap = map[string]string{
 	"session_id":    "gen_ai.conversation.id",
@@ -316,6 +324,16 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 	var attrs []Attribute
 	for k, v := range event {
 		if attrSkipKeys[k] {
+			continue
+		}
+		if cfg.OmitUserInfo && userInfoKeys[k] {
+			key := k
+			if mapped, ok := attrKeyMap[k]; ok {
+				key = mapped
+			}
+			if s, ok := v.(string); ok {
+				attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactHomeDir(s))})
+			}
 			continue
 		}
 		if cfg.OmitIO && contentKeys[k] {
@@ -472,4 +490,22 @@ func vcsSpanAttributes(cfg Config) []Attribute {
 func hashIdentity(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:8])
+}
+
+// redactHomeDir replaces the user's home directory prefix in the path with "~".
+// If the path doesn't start with the home directory, it is returned unchanged.
+func redactHomeDir(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	home = filepath.Clean(home)
+	path = filepath.Clean(path)
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+string(filepath.Separator)) {
+		return "~" + path[len(home):]
+	}
+	return path
 }

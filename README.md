@@ -154,12 +154,12 @@ By default, the plugin anonymizes telemetry:
 
 | Setting | Default | Behavior |
 |---|---|---|
-| `OMIT_USER_INFO` | `true` | `user.name` is emitted as a SHA-256 hash (stable per-user grouping without revealing identity). `user.email` is omitted. |
+| `OMIT_USER_INFO` | `true` | `user.name` is emitted as a SHA-256 hash (stable per-user grouping without revealing identity). `user.email` is omitted. Working directory (`process.working_directory`) has its home directory prefix replaced with `~`. |
 | `OMIT_IO` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
 
 **What is always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
 
-**What is omitted by default**: real user name, email, prompt text, tool call arguments and responses.
+**What is omitted by default**: real user name, email, home directory path in working directory, prompt text, tool call arguments and responses.
 
 To opt in to full data collection, set either option to `"false"` via `/plugin` → Installed → dash0-agent-plugin → Configure.
 

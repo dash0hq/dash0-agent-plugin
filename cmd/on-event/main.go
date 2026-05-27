@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -88,6 +89,18 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
 	}
 	// Main-agent tool calls: parentSpanID stays as chat span (from context).
+
+	// Extract VCS metadata before eventAttributes redacts tool_response.
+	resp := event["tool_response"]
+	if prURL := extractPRURL(resp); prURL != "" {
+		event["pr_url"] = prURL
+	}
+	if issueURL := extractIssueURL(resp); issueURL != "" {
+		event["issue_url"] = issueURL
+	}
+	if sha := extractCommitSHA(resp); sha != "" {
+		event["commit_sha"] = sha
+	}
 
 	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
@@ -173,6 +186,73 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	return otlp.SendTrace(span, event, cfg)
 }
 
+
+// prURLPattern matches GitHub, GitLab, and Bitbucket pull/merge request URLs,
+// including self-hosted instances. Excludes /pull/new/ (pre-creation links from git push).
+var prURLPattern = regexp.MustCompile(`https?://[^\s"'<>\x60\])]+/(?:pull/\d+|pull-requests/\d+|-/merge_requests/\d+)`)
+
+// issueURLPattern matches GitHub and GitLab issue URLs.
+var issueURLPattern = regexp.MustCompile(`https?://[^\s"'<>\x60\])]+/issues/\d+`)
+
+// commitSHAPattern matches a git commit output line: [branch SHA] message
+var commitSHAPattern = regexp.MustCompile(`^\[[\w/.-]+ ([0-9a-f]{7,40})\]`)
+
+// toolResponseText extracts the scannable text from a tool response.
+// Bash tool responses are dicts with stdout/stderr; other responses may be
+// plain strings or arbitrary dicts.
+func toolResponseText(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case map[string]any:
+		var parts []string
+		if stdout, ok := val["stdout"].(string); ok && stdout != "" {
+			parts = append(parts, stdout)
+		}
+		if stderr, ok := val["stderr"].(string); ok && stderr != "" {
+			parts = append(parts, stderr)
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+		b, err := json.Marshal(val)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	default:
+		b, err := json.Marshal(val)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+}
+
+// extractPRURL scans a tool response for a pull/merge request URL.
+func extractPRURL(v any) string {
+	return prURLPattern.FindString(toolResponseText(v))
+}
+
+// extractIssueURL scans a tool response for an issue URL.
+func extractIssueURL(v any) string {
+	return issueURLPattern.FindString(toolResponseText(v))
+}
+
+// extractCommitSHA scans a tool response for a git commit SHA from the
+// standard git commit output format: [branch SHA] message
+func extractCommitSHA(v any) string {
+	text := toolResponseText(v)
+	for _, line := range strings.Split(text, "\n") {
+		if m := commitSHAPattern.FindStringSubmatch(line); len(m) > 1 {
+			return m[1]
+		}
+	}
+	return ""
+}
 
 // extractAgentIDFromResponse parses the agentId from an Agent tool's response.
 // The response may be a JSON string or an already-decoded map.

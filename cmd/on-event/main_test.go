@@ -868,6 +868,180 @@ func TestModelOnToolSpanFromTranscriptWhenSessionStartOmitsModel(t *testing.T) {
 	assertStringAttr(t, chatSpan.Attributes, "gen_ai.request.model", "claude-opus-4-7")
 }
 
+func TestToolResponseText(t *testing.T) {
+	t.Run("string input", func(t *testing.T) {
+		assert.Equal(t, "hello", toolResponseText("hello"))
+	})
+	t.Run("nil input", func(t *testing.T) {
+		assert.Equal(t, "", toolResponseText(nil))
+	})
+	t.Run("Bash response dict", func(t *testing.T) {
+		resp := map[string]any{
+			"stdout":    "output line",
+			"stderr":    "warning",
+			"isImage":   false,
+		}
+		text := toolResponseText(resp)
+		assert.Contains(t, text, "output line")
+		assert.Contains(t, text, "warning")
+	})
+	t.Run("dict without stdout falls back to JSON", func(t *testing.T) {
+		resp := map[string]any{"filePath": "/tmp/file.go"}
+		text := toolResponseText(resp)
+		assert.Contains(t, text, "filePath")
+	})
+}
+
+func TestExtractPRURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected string
+	}{
+		{"GitHub PR URL", "https://github.com/dash0hq/dash0-agent-plugin/pull/94", "https://github.com/dash0hq/dash0-agent-plugin/pull/94"},
+		{"GitHub PR in multiline output", "Creating pull request...\nhttps://github.com/org/repo/pull/123\nDone.", "https://github.com/org/repo/pull/123"},
+		{"GitLab MR URL", "https://gitlab.com/org/repo/-/merge_requests/42", "https://gitlab.com/org/repo/-/merge_requests/42"},
+		{"Bitbucket PR URL", "https://bitbucket.org/team/repo/pull-requests/7", "https://bitbucket.org/team/repo/pull-requests/7"},
+		{"self-hosted GitHub", "https://github.company.com/team/repo/pull/99", "https://github.company.com/team/repo/pull/99"},
+		{"ignores pull/new from git push", "https://github.com/org/repo/pull/new/feat-branch", ""},
+		{"no PR URL", "file1.go\nfile2.go\nok", ""},
+		{"nil input", nil, ""},
+		{"Bash response dict with PR in stdout", map[string]any{
+			"stdout": "Warning: 2 uncommitted changes\nhttps://github.com/dash0hq/dash0-agent-plugin/pull/94",
+			"stderr": "",
+		}, "https://github.com/dash0hq/dash0-agent-plugin/pull/94"},
+		{"empty string", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, extractPRURL(tt.input))
+		})
+	}
+}
+
+func TestExtractIssueURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected string
+	}{
+		{"GitHub issue", "https://github.com/dash0hq/dash0-agent-plugin/issues/91", "https://github.com/dash0hq/dash0-agent-plugin/issues/91"},
+		{"GitLab issue", "https://gitlab.com/org/repo/issues/42", "https://gitlab.com/org/repo/issues/42"},
+		{"issue in Bash stdout", map[string]any{
+			"stdout": "Created issue https://github.com/org/repo/issues/5\n",
+		}, "https://github.com/org/repo/issues/5"},
+		{"no issue URL", "file1.go\nfile2.go", ""},
+		{"nil", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, extractIssueURL(tt.input))
+		})
+	}
+}
+
+func TestExtractCommitSHA(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected string
+	}{
+		{"git commit output", "[feat/my-branch 82717dc] feat: add new feature\n 4 files changed", "82717dc"},
+		{"full SHA", "[main abcdef1234567890abcdef1234567890abcdef12] fix: bug", "abcdef1234567890abcdef1234567890abcdef12"},
+		{"Bash response dict", map[string]any{
+			"stdout": "[feat/extract-pr-urls a1b2c3d] feat: extract PR URLs\n 3 files changed",
+		}, "a1b2c3d"},
+		{"no commit", "file1.go\nfile2.go", ""},
+		{"nil", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, extractCommitSHA(tt.input))
+		})
+	}
+}
+
+func TestPRURLSurvivesOmitIO(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Setenv("DASH0_OMIT_IO", "true")
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-pr","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-pr","prompt":"create PR"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-pr","tool_name":"Bash","tool_use_id":"tu-pr"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-pr","tool_name":"Bash","tool_use_id":"tu-pr","tool_input":"gh pr create","tool_response":"Creating pull request...\nhttps://github.com/dash0hq/dash0-agent-plugin/pull/94\n"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-pr"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	// Tool I/O is redacted.
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
+
+	// But the PR URL is extracted as a dedicated attribute.
+	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.vcs.pull_request.url", "https://github.com/dash0hq/dash0-agent-plugin/pull/94")
+}
+
+func TestCommitSHAExtractedOnToolSpan(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Setenv("DASH0_OMIT_IO", "true")
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-sha","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-sha","prompt":"commit"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-sha","tool_name":"Bash","tool_use_id":"tu-sha"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-sha","tool_name":"Bash","tool_use_id":"tu-sha","tool_input":"git commit","tool_response":{"stdout":"[feat/my-branch 82717dc] feat: add feature\n 3 files changed","stderr":""}}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.vcs.commit.sha", "82717dc")
+	// Tool I/O still redacted.
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
+}
+
+func TestIssueURLExtractedOnToolSpan(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-issue","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-issue","prompt":"create issue"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-issue","tool_name":"Bash","tool_use_id":"tu-issue"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-issue","tool_name":"Bash","tool_use_id":"tu-issue","tool_response":{"stdout":"https://github.com/dash0hq/dash0-agent-plugin/issues/93","stderr":""}}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.vcs.issue.url", "https://github.com/dash0hq/dash0-agent-plugin/issues/93")
+}
+
+func TestPRURLNotPresentWhenNoMatch(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-nopr","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-nopr","prompt":"list files"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-nopr","tool_name":"Bash","tool_use_id":"tu-nopr"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-nopr","tool_name":"Bash","tool_use_id":"tu-nopr","tool_response":"file1.go\nfile2.go"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	// No PR URL attribute should be present.
+	for _, a := range toolSpan.Attributes {
+		assert.NotEqual(t, "dash0.gen_ai.vcs.pull_request.url", a.Key, "PR URL attribute should not be present when no PR URL in response")
+	}
+}
+
 func assertStringAttr(t *testing.T, attrs []otlp.Attribute, key, want string) {
 	t.Helper()
 	for _, a := range attrs {

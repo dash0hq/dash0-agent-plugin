@@ -147,6 +147,9 @@ The plugin emits OpenTelemetry spans following [GenAI semantic conventions](http
 | `gen_ai.tool.type` | Always `function` for Claude Code tools |
 | `gen_ai.tool.call.arguments` | Tool input (omitted when `OMIT_IO=true`, truncated to 16KB otherwise) |
 | `gen_ai.tool.call.result` | Tool output (omitted when `OMIT_IO=true`, truncated to 16KB otherwise) |
+| `dash0.gen_ai.vcs.pull_request.url` | PR/MR URL extracted from tool response (survives `OMIT_IO=true`). Supports GitHub, GitLab, and Bitbucket. |
+| `dash0.gen_ai.vcs.issue.url` | Issue URL extracted from tool response (survives `OMIT_IO=true`). |
+| `dash0.gen_ai.vcs.commit.sha` | Commit SHA extracted from `git commit` output (survives `OMIT_IO=true`). |
 
 ### Privacy defaults
 

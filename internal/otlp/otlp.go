@@ -283,6 +283,9 @@ var attrKeyMap = map[string]string{
 	"error":         "exception.message",
 	"agent_id":      "gen_ai.agent.id",
 	"agent_type":    "gen_ai.agent.name",
+	"pr_url":        "dash0.gen_ai.vcs.pull_request.url",
+	"issue_url":     "dash0.gen_ai.vcs.issue.url",
+	"commit_sha":    "dash0.gen_ai.vcs.commit.sha",
 }
 
 // attrTransformMap maps event field names to a target key and a value transform function.

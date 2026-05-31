@@ -153,18 +153,18 @@ The plugin emits OpenTelemetry spans following [GenAI semantic conventions](http
 
 ### Privacy defaults
 
-By default, the plugin anonymizes telemetry:
+By default, the plugin sends real user identity and omits prompt/tool I/O content:
 
 | Setting | Default | Behavior |
 |---|---|---|
-| `OMIT_USER_INFO` | `true` | `user.name` is emitted as a SHA-256 hash (stable per-user grouping without revealing identity). `user.email` is omitted. Working directory (`process.working_directory`) has its home directory prefix replaced with `~`. |
+| `OMIT_USER_INFO` | `false` | Real `user.name` and `user.email` are sent. When set to `true`, `user.name` is emitted as a SHA-256 hash, `user.email` is omitted, and working directory has its home directory prefix replaced with `~`. |
 | `OMIT_IO` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
 
 **What is always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
 
-**What is omitted by default**: real user name, email, home directory path in working directory, prompt text, tool call arguments and responses.
+**What is omitted by default**: prompt text, tool call arguments and responses.
 
-To opt in to full data collection, set either option to `"false"` via `/plugin` → Installed → dash0-agent-plugin → Configure.
+To anonymize user identity, set `OMIT_USER_INFO` to `"true"` via `/plugin` → Installed → dash0-agent-plugin → Configure.
 
 ## Configuration
 
@@ -190,7 +190,7 @@ For non-sensitive options, the plugin falls back to `DASH0_*` environment variab
 | `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL — must include scheme (e.g. `https://ingress.us1.dash0.com`) |
 | `DASH0_DATASET` | Dash0 dataset |
 | `DASH0_AGENT_NAME` | Agent name |
-| `DASH0_OMIT_USER_INFO` | Anonymize user identity (default: `true`). When true, `user.name` is emitted as a hash and `user.email` is omitted. Set to `false` to include real identity. |
+| `DASH0_OMIT_USER_INFO` | Anonymize user identity (default: `false`). When true, `user.name` is emitted as a hash and `user.email` is omitted. |
 | `DASH0_OMIT_IO` | Omit prompts and tool I/O (default: `true`). When true, prompt content and tool call inputs/outputs are stripped from spans. Set to `false` to include full content. |
 | `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
@@ -215,7 +215,7 @@ auth_token: "your-dash0-auth-token"
 dataset: "default"
 agent_name: "claude-code"
 omit_io: true
-omit_user_info: true
+omit_user_info: false
 ---
 ```
 
@@ -231,7 +231,7 @@ auth_token: "your-dash0-auth-token"
 dataset: "my-project-dataset"
 agent_name: "my-coding-agent"
 omit_io: false
-omit_user_info: false
+omit_user_info: true
 ---
 ```
 
@@ -245,7 +245,7 @@ omit_user_info: false
 | `dataset` | Dash0 dataset name | — |
 | `agent_name` | Agent name (used as `service.name`) | `claude-code` |
 | `omit_io` | Omit prompt content and tool I/O | `true` |
-| `omit_user_info` | Anonymize user identity | `true` |
+| `omit_user_info` | Anonymize user identity | `false` |
 
 Set `enabled: false` to disable the plugin for a single project without uninstalling it.
 

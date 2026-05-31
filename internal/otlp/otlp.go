@@ -92,7 +92,7 @@ type Config struct {
 	AuthToken    string
 	Dataset      string
 	AgentName    string
-	OmitUserInfo bool   // when true (default), hash user.name and omit user.email (both span attributes)
+	OmitUserInfo bool   // when true, hash user.name and omit user.email (both span attributes)
 	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to

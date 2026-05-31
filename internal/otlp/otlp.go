@@ -286,6 +286,8 @@ var attrKeyMap = map[string]string{
 	"pr_url":        "dash0.gen_ai.vcs.pull_request.url",
 	"issue_url":     "dash0.gen_ai.vcs.issue.url",
 	"commit_sha":    "dash0.gen_ai.vcs.commit.sha",
+	"lines_added":   "dash0.gen_ai.code.lines_added",
+	"lines_removed": "dash0.gen_ai.code.lines_removed",
 }
 
 // attrTransformMap maps event field names to a target key and a value transform function.

@@ -1042,6 +1042,148 @@ func TestPRURLNotPresentWhenNoMatch(t *testing.T) {
 	}
 }
 
+func TestExtractLinesCounts(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       any
+		wantAdded   int
+		wantRemoved int
+	}{
+		{
+			"Edit with additions and removals",
+			map[string]any{
+				"structuredPatch": []any{
+					map[string]any{
+						"filePath": "main.go",
+						"lines": []any{
+							" unchanged line",
+							"-old line 1",
+							"-old line 2",
+							"+new line 1",
+							"+new line 2",
+							"+new line 3",
+							" another unchanged",
+						},
+					},
+				},
+			},
+			3, 2,
+		},
+		{
+			"Write (new file, no patches)",
+			map[string]any{
+				"structuredPatch": []any{},
+			},
+			0, 0,
+		},
+		{
+			"nil input",
+			nil,
+			0, 0,
+		},
+		{
+			"string input (not a map)",
+			"some text response",
+			0, 0,
+		},
+		{
+			"map without structuredPatch",
+			map[string]any{"filePath": "/tmp/file.go"},
+			0, 0,
+		},
+		{
+			"multiple patches across files",
+			map[string]any{
+				"structuredPatch": []any{
+					map[string]any{
+						"filePath": "a.go",
+						"lines":    []any{"+added1", "+added2", "-removed1"},
+					},
+					map[string]any{
+						"filePath": "b.go",
+						"lines":    []any{"+added3", "-removed2", "-removed3"},
+					},
+				},
+			},
+			3, 3,
+		},
+		{
+			"patch with missing lines field",
+			map[string]any{
+				"structuredPatch": []any{
+					map[string]any{"filePath": "c.go"},
+				},
+			},
+			0, 0,
+		},
+		{
+			"empty line strings are skipped",
+			map[string]any{
+				"structuredPatch": []any{
+					map[string]any{
+						"lines": []any{"", "+added", ""},
+					},
+				},
+			},
+			1, 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			added, removed := extractLinesCounts(tt.input)
+			assert.Equal(t, tt.wantAdded, added, "lines added")
+			assert.Equal(t, tt.wantRemoved, removed, "lines removed")
+		})
+	}
+}
+
+func TestLinesOfCodeSurvivesOmitIO(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Setenv("DASH0_OMIT_IO", "true")
+
+	patchJSON := `{"structuredPatch":[{"filePath":"main.go","lines":[" ctx","- old1","- old2","+new1","+new2","+new3"," end"]}]}`
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-loc","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-loc","prompt":"edit file"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-loc","tool_name":"Edit","tool_use_id":"tu-loc"}`)
+	feed(t, fmt.Sprintf(`{"hook_event_name":"PostToolUse","session_id":"sess-loc","tool_name":"Edit","tool_use_id":"tu-loc","tool_input":"edit main.go","tool_response":%s}`, patchJSON))
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-loc"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	// Tool I/O is redacted.
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
+
+	// But lines-of-code counts survive as dedicated int attributes.
+	assertIntAttr(t, toolSpan.Attributes, "dash0.gen_ai.code.lines_added", 3)
+	assertIntAttr(t, toolSpan.Attributes, "dash0.gen_ai.code.lines_removed", 2)
+}
+
+func TestLinesOfCodeNotPresentOnNonEditTools(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-noloc","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-noloc","prompt":"list files"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-noloc","tool_name":"Bash","tool_use_id":"tu-noloc"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-noloc","tool_name":"Bash","tool_use_id":"tu-noloc","tool_response":"file1.go\nfile2.go"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	for _, a := range toolSpan.Attributes {
+		assert.NotEqual(t, "dash0.gen_ai.code.lines_added", a.Key, "lines_added should not be present on Bash tool spans")
+		assert.NotEqual(t, "dash0.gen_ai.code.lines_removed", a.Key, "lines_removed should not be present on Bash tool spans")
+	}
+}
+
 func assertStringAttr(t *testing.T, attrs []otlp.Attribute, key, want string) {
 	t.Helper()
 	for _, a := range attrs {

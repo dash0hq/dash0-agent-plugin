@@ -36,7 +36,7 @@
     },
     "OMIT_USER_INFO": {
       "title": "Anonymize User Identity",
-      "description": "When true (default), hashes user.name and omits user.email. Set to false to include real identity.",
+      "description": "When true, hashes user.name and omits user.email. Default: false (real identity is sent).",
       "type": "string",
       "sensitive": false
     },

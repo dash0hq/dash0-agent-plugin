@@ -103,7 +103,7 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	}
 
 	// Extract tool metadata attributes before OMIT_IO redacts tool_input.
-	toolInput, _ := event["tool_input"].(string)
+	toolInput := event["tool_input"]
 	if toolName == "Bash" {
 		if family := extractBashCommandFamily(toolInput); family != "" {
 			event["bash_command_family"] = family
@@ -271,12 +271,22 @@ func extractCommitSHA(v any) string {
 }
 
 // extractBashCommandFamily extracts the leading binary name from a Bash tool
-// input string, skipping environment variable assignments (KEY=val prefixes).
-func extractBashCommandFamily(input string) string {
-	if input == "" {
+// input, skipping environment variable assignments (KEY=val prefixes).
+// Input may be a string ("git status") or a map with a "command" field.
+func extractBashCommandFamily(v any) string {
+	var cmd string
+	switch val := v.(type) {
+	case string:
+		cmd = val
+	case map[string]any:
+		cmd, _ = val["command"].(string)
+	default:
 		return ""
 	}
-	for _, token := range strings.Fields(input) {
+	if cmd == "" {
+		return ""
+	}
+	for _, token := range strings.Fields(cmd) {
 		if strings.Contains(token, "=") && !strings.HasPrefix(token, "-") {
 			continue
 		}
@@ -289,17 +299,26 @@ func extractBashCommandFamily(input string) string {
 	return ""
 }
 
-// extractSkillName parses the skill name from a Skill tool's input JSON.
-func extractSkillName(input string) string {
-	if input == "" {
+// extractSkillName parses the skill name from a Skill tool's input.
+// Input may be a JSON string or an already-decoded map with a "skill" field.
+func extractSkillName(v any) string {
+	switch val := v.(type) {
+	case string:
+		if val == "" {
+			return ""
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(val), &m); err != nil {
+			return ""
+		}
+		name, _ := m["skill"].(string)
+		return name
+	case map[string]any:
+		name, _ := val["skill"].(string)
+		return name
+	default:
 		return ""
 	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(input), &m); err != nil {
-		return ""
-	}
-	name, _ := m["skill"].(string)
-	return name
 }
 
 // extractMCPServer parses the server name from an MCP tool name

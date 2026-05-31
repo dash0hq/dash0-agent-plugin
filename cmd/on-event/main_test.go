@@ -1055,7 +1055,7 @@ func assertAttrAbsent(t *testing.T, attrs []otlp.Attribute, key string) {
 func TestExtractBashCommandFamily(t *testing.T) {
 	tests := []struct {
 		name  string
-		input string
+		input any
 		want  string
 	}{
 		{"simple command", "git status", "git"},
@@ -1067,6 +1067,10 @@ func TestExtractBashCommandFamily(t *testing.T) {
 		{"empty input", "", ""},
 		{"only env vars", "FOO=bar", ""},
 		{"command with flags", "ls -la /tmp", "ls"},
+		{"map with command field", map[string]any{"command": "git log --oneline -3", "description": "Show log"}, "git"},
+		{"map with env var prefix", map[string]any{"command": "DASH0_DEBUG=true claude --debug"}, "claude"},
+		{"map without command field", map[string]any{"description": "no command"}, ""},
+		{"nil input", nil, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1078,15 +1082,18 @@ func TestExtractBashCommandFamily(t *testing.T) {
 func TestExtractSkillName(t *testing.T) {
 	tests := []struct {
 		name  string
-		input string
+		input any
 		want  string
 	}{
-		{"valid skill", `{"skill":"translation-updater","args":"Add translations"}`, "translation-updater"},
-		{"skill only", `{"skill":"reviewer"}`, "reviewer"},
+		{"valid skill JSON string", `{"skill":"translation-updater","args":"Add translations"}`, "translation-updater"},
+		{"skill only JSON string", `{"skill":"reviewer"}`, "reviewer"},
 		{"empty input", "", ""},
 		{"invalid JSON", "not json", ""},
-		{"missing skill field", `{"args":"something"}`, ""},
-		{"null skill", `{"skill":null}`, ""},
+		{"missing skill field string", `{"args":"something"}`, ""},
+		{"null skill string", `{"skill":null}`, ""},
+		{"map with skill field", map[string]any{"skill": "keybindings-help"}, "keybindings-help"},
+		{"map without skill field", map[string]any{"args": "something"}, ""},
+		{"nil input", nil, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1126,7 +1133,7 @@ func TestBashCommandFamilySurvivesOmitIO(t *testing.T) {
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-bash","model":"claude-sonnet-4-20250514"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-bash","prompt":"run git"}`)
 	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-bash","tool_name":"Bash","tool_use_id":"tu-bash"}`)
-	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-bash","tool_name":"Bash","tool_use_id":"tu-bash","tool_input":"git status","tool_response":"on branch main"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-bash","tool_name":"Bash","tool_use_id":"tu-bash","tool_input":{"command":"git status","description":"Show status"},"tool_response":"on branch main"}`)
 
 	toolSpan := findSpan(*spans, "execute_tool")
 	require.NotNil(t, toolSpan)
@@ -1145,7 +1152,7 @@ func TestSkillNameSurvivesOmitIO(t *testing.T) {
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-skill","model":"claude-sonnet-4-20250514"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-skill","prompt":"run skill"}`)
 	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-skill","tool_name":"Skill","tool_use_id":"tu-skill"}`)
-	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-skill","tool_name":"Skill","tool_use_id":"tu-skill","tool_input":"{\"skill\":\"translation-updater\",\"args\":\"Add entries\"}","tool_response":"done"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-skill","tool_name":"Skill","tool_use_id":"tu-skill","tool_input":{"skill":"translation-updater","args":"Add entries"},"tool_response":"done"}`)
 
 	toolSpan := findSpan(*spans, "execute_tool")
 	require.NotNil(t, toolSpan)

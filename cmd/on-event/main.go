@@ -102,6 +102,22 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		event["commit_sha"] = sha
 	}
 
+	// Extract tool metadata attributes before OMIT_IO redacts tool_input.
+	toolInput, _ := event["tool_input"].(string)
+	if toolName == "Bash" {
+		if family := extractBashCommandFamily(toolInput); family != "" {
+			event["bash_command_family"] = family
+		}
+	}
+	if toolName == "Skill" {
+		if skill := extractSkillName(toolInput); skill != "" {
+			event["skill_name"] = skill
+		}
+	}
+	if server := extractMCPServer(toolName); server != "" {
+		event["mcp_server"] = server
+	}
+
 	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
 }
@@ -252,6 +268,51 @@ func extractCommitSHA(v any) string {
 		}
 	}
 	return ""
+}
+
+// extractBashCommandFamily extracts the leading binary name from a Bash tool
+// input string, skipping environment variable assignments (KEY=val prefixes).
+func extractBashCommandFamily(input string) string {
+	if input == "" {
+		return ""
+	}
+	for _, token := range strings.Fields(input) {
+		if strings.Contains(token, "=") && !strings.HasPrefix(token, "-") {
+			continue
+		}
+		binary := filepath.Base(token)
+		if binary == "." || binary == "/" {
+			return ""
+		}
+		return binary
+	}
+	return ""
+}
+
+// extractSkillName parses the skill name from a Skill tool's input JSON.
+func extractSkillName(input string) string {
+	if input == "" {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(input), &m); err != nil {
+		return ""
+	}
+	name, _ := m["skill"].(string)
+	return name
+}
+
+// extractMCPServer parses the server name from an MCP tool name
+// (format: mcp__<server>__<tool>).
+func extractMCPServer(toolName string) string {
+	if !strings.HasPrefix(toolName, "mcp__") {
+		return ""
+	}
+	parts := strings.SplitN(toolName, "__", 3)
+	if len(parts) < 2 || parts[1] == "" {
+		return ""
+	}
+	return parts[1]
 }
 
 // extractAgentIDFromResponse parses the agentId from an Agent tool's response.

@@ -1042,6 +1042,161 @@ func TestPRURLNotPresentWhenNoMatch(t *testing.T) {
 	}
 }
 
+func assertAttrAbsent(t *testing.T, attrs []otlp.Attribute, key string) {
+	t.Helper()
+	for _, a := range attrs {
+		if a.Key == key {
+			t.Errorf("attribute %q should not be present", key)
+			return
+		}
+	}
+}
+
+func TestExtractBashCommandFamily(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  string
+	}{
+		{"simple command", "git status", "git"},
+		{"command with args", "npm install express", "npm"},
+		{"env var prefix", "FOO=bar git push", "git"},
+		{"multiple env vars", "A=1 B=2 docker build .", "docker"},
+		{"chained commands", "cd /tmp && make build", "cd"},
+		{"absolute path", "/usr/bin/git log", "git"},
+		{"empty input", "", ""},
+		{"only env vars", "FOO=bar", ""},
+		{"command with flags", "ls -la /tmp", "ls"},
+		{"map with command field", map[string]any{"command": "git log --oneline -3", "description": "Show log"}, "git"},
+		{"map with env var prefix", map[string]any{"command": "DASH0_DEBUG=true claude --debug"}, "claude"},
+		{"map without command field", map[string]any{"description": "no command"}, ""},
+		{"nil input", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractBashCommandFamily(tt.input))
+		})
+	}
+}
+
+func TestExtractSkillName(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  string
+	}{
+		{"valid skill JSON string", `{"skill":"translation-updater","args":"Add translations"}`, "translation-updater"},
+		{"skill only JSON string", `{"skill":"reviewer"}`, "reviewer"},
+		{"empty input", "", ""},
+		{"invalid JSON", "not json", ""},
+		{"missing skill field string", `{"args":"something"}`, ""},
+		{"null skill string", `{"skill":null}`, ""},
+		{"map with skill field", map[string]any{"skill": "keybindings-help"}, "keybindings-help"},
+		{"map without skill field", map[string]any{"args": "something"}, ""},
+		{"nil input", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractSkillName(tt.input))
+		})
+	}
+}
+
+func TestExtractMCPServer(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		want     string
+	}{
+		{"linear server", "mcp__linear-server__list_issues", "linear-server"},
+		{"github", "mcp__github__create_pull_request", "github"},
+		{"slack", "mcp__slack__send_message", "slack"},
+		{"not MCP", "Bash", ""},
+		{"partial MCP prefix", "mcp__", ""},
+		{"no tool part", "mcp__server", "server"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractMCPServer(tt.toolName))
+		})
+	}
+}
+
+func TestBashCommandFamilySurvivesOmitIO(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Setenv("DASH0_OMIT_IO", "true")
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-bash","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-bash","prompt":"run git"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-bash","tool_name":"Bash","tool_use_id":"tu-bash"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-bash","tool_name":"Bash","tool_use_id":"tu-bash","tool_input":{"command":"git status","description":"Show status"},"tool_response":"on branch main"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.bash.command_family", "git")
+}
+
+func TestSkillNameSurvivesOmitIO(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Setenv("DASH0_OMIT_IO", "true")
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-skill","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-skill","prompt":"run skill"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-skill","tool_name":"Skill","tool_use_id":"tu-skill"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-skill","tool_name":"Skill","tool_use_id":"tu-skill","tool_input":{"skill":"translation-updater","args":"Add entries"},"tool_response":"done"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.skill.name", "translation-updater")
+}
+
+func TestMCPServerExtracted(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-mcp","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-mcp","prompt":"list issues"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-mcp","tool_name":"mcp__linear-server__list_issues","tool_use_id":"tu-mcp"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-mcp","tool_name":"mcp__linear-server__list_issues","tool_use_id":"tu-mcp","tool_response":"issues list"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.mcp_server", "linear-server")
+}
+
+func TestNoMetadataOnUnrelatedTools(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-read","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-read","prompt":"read file"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-read","tool_name":"Read","tool_use_id":"tu-read"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-read","tool_name":"Read","tool_use_id":"tu-read","tool_response":"file content"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertAttrAbsent(t, toolSpan.Attributes, "dash0.gen_ai.tool.bash.command_family")
+	assertAttrAbsent(t, toolSpan.Attributes, "dash0.gen_ai.tool.skill.name")
+	assertAttrAbsent(t, toolSpan.Attributes, "dash0.gen_ai.tool.mcp_server")
+}
+
 func assertStringAttr(t *testing.T, attrs []otlp.Attribute, key, want string) {
 	t.Helper()
 	for _, a := range attrs {

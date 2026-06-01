@@ -285,7 +285,10 @@ var attrKeyMap = map[string]string{
 	"agent_type":    "gen_ai.agent.name",
 	"pr_url":        "dash0.gen_ai.vcs.pull_request.url",
 	"issue_url":     "dash0.gen_ai.vcs.issue.url",
-	"commit_sha":    "dash0.gen_ai.vcs.commit.sha",
+	"commit_sha":          "dash0.gen_ai.vcs.commit.sha",
+	"bash_command_family": "dash0.gen_ai.tool.bash.command_family",
+	"skill_name":          "dash0.gen_ai.tool.skill.name",
+	"mcp_server":          "dash0.gen_ai.tool.mcp_server",
 }
 
 // attrTransformMap maps event field names to a target key and a value transform function.

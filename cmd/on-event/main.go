@@ -102,6 +102,22 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		event["commit_sha"] = sha
 	}
 
+	// Extract tool metadata attributes before OMIT_IO redacts tool_input.
+	toolInput := event["tool_input"]
+	if toolName == "Bash" {
+		if family := extractBashCommandFamily(toolInput); family != "" {
+			event["bash_command_family"] = family
+		}
+	}
+	if toolName == "Skill" {
+		if skill := extractSkillName(toolInput); skill != "" {
+			event["skill_name"] = skill
+		}
+	}
+	if server := extractMCPServer(toolName); server != "" {
+		event["mcp_server"] = server
+	}
+
 	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
 }
@@ -252,6 +268,70 @@ func extractCommitSHA(v any) string {
 		}
 	}
 	return ""
+}
+
+// extractBashCommandFamily extracts the leading binary name from a Bash tool
+// input, skipping environment variable assignments (KEY=val prefixes).
+// Input may be a string ("git status") or a map with a "command" field.
+func extractBashCommandFamily(v any) string {
+	var cmd string
+	switch val := v.(type) {
+	case string:
+		cmd = val
+	case map[string]any:
+		cmd, _ = val["command"].(string)
+	default:
+		return ""
+	}
+	if cmd == "" {
+		return ""
+	}
+	for _, token := range strings.Fields(cmd) {
+		if strings.Contains(token, "=") && !strings.HasPrefix(token, "-") {
+			continue
+		}
+		binary := filepath.Base(token)
+		if binary == "." || binary == "/" {
+			return ""
+		}
+		return binary
+	}
+	return ""
+}
+
+// extractSkillName parses the skill name from a Skill tool's input.
+// Input may be a JSON string or an already-decoded map with a "skill" field.
+func extractSkillName(v any) string {
+	switch val := v.(type) {
+	case string:
+		if val == "" {
+			return ""
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(val), &m); err != nil {
+			return ""
+		}
+		name, _ := m["skill"].(string)
+		return name
+	case map[string]any:
+		name, _ := val["skill"].(string)
+		return name
+	default:
+		return ""
+	}
+}
+
+// extractMCPServer parses the server name from an MCP tool name
+// (format: mcp__<server>__<tool>).
+func extractMCPServer(toolName string) string {
+	if !strings.HasPrefix(toolName, "mcp__") {
+		return ""
+	}
+	parts := strings.SplitN(toolName, "__", 3)
+	if len(parts) < 2 || parts[1] == "" {
+		return ""
+	}
+	return parts[1]
 }
 
 // extractAgentIDFromResponse parses the agentId from an Agent tool's response.

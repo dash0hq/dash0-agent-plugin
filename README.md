@@ -33,6 +33,39 @@ claude plugin install dash0-agent-plugin@dash0 --scope user
 
 > **Note:** Claude Code downloads marketplace plugins via SSH by default. If SSH keys are not configured for GitHub, the `git config` line above forces HTTPS. This is required in Docker containers, CI runners, or any environment without SSH access to GitHub.
 
+### Fleet / global deployment
+
+To roll the plugin out across many machines non-interactively (MDM, golden image, dotfiles, config-management tooling), there are two independent pieces: **enabling the plugin** and **configuring credentials**. Neither requires the interactive `/plugin` UI.
+
+**1. Register the marketplace and enable the plugin** by writing `~/.claude/settings.json` on each device:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "dash0": { "source": { "source": "github", "repo": "dash0hq/claude-marketplace" } }
+  },
+  "enabledPlugins": { "dash0-agent-plugin@dash0": true }
+}
+```
+
+Each device needs network access to `github.com` to download the marketplace and the `on-event` binary (fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) on first run, with checksum verification).
+
+**2. Supply credentials** with either of the file/env mechanisms below (the interactive `/plugin → Configure` UI **cannot** be pre-seeded from a file):
+
+- Push a user-level config file to `~/.claude/dash0-agent-plugin.local.md` (the simplest fleet-wide option — see [Configuration file](#configuration-file) for all keys):
+
+  ```markdown
+  ---
+  otlp_url: "https://ingress.us1.dash0.com"
+  auth_token: "your-dash0-auth-token"
+  dataset: "default"
+  ---
+  ```
+
+  Ship it `chmod 600` and user-owned: the token is stored in cleartext (unlike the keychain), though it is only ever exposed to the plugin's hook process, never to tool-spawned shells.
+
+- Or inject environment variables — `DASH0_OTLP_URL` plus `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` (and optionally `DASH0_DATASET`) — which suits containers and CI. The token is the only value with no `DASH0_*` form (see [Environment variable fallback](#environment-variable-fallback)).
+
 ### First-time setup
 
 After installing, configure credentials using **one of these options**:
@@ -64,7 +97,7 @@ dataset: "default"
 
 **Option B: Plugin UI**
 
-Run `/plugin` → **Installed** → **dash0** → **Configure** and enter your credentials. Then run `/reload-plugins` to apply.
+Run `/plugin` → **Installed** → **dash0** (or **dash0-agent-plugin** if you installed from the Dash0 marketplace — see the [naming note](#from-the-dash0-marketplace) above) → **Configure** and enter your credentials. Then run `/reload-plugins` to apply.
 
 ---
 
@@ -81,16 +114,20 @@ dash0: telemetry is not active — configure the plugin to start sending data.
 claude --plugin-dir /path/to/dash0-agent-plugin
 
 # Build the binary locally (instead of downloading from GitHub Releases)
-go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-0.1.0-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/on-event/
+go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-0.1.8-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/on-event/
 ```
 
 ## What it does
 
-The plugin registers a hook for every supported Claude Code event. Each event's payload is written as a single JSON line (with a `timestamp` field added) to:
+The plugin's job is to **emit OpenTelemetry spans to your Dash0 OTLP endpoint** for the events that represent agent activity — tool calls, LLM turns, and session lifecycle.
+
+To do that it hooks every supported Claude Code event (see [Hooked events](#hooked-events) below). A subset of those events are turned into spans; the rest are recorded only as local scratch state used to reconstruct trace context across hook invocations. That scratch state is a per-session JSON-lines file (each event written as one line with a `timestamp` added):
 
 ```
-~/.claude/plugins/data/dash0-agent-plugin/events.jsonl
+$CLAUDE_PLUGIN_DATA/<session-id>/events.jsonl
 ```
+
+This file is internal — it is cleaned up on `SessionEnd` and is not the telemetry the plugin produces.
 
 ### Hooked events
 
@@ -106,6 +143,8 @@ The plugin registers a hook for every supported Claude Code event. Each event's 
 | Compaction | `PreCompact`, `PostCompact` |
 | Elicitation | `Elicitation`, `ElicitationResult` |
 | Notification | `Notification` |
+
+> **Hooked vs. exported.** All events above are hooked (so trace context stays accurate), but only a subset is currently exported as spans: tool spans from `PostToolUse` / `PostToolUseFailure`, chat/LLM spans from `Stop` / `StopFailure`, and the connectivity check at `SessionStart`. `UserPromptSubmit` and `SessionEnd` drive trace state; the remaining events are recorded locally but do not yet produce telemetry.
 
 ### Telemetry attributes
 
@@ -164,7 +203,7 @@ By default, the plugin sends real user identity and omits prompt/tool I/O conten
 
 **What is omitted by default**: prompt text, tool call arguments and responses.
 
-To anonymize user identity, set `OMIT_USER_INFO` to `"true"` via `/plugin` → Installed → dash0-agent-plugin → Configure.
+To anonymize user identity, set `OMIT_USER_INFO` to `"true"` via `/plugin` → Installed → dash0 → Configure (the entry name depends on the marketplace — see [First-time setup](#first-time-setup)).
 
 ## Configuration
 
@@ -183,7 +222,7 @@ After changing any value via Configure, run `/reload-plugins` to apply it to the
 
 For non-sensitive options, the plugin falls back to `DASH0_*` environment variables when the `userConfig` value is not set. This is useful for `--plugin-dir` development or CI.
 
-> **Note:** `AUTH_TOKEN` has no env var fallback — it must be configured via `/plugin → Configure` (stored in the OS keychain). This prevents the token from leaking into tool-spawned shell environments where other tools (e.g. Dash0 CLI) might pick it up.
+> **Note:** `AUTH_TOKEN` has **no `DASH0_AUTH_TOKEN` env var fallback** — unlike the other options, it is never read from a `DASH0_*` variable. This prevents the token from leaking into tool-spawned shell environments where other tools might pick it up. Configure it via either `/plugin → Configure` (stored in the OS keychain) or the [config file](#configuration-file)'s `auth_token:` field (passed to the hook as `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`). You can set the token via one source and the remaining options via `DASH0_*` env vars — see [Mixing sources](#mixing-sources).
 
 | Variable | Description |
 |---|---|
@@ -202,7 +241,7 @@ You can configure the plugin via a markdown file with YAML frontmatter. The plug
 1. **Project-level**: `.claude/dash0-agent-plugin.local.md` (in current directory)
 2. **Global**: `~/.claude/dash0-agent-plugin.local.md` (user home)
 
-Project-level config takes precedence over global config.
+The two config files do **not** merge: if a project-level file exists, it is used and the global file is ignored entirely — even for keys the project file leaves out. Keep all the keys you need in whichever file is active (don't, for example, put `auth_token` only in the global file and expect a project file to inherit it).
 
 **Global config (recommended for personal use)**
 
@@ -251,6 +290,19 @@ Set `enabled: false` to disable the plugin for a single project without uninstal
 
 The config file sets environment variables for the hook subprocess, so it acts as a fallback after `/plugin → Configure` values and before `DASH0_*` environment variables.
 
+### Mixing sources
+
+A config file and `DASH0_*` environment variables compose **per key** (this is separate from the two config files, which do *not* merge with each other — see [Configuration file](#configuration-file)). The active config file only sets values for the keys it actually contains; any key it omits falls through to the environment — not to the other config file. So you can, for example, put just the `auth_token` in a config file and supply everything else via `DASH0_*` env vars:
+
+```bash
+# ~/.claude/dash0-agent-plugin.local.md contains only:  auth_token: "…"
+DASH0_OTLP_URL="https://ingress.us1.dash0.com" \
+  DASH0_DATASET="default" \
+  claude
+```
+
+If the same key is set in more than one source, the highest-precedence one wins (`/plugin → Configure` → active config file → `DASH0_*` env var). The only exception is the two config files themselves, which do not merge (see above).
+
 ### Debug mode
 
 Set `DASH0_DEBUG=true` to print all OTel payloads to stderr. Works with or without an OTLP endpoint configured — useful for verifying what telemetry the plugin produces.
@@ -288,9 +340,11 @@ Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering:
 
 ```bash
 DASH0_OTLP_URL="https://ingress.us1.dash0.com:4318" \
-  DASH0_AUTH_TOKEN="your-token" \
+  CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="your-token" \
   claude --debug --plugin-dir /path/to/dash0-agent-plugin 2>&1 | grep "on-event:\|dash0:"
 ```
+
+> The auth token uses `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`, not `DASH0_AUTH_TOKEN` — there is no `DASH0_*` fallback for the token (see [Environment variable fallback](#environment-variable-fallback)).
 
 Plugin errors are prefixed with `on-event:` or `dash0:` in the output.
 

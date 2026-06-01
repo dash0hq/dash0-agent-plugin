@@ -102,6 +102,12 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		event["commit_sha"] = sha
 	}
 
+	// Extract lines-of-code counts before OMIT_IO redacts tool_response.
+	if added, removed := extractLinesCounts(resp); added > 0 || removed > 0 {
+		event["lines_added"] = int64(added)
+		event["lines_removed"] = int64(removed)
+	}
+
 	// Extract tool metadata attributes before OMIT_IO redacts tool_input.
 	toolInput := event["tool_input"]
 	if toolName == "Bash" {
@@ -268,6 +274,44 @@ func extractCommitSHA(v any) string {
 		}
 	}
 	return ""
+}
+
+// extractLinesCounts returns the number of lines added and removed from a tool
+// response that contains a structuredPatch (Edit/Write/MultiEdit tools).
+func extractLinesCounts(v any) (added, removed int) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return 0, 0
+	}
+
+	patches, ok := m["structuredPatch"].([]any)
+	if !ok || len(patches) == 0 {
+		return 0, 0
+	}
+
+	for _, p := range patches {
+		patch, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		lines, ok := patch["lines"].([]any)
+		if !ok {
+			continue
+		}
+		for _, l := range lines {
+			line, ok := l.(string)
+			if !ok || len(line) == 0 {
+				continue
+			}
+			switch line[0] {
+			case '+':
+				added++
+			case '-':
+				removed++
+			}
+		}
+	}
+	return added, removed
 }
 
 // extractBashCommandFamily extracts the leading binary name from a Bash tool

@@ -57,36 +57,37 @@ claude plugin install dash0-agent-plugin@dash0 --scope user
 
 ### Fleet / global deployment
 
-To roll the plugin out across many machines non-interactively (MDM, golden image, dotfiles, config-management tooling), there are two independent pieces: **enabling the plugin** and **configuring credentials**. Neither requires the interactive `/plugin` UI.
+To roll the plugin out across many machines non-interactively (MDM, golden image, dotfiles, config-management tooling), run the CLI installer — it installs, enables, **and** configures the plugin in one step, without the interactive `/plugin` UI:
 
-**1. Register the marketplace and enable the plugin** by writing `~/.claude/settings.json` on each device:
+```bash
+# Claude Code clones marketplaces over SSH by default. On machines without a
+# GitHub SSH key (containers, CI, freshly-provisioned devices), force HTTPS:
+git config --global url."https://github.com/".insteadOf "git@github.com:"
 
-```json
-{
-  "extraKnownMarketplaces": {
-    "dash0": { "source": { "source": "github", "repo": "dash0hq/claude-marketplace" } }
-  },
-  "enabledPlugins": { "dash0-agent-plugin@dash0": true }
-}
+claude plugin marketplace add dash0hq/claude-marketplace --scope user
+claude plugin install dash0-agent-plugin@dash0 --scope user \
+  --config OTLP_URL=https://ingress.<your-region>.dash0.com \
+  --config AUTH_TOKEN=<your-dash0-auth-token> \
+  --config DATASET=default
 ```
 
-Each device needs network access to `github.com` to download the marketplace and the `on-event` binary (fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) on first run, with checksum verification).
+`--config` writes each value through the plugin's `userConfig`: non-sensitive values are stored in `~/.claude/settings.json` under `pluginConfigs`, and the **`AUTH_TOKEN` is stored in the OS keychain** (on Linux hosts without a keychain it falls back to `~/.claude/.credentials.json`). The `on-event` binary is fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) on first run (checksum-verified), so each device needs outbound access to `github.com` and to your Dash0 ingress endpoint.
 
-**2. Supply credentials** with either of the file/env mechanisms below (the interactive `/plugin → Configure` UI **cannot** be pre-seeded from a file):
+> **Writing `~/.claude/settings.json` by hand is _not_ enough to install the plugin.** `enabledPlugins` only *enables* an already-installed plugin and `extraKnownMarketplaces` only *registers* the marketplace — neither downloads anything. The `claude plugin install` command above is what actually installs it.
 
-- Push a user-level config file to `~/.claude/dash0-agent-plugin.local.md` (the simplest fleet-wide option — see [Configuration file](#configuration-file) for all keys):
+> **Secrets on the command line:** values passed via `--config` can appear in shell history and process listings during provisioning. If that's a concern, drop `--config AUTH_TOKEN=…` and supply the token via the config file (below) or your secret manager instead.
 
-  ```markdown
-  ---
-  otlp_url: "https://ingress.us1.dash0.com"
-  auth_token: "your-dash0-auth-token"
-  dataset: "default"
-  ---
-  ```
+**Alternative — credentials via config file.** Instead of `--config`, push a `~/.claude/dash0-agent-plugin.local.md` file (see [Configuration file](#configuration-file)); the token is stored in cleartext there, so `chmod 600` it and keep it user-owned. You still run the same `claude plugin install` step to install the plugin — just omit the `--config` flags:
 
-  Ship it `chmod 600` and user-owned: the token is stored in cleartext (unlike the keychain), though it is only ever exposed to the plugin's hook process, never to tool-spawned shells.
+```markdown
+---
+otlp_url: "https://ingress.<your-region>.dash0.com"
+auth_token: "your-dash0-auth-token"
+dataset: "default"
+---
+```
 
-- Or inject environment variables — `DASH0_OTLP_URL` plus `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` (and optionally `DASH0_DATASET`) — which suits containers and CI. The token is the only value with no `DASH0_*` form (see [Environment variable fallback](#environment-variable-fallback)).
+For containers/CI you can also inject credentials as environment variables — `DASH0_OTLP_URL` plus `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` (and optionally `DASH0_DATASET`); see [Environment variable fallback](#environment-variable-fallback).
 
 ### Local development
 

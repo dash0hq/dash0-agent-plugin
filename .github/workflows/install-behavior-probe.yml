@@ -1,0 +1,93 @@
+name: Plugin install behavior probe
+
+# Diagnostic (not part of normal CI): settles whether writing ONLY
+# ~/.claude/settings.json (extraKnownMarketplaces + enabledPlugins) is enough to
+# install the plugin on a clean machine, vs. requiring an explicit
+# `claude plugin install`. Runs on a GitHub-hosted runner (no SSH keys, no
+# GitHub auth) — a good proxy for a fleet machine.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['exp/install-behavior-probe']
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Claude Code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          echo "claude version: $(claude --version 2>&1 || true)"
+
+      - name: "Experiment A — settings.json ONLY (no explicit install)"
+        env:
+          HOME: /tmp/homeA
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -x
+          mkdir -p "$HOME/.claude"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          cat > "$HOME/.claude/settings.json" <<'JSON'
+          {
+            "extraKnownMarketplaces": {
+              "dash0": { "source": { "source": "github", "repo": "dash0hq/claude-marketplace" } }
+            },
+            "enabledPlugins": { "dash0-agent-plugin@dash0": true }
+          }
+          JSON
+          set +x
+          echo "::group::settings.json written"
+          cat "$HOME/.claude/settings.json"
+          echo "::endgroup::"
+
+          echo "::group::claude plugin list (before any session)"
+          claude plugin list 2>&1 || true
+          echo "::endgroup::"
+
+          echo "::group::boot a headless session to trigger any startup auto-install"
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            cd /tmp && timeout 90 claude -p "say ok" --permission-mode bypassPermissions 2>&1 | head -60 || true
+          else
+            echo "ANTHROPIC_API_KEY not available on this run — skipping session boot"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::claude plugin list (after)"
+          claude plugin list 2>&1 || true
+          echo "::endgroup::"
+
+          echo "::group::plugins dir contents"
+          ls -R "$HOME/.claude/plugins" 2>&1 || echo "NO ~/.claude/plugins dir at all"
+          echo "::endgroup::"
+
+          if ls "$HOME/.claude/plugins/cache/" 2>/dev/null | grep -qi dash0; then
+            echo "RESULT_A=INSTALLED (settings.json alone was sufficient)"
+          else
+            echo "RESULT_A=NOT_INSTALLED (settings.json alone did not download the plugin)"
+          fi
+
+      - name: "Experiment B — explicit claude plugin install (control)"
+        env:
+          HOME: /tmp/homeB
+        run: |
+          set -x
+          mkdir -p "$HOME/.claude"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          claude plugin marketplace add dash0hq/claude-marketplace --scope user
+          claude plugin install dash0-agent-plugin@dash0 --scope user
+          set +x
+
+          echo "::group::claude plugin list"
+          claude plugin list 2>&1 || true
+          echo "::endgroup::"
+
+          echo "::group::plugins dir contents"
+          ls -R "$HOME/.claude/plugins" 2>&1 || echo "NO ~/.claude/plugins dir at all"
+          echo "::endgroup::"
+
+          if ls "$HOME/.claude/plugins/cache/" 2>/dev/null | grep -qi dash0; then
+            echo "RESULT_B=INSTALLED (explicit install worked)"
+          else
+            echo "RESULT_B=NOT_INSTALLED"
+          fi

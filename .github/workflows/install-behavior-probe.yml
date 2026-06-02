@@ -91,3 +91,41 @@ jobs:
           else
             echo "RESULT_B=NOT_INSTALLED"
           fi
+
+      - name: "Experiment C — explicit install WITH --config (non-interactive configure)"
+        env:
+          HOME: /tmp/homeC
+        run: |
+          set -x
+          mkdir -p "$HOME/.claude"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          claude plugin marketplace add dash0hq/claude-marketplace --scope user
+          claude plugin install dash0-agent-plugin@dash0 --scope user \
+            --config OTLP_URL=https://probe.example.test \
+            --config AUTH_TOKEN=probe-secret-123 \
+            --config DATASET=probe-ds 2>&1 || echo "INSTALL_WITH_CONFIG_EXIT=$?"
+          set +x
+
+          echo "::group::settings.json after --config (expect pluginConfigs for non-sensitive)"
+          cat "$HOME/.claude/settings.json" 2>&1 || true
+          echo "::endgroup::"
+
+          echo "::group::credentials.json (keychain fallback on headless linux)"
+          cat "$HOME/.claude/.credentials.json" 2>&1 || echo "no credentials.json"
+          echo "::endgroup::"
+
+          echo "::group::WHERE did the sensitive token land?"
+          if grep -rl "probe-secret-123" "$HOME/.claude" 2>/dev/null; then
+            echo "TOKEN_FOUND_PLAINTEXT=yes (files listed above)"
+          else
+            echo "TOKEN_FOUND_PLAINTEXT=no (not in plaintext under ~/.claude — likely keychain)"
+          fi
+          echo "--- non-sensitive dataset value ---"
+          grep -rl "probe-ds" "$HOME/.claude" 2>/dev/null || echo "dataset value not found in ~/.claude"
+          echo "::endgroup::"
+
+          if grep -rq "probe-ds\|probe.example.test" "$HOME/.claude" 2>/dev/null; then
+            echo "RESULT_C=CONFIG_PERSISTED (--config set userConfig non-interactively)"
+          else
+            echo "RESULT_C=CONFIG_NOT_PERSISTED (--config flag did not take)"
+          fi

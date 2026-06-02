@@ -25,11 +25,13 @@ Claude Code plugin that captures agent activity as OpenTelemetry traces — tool
 
 After installing, give the plugin your Dash0 credentials one of two ways. See [Configuration](#configuration) for the full reference (all options, precedence, and env-var equivalents).
 
+Find your exact `otlp_url` (and auth token) in your Dash0 org settings — the region segment varies (e.g. `eu-west-1`, `us-west-2`).
+
 **Config file (recommended)** — create `~/.claude/dash0-agent-plugin.local.md` (applies to all projects), or `.claude/dash0-agent-plugin.local.md` for a single project:
 
 ```markdown
 ---
-otlp_url: "https://ingress.us1.dash0.com"
+otlp_url: "https://ingress.<region>.aws.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "default"
 ---
@@ -55,42 +57,25 @@ claude plugin install dash0-agent-plugin@dash0 --scope user
 
 > **Note:** Claude Code downloads marketplace plugins via SSH by default. If SSH keys are not configured for GitHub, the `git config` line above forces HTTPS. This is required in Docker containers, CI runners, or any environment without SSH access to GitHub.
 
+This installs the plugin; configure credentials as in [First-time setup](#first-time-setup).
+
 ### Fleet / global deployment
 
 Rolling the plugin out across many machines (MDM, golden image, dotfiles, config-management tooling) is two non-interactive steps: **install** the plugin, then give it **credentials**.
 
-**1. Install + enable** with the CLI:
+**1. Install + enable** with the non-interactive CLI shown in [Headless / CI installation](#headless--ci-installation) above (`claude plugin marketplace add` then `claude plugin install … --scope user`). The `on-event` binary is fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) on first run (checksum-verified), so each device needs outbound access to `github.com` and to your Dash0 ingress endpoint.
 
-```bash
-# Claude Code clones marketplaces over SSH by default. On machines without a
-# GitHub SSH key (containers, CI, freshly-provisioned devices), force HTTPS:
-git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-claude plugin marketplace add dash0hq/claude-marketplace --scope user
-claude plugin install dash0-agent-plugin@dash0 --scope user
-```
-
-The `on-event` binary is fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) on first run (checksum-verified), so each device needs outbound access to `github.com` and to your Dash0 ingress endpoint.
-
-> **Hand-writing `~/.claude/settings.json` is _not_ enough to install the plugin.** `enabledPlugins` only *enables* an already-installed plugin and `extraKnownMarketplaces` only *registers* the marketplace — neither downloads anything. The `claude plugin install` command above is what actually installs it.
+> **Hand-writing `~/.claude/settings.json` is _not_ enough to install the plugin.** `enabledPlugins` only *enables* an already-installed plugin and `extraKnownMarketplaces` only *registers* the marketplace — neither downloads anything. Run `claude plugin install` (above) to actually install it.
 
 **2. Supply credentials** with any one of:
 
-- **A config file** at `~/.claude/dash0-agent-plugin.local.md` (see [Configuration file](#configuration-file)). The token is stored in cleartext, so `chmod 600` it and keep it user-owned:
-
-  ```markdown
-  ---
-  otlp_url: "https://ingress.<your-region>.dash0.com"
-  auth_token: "your-dash0-auth-token"
-  dataset: "default"
-  ---
-  ```
+- **A config file** at `~/.claude/dash0-agent-plugin.local.md` — format in [First-time setup](#first-time-setup), full options in [Configuration file](#configuration-file). The token is stored in cleartext, so `chmod 600` it and keep it user-owned.
 
 - **`--config` on the install command**, which stores the token in the OS keychain (`~/.claude/.credentials.json` fallback on Linux) instead of cleartext:
 
   ```bash
   claude plugin install dash0-agent-plugin@dash0 --scope user \
-    --config OTLP_URL=https://ingress.<your-region>.dash0.com \
+    --config OTLP_URL=https://ingress.<region>.aws.dash0.com \
     --config AUTH_TOKEN=<your-dash0-auth-token> \
     --config DATASET=default
   ```
@@ -204,7 +189,7 @@ The plugin declares its configuration via Claude Code's `userConfig` mechanism. 
 
 | Option | Description | Required | Sensitive |
 |---|---|---|---|
-| `OTLP_URL` | Dash0 OTLP endpoint URL (e.g. `https://ingress.us1.dash0.com`) | Yes | No |
+| `OTLP_URL` | Dash0 OTLP endpoint URL (e.g. `https://ingress.<region>.aws.dash0.com`) | Yes | No |
 | `AUTH_TOKEN` | Dash0 authentication token | Yes | Yes (stored in keychain) |
 | `DATASET` | Dash0 dataset name | No | No |
 | `AGENT_NAME` | Used as `service.name` and `gen_ai.agent.name` resource attributes (defaults to `claude-code`) | No | No |
@@ -228,7 +213,7 @@ For non-sensitive options, the plugin falls back to `DASH0_*` environment variab
 
 | Variable | Description |
 |---|---|
-| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL — must include scheme (e.g. `https://ingress.us1.dash0.com`) |
+| `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL — must include scheme (e.g. `https://ingress.<region>.aws.dash0.com`) |
 | `DASH0_DATASET` | Dash0 dataset |
 | `DASH0_AGENT_NAME` | Agent name |
 | `DASH0_OMIT_USER_INFO` | Anonymize user identity (default: `false`). When true, `user.name` is emitted as a hash and `user.email` is omitted. |
@@ -251,7 +236,7 @@ Create `~/.claude/dash0-agent-plugin.local.md` to configure the plugin once for 
 
 ```markdown
 ---
-otlp_url: "https://ingress.us1.dash0.com"
+otlp_url: "https://ingress.<region>.aws.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "default"
 agent_name: "claude-code"
@@ -267,7 +252,7 @@ Create `.claude/dash0-agent-plugin.local.md` in a project directory for project-
 ```markdown
 ---
 enabled: true
-otlp_url: "https://ingress.us1.dash0.com"
+otlp_url: "https://ingress.<region>.aws.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "my-project-dataset"
 agent_name: "my-coding-agent"
@@ -294,11 +279,11 @@ The config file sets environment variables for the hook subprocess, so it acts a
 
 ### Mixing sources
 
-A config file and `DASH0_*` environment variables compose **per key** (this is separate from the two config files, which do *not* merge with each other — see [Configuration file](#configuration-file)). The active config file only sets values for the keys it actually contains; any key it omits falls through to the environment — not to the other config file. So you can, for example, put just the `auth_token` in a config file and supply everything else via `DASH0_*` env vars:
+A config file and `DASH0_*` environment variables compose **per key**: the active config file only sets the keys it actually contains, and any key it omits falls through to the environment. (The two config files themselves don't merge — see [Configuration file](#configuration-file).) So you can, for example, put just the `auth_token` in a config file and supply everything else via `DASH0_*` env vars:
 
 ```bash
 # ~/.claude/dash0-agent-plugin.local.md contains only:  auth_token: "…"
-DASH0_OTLP_URL="https://ingress.us1.dash0.com" \
+DASH0_OTLP_URL="https://ingress.<region>.aws.dash0.com" \
   DASH0_DATASET="default" \
   claude
 ```
@@ -341,7 +326,7 @@ Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering:
 **More verbose debugging.** Run Claude Code with `--debug` to see plugin error messages:
 
 ```bash
-DASH0_OTLP_URL="https://ingress.us1.dash0.com" \
+DASH0_OTLP_URL="https://ingress.<region>.aws.dash0.com" \
   CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="your-token" \
   claude --debug --plugin-dir /path/to/dash0-agent-plugin 2>&1 | grep "on-event:\|dash0:"
 ```

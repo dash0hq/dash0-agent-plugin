@@ -63,9 +63,14 @@ jobs:
           claude plugin marketplace add anthropics/claude-plugins-official --scope user
           claude plugin install dash0@claude-plugins-official --scope user
 
-  # Contract tests for how the plugin gets installed + configured. These pin the
-  # behavior our fleet/onboarding docs depend on, so a Claude Code change (or a
-  # wrong doc assumption) that breaks it fails CI instead of a customer's rollout.
+  # Contract tests mapping to the documented install/credential paths (README
+  # "Installation" + "Configuration"). They pin the behavior the docs depend on,
+  # so a Claude Code change or a wrong doc assumption fails CI, not a rollout:
+  #   A — settings.json alone does NOT install (the Fleet "not enough" callout)
+  #   B — `claude plugin install --config` (Fleet --config credential option)
+  #   C — credential delivery: config file AND DASH0_*/CLAUDE_PLUGIN_OPTION_* env vars
+  # Marketplace installs (official / Dash0 / local PR code) are covered by the
+  # build-and-test job; the binary reading CLAUDE_PLUGIN_OPTION_* by Go unit tests.
   install-config-contract:
     runs-on: ubuntu-latest
     steps:
@@ -153,23 +158,22 @@ jobs:
           if [ "$fail" -ne 0 ]; then exit 1; fi
           echo "PASS: --config installs + persists non-sensitive->settings.json, AUTH_TOKEN->secrets store"
 
-      - name: "Contract C — config file (.local.md) feeds creds through on-event.sh to a real OTLP request"
+      - name: "Contract C — credential delivery reaches a real OTLP request (config file + env vars)"
         env:
-          HOME: /tmp/home-cfg
           CLAUDE_PLUGIN_DATA: /tmp/pdata
         run: |
-          # Build the hook binary and place it where on-event.sh expects it, so
-          # the script doesn't try to download a release.
+          # Build the hook binary where on-event.sh expects it (skip release download),
+          # and stand up the mock OTLP server (records requests + auth header on :4319).
           VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//;s/"//')
           mkdir -p "$CLAUDE_PLUGIN_DATA/bin"
           go build -o "$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-linux-amd64" ./cmd/on-event
-
-          # Stand up the mock OTLP server (records requests + auth header on :4319).
           go build -o /tmp/mock-otlp ./test/e2e/mock-otlp-server
           /tmp/mock-otlp &
           sleep 1
 
-          # User-level config file points the plugin at the mock and sets the token.
+          # C1 — credentials from a user-level config file (~/.claude/dash0-agent-plugin.local.md).
+          # Run from a clean cwd so the repo's own .env / .claude can't interfere.
+          export HOME=/tmp/home-cfg
           mkdir -p "$HOME/.claude"
           cat > "$HOME/.claude/dash0-agent-plugin.local.md" <<'MD'
           ---
@@ -178,22 +182,30 @@ jobs:
           dataset: "cfg-file-ds"
           ---
           MD
+          ( cd "$(mktemp -d)" \
+            && echo '{"hook_event_name":"SessionStart","session_id":"contract-c1","model":"opus"}' \
+               | bash "$GITHUB_WORKSPACE/scripts/on-event.sh" )
 
-          # Run from a clean cwd so the repo's own .env / .claude can't override
-          # the config we're testing.
-          cd "$(mktemp -d)"
-          echo '{"hook_event_name":"SessionStart","session_id":"contract-c","model":"opus"}' \
-            | bash "$GITHUB_WORKSPACE/scripts/on-event.sh"
+          # C2 — credentials from env vars only (no config file present).
+          export HOME=/tmp/home-env
+          mkdir -p "$HOME/.claude"
+          ( cd "$(mktemp -d)" \
+            && echo '{"hook_event_name":"SessionStart","session_id":"contract-c2","model":"opus"}' \
+               | DASH0_OTLP_URL=http://localhost:4319 \
+                 CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=env-token \
+                 DASH0_DATASET=env-ds \
+                 bash "$GITHUB_WORKSPACE/scripts/on-event.sh" )
+
           sleep 2
-
           RESULT=$(curl -s http://localhost:4319/requests)
           echo "::group::mock requests"; echo "$RESULT" | jq .; echo "::endgroup::"
-          HAS_AUTH=$(echo "$RESULT" | jq '[.requests[] | select(.auth == "Bearer cfg-file-token")] | length')
-          if [ "$HAS_AUTH" -lt 1 ]; then
-            echo "::error::config-file auth_token did not reach the OTLP request — .local.md path broken"
-            exit 1
-          fi
-          echo "PASS: ~/.claude/dash0-agent-plugin.local.md creds flowed through on-event.sh to the OTLP request"
+          fail=0
+          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer cfg-file-token")]|length')" -ge 1 ] \
+            || { echo "::error::config-file token did not reach the OTLP request"; fail=1; }
+          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer env-token")]|length')" -ge 1 ] \
+            || { echo "::error::env-var token did not reach the OTLP request"; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PASS: both config-file and env-var credentials flow through on-event.sh to real OTLP requests"
 
   e2e:
     runs-on: ubuntu-latest

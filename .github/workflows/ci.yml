@@ -63,6 +63,150 @@ jobs:
           claude plugin marketplace add anthropics/claude-plugins-official --scope user
           claude plugin install dash0@claude-plugins-official --scope user
 
+  # Contract tests mapping to the documented install/credential paths (README
+  # "Installation" + "Configuration"). They pin the behavior the docs depend on,
+  # so a Claude Code change or a wrong doc assumption fails CI, not a rollout:
+  #   A — settings.json alone does NOT install (the Fleet "not enough" callout)
+  #   B — `claude plugin install --config` (Fleet --config credential option)
+  #   C — credential delivery: config file AND DASH0_*/CLAUDE_PLUGIN_OPTION_* env vars
+  # Marketplace installs (official / Dash0 / local PR code) are covered by the
+  # build-and-test job; the binary reading CLAUDE_PLUGIN_OPTION_* by Go unit tests.
+  install-config-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Force HTTPS for marketplace clones (runner has no SSH key)
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: "Contract A — settings.json alone does NOT install the plugin"
+        env:
+          HOME: /tmp/home-neg
+        run: |
+          mkdir -p "$HOME/.claude"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          cat > "$HOME/.claude/settings.json" <<'JSON'
+          {
+            "extraKnownMarketplaces": {
+              "dash0": { "source": { "source": "github", "repo": "dash0hq/claude-marketplace" } }
+            },
+            "enabledPlugins": { "dash0-agent-plugin@dash0": true }
+          }
+          JSON
+          claude plugin list 2>&1 | tee /tmp/list-neg.txt || true
+          if [ -d "$HOME/.claude/plugins/cache" ] && ls "$HOME/.claude/plugins/cache" | grep -qi dash0; then
+            echo "::error::settings.json alone installed the plugin — fleet docs/assumptions must be revisited"
+            exit 1
+          fi
+          echo "PASS: settings.json (extraKnownMarketplaces + enabledPlugins) alone does NOT install; explicit install required"
+
+      - name: "Contract B — claude plugin install --config persists creds where the plugin reads them"
+        env:
+          HOME: /tmp/home-pos
+        run: |
+          mkdir -p "$HOME/.claude"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+          # Use the published Dash0 marketplace. `--config` is a Claude Code
+          # behavior independent of the plugin's own code (PR-code install is
+          # already covered by the "workspace, PR code" step above), and a
+          # published marketplace installs into ~/.claude/plugins/cache — the
+          # cleanest signal to assert "installed" on. (A local/directory
+          # marketplace serves the plugin in place and never populates the cache.)
+          claude plugin marketplace add dash0hq/claude-marketplace --scope user
+          claude plugin install dash0-agent-plugin@dash0 --scope user \
+            --config OTLP_URL=https://probe.example.test \
+            --config AUTH_TOKEN=contract-token-xyz \
+            --config DATASET=contract-ds
+
+          echo "::group::resulting settings.json"; cat "$HOME/.claude/settings.json"; echo "::endgroup::"
+          echo "::group::resulting credentials.json"; cat "$HOME/.claude/.credentials.json" 2>/dev/null || echo "(none)"; echo "::endgroup::"
+
+          fail=0
+
+          # 1) Plugin actually installed to cache.
+          if ! ls "$HOME/.claude/plugins/cache" 2>/dev/null | grep -qi dash0; then
+            echo "::error::plugin was not installed to cache"; fail=1
+          fi
+
+          # 2) Non-sensitive --config values land in settings.json (pluginConfigs).
+          if ! grep -q "https://probe.example.test" "$HOME/.claude/settings.json"; then
+            echo "::error::OTLP_URL not persisted to settings.json"; fail=1
+          fi
+          if ! grep -q "contract-ds" "$HOME/.claude/settings.json"; then
+            echo "::error::DATASET not persisted to settings.json"; fail=1
+          fi
+
+          # 3) The sensitive token must NOT be in settings.json...
+          if grep -q "contract-token-xyz" "$HOME/.claude/settings.json"; then
+            echo "::error::AUTH_TOKEN leaked into settings.json (should be in keychain/credentials)"; fail=1
+          fi
+          # ...and MUST be in the secrets store (keychain -> .credentials.json fallback on Linux).
+          if ! grep -q "contract-token-xyz" "$HOME/.claude/.credentials.json" 2>/dev/null; then
+            echo "::error::AUTH_TOKEN not stored in the secrets store (.credentials.json pluginSecrets)"; fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "PASS: --config installs + persists non-sensitive->settings.json, AUTH_TOKEN->secrets store"
+
+      - name: "Contract C — credential delivery reaches a real OTLP request (config file + env vars)"
+        env:
+          CLAUDE_PLUGIN_DATA: /tmp/pdata
+        run: |
+          # Build the hook binary where on-event.sh expects it (skip release download),
+          # and stand up the mock OTLP server (records requests + auth header on :4319).
+          VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//;s/"//')
+          mkdir -p "$CLAUDE_PLUGIN_DATA/bin"
+          go build -o "$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-linux-amd64" ./cmd/on-event
+          go build -o /tmp/mock-otlp ./test/e2e/mock-otlp-server
+          /tmp/mock-otlp &
+          sleep 1
+
+          # C1 — credentials from a user-level config file (~/.claude/dash0-agent-plugin.local.md).
+          # Run from a clean cwd so the repo's own .env / .claude can't interfere.
+          export HOME=/tmp/home-cfg
+          mkdir -p "$HOME/.claude"
+          cat > "$HOME/.claude/dash0-agent-plugin.local.md" <<'MD'
+          ---
+          otlp_url: "http://localhost:4319"
+          auth_token: "cfg-file-token"
+          dataset: "cfg-file-ds"
+          ---
+          MD
+          ( cd "$(mktemp -d)" \
+            && echo '{"hook_event_name":"SessionStart","session_id":"contract-c1","model":"opus"}' \
+               | bash "$GITHUB_WORKSPACE/scripts/on-event.sh" )
+
+          # C2 — credentials from env vars only (no config file present).
+          export HOME=/tmp/home-env
+          mkdir -p "$HOME/.claude"
+          ( cd "$(mktemp -d)" \
+            && echo '{"hook_event_name":"SessionStart","session_id":"contract-c2","model":"opus"}' \
+               | DASH0_OTLP_URL=http://localhost:4319 \
+                 CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=env-token \
+                 DASH0_DATASET=env-ds \
+                 bash "$GITHUB_WORKSPACE/scripts/on-event.sh" )
+
+          sleep 2
+          RESULT=$(curl -s http://localhost:4319/requests)
+          echo "::group::mock requests"; echo "$RESULT" | jq .; echo "::endgroup::"
+          fail=0
+          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer cfg-file-token")]|length')" -ge 1 ] \
+            || { echo "::error::config-file token did not reach the OTLP request"; fail=1; }
+          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer env-token")]|length')" -ge 1 ] \
+            || { echo "::error::env-var token did not reach the OTLP request"; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PASS: both config-file and env-var credentials flow through on-event.sh to real OTLP requests"
+
   e2e:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -152,6 +296,24 @@ jobs:
             echo "::error::Options used in code but missing from plugin.json userConfig:$MISSING"
             exit 1
           fi
+
+      - name: README documents every userConfig option
+        run: |
+          # Every userConfig option declared in plugin.json must appear as a
+          # table row in the README (the backtick-wrapped `KEY` form), so the
+          # Configuration/Privacy tables can't silently fall out of sync.
+          DECLARED_KEYS=$(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json | sort -u)
+          MISSING=""
+          for key in $DECLARED_KEYS; do
+            if ! grep -qF "| \`$key\`" README.md; then
+              MISSING="$MISSING $key"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::userConfig options declared in plugin.json but not documented as README table rows:$MISSING"
+            exit 1
+          fi
+          echo "PASS: README documents all $(echo "$DECLARED_KEYS" | wc -w | tr -d ' ') userConfig options"
 
       - name: Hook script is valid
         run: |

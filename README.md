@@ -193,6 +193,8 @@ The plugin declares its configuration via Claude Code's `userConfig` mechanism. 
 | `AUTH_TOKEN` | Dash0 authentication token | Yes | Yes (stored in keychain) |
 | `DATASET` | Dash0 dataset name | No | No |
 | `AGENT_NAME` | Used as `service.name` and `gen_ai.agent.name` resource attributes (defaults to `claude-code`) | No | No |
+| `OMIT_IO` | Omit prompt content and tool I/O (default `true`) — see [Privacy defaults](#privacy-defaults) | No | No |
+| `OMIT_USER_INFO` | Anonymize user identity (default `false`) — see [Privacy defaults](#privacy-defaults) | No | No |
 
 After changing any value via Configure, run `/reload-plugins` to apply it to the current session.
 

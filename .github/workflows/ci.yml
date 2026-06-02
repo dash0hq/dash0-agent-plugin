@@ -297,6 +297,24 @@ jobs:
             exit 1
           fi
 
+      - name: README documents every userConfig option
+        run: |
+          # Every userConfig option declared in plugin.json must appear as a
+          # table row in the README (the backtick-wrapped `KEY` form), so the
+          # Configuration/Privacy tables can't silently fall out of sync.
+          DECLARED_KEYS=$(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json | sort -u)
+          MISSING=""
+          for key in $DECLARED_KEYS; do
+            if ! grep -qF "| \`$key\`" README.md; then
+              MISSING="$MISSING $key"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::userConfig options declared in plugin.json but not documented as README table rows:$MISSING"
+            exit 1
+          fi
+          echo "PASS: README documents all $(echo "$DECLARED_KEYS" | wc -w | tr -d ' ') userConfig options"
+
       - name: Hook script is valid
         run: |
           # Check on-event.sh is executable and has valid shebang

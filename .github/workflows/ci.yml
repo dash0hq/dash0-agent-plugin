@@ -111,17 +111,14 @@ jobs:
           mkdir -p "$HOME/.claude"
           git config --global url."https://github.com/".insteadOf "git@github.com:"
 
-          # Stage THIS checkout as a local marketplace so we test the PR's plugin,
-          # not whatever is published.
-          mkdir -p /tmp/local-mp/.claude-plugin
-          ln -s "$GITHUB_WORKSPACE" /tmp/local-mp/dash0-agent-plugin
-          cat > /tmp/local-mp/.claude-plugin/marketplace.json <<'JSON'
-          { "name": "local", "owner": { "name": "ci" },
-            "plugins": [ { "name": "dash0-agent-plugin", "source": "./dash0-agent-plugin" } ] }
-          JSON
-
-          claude plugin marketplace add /tmp/local-mp --scope user
-          claude plugin install dash0-agent-plugin@local --scope user \
+          # Use the published Dash0 marketplace. `--config` is a Claude Code
+          # behavior independent of the plugin's own code (PR-code install is
+          # already covered by the "workspace, PR code" step above), and a
+          # published marketplace installs into ~/.claude/plugins/cache — the
+          # cleanest signal to assert "installed" on. (A local/directory
+          # marketplace serves the plugin in place and never populates the cache.)
+          claude plugin marketplace add dash0hq/claude-marketplace --scope user
+          claude plugin install dash0-agent-plugin@dash0 --scope user \
             --config OTLP_URL=https://probe.example.test \
             --config AUTH_TOKEN=contract-token-xyz \
             --config DATASET=contract-ds
@@ -182,8 +179,11 @@ jobs:
           ---
           MD
 
+          # Run from a clean cwd so the repo's own .env / .claude can't override
+          # the config we're testing.
+          cd "$(mktemp -d)"
           echo '{"hook_event_name":"SessionStart","session_id":"contract-c","model":"opus"}' \
-            | bash scripts/on-event.sh
+            | bash "$GITHUB_WORKSPACE/scripts/on-event.sh"
           sleep 2
 
           RESULT=$(curl -s http://localhost:4319/requests)

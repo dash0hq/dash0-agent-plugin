@@ -63,6 +63,138 @@ jobs:
           claude plugin marketplace add anthropics/claude-plugins-official --scope user
           claude plugin install dash0@claude-plugins-official --scope user
 
+  # Contract tests for how the plugin gets installed + configured. These pin the
+  # behavior our fleet/onboarding docs depend on, so a Claude Code change (or a
+  # wrong doc assumption) that breaks it fails CI instead of a customer's rollout.
+  install-config-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Force HTTPS for marketplace clones (runner has no SSH key)
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: "Contract A — settings.json alone does NOT install the plugin"
+        env:
+          HOME: /tmp/home-neg
+        run: |
+          mkdir -p "$HOME/.claude"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          cat > "$HOME/.claude/settings.json" <<'JSON'
+          {
+            "extraKnownMarketplaces": {
+              "dash0": { "source": { "source": "github", "repo": "dash0hq/claude-marketplace" } }
+            },
+            "enabledPlugins": { "dash0-agent-plugin@dash0": true }
+          }
+          JSON
+          claude plugin list 2>&1 | tee /tmp/list-neg.txt || true
+          if [ -d "$HOME/.claude/plugins/cache" ] && ls "$HOME/.claude/plugins/cache" | grep -qi dash0; then
+            echo "::error::settings.json alone installed the plugin — fleet docs/assumptions must be revisited"
+            exit 1
+          fi
+          echo "PASS: settings.json (extraKnownMarketplaces + enabledPlugins) alone does NOT install; explicit install required"
+
+      - name: "Contract B — claude plugin install --config persists creds where the plugin reads them"
+        env:
+          HOME: /tmp/home-pos
+        run: |
+          mkdir -p "$HOME/.claude"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+          # Stage THIS checkout as a local marketplace so we test the PR's plugin,
+          # not whatever is published.
+          mkdir -p /tmp/local-mp/.claude-plugin
+          ln -s "$GITHUB_WORKSPACE" /tmp/local-mp/dash0-agent-plugin
+          cat > /tmp/local-mp/.claude-plugin/marketplace.json <<'JSON'
+          { "name": "local", "owner": { "name": "ci" },
+            "plugins": [ { "name": "dash0-agent-plugin", "source": "./dash0-agent-plugin" } ] }
+          JSON
+
+          claude plugin marketplace add /tmp/local-mp --scope user
+          claude plugin install dash0-agent-plugin@local --scope user \
+            --config OTLP_URL=https://probe.example.test \
+            --config AUTH_TOKEN=contract-token-xyz \
+            --config DATASET=contract-ds
+
+          echo "::group::resulting settings.json"; cat "$HOME/.claude/settings.json"; echo "::endgroup::"
+          echo "::group::resulting credentials.json"; cat "$HOME/.claude/.credentials.json" 2>/dev/null || echo "(none)"; echo "::endgroup::"
+
+          fail=0
+
+          # 1) Plugin actually installed to cache.
+          if ! ls "$HOME/.claude/plugins/cache" 2>/dev/null | grep -qi dash0; then
+            echo "::error::plugin was not installed to cache"; fail=1
+          fi
+
+          # 2) Non-sensitive --config values land in settings.json (pluginConfigs).
+          if ! grep -q "https://probe.example.test" "$HOME/.claude/settings.json"; then
+            echo "::error::OTLP_URL not persisted to settings.json"; fail=1
+          fi
+          if ! grep -q "contract-ds" "$HOME/.claude/settings.json"; then
+            echo "::error::DATASET not persisted to settings.json"; fail=1
+          fi
+
+          # 3) The sensitive token must NOT be in settings.json...
+          if grep -q "contract-token-xyz" "$HOME/.claude/settings.json"; then
+            echo "::error::AUTH_TOKEN leaked into settings.json (should be in keychain/credentials)"; fail=1
+          fi
+          # ...and MUST be in the secrets store (keychain -> .credentials.json fallback on Linux).
+          if ! grep -q "contract-token-xyz" "$HOME/.claude/.credentials.json" 2>/dev/null; then
+            echo "::error::AUTH_TOKEN not stored in the secrets store (.credentials.json pluginSecrets)"; fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "PASS: --config installs + persists non-sensitive->settings.json, AUTH_TOKEN->secrets store"
+
+      - name: "Contract C — config file (.local.md) feeds creds through on-event.sh to a real OTLP request"
+        env:
+          HOME: /tmp/home-cfg
+          CLAUDE_PLUGIN_DATA: /tmp/pdata
+        run: |
+          # Build the hook binary and place it where on-event.sh expects it, so
+          # the script doesn't try to download a release.
+          VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//;s/"//')
+          mkdir -p "$CLAUDE_PLUGIN_DATA/bin"
+          go build -o "$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-linux-amd64" ./cmd/on-event
+
+          # Stand up the mock OTLP server (records requests + auth header on :4319).
+          go build -o /tmp/mock-otlp ./test/e2e/mock-otlp-server
+          /tmp/mock-otlp &
+          sleep 1
+
+          # User-level config file points the plugin at the mock and sets the token.
+          mkdir -p "$HOME/.claude"
+          cat > "$HOME/.claude/dash0-agent-plugin.local.md" <<'MD'
+          ---
+          otlp_url: "http://localhost:4319"
+          auth_token: "cfg-file-token"
+          dataset: "cfg-file-ds"
+          ---
+          MD
+
+          echo '{"hook_event_name":"SessionStart","session_id":"contract-c","model":"opus"}' \
+            | bash scripts/on-event.sh
+          sleep 2
+
+          RESULT=$(curl -s http://localhost:4319/requests)
+          echo "::group::mock requests"; echo "$RESULT" | jq .; echo "::endgroup::"
+          HAS_AUTH=$(echo "$RESULT" | jq '[.requests[] | select(.auth == "Bearer cfg-file-token")] | length')
+          if [ "$HAS_AUTH" -lt 1 ]; then
+            echo "::error::config-file auth_token did not reach the OTLP request — .local.md path broken"
+            exit 1
+          fi
+          echo "PASS: ~/.claude/dash0-agent-plugin.local.md creds flowed through on-event.sh to the OTLP request"
+
   e2e:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository

@@ -790,8 +790,8 @@ func TestTokenUsageOnLLMSpan(t *testing.T) {
 
 	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.input_tokens", 100)
 	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.output_tokens", 50)
-	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.cache_creation_input_tokens", 200)
-	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.cache_read_input_tokens", 300)
+	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.cache_creation.input_tokens", 200)
+	assertIntAttr(t, chatSpan.Attributes, "gen_ai.usage.cache_read.input_tokens", 300)
 }
 
 func TestTokenUsageMissingTranscriptDoesNotBreakSpan(t *testing.T) {
@@ -877,9 +877,9 @@ func TestToolResponseText(t *testing.T) {
 	})
 	t.Run("Bash response dict", func(t *testing.T) {
 		resp := map[string]any{
-			"stdout":    "output line",
-			"stderr":    "warning",
-			"isImage":   false,
+			"stdout":  "output line",
+			"stderr":  "warning",
+			"isImage": false,
 		}
 		text := toolResponseText(resp)
 		assert.Contains(t, text, "output line")

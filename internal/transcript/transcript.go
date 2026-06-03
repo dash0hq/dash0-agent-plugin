@@ -56,11 +56,15 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 
 	dec := json.NewDecoder(f)
 
-	var (
-		usage    Usage
-		hasUsage bool
-		seen     = make(map[string]bool)
-	)
+	// perReq tracks per-requestId usage, keeping only the last entry for
+	// each requestId. Streaming splits a single API call into multiple
+	// transcript entries (thinking block, then text block); the last entry
+	// carries the final output_tokens count.
+	perReq := make(map[string]*usageData)
+	// noReq collects entries without a requestId (shouldn't happen in
+	// practice but handled for safety).
+	var noReqUsage Usage
+	var hasUsage bool
 
 	for dec.More() {
 		var entry transcriptEntry
@@ -70,9 +74,9 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 
 		if isRealUserMessage(entry) {
 			// New turn — reset accumulator.
-			usage = Usage{}
+			perReq = make(map[string]*usageData)
+			noReqUsage = Usage{}
 			hasUsage = false
-			seen = make(map[string]bool)
 			continue
 		}
 
@@ -80,20 +84,25 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 			continue
 		}
 
-		// Deduplicate by requestId (streaming splits assistant messages).
-		if entry.RequestID != "" && seen[entry.RequestID] {
-			continue
-		}
-		if entry.RequestID != "" {
-			seen[entry.RequestID] = true
-		}
-
+		hasUsage = true
 		u := entry.Message.Usage
+		if entry.RequestID != "" {
+			perReq[entry.RequestID] = u
+		} else {
+			noReqUsage.InputTokens += u.InputTokens
+			noReqUsage.OutputTokens += u.OutputTokens
+			noReqUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
+			noReqUsage.CacheReadInputTokens += u.CacheReadInputTokens
+		}
+	}
+
+	// Sum final usage across all API calls in the turn.
+	usage := noReqUsage
+	for _, u := range perReq {
 		usage.InputTokens += u.InputTokens
 		usage.OutputTokens += u.OutputTokens
 		usage.CacheCreationInputTokens += u.CacheCreationInputTokens
 		usage.CacheReadInputTokens += u.CacheReadInputTokens
-		hasUsage = true
 	}
 
 	if !hasUsage {

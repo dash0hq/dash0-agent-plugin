@@ -153,8 +153,8 @@ The plugin emits OpenTelemetry spans following [GenAI semantic conventions](http
 | `gen_ai.request.model`                     | Model used |
 | `gen_ai.usage.input_tokens`                | Input tokens consumed |
 | `gen_ai.usage.output_tokens`               | Output tokens produced |
-| `gen_ai.usage.cache_read_input_tokens`     | Tokens read from prompt cache |
-| `gen_ai.usage.cache_creation_input_tokens` | Tokens written to prompt cache |
+| `gen_ai.usage.cache_read.input_tokens`     | Tokens read from prompt cache |
+| `gen_ai.usage.cache_creation.input_tokens` | Tokens written to prompt cache |
 
 **Span attributes (tool spans)**:
 

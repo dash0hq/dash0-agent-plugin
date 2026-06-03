@@ -186,8 +186,8 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		if usage != nil {
 			event["gen_ai.usage.input_tokens"] = int64(usage.InputTokens)
 			event["gen_ai.usage.output_tokens"] = int64(usage.OutputTokens)
-			event["gen_ai.usage.cache_creation_input_tokens"] = int64(usage.CacheCreationInputTokens)
-			event["gen_ai.usage.cache_read_input_tokens"] = int64(usage.CacheReadInputTokens)
+			event["gen_ai.usage.cache_creation.input_tokens"] = int64(usage.CacheCreationInputTokens)
+			event["gen_ai.usage.cache_read.input_tokens"] = int64(usage.CacheReadInputTokens)
 		}
 
 		// Extract session title from transcript (custom-title set by user or auto-generated).
@@ -207,7 +207,6 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
 }
-
 
 // prURLPattern matches GitHub, GitLab, and Bitbucket pull/merge request URLs,
 // including self-hosted instances. Excludes /pull/new/ (pre-creation links from git push).

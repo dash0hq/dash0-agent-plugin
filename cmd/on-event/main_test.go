@@ -1339,6 +1339,55 @@ func TestNoMetadataOnUnrelatedTools(t *testing.T) {
 	assertAttrAbsent(t, toolSpan.Attributes, "dash0.gen_ai.tool.mcp_server")
 }
 
+func TestSubagentStopEmitsChatSpanWithTokens(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	// Create sub-agent transcript with token usage.
+	agentTranscriptPath := filepath.Join(dataDir, "agent-sub1.jsonl")
+	writeTranscript(t, agentTranscriptPath, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"search for X"}]}}`,
+		`{"type":"assistant","requestId":"req_sub_001","message":{"role":"assistant","content":[{"type":"text","text":"found it"}],"usage":{"input_tokens":500,"output_tokens":200,"cache_creation_input_tokens":1000,"cache_read_input_tokens":3000}}}`,
+	})
+
+	// Main agent session setup.
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-substop","model":"claude-opus-4-7"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-substop","prompt":"explore the code"}`)
+
+	// Agent tool call spawns sub-agent.
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-substop","tool_name":"Agent","tool_use_id":"tu-agent"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-substop","tool_name":"Agent","tool_use_id":"tu-agent","tool_response":"{\"agentId\":\"sub1\",\"content\":[]}"}`)
+
+	// Sub-agent does its work (tool calls inside sub-agent omitted for brevity).
+	// SubagentStop fires when sub-agent finishes.
+	feed(t, fmt.Sprintf(`{"hook_event_name":"SubagentStop","session_id":"sess-substop","agent_id":"sub1","agent_type":"Explore","agent_transcript_path":"%s"}`, agentTranscriptPath))
+
+	// Main agent Stop.
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-substop"}`)
+
+	// Should have 3 spans: Agent tool + sub-agent chat + main chat.
+	require.Len(t, *spans, 3, "expected Agent tool span + sub-agent chat span + main chat span")
+
+	// Find the sub-agent chat span (invoke_agent).
+	subagentSpan := findSpan(*spans, "invoke_agent")
+	require.NotNil(t, subagentSpan, "SubagentStop should emit an invoke_agent span")
+
+	// Sub-agent span should carry token usage from its transcript.
+	assertIntAttr(t, subagentSpan.Attributes, "gen_ai.usage.input_tokens", 500)
+	assertIntAttr(t, subagentSpan.Attributes, "gen_ai.usage.output_tokens", 200)
+	assertIntAttr(t, subagentSpan.Attributes, "gen_ai.usage.cache_creation.input_tokens", 1000)
+	assertIntAttr(t, subagentSpan.Attributes, "gen_ai.usage.cache_read.input_tokens", 3000)
+
+	// Sub-agent span should be nested under the Agent tool span.
+	expectedParent := otlp.SpanIDFromAgentID("sub1")
+	assert.Equal(t, expectedParent, subagentSpan.ParentSpanID)
+
+	// Sub-agent span should have the agent type attribute.
+	assertStringAttr(t, subagentSpan.Attributes, "gen_ai.agent.name", "Explore")
+}
+
 func assertStringAttr(t *testing.T, attrs []otlp.Attribute, key, want string) {
 	t.Helper()
 	for _, a := range attrs {

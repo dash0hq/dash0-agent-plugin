@@ -36,10 +36,10 @@ func TestReadTurnUsageDeduplicatesRequestID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	writeTranscript(t, path, []string{
 		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
-		// Streaming split: thinking block first.
-		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
-		// Same requestId: text block.
-		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+		// Streaming split: thinking block first (partial output_tokens).
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."}],"usage":{"input_tokens":100,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+		// Same requestId: text block (final output_tokens).
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":150,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
 	})
 
 	usage, err := ReadTurnUsage(path)
@@ -47,8 +47,9 @@ func TestReadTurnUsageDeduplicatesRequestID(t *testing.T) {
 	require.NotNil(t, usage)
 
 	// Counted only once despite two entries with same requestId.
+	// Uses the LAST entry's values (final streaming state).
 	assert.Equal(t, int64(100), usage.InputTokens)
-	assert.Equal(t, int64(50), usage.OutputTokens)
+	assert.Equal(t, int64(150), usage.OutputTokens)
 }
 
 func TestReadTurnUsageAggregatesMultipleIterations(t *testing.T) {

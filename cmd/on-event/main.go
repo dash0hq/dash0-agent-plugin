@@ -164,11 +164,16 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	}
 
 	// If this LLM invocation belongs to a sub-agent, nest it under the
-	// Agent tool call span.
+	// Agent tool call span and give it its own span ID.
 	agentID, _ := event["agent_id"].(string)
 	parentSpanID := "" // chat span is root by default
 	if agentID != "" {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
+		newSpanID, err := otlp.GenerateSpanID()
+		if err != nil {
+			return fmt.Errorf("generating sub-agent span ID: %w", err)
+		}
+		spanID = newSpanID
 	}
 
 	// Extract token usage from the transcript file.
@@ -637,6 +642,10 @@ func run() error {
 		}
 		// Clear trace context so SessionEnd knows the chat span was already emitted.
 		otlp.ClearTraceContext(sessionDir)
+	case "SubagentStop":
+		if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
+			fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
+		}
 	case "SessionEnd":
 		// If trace context exists, Stop never fired — emit a partial chat
 		// span with error status so orphaned tool spans have a parent.

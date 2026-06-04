@@ -196,7 +196,16 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Time, event map[string]any, failed bool, cfg Config) Span {
 	model, _ := event["model"].(string)
 	attrs := eventAttributes(event, cfg)
-	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal("chat")})
+
+	opName := "chat"
+	spanName := "chat " + model
+	agentType, _ := event["agent_type"].(string)
+	if agentType != "" {
+		opName = "invoke_agent"
+		spanName = "invoke_agent " + agentType
+		attrs = append(attrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(agentType)})
+	}
+	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal(opName)})
 	attrs = append(attrs, vcsSpanAttributes(cfg)...)
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
@@ -209,7 +218,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 		TraceID:           traceID,
 		SpanID:            spanID,
 		ParentSpanID:      parentSpanID,
-		Name:              "chat " + model,
+		Name:              spanName,
 		Kind:              SpanKindInternal,
 		StartTimeUnixNano: strconv.FormatInt(startTime.UnixNano(), 10),
 		EndTimeUnixNano:   strconv.FormatInt(endTime.UnixNano(), 10),

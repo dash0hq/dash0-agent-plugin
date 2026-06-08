@@ -43,7 +43,7 @@ load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
 PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.8"
+VERSION="0.1.9"
 
 # Detect OS and architecture.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

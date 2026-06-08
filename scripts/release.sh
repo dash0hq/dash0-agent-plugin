@@ -23,14 +23,13 @@ fi
 echo "Releasing $TAG..."
 
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .claude-plugin/plugin.json
-sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .claude-plugin/marketplace.json
 sed -i '' "s/VERSION=\"[^\"]*\"/VERSION=\"${VERSION}\"/" scripts/on-event.sh
 
 echo "Updated versions:"
-grep '"version"' .claude-plugin/plugin.json .claude-plugin/marketplace.json
+grep '"version"' .claude-plugin/plugin.json
 grep 'VERSION=' scripts/on-event.sh
 
-git add .claude-plugin/plugin.json .claude-plugin/marketplace.json scripts/on-event.sh
+git add .claude-plugin/plugin.json scripts/on-event.sh
 git commit -m "release: ${TAG}"
 git tag "$TAG"
 git push

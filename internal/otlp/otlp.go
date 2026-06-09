@@ -92,6 +92,7 @@ type Config struct {
 	AuthToken    string
 	Dataset      string
 	AgentName    string
+	TeamName     string // when set, tag all spans with the dash0.team.name attribute
 	OmitUserInfo bool   // when true, hash user.name and omit user.email (both span attributes)
 	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
@@ -273,18 +274,18 @@ var userInfoKeys = map[string]bool{
 
 // attrKeyMap maps event field names to OTLP semantic convention attribute keys.
 var attrKeyMap = map[string]string{
-	"session_id":    "gen_ai.conversation.id",
-	"cwd":           "process.working_directory",
-	"model":         "gen_ai.request.model",
-	"tool_name":     "gen_ai.tool.name",
-	"tool_input":    "gen_ai.tool.call.arguments",
-	"tool_response": "gen_ai.tool.call.result",
-	"tool_use_id":   "gen_ai.tool.call.id",
-	"error":         "exception.message",
-	"agent_id":      "gen_ai.agent.id",
-	"agent_type":    "gen_ai.agent.name",
-	"pr_url":        "dash0.gen_ai.vcs.pull_request.url",
-	"issue_url":     "dash0.gen_ai.vcs.issue.url",
+	"session_id":          "gen_ai.conversation.id",
+	"cwd":                 "process.working_directory",
+	"model":               "gen_ai.request.model",
+	"tool_name":           "gen_ai.tool.name",
+	"tool_input":          "gen_ai.tool.call.arguments",
+	"tool_response":       "gen_ai.tool.call.result",
+	"tool_use_id":         "gen_ai.tool.call.id",
+	"error":               "exception.message",
+	"agent_id":            "gen_ai.agent.id",
+	"agent_type":          "gen_ai.agent.name",
+	"pr_url":              "dash0.gen_ai.vcs.pull_request.url",
+	"issue_url":           "dash0.gen_ai.vcs.issue.url",
 	"commit_sha":          "dash0.gen_ai.vcs.commit.sha",
 	"lines_added":         "dash0.gen_ai.code.lines_added",
 	"lines_removed":       "dash0.gen_ai.code.lines_removed",
@@ -443,6 +444,15 @@ func stringifyValue(v any) string {
 		}
 		return string(b)
 	}
+}
+
+// teamSpanAttributes returns the dash0.team.name span attribute when a team name
+// is configured. Returns nil otherwise.
+func teamSpanAttributes(cfg Config) []Attribute {
+	if cfg.TeamName == "" {
+		return nil
+	}
+	return []Attribute{{Key: "dash0.team.name", Value: StringVal(cfg.TeamName)}}
 }
 
 // vcsSpanAttributes returns dash0.gen_ai.vcs.* and user.* span attributes derived from the

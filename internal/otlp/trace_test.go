@@ -348,3 +348,36 @@ func TestSendTraceDoesNotRetry4xx(t *testing.T) {
 	assert.Error(t, SendTrace(span, map[string]any{}, cfg))
 	assert.Equal(t, 1, attempts, "should not retry on 4xx")
 }
+
+func TestSpanTeamNameAttribute(t *testing.T) {
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	startTime := ts
+	endTime := ts.Add(time.Minute)
+	event := map[string]any{
+		"hook_event_name": "SessionStart",
+		"session_id":      "sess-123",
+		"tool_name":       "Bash",
+		"model":           "claude-sonnet-4-20250514",
+	}
+	cfg := Config{TeamName: "platform"}
+
+	session := NewSessionSpan("abc123traceabc123traceabc123tr", "span1234span1234", ts, event, cfg)
+	assertAttr(t, session.Attributes, "dash0.team.name", "platform")
+
+	tool := NewToolSpan("aabbccddeeff00112233445566778899", "span1234span1234", "parentidparentid", startTime, endTime, event, false, cfg)
+	assertAttr(t, tool.Attributes, "dash0.team.name", "platform")
+
+	llm := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid", startTime, endTime, event, false, cfg)
+	assertAttr(t, llm.Attributes, "dash0.team.name", "platform")
+}
+
+func TestSpanNoTeamNameAttributeWhenUnset(t *testing.T) {
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	event := map[string]any{
+		"hook_event_name": "SessionStart",
+		"session_id":      "sess-123",
+	}
+
+	session := NewSessionSpan("abc123traceabc123traceabc123tr", "span1234span1234", ts, event, Config{})
+	assertNoAttr(t, session.Attributes, "dash0.team.name")
+}

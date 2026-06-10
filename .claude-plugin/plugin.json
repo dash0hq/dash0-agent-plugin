@@ -51,6 +51,12 @@
       "description": "When true (default), omits tool call inputs and responses. Set to false to include full content.",
       "type": "string",
       "sensitive": false
+    },
+    "TEAM_NAME": {
+      "title": "Team Name",
+      "description": "Team name (optional). When set, all spans are tagged with the dash0.team.name attribute.",
+      "type": "string",
+      "sensitive": false
     }
   }
 }

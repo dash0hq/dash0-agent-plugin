@@ -142,6 +142,7 @@ The plugin emits OpenTelemetry spans following [GenAI semantic conventions](http
 | `dash0.gen_ai.vcs.repository.name`         | Git repository name |
 | `dash0.gen_ai.vcs.ref.head.name`                        | Git branch |
 | `dash0.gen_ai.vcs.repository.url.full`                  | Full repository URL |
+| `dash0.team.name`                          | Team name (only present when `TEAM_NAME` is configured) |
 | `user.name`                                | Real name or SHA-256 hash depending on privacy setting |
 
 **Span attributes (LLM / chat spans)**:
@@ -198,6 +199,7 @@ The plugin declares its configuration via Claude Code's `userConfig` mechanism. 
 | `AGENT_NAME` | Used as `service.name` and `gen_ai.agent.name` resource attributes (defaults to `claude-code`) | No | No |
 | `OMIT_PROMPTS` | Omit user prompts and assistant responses (default `true`) — see [Privacy defaults](#privacy-defaults) | No | No |
 | `OMIT_TOOL_IO` | Omit tool call inputs and responses (default `true`) — see [Privacy defaults](#privacy-defaults) | No | No |
+| `TEAM_NAME` | When set, all spans are tagged with the `dash0.team.name` attribute | No | No |
 | `OMIT_USER_INFO` | Anonymize user identity (default `false`) — see [Privacy defaults](#privacy-defaults) | No | No |
 
 After changing any value via Configure, run `/reload-plugins` to apply it to the current session.
@@ -222,6 +224,7 @@ For non-sensitive options, the plugin falls back to `DASH0_*` environment variab
 | `DASH0_OTLP_URL` | Dash0 OTLP endpoint URL — must include scheme (e.g. `https://ingress.<region>.aws.dash0.com`) |
 | `DASH0_DATASET` | Dash0 dataset |
 | `DASH0_AGENT_NAME` | Agent name |
+| `DASH0_TEAM_NAME` | Team name — when set, all spans are tagged with the `dash0.team.name` attribute |
 | `DASH0_OMIT_USER_INFO` | Anonymize user identity (default: `false`). When true, `user.name` is emitted as a hash and `user.email` is omitted. |
 | `DASH0_OMIT_PROMPTS` | Omit user prompts and assistant responses (default: `true`). Set to `false` to include full content. |
 | `DASH0_OMIT_TOOL_IO` | Omit tool call inputs and responses (default: `true`). Set to `false` to include full content. |
@@ -281,6 +284,7 @@ omit_user_info: true
 | `agent_name` | Agent name (used as `service.name`) | `claude-code` |
 | `omit_prompts` | Omit user prompts and assistant responses | `true` |
 | `omit_tool_io` | Omit tool call inputs and responses | `true` |
+| `team_name` | Team name — when set, all spans are tagged with `dash0.team.name` | — |
 | `omit_user_info` | Anonymize user identity | `false` |
 
 Set `enabled: false` to disable the plugin for a single project without uninstalling it.

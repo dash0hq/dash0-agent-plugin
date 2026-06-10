@@ -756,6 +756,29 @@ func TestOmitPromptsOmitsPromptContentAttributes(t *testing.T) {
 	assertAttrContains(t, chatSpan.Attributes, "gen_ai.output.messages", `REDACTED`)
 }
 
+func TestTeamNameOnAllSpans(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Setenv("DASH0_TEAM_NAME", "platform")
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-team","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-team","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-team","tool_name":"Bash","tool_use_id":"tu-team"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-team","tool_name":"Bash","tool_use_id":"tu-team","tool_input":"ls","tool_response":"ok"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-team","model":"claude-sonnet-4-20250514","last_assistant_message":"done"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	chatSpan := findSpan(*spans, "chat")
+
+	require.NotNil(t, toolSpan)
+	require.NotNil(t, chatSpan)
+
+	assertStringAttr(t, toolSpan.Attributes, "dash0.team.name", "platform")
+	assertStringAttr(t, chatSpan.Attributes, "dash0.team.name", "platform")
+}
+
 func TestUserPromptSubmitStampsChatSpanID(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)

@@ -597,6 +597,7 @@ func run() error {
 		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
 		Dataset:      pluginOption("DATASET"),
 		AgentName:    pluginOption("AGENT_NAME"),
+		TeamName:     pluginOption("TEAM_NAME"),
 		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", false),
 		OmitPrompts:  pluginOptionBoolDefault("OMIT_PROMPTS", true),
 		OmitToolIO:   pluginOptionBoolDefault("OMIT_TOOL_IO", true),

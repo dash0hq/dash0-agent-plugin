@@ -30,6 +30,8 @@ load_settings() {
   [[ -n "$val" ]] && export DASH0_OMIT_PROMPTS="$val"
   val=$(echo "$frontmatter" | grep '^omit_tool_io:' | sed 's/omit_tool_io: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_OMIT_TOOL_IO="$val"
+  val=$(echo "$frontmatter" | grep '^team_name:' | sed 's/team_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_TEAM_NAME="$val"
   val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
 

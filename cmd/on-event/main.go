@@ -102,13 +102,13 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		event["commit_sha"] = sha
 	}
 
-	// Extract lines-of-code counts before OMIT_IO redacts tool_response.
+	// Extract lines-of-code counts before OMIT_TOOL_IO redacts tool_response.
 	if added, removed := extractLinesCounts(resp); added > 0 || removed > 0 {
 		event["lines_added"] = int64(added)
 		event["lines_removed"] = int64(removed)
 	}
 
-	// Extract tool metadata attributes before OMIT_IO redacts tool_input.
+	// Extract tool metadata attributes before OMIT_TOOL_IO redacts tool_input.
 	toolInput := event["tool_input"]
 	if toolName == "Bash" {
 		if family := extractBashCommandFamily(toolInput); family != "" {
@@ -598,7 +598,8 @@ func run() error {
 		Dataset:      pluginOption("DATASET"),
 		AgentName:    pluginOption("AGENT_NAME"),
 		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", false),
-		OmitIO:       pluginOptionBoolDefault("OMIT_IO", true),
+		OmitPrompts:  pluginOptionBoolDefault("OMIT_PROMPTS", true),
+		OmitToolIO:   pluginOptionBoolDefault("OMIT_TOOL_IO", true),
 		Debug:        pluginOptionBool("DEBUG"),
 		DebugFile:    pluginOption("DEBUG_FILE"),
 	}

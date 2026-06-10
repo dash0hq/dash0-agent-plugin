@@ -162,11 +162,11 @@ The plugin emits OpenTelemetry spans following [GenAI semantic conventions](http
 |---|---|
 | `gen_ai.tool.name` | Tool name (e.g. `Bash`, `Read`, `mcp__server__tool`) |
 | `gen_ai.tool.type` | Always `function` for Claude Code tools |
-| `gen_ai.tool.call.arguments` | Tool input (omitted when `OMIT_IO=true`, truncated to 16KB otherwise) |
-| `gen_ai.tool.call.result` | Tool output (omitted when `OMIT_IO=true`, truncated to 16KB otherwise) |
-| `dash0.gen_ai.vcs.pull_request.url` | PR/MR URL extracted from tool response (survives `OMIT_IO=true`). Supports GitHub, GitLab, and Bitbucket. |
-| `dash0.gen_ai.vcs.issue.url` | Issue URL extracted from tool response (survives `OMIT_IO=true`). |
-| `dash0.gen_ai.vcs.commit.sha` | Commit SHA extracted from `git commit` output (survives `OMIT_IO=true`). |
+| `gen_ai.tool.call.arguments` | Tool input (omitted when `OMIT_TOOL_IO=true`, truncated to 16KB otherwise) |
+| `gen_ai.tool.call.result` | Tool output (omitted when `OMIT_TOOL_IO=true`, truncated to 16KB otherwise) |
+| `dash0.gen_ai.vcs.pull_request.url` | PR/MR URL extracted from tool response (survives `OMIT_TOOL_IO=true`). Supports GitHub, GitLab, and Bitbucket. |
+| `dash0.gen_ai.vcs.issue.url` | Issue URL extracted from tool response (survives `OMIT_TOOL_IO=true`). |
+| `dash0.gen_ai.vcs.commit.sha` | Commit SHA extracted from `git commit` output (survives `OMIT_TOOL_IO=true`). |
 
 ### Privacy defaults
 
@@ -175,11 +175,14 @@ By default, the plugin sends real user identity and omits prompt/tool I/O conten
 | Setting | Default | Behavior |
 |---|---|---|
 | `OMIT_USER_INFO` | `false` | Real `user.name` and `user.email` are sent. When set to `true`, `user.name` is emitted as a SHA-256 hash, `user.email` is omitted, and working directory has its home directory prefix replaced with `~`. |
-| `OMIT_IO` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
+| `OMIT_PROMPTS` | `true` | User prompts and assistant response content are stripped from spans. |
+| `OMIT_TOOL_IO` | `true` | Tool call inputs and responses are stripped from spans. |
 
 **What is always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
 
-**What is omitted by default**: prompt text, tool call arguments and responses.
+**What is omitted by default**: prompt text, assistant responses, tool call arguments and responses.
+
+To collect tool I/O without collecting prompts (or vice versa), set `OMIT_PROMPTS` and `OMIT_TOOL_IO` independently — e.g. `OMIT_PROMPTS=true`, `OMIT_TOOL_IO=false` keeps tool arguments/responses while still stripping prompts.
 
 To anonymize user identity, set `OMIT_USER_INFO` to `"true"` via `/plugin` → Installed → dash0 → Configure (the entry name depends on the marketplace — see [First-time setup](#first-time-setup)).
 
@@ -193,7 +196,8 @@ The plugin declares its configuration via Claude Code's `userConfig` mechanism. 
 | `AUTH_TOKEN` | Dash0 authentication token | Yes | Yes (stored in keychain) |
 | `DATASET` | Dash0 dataset name | No | No |
 | `AGENT_NAME` | Used as `service.name` and `gen_ai.agent.name` resource attributes (defaults to `claude-code`) | No | No |
-| `OMIT_IO` | Omit prompt content and tool I/O (default `true`) — see [Privacy defaults](#privacy-defaults) | No | No |
+| `OMIT_PROMPTS` | Omit user prompts and assistant responses (default `true`) — see [Privacy defaults](#privacy-defaults) | No | No |
+| `OMIT_TOOL_IO` | Omit tool call inputs and responses (default `true`) — see [Privacy defaults](#privacy-defaults) | No | No |
 | `OMIT_USER_INFO` | Anonymize user identity (default `false`) — see [Privacy defaults](#privacy-defaults) | No | No |
 
 After changing any value via Configure, run `/reload-plugins` to apply it to the current session.
@@ -219,7 +223,8 @@ For non-sensitive options, the plugin falls back to `DASH0_*` environment variab
 | `DASH0_DATASET` | Dash0 dataset |
 | `DASH0_AGENT_NAME` | Agent name |
 | `DASH0_OMIT_USER_INFO` | Anonymize user identity (default: `false`). When true, `user.name` is emitted as a hash and `user.email` is omitted. |
-| `DASH0_OMIT_IO` | Omit prompts and tool I/O (default: `true`). When true, prompt content and tool call inputs/outputs are stripped from spans. Set to `false` to include full content. |
+| `DASH0_OMIT_PROMPTS` | Omit user prompts and assistant responses (default: `true`). Set to `false` to include full content. |
+| `DASH0_OMIT_TOOL_IO` | Omit tool call inputs and responses (default: `true`). Set to `false` to include full content. |
 | `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
 
@@ -242,7 +247,8 @@ otlp_url: "https://ingress.<region>.aws.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "default"
 agent_name: "claude-code"
-omit_io: true
+omit_prompts: true
+omit_tool_io: true
 omit_user_info: false
 ---
 ```
@@ -258,7 +264,8 @@ otlp_url: "https://ingress.<region>.aws.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "my-project-dataset"
 agent_name: "my-coding-agent"
-omit_io: false
+omit_prompts: false
+omit_tool_io: false
 omit_user_info: true
 ---
 ```
@@ -272,7 +279,8 @@ omit_user_info: true
 | `auth_token` | Dash0 authentication token | — |
 | `dataset` | Dash0 dataset name | — |
 | `agent_name` | Agent name (used as `service.name`) | `claude-code` |
-| `omit_io` | Omit prompt content and tool I/O | `true` |
+| `omit_prompts` | Omit user prompts and assistant responses | `true` |
+| `omit_tool_io` | Omit tool call inputs and responses | `true` |
 | `omit_user_info` | Anonymize user identity | `false` |
 
 Set `enabled: false` to disable the plugin for a single project without uninstalling it.

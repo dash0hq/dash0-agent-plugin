@@ -93,7 +93,8 @@ type Config struct {
 	Dataset      string
 	AgentName    string
 	OmitUserInfo bool   // when true, hash user.name and omit user.email (both span attributes)
-	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
+	OmitPrompts  bool   // when true (default), omit user prompt and assistant response content
+	OmitToolIO   bool   // when true (default), omit tool call inputs and responses
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to
 }
@@ -256,13 +257,23 @@ const MaxContentBytes = 16 * 1024
 
 const redactedValue = "<REDACTED>"
 
-// contentKeys lists event fields that contain input/output content.
-// These are redacted when Config.OmitIO is true, or truncated when included.
-var contentKeys = map[string]bool{
-	"tool_input":             true,
-	"tool_response":          true,
+// promptContentKeys lists event fields that contain prompt/response content.
+// These are redacted when Config.OmitPrompts is true, or truncated when included.
+var promptContentKeys = map[string]bool{
 	"last_assistant_message": true,
 	"prompt":                 true,
+}
+
+// toolContentKeys lists event fields that contain tool call I/O.
+// These are redacted when Config.OmitToolIO is true, or truncated when included.
+var toolContentKeys = map[string]bool{
+	"tool_input":    true,
+	"tool_response": true,
+}
+
+// isContentKey reports whether an event field is content subject to redaction or truncation.
+func isContentKey(k string) bool {
+	return promptContentKeys[k] || toolContentKeys[k]
 }
 
 // userInfoKeys lists event fields that contain user-identifying information.
@@ -344,7 +355,7 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			}
 			continue
 		}
-		if cfg.OmitIO && contentKeys[k] {
+		if (cfg.OmitPrompts && promptContentKeys[k]) || (cfg.OmitToolIO && toolContentKeys[k]) {
 			key := k
 			if mapped, ok := attrKeyMap[k]; ok {
 				key = mapped
@@ -361,7 +372,7 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 		if t, ok := attrTransformMap[k]; ok {
 			s := t.transform(v)
 			if s != "" {
-				if contentKeys[k] {
+				if isContentKey(k) {
 					s = truncateContent(s)
 				}
 				attrs = append(attrs, Attribute{Key: t.key, Value: StringVal(s)})
@@ -373,7 +384,7 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			key = mapped
 		}
 		av := toAttrValue(v)
-		if av.StringValue != nil && contentKeys[k] {
+		if av.StringValue != nil && isContentKey(k) {
 			truncated := truncateContent(*av.StringValue)
 			av = StringVal(truncated)
 		}

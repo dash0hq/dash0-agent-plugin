@@ -696,18 +696,19 @@ func TestHintNotEmittedOnNonSessionStartEvents(t *testing.T) {
 	assert.NotContains(t, stdout, "systemMessage")
 }
 
-func TestOmitIOOmitsContentAttributes(t *testing.T) {
+func TestOmitToolIOOmitsToolContentAttributes(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
-	t.Setenv("DASH0_OMIT_IO", "true")
+	t.Setenv("DASH0_OMIT_TOOL_IO", "true")
+	t.Setenv("DASH0_OMIT_PROMPTS", "false")
 
-	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-omit","model":"claude-sonnet-4-20250514"}`)
-	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-omit","prompt":"hello"}`)
-	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-omit","tool_name":"Bash","tool_use_id":"tu-omit"}`)
-	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-omit","tool_name":"Bash","tool_use_id":"tu-omit","tool_input":"ls","tool_response":"ok"}`)
-	feed(t, `{"hook_event_name":"Stop","session_id":"sess-omit","model":"claude-sonnet-4-20250514","last_assistant_message":"done","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-tool","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-tool","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-tool","tool_name":"Bash","tool_use_id":"tu-tool"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-tool","tool_name":"Bash","tool_use_id":"tu-tool","tool_input":"ls","tool_response":"ok"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-tool","model":"claude-sonnet-4-20250514","last_assistant_message":"done","prompt":"hello"}`)
 
 	toolSpan := findSpan(*spans, "execute_tool")
 	chatSpan := findSpan(*spans, "chat")
@@ -715,11 +716,40 @@ func TestOmitIOOmitsContentAttributes(t *testing.T) {
 	require.NotNil(t, toolSpan)
 	require.NotNil(t, chatSpan)
 
-	// Tool span should have redacted input/output content.
+	// Tool span: redacted.
 	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
 	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
 
-	// Chat span should have redacted prompt/response content but preserve JSON structure.
+	// Chat span: prompts preserved.
+	assertAttrContains(t, chatSpan.Attributes, "gen_ai.input.messages", "hello")
+	assertAttrContains(t, chatSpan.Attributes, "gen_ai.output.messages", "done")
+}
+
+func TestOmitPromptsOmitsPromptContentAttributes(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Setenv("DASH0_OMIT_PROMPTS", "true")
+	t.Setenv("DASH0_OMIT_TOOL_IO", "false")
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-prompts","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-prompts","prompt":"hello"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-prompts","tool_name":"Bash","tool_use_id":"tu-prompts"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-prompts","tool_name":"Bash","tool_use_id":"tu-prompts","tool_input":"ls","tool_response":"ok"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-prompts","model":"claude-sonnet-4-20250514","last_assistant_message":"done","prompt":"hello"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	chatSpan := findSpan(*spans, "chat")
+
+	require.NotNil(t, toolSpan)
+	require.NotNil(t, chatSpan)
+
+	// Tool span: I/O preserved.
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "ls")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.result", "ok")
+
+	// Chat span: prompt/response redacted, JSON structure preserved.
 	assertAttrContains(t, chatSpan.Attributes, "gen_ai.input.messages", `"role":"user"`)
 	assertAttrContains(t, chatSpan.Attributes, "gen_ai.input.messages", `REDACTED`)
 	assertAttrContains(t, chatSpan.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
@@ -961,12 +991,12 @@ func TestExtractCommitSHA(t *testing.T) {
 	}
 }
 
-func TestPRURLSurvivesOmitIO(t *testing.T) {
+func TestPRURLSurvivesOmitToolIO(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
-	t.Setenv("DASH0_OMIT_IO", "true")
+	t.Setenv("DASH0_OMIT_TOOL_IO", "true")
 
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-pr","model":"claude-sonnet-4-20250514"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-pr","prompt":"create PR"}`)
@@ -990,7 +1020,7 @@ func TestCommitSHAExtractedOnToolSpan(t *testing.T) {
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
-	t.Setenv("DASH0_OMIT_IO", "true")
+	t.Setenv("DASH0_OMIT_TOOL_IO", "true")
 
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-sha","model":"claude-sonnet-4-20250514"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-sha","prompt":"commit"}`)
@@ -1218,12 +1248,12 @@ func TestExtractMCPServer(t *testing.T) {
 	}
 }
 
-func TestLinesOfCodeSurvivesOmitIO(t *testing.T) {
+func TestLinesOfCodeSurvivesOmitToolIO(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
-	t.Setenv("DASH0_OMIT_IO", "true")
+	t.Setenv("DASH0_OMIT_TOOL_IO", "true")
 
 	patchJSON := `{"structuredPatch":[{"filePath":"main.go","lines":[" ctx","- old1","- old2","+new1","+new2","+new3"," end"]}]}`
 
@@ -1245,12 +1275,12 @@ func TestLinesOfCodeSurvivesOmitIO(t *testing.T) {
 	assertIntAttr(t, toolSpan.Attributes, "dash0.gen_ai.code.lines_removed", 2)
 }
 
-func TestBashCommandFamilySurvivesOmitIO(t *testing.T) {
+func TestBashCommandFamilySurvivesOmitToolIO(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
-	t.Setenv("DASH0_OMIT_IO", "true")
+	t.Setenv("DASH0_OMIT_TOOL_IO", "true")
 
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-bash","model":"claude-sonnet-4-20250514"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-bash","prompt":"run git"}`)
@@ -1264,12 +1294,12 @@ func TestBashCommandFamilySurvivesOmitIO(t *testing.T) {
 	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.bash.command_family", "git")
 }
 
-func TestSkillNameSurvivesOmitIO(t *testing.T) {
+func TestSkillNameSurvivesOmitToolIO(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
 	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
-	t.Setenv("DASH0_OMIT_IO", "true")
+	t.Setenv("DASH0_OMIT_TOOL_IO", "true")
 
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-skill","model":"claude-sonnet-4-20250514"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-skill","prompt":"run skill"}`)

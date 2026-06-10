@@ -167,6 +167,7 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 
 	attrs = append(attrs, Attribute{Key: "gen_ai.tool.type", Value: StringVal("function")})
 	attrs = append(attrs, vcsSpanAttributes(cfg)...)
+	attrs = append(attrs, teamSpanAttributes(cfg)...)
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
 	if failed {
@@ -207,6 +208,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 	}
 	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal(opName)})
 	attrs = append(attrs, vcsSpanAttributes(cfg)...)
+	attrs = append(attrs, teamSpanAttributes(cfg)...)
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
 	if failed {
@@ -235,6 +237,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 func NewSessionSpan(traceID, spanID string, ts time.Time, event map[string]any, cfg Config) Span {
 	attrs := eventAttributes(event, cfg)
 	attrs = append(attrs, vcsSpanAttributes(cfg)...)
+	attrs = append(attrs, teamSpanAttributes(cfg)...)
 	tsNano := strconv.FormatInt(ts.UnixNano(), 10)
 
 	return Span{

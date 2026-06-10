@@ -1,0 +1,11 @@
+{
+  "name": "dash0-local",
+  "owner": { "name": "local" },
+  "plugins": [
+    {
+      "name": "dash0-agent-plugin",
+      "source": "./dash0-agent-plugin",
+      "description": "Local build of the Dash0 agent plugin for testing"
+    }
+  ]
+}

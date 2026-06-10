@@ -208,16 +208,7 @@ func TestSendLogMinimalEvent(t *testing.T) {
 	assertAttr(t, lr.Attributes, "foo", "bar")
 }
 
-func TestSendLogOmitIO(t *testing.T) {
-	var received ExportLogsRequest
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &received)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
+func TestSendLogOmitPromptsAndToolIO(t *testing.T) {
 	event := map[string]any{
 		"hook_event_name":        "PostToolUse",
 		"session_id":             "sess-123",
@@ -227,25 +218,67 @@ func TestSendLogOmitIO(t *testing.T) {
 		"last_assistant_message": "Here are the files.",
 		"prompt":                 "list files",
 	}
-	cfg := Config{OTLPUrl: srv.URL, OmitIO: true}
 
-	require.NoError(t, SendLog(event, cfg))
+	t.Run("both flags redact everything", func(t *testing.T) {
+		var received ExportLogsRequest
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &received)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
 
-	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+		cfg := Config{OTLPUrl: srv.URL, OmitPrompts: true, OmitToolIO: true}
+		require.NoError(t, SendLog(event, cfg))
 
-	// Non-content attributes are still present.
-	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "sess-123")
-	assertAttr(t, lr.Attributes, "gen_ai.tool.name", "Bash")
+		lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+		assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "sess-123")
+		assertAttr(t, lr.Attributes, "gen_ai.tool.name", "Bash")
+		assertAttr(t, lr.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+		assertAttr(t, lr.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
+		assertAttrContains(t, lr.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
+		assertAttrContains(t, lr.Attributes, "gen_ai.output.messages", `REDACTED`)
+		assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `"role":"user"`)
+		assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `REDACTED`)
+	})
 
-	// Content attributes are present but redacted.
-	// Tool I/O uses plain redaction.
-	assertAttr(t, lr.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
-	assertAttr(t, lr.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
-	// Message attributes preserve JSON structure for UI parsing.
-	assertAttrContains(t, lr.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
-	assertAttrContains(t, lr.Attributes, "gen_ai.output.messages", `REDACTED`)
-	assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `"role":"user"`)
-	assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `REDACTED`)
+	t.Run("OmitPrompts only redacts prompts, leaves tool I/O", func(t *testing.T) {
+		var received ExportLogsRequest
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &received)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		cfg := Config{OTLPUrl: srv.URL, OmitPrompts: true, OmitToolIO: false}
+		require.NoError(t, SendLog(event, cfg))
+
+		lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+		assertAttrContains(t, lr.Attributes, "gen_ai.tool.call.arguments", "ls")
+		assertAttr(t, lr.Attributes, "gen_ai.tool.call.result", "file1.go\nfile2.go")
+		assertAttrContains(t, lr.Attributes, "gen_ai.output.messages", `REDACTED`)
+		assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `REDACTED`)
+	})
+
+	t.Run("OmitToolIO only redacts tool I/O, leaves prompts", func(t *testing.T) {
+		var received ExportLogsRequest
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &received)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		cfg := Config{OTLPUrl: srv.URL, OmitPrompts: false, OmitToolIO: true}
+		require.NoError(t, SendLog(event, cfg))
+
+		lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+		assertAttr(t, lr.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
+		assertAttr(t, lr.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
+		assertAttrContains(t, lr.Attributes, "gen_ai.output.messages", "Here are the files.")
+		assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", "list files")
+	})
 }
 
 func TestTruncateContent(t *testing.T) {
@@ -290,7 +323,7 @@ func TestToolIOTruncatedInSpan(t *testing.T) {
 		"tool_response":   largeOutput,
 	}
 
-	cfg := Config{OmitIO: false}
+	cfg := Config{OmitPrompts: false, OmitToolIO: false}
 	span := NewToolSpan("aabbccdd"+"eeff0011"+"22334455"+"66778899", "span1234span1234", "parentidparentid",
 		time.Now().Add(-100*time.Millisecond), time.Now(), event, false, cfg)
 

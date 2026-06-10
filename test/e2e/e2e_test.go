@@ -195,7 +195,8 @@ func runBinary(t *testing.T, binary, event, dataDir, otlpURL string) {
 		"CLAUDE_PLUGIN_OPTION_OTLP_URL=" + otlpURL,
 		"CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=e2e-test-token",
 		"CLAUDE_PLUGIN_OPTION_OMIT_USER_INFO=false",
-		"CLAUDE_PLUGIN_OPTION_OMIT_IO=false",
+		"CLAUDE_PLUGIN_OPTION_OMIT_PROMPTS=false",
+		"CLAUDE_PLUGIN_OPTION_OMIT_TOOL_IO=false",
 		"HOME=" + os.Getenv("HOME"),
 		"PATH=" + os.Getenv("PATH"),
 	}

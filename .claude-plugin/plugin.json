@@ -40,9 +40,15 @@
       "type": "string",
       "sensitive": false
     },
-    "OMIT_IO": {
-      "title": "Omit Prompts & Tool I/O",
-      "description": "When true (default), omits prompt content and tool call inputs/outputs. Set to false to include full content.",
+    "OMIT_PROMPTS": {
+      "title": "Omit Prompts & Assistant Responses",
+      "description": "When true (default), omits user prompt and assistant response content. Set to false to include full content.",
+      "type": "string",
+      "sensitive": false
+    },
+    "OMIT_TOOL_IO": {
+      "title": "Omit Tool Call I/O",
+      "description": "When true (default), omits tool call inputs and responses. Set to false to include full content.",
       "type": "string",
       "sensitive": false
     },

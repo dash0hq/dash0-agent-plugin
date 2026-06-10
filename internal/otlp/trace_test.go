@@ -244,7 +244,7 @@ func TestSendTrace(t *testing.T) {
 	assert.Equal(t, "0", s.EndTimeUnixNano)
 }
 
-func TestNewToolSpanOmitIO(t *testing.T) {
+func TestNewToolSpanOmitToolIO(t *testing.T) {
 	startTime := time.Date(2025, 6, 15, 12, 0, 30, 0, time.UTC)
 	endTime := time.Date(2025, 6, 15, 12, 1, 0, 0, time.UTC)
 	event := map[string]any{
@@ -255,16 +255,34 @@ func TestNewToolSpanOmitIO(t *testing.T) {
 		"tool_response":   "file1.go",
 	}
 
-	span := NewToolSpan("aabb"+"ccdd"+"eeff"+"0011"+"2233"+"4455"+"6677"+"8899", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{OmitIO: true})
+	// OmitPrompts is irrelevant for tool spans — they carry no prompt fields.
+	cfg := Config{OmitToolIO: true, OmitPrompts: false}
+	span := NewToolSpan("aabb"+"ccdd"+"eeff"+"0011"+"2233"+"4455"+"6677"+"8899", "span1234span1234", "parentidparentid", startTime, endTime, event, false, cfg)
 
-	// Tool name is still present.
 	assertAttr(t, span.Attributes, "gen_ai.tool.name", "Bash")
-	// Content attributes are present but redacted.
 	assertAttr(t, span.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
 	assertAttr(t, span.Attributes, "gen_ai.tool.call.result", "<REDACTED>")
 }
 
-func TestNewLLMSpanOmitIO(t *testing.T) {
+func TestNewToolSpanOmitPromptsLeavesToolIO(t *testing.T) {
+	startTime := time.Date(2025, 6, 15, 12, 0, 30, 0, time.UTC)
+	endTime := time.Date(2025, 6, 15, 12, 1, 0, 0, time.UTC)
+	event := map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "sess-123",
+		"tool_name":       "Bash",
+		"tool_input":      "ls -la",
+		"tool_response":   "file1.go",
+	}
+
+	cfg := Config{OmitPrompts: true, OmitToolIO: false}
+	span := NewToolSpan("aabb"+"ccdd"+"eeff"+"0011"+"2233"+"4455"+"6677"+"8899", "span1234span1234", "parentidparentid", startTime, endTime, event, false, cfg)
+
+	assertAttr(t, span.Attributes, "gen_ai.tool.call.arguments", "ls -la")
+	assertAttr(t, span.Attributes, "gen_ai.tool.call.result", "file1.go")
+}
+
+func TestNewLLMSpanOmitPrompts(t *testing.T) {
 	startTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	endTime := time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC)
 	event := map[string]any{
@@ -275,15 +293,33 @@ func TestNewLLMSpanOmitIO(t *testing.T) {
 		"last_assistant_message": "hi there",
 	}
 
-	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{OmitIO: true})
+	// OmitToolIO is irrelevant for LLM spans — they carry no tool_input/response.
+	cfg := Config{OmitPrompts: true, OmitToolIO: false}
+	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid", startTime, endTime, event, false, cfg)
 
-	// Model is still present.
 	assertAttr(t, span.Attributes, "gen_ai.request.model", "claude-sonnet-4-20250514")
-	// Content attributes are present but redacted, preserving JSON structure for UI parsing.
 	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", `"role":"user"`)
 	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", `REDACTED`)
 	assertAttrContains(t, span.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
 	assertAttrContains(t, span.Attributes, "gen_ai.output.messages", `REDACTED`)
+}
+
+func TestNewLLMSpanOmitToolIOLeavesPrompts(t *testing.T) {
+	startTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	endTime := time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC)
+	event := map[string]any{
+		"hook_event_name":        "Stop",
+		"session_id":             "sess-123",
+		"model":                  "claude-sonnet-4-20250514",
+		"prompt":                 "hello",
+		"last_assistant_message": "hi there",
+	}
+
+	cfg := Config{OmitPrompts: false, OmitToolIO: true}
+	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid", startTime, endTime, event, false, cfg)
+
+	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", "hello")
+	assertAttrContains(t, span.Attributes, "gen_ai.output.messages", "hi there")
 }
 
 func TestNewSessionSpanOmitUserInfoRedactsCwd(t *testing.T) {

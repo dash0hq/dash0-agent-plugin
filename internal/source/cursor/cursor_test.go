@@ -67,7 +67,7 @@ func TestNormalize_SessionStart(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Equal(t, "SessionStart", out["hook_event_name"])
 	assert.Equal(t, "2a409a3e-2603-44b3-8856-c6fb4f622874", out["session_id"])
-	assert.Equal(t, "default", out["model"])
+	assert.Equal(t, "cursor-auto", out["model"], "Auto-routing 'default' is rewritten to 'cursor-auto'")
 }
 
 func TestNormalize_BeforeSubmitPromptCarriesPrompt(t *testing.T) {
@@ -167,6 +167,30 @@ func TestNormalize_SessionEnd(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Equal(t, "SessionEnd", out["hook_event_name"])
 	assert.Equal(t, "user_close", out["reason"])
+}
+
+func TestNormalize_RewritesDefaultModelToCursorAuto(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"default becomes cursor-auto", "default", "cursor-auto"},
+		{"explicit Cursor model is preserved", "composer-2.5-fast", "composer-2.5-fast"},
+		{"already normalized stays put", "cursor-auto", "cursor-auto"},
+		{"empty string passes through", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ev := map[string]any{
+				"hook_event_name": "sessionStart",
+				"model":           c.input,
+			}
+			out := Normalize(ev)
+			require.NotNil(t, out)
+			assert.Equal(t, c.expected, out["model"])
+		})
+	}
 }
 
 func TestNormalize_PreservesUnknownFields(t *testing.T) {

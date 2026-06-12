@@ -37,6 +37,16 @@ func Normalize(event map[string]any) map[string]any {
 		delete(event, "duration")
 	}
 
+	// Cursor reports model="default" when the user has the model picker set
+	// to Auto — the actual model is chosen per-request by Cursor's backend
+	// and never surfaced (not in the hook payload, not in the transcript,
+	// not in any user-readable on-disk state). Rewrite to "cursor-auto" so
+	// downstream dashboards can distinguish auto-routing from a literal
+	// model whose vendor name happens to be "default".
+	if model, ok := event["model"].(string); ok && model == "default" {
+		event["model"] = "cursor-auto"
+	}
+
 	// afterAgentResponse carries the assistant text + the per-turn token usage.
 	// These are the only place Cursor exposes per-call tokens, so the rename
 	// from afterAgentResponse to Stop has to bring the token fields along too.

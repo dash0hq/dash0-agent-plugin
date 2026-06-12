@@ -6,3 +6,4 @@
 events.jsonl
 dist/
 bin/
+cursor/captured/

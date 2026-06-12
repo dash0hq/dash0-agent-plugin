@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "sessionEnd": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "beforeSubmitPrompt": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "afterAgentResponse": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "afterAgentThought": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "preToolUse": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "postToolUse": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "postToolUseFailure": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "beforeMCPExecution": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "afterMCPExecution": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "beforeShellExecution": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "afterShellExecution": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "beforeReadFile": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "afterFileEdit": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "subagentStart": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "subagentStop": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ],
+    "preCompact": [
+      {"command": "$HOME/source/dash0-agent-plugin/cursor/capture/capture.sh"}
+    ]
+  }
+}

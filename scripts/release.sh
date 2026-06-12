@@ -24,12 +24,16 @@ echo "Releasing $TAG..."
 
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .claude-plugin/plugin.json
 sed -i '' "s/VERSION=\"[^\"]*\"/VERSION=\"${VERSION}\"/" scripts/on-event.sh
+sed -i '' "s/VERSION=\"[^\"]*\"/VERSION=\"${VERSION}\"/" scripts/cursor-on-event.sh
+sed -i '' "s/VERSION=\"[^\"]*\"/VERSION=\"${VERSION}\"/" install-cursor.sh
 
 echo "Updated versions:"
 grep '"version"' .claude-plugin/plugin.json
 grep 'VERSION=' scripts/on-event.sh
+grep 'VERSION=' scripts/cursor-on-event.sh
+grep 'VERSION=' install-cursor.sh
 
-git add .claude-plugin/plugin.json scripts/on-event.sh
+git add .claude-plugin/plugin.json scripts/on-event.sh scripts/cursor-on-event.sh install-cursor.sh
 git commit -m "release: ${TAG}"
 git tag "$TAG"
 git push

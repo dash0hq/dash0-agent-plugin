@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -333,4 +334,63 @@ func TestProcess_SessionStart_ConnectivityMessages(t *testing.T) {
 		require.Len(t, res.Messages, 1)
 		assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
 	})
+}
+
+// 11. Subsequent SessionStart fires (resume, compact, clear) within the same
+//     session are no-ops: no connectivity check, no messages, no trace context overwrite.
+func TestProcess_SessionStart_SubsequentFireIsNoOp(t *testing.T) {
+	url, _, _ := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	// First fire: initializes normally.
+	res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	require.Len(t, res.Messages, 1)
+	assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
+
+	ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	assert.Equal(t, "opus", ctx.Model)
+
+	// Second fire (simulates resume/compact/clear): should produce no messages
+	// and must NOT overwrite the trace context.
+	res = s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "sonnet"})
+	assert.Empty(t, res.Messages, "subsequent SessionStart should not produce messages")
+
+	ctx, err = otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	assert.Equal(t, "opus", ctx.Model, "trace context model must not be overwritten by re-fire")
+}
+
+// 12. A re-fired SessionStart still logs the event to filelog — the guard only
+//     suppresses initialization, not event recording.
+func TestProcess_SessionStart_ReFireStillLogsEvent(t *testing.T) {
+	url, _, _ := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "sonnet", "source": "resume"})
+
+	data, err := os.ReadFile(filepath.Join(s.sessionDir("sess-1"), "events.jsonl"))
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	assert.Len(t, lines, 2, "both SessionStart events should be logged")
+}
+
+// 13. After SessionEnd cleans up sessionDir, a new SessionStart for a fresh
+//     session with the same ID re-initializes normally (sentinel was removed).
+func TestProcess_SessionStart_ReInitializesAfterSessionEnd(t *testing.T) {
+	url, _, _ := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "SessionEnd", "session_id": "sess-1"})
+
+	// New session start after end: should initialize again.
+	res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "sonnet"})
+	require.Len(t, res.Messages, 1)
+	assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
+
+	ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	assert.Equal(t, "sonnet", ctx.Model)
 }

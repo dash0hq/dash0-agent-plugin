@@ -66,13 +66,20 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		return res, fmt.Errorf("creating session directory: %w", err)
 	}
 
+	startedFile := filepath.Join(sessionDir, "started")
+	sessionAlreadyStarted := false
 	if hookEvent == "SessionStart" {
-		model, _ := event["model"].(string)
-		if err := otlp.SaveTraceContext(otlp.TraceContext{
-			SessionID: sessionID,
-			Model:     model,
-		}, sessionDir); err != nil {
-			return res, err
+		if _, err := os.Stat(startedFile); err == nil {
+			sessionAlreadyStarted = true
+		} else {
+			model, _ := event["model"].(string)
+			if err := otlp.SaveTraceContext(otlp.TraceContext{
+				SessionID: sessionID,
+				Model:     model,
+			}, sessionDir); err != nil {
+				return res, err
+			}
+			os.WriteFile(startedFile, nil, 0o644)
 		}
 	}
 
@@ -106,7 +113,7 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		return res, err
 	}
 
-	if hookEvent == "SessionStart" {
+	if hookEvent == "SessionStart" && !sessionAlreadyStarted {
 		switch {
 		case cfg.OTLPUrl == "":
 			res.Messages = append(res.Messages, Message{

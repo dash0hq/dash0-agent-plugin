@@ -86,10 +86,13 @@ func run() error {
 	for _, msg := range result.Messages {
 		text := msg.UserText
 		// Annotate the SessionStart connectivity-success message with the
-		// running plugin version — Claude Code surfaces this in its UI so
-		// users can confirm the active version.
+		// running plugin version and session URL.
 		if hookEvent == "SessionStart" && text == "dash0: connected" {
 			text = fmt.Sprintf("dash0: connected (v%s)", version.Version)
+			if appURL := deriveAppURL(cfg.OTLPUrl); appURL != "" {
+				sessionURL := buildSessionURL(appURL, sessionID)
+				text += " → " + sessionURL
+			}
 		}
 		// SessionStart's "telemetry is not active" message gets a Claude-Code-specific
 		// instructions tail pointing at /plugin → Configure.
@@ -99,7 +102,7 @@ func run() error {
 		printHookResponse(text, msg.ModelContext)
 	}
 
-	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" {
+	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" && pluginOptionBool("SHOW_SESSION_LINK") {
 		if appURL := deriveAppURL(cfg.OTLPUrl); appURL != "" {
 			sessionURL := buildSessionURL(appURL, sessionID)
 			printHookResponse(fmt.Sprintf("dash0: view session → %s", sessionURL), "")

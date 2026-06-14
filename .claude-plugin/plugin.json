@@ -51,6 +51,12 @@
       "description": "Team name (optional). When set, all spans are tagged with the dash0.team.name attribute.",
       "type": "string",
       "sensitive": false
+    },
+    "SHOW_SESSION_LINK": {
+      "title": "Show Session Link Per Turn",
+      "description": "When true, prints the session URL after every turn. Default: false (URL shown once at session start).",
+      "type": "string",
+      "sensitive": false
     }
   }
 }

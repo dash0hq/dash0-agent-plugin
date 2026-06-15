@@ -19,6 +19,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "session-url" {
+		if err := printSessionURL(); err != nil {
+			fmt.Fprintf(os.Stderr, "on-event session-url: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: %v\n", err)
 		os.Exit(1)
@@ -86,10 +93,13 @@ func run() error {
 	for _, msg := range result.Messages {
 		text := msg.UserText
 		// Annotate the SessionStart connectivity-success message with the
-		// running plugin version — Claude Code surfaces this in its UI so
-		// users can confirm the active version.
+		// running plugin version and session URL.
 		if hookEvent == "SessionStart" && text == "dash0: connected" {
 			text = fmt.Sprintf("dash0: connected (v%s)", version.Version)
+			if appURL := deriveAppURL(cfg.OTLPUrl); appURL != "" {
+				sessionURL := buildSessionURL(appURL, sessionID)
+				text += " → " + sessionURL
+			}
 		}
 		// SessionStart's "telemetry is not active" message gets a Claude-Code-specific
 		// instructions tail pointing at /plugin → Configure.
@@ -99,13 +109,42 @@ func run() error {
 		printHookResponse(text, msg.ModelContext)
 	}
 
-	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" {
+	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" && pluginOptionBool("SHOW_SESSION_LINK") {
 		if appURL := deriveAppURL(cfg.OTLPUrl); appURL != "" {
 			sessionURL := buildSessionURL(appURL, sessionID)
 			printHookResponse(fmt.Sprintf("dash0: view session → %s", sessionURL), "")
 		}
 	}
 
+	return nil
+}
+
+func printSessionURL() error {
+	dotenv.Load(".env")
+
+	otlpURL := pluginOption("OTLP_URL")
+	if otlpURL == "" {
+		return fmt.Errorf("OTLP_URL is not configured")
+	}
+	appURL := deriveAppURL(otlpURL)
+	if appURL == "" {
+		return fmt.Errorf("cannot derive app URL from OTLP_URL %q", otlpURL)
+	}
+
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return fmt.Errorf("reading stdin: %w", err)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return fmt.Errorf("parsing JSON from stdin: %w", err)
+	}
+	sessionID, _ := input["session_id"].(string)
+	if sessionID == "" {
+		return fmt.Errorf("session_id not provided")
+	}
+
+	fmt.Println(buildSessionURL(appURL, sessionID))
 	return nil
 }
 

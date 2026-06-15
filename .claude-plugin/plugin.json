@@ -9,6 +9,9 @@
   "repository": "https://github.com/dash0hq/dash0-agent-plugin",
   "license": "Apache-2.0",
   "keywords": ["observability", "tracing", "opentelemetry", "dash0", "otel"],
+  "commands": [
+    "./commands/open-session.md"
+  ],
   "userConfig": {
     "OTLP_URL": {
       "title": "OTLP Endpoint URL",
@@ -49,6 +52,12 @@
     "TEAM_NAME": {
       "title": "Team Name",
       "description": "Team name (optional). When set, all spans are tagged with the dash0.team.name attribute.",
+      "type": "string",
+      "sensitive": false
+    },
+    "SHOW_SESSION_LINK": {
+      "title": "Show Session Link Per Turn",
+      "description": "When true, prints the session URL after every turn. Default: false (URL shown once at session start).",
       "type": "string",
       "sensitive": false
     }

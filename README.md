@@ -197,6 +197,7 @@ The plugin declares its configuration via Claude Code's `userConfig` mechanism. 
 | `TEAM_NAME` | When set, all spans are tagged with the `dash0.team.name` attribute | No | No |
 | `OMIT_IO` | Omit prompt content and tool I/O (default `true`) — see [Privacy defaults](#privacy-defaults) | No | No |
 | `OMIT_USER_INFO` | Anonymize user identity (default `false`) — see [Privacy defaults](#privacy-defaults) | No | No |
+| `SHOW_SESSION_LINK` | Print the session URL after every turn (default `false` — URL shown once at session start) | No | No |
 
 After changing any value via Configure, run `/reload-plugins` to apply it to the current session.
 
@@ -223,6 +224,7 @@ For non-sensitive options, the plugin falls back to `DASH0_*` environment variab
 | `DASH0_TEAM_NAME` | Team name — when set, all spans are tagged with the `dash0.team.name` attribute |
 | `DASH0_OMIT_USER_INFO` | Anonymize user identity (default: `false`). When true, `user.name` is emitted as a hash and `user.email` is omitted. |
 | `DASH0_OMIT_IO` | Omit prompts and tool I/O (default: `true`). When true, prompt content and tool call inputs/outputs are stripped from spans. Set to `false` to include full content. |
+| `DASH0_SHOW_SESSION_LINK` | Print session URL after every turn (default: `false`). When true, a `dash0: view session → <url>` message appears on each turn end. |
 | `DASH0_DEBUG` | Print OTel payloads to stderr for local debugging (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Also write debug output to this file path (e.g. `/tmp/dash0-debug.log`) |
 
@@ -340,6 +342,14 @@ DASH0_OTLP_URL="https://ingress.<region>.aws.dash0.com" \
 > The auth token uses `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`, not `DASH0_AUTH_TOKEN` — there is no `DASH0_*` fallback for the token (see [Environment variable fallback](#environment-variable-fallback)).
 
 Plugin errors are prefixed with `on-event:` or `dash0:` in the output.
+
+## Commands
+
+The plugin provides slash commands you can use in Claude Code:
+
+| Command | Description |
+|---|---|
+| `/open-session` | Print and open the Dash0 session details URL for the current session |
 
 ## Releasing
 

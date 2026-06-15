@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/demo"
 	"github.com/dash0hq/dash0-agent-plugin/internal/dotenv"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
@@ -19,6 +20,20 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "generate" {
+		if err := demo.Run(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "on-event generate: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "session-url" {
+		if err := printSessionURL(); err != nil {
+			fmt.Fprintf(os.Stderr, "on-event session-url: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: %v\n", err)
 		os.Exit(1)
@@ -106,6 +121,37 @@ func run() error {
 		}
 	}
 
+	return nil
+}
+
+// printSessionURL outputs the Dash0 session URL for the current session.
+// It reads session_id from stdin (JSON) and OTLP_URL from plugin config.
+func printSessionURL() error {
+	dotenv.Load(".env")
+
+	otlpURL := pluginOption("OTLP_URL")
+	if otlpURL == "" {
+		return fmt.Errorf("OTLP_URL is not configured")
+	}
+	appURL := deriveAppURL(otlpURL)
+	if appURL == "" {
+		return fmt.Errorf("cannot derive app URL from OTLP_URL %q", otlpURL)
+	}
+
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return fmt.Errorf("reading stdin: %w", err)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return fmt.Errorf("parsing JSON from stdin: %w", err)
+	}
+	sessionID, _ := input["session_id"].(string)
+	if sessionID == "" {
+		return fmt.Errorf("session_id not provided")
+	}
+
+	fmt.Println(buildSessionURL(appURL, sessionID))
 	return nil
 }
 

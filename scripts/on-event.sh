@@ -97,5 +97,5 @@ if [ ! -x "$BINARY" ]; then
   chmod +x "$BINARY"
 fi
 
-# Forward stdin to the binary.
-exec "$BINARY"
+# Forward stdin and arguments to the binary.
+exec "$BINARY" "$@"

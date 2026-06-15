@@ -343,6 +343,14 @@ DASH0_OTLP_URL="https://ingress.<region>.aws.dash0.com" \
 
 Plugin errors are prefixed with `on-event:` or `dash0:` in the output.
 
+## Commands
+
+The plugin provides slash commands you can use in Claude Code:
+
+| Command | Description |
+|---|---|
+| `/open-session` | Print and open the Dash0 session details URL for the current session |
+
 ## Releasing
 
 Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release:

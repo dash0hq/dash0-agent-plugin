@@ -343,7 +343,7 @@ Plugin errors are prefixed with `on-event:` or `dash0:` in the output.
 
 ## Releasing
 
-Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release:
+Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release, update the version in `.claude-plugin/plugin.json` and `scripts/on-event.sh`, then tag the commit in main:
 
 ```bash
 git tag v0.1.0

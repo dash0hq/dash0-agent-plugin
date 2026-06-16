@@ -388,3 +388,26 @@ func TestProcess_SessionStart_ReInitializesAfterSessionEnd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "sonnet", ctx.Model)
 }
+
+func TestNormalizeModel(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantBase    string
+		wantVariant string
+	}{
+		{"claude-opus-4-7", "claude-opus-4-7", ""},
+		{"claude-opus-4-7[1m]", "claude-opus-4-7", "1m"},
+		{"claude-sonnet-4-6", "claude-sonnet-4-6", ""},
+		{"us.anthropic.claude-opus-4-6-v1[1m]", "us.anthropic.claude-opus-4-6-v1", "1m"},
+		{"model[extended]", "model", "extended"},
+		{"", "", ""},
+		{"[broken", "[broken", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			base, variant := normalizeModel(tt.input)
+			assert.Equal(t, tt.wantBase, base)
+			assert.Equal(t, tt.wantVariant, variant)
+		})
+	}
+}

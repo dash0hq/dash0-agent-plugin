@@ -277,6 +277,7 @@ var attrKeyMap = map[string]string{
 	"session_id":          "gen_ai.conversation.id",
 	"cwd":                 "process.working_directory",
 	"model":               "gen_ai.request.model",
+	"model_variant":       "gen_ai.request.model_variant",
 	"tool_name":           "gen_ai.tool.name",
 	"tool_input":          "gen_ai.tool.call.arguments",
 	"tool_response":       "gen_ai.tool.call.result",

@@ -190,6 +190,14 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		}
 	}
 
+	if model, ok := event["model"].(string); ok {
+		base, variant := normalizeModel(model)
+		event["model"] = base
+		if variant != "" {
+			event["model_variant"] = variant
+		}
+	}
+
 	startTime := ts
 	if durationMs, ok := event["duration_ms"].(float64); ok && durationMs > 0 {
 		startTime = ts.Add(-time.Duration(durationMs) * time.Millisecond)
@@ -531,4 +539,15 @@ func ValidateOTLPURL(cfg *otlp.Config) bool {
 		return false
 	}
 	return true
+}
+
+// normalizeModel splits a model ID like "claude-opus-4-7[1m]" into
+// base ("claude-opus-4-7") and variant ("1m").
+func normalizeModel(model string) (base, variant string) {
+	if i := strings.IndexByte(model, '['); i > 0 {
+		if j := strings.IndexByte(model[i:], ']'); j > 0 {
+			return model[:i], model[i+1 : i+j]
+		}
+	}
+	return model, ""
 }

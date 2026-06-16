@@ -24,6 +24,12 @@ Randomized per turn from closed lists in [`data.go`](./data.go):
 A fresh session (`gen_ai.conversation.id`) is created for every turn. **Cost is
 not emitted** — it is enriched in the Dash0 backend.
 
+Alongside the spans, each turn also exports the `dash0.gen_ai.vcs.*` metrics
+(change count, time to merge, time to approval, lines added/deleted) with
+randomized values. They carry the **same repository and branch** as the turn's
+spans, so the metrics join with the spans on the VCS dimensions. See
+[`vcs_metrics.go`](./vcs_metrics.go).
+
 ## Running locally
 
 ```sh
@@ -49,4 +55,3 @@ go run ./cmd/demo -debug
 ## Not yet implemented
 
 - AWS Lambda packaging / deployment (the handler is ready to be wrapped).
-- Metrics. Only spans are generated for now.

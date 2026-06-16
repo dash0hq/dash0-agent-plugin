@@ -17,15 +17,24 @@ import (
 )
 
 // Handle generates exactly one mock turn and exports it to the OTLP endpoint
-// configured in cfg. It is the entry point shared by local invocation and (in
-// the future) the Lambda handler.
+// configured in cfg: the turn's chat + tool spans, plus the corresponding
+// dash0.gen_ai.vcs.* metrics. Both are built from the same turn, so the metrics
+// carry the same repository and branch as the spans. It is the entry point
+// shared by local invocation and (in the future) the Lambda handler.
 func Handle(ctx context.Context, cfg otlp.Config) error {
-	req, err := GenerateTurn(time.Now().UTC())
+	now := time.Now().UTC()
+	t := newTurn()
+
+	req, err := t.traces(now)
 	if err != nil {
 		return fmt.Errorf("generating mock turn: %w", err)
 	}
 	if err := otlp.SendTracesRequest(req, cfg); err != nil {
 		return fmt.Errorf("sending mock turn: %w", err)
+	}
+
+	if err := t.emitVCSMetrics(cfg, now); err != nil {
+		return fmt.Errorf("sending VCS metrics: %w", err)
 	}
 	return nil
 }

@@ -22,6 +22,36 @@ const (
 	toolKindSkill
 )
 
+// turn holds the randomized selections for a single agent turn. Both the trace
+// and the VCS metrics for the turn are built from this value, so they always
+// share the same repository, branch, user, and session.
+type turn struct {
+	repo     repo
+	user     user
+	model    string
+	effort   string
+	msg      messagePair
+	branch   string
+	revision string
+	session  string
+}
+
+// newTurn draws all randomized dimensions for one turn from the closed lists in
+// data.go.
+func newTurn() turn {
+	return turn{
+		repo:   pick(repos),
+		user:   pick(users),
+		model:  pick(models),
+		effort: pick(effortLevels),
+		msg:    pick(messagePairs),
+		branch: fmt.Sprintf("ENG-%d-%s", rand.IntN(900)+100, pick(branchTitles)),
+		// A fresh session per turn, used as the conversation identifier.
+		revision: randomHex(40),
+		session:  randomUUID(),
+	}
+}
+
 // GenerateTurn builds a mock OTLP traces request representing exactly one agent
 // turn: a root "chat" span with a single child tool span (a Bash command, an
 // MCP tool call, or a Skill invocation, chosen at random). All randomized
@@ -31,6 +61,11 @@ const (
 // now is the wall-clock instant the turn ends; the span timestamps are derived
 // from it so callers can produce deterministic output in tests.
 func GenerateTurn(now time.Time) (otlp.ExportTracesRequest, error) {
+	return newTurn().traces(now)
+}
+
+// traces builds the OTLP traces request for the turn.
+func (t turn) traces(now time.Time) (otlp.ExportTracesRequest, error) {
 	traceID, err := otlp.GenerateTraceID()
 	if err != nil {
 		return otlp.ExportTracesRequest{}, err
@@ -44,16 +79,15 @@ func GenerateTurn(now time.Time) (otlp.ExportTracesRequest, error) {
 		return otlp.ExportTracesRequest{}, err
 	}
 
-	r := pick(repos)
-	u := pick(users)
+	r := t.repo
+	u := t.user
 	handle := userHandle(u.Name)
-	model := pick(models)
-	effort := pick(effortLevels)
-	msg := pick(messagePairs)
-	branch := fmt.Sprintf("ENG-%d-%s", rand.IntN(900)+100, pick(branchTitles))
-	revision := randomHex(40)
-	// A fresh session per invocation, as the conversation identifier.
-	sessionID := randomUUID()
+	model := t.model
+	effort := t.effort
+	msg := t.msg
+	branch := t.branch
+	revision := t.revision
+	sessionID := t.session
 
 	workingDir := fmt.Sprintf("/Users/%s/dev/%s", handle, r.Name)
 

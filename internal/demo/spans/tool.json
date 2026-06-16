@@ -36,7 +36,7 @@
           {
             "key": "process.working_directory",
             "value": {
-              "stringValue": "/Users/guymoses/source/dash0"
+              "stringValue": "/Users/someuser/source/dash0"
             }
           },
           {
@@ -184,7 +184,7 @@
                 {
                   "key": "user.name",
                   "value": {
-                    "stringValue": "Guy Moses"
+                    "stringValue": "Some User"
                   }
                 }
               ],

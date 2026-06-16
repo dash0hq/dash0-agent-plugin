@@ -49,9 +49,13 @@ go run ./cmd/demo -debug
 - [`generator.go`](./generator.go) — `GenerateTurn` builds the OTLP request for one turn.
 - [`handler.go`](./handler.go) — `Handle` generates one turn and exports it; the
   transport-agnostic entry point shared by the local driver and (later) a Lambda wrapper.
-- [`../../cmd/demo`](../../cmd/demo) — locally-invokable driver.
+- [`../../cmd/demo`](../../cmd/demo) — the binary: a local CLI that also serves
+  the Lambda Runtime API loop when run on Lambda (`lambda.go`).
+- [`deploy/`](./deploy) — deploy to Lambda on an EventBridge schedule (see its README).
 - [`spans/`](./spans) — captured span templates the generator's schema mirrors.
 
-## Not yet implemented
+## Deploying
 
-- AWS Lambda packaging / deployment (the handler is ready to be wrapped).
+See [`deploy/README.md`](./deploy/README.md) to run this on a schedule as an AWS
+Lambda function (EventBridge, every 20 minutes), driven from your machine with
+the AWS CLI.

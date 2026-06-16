@@ -157,6 +157,31 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 	return sendOTLP(cfg, "/v1/traces", payload)
 }
 
+// SendTracesRequest sends a pre-built OTLP traces request to the configured
+// endpoint. Unlike SendTrace, the caller supplies the full request (resource
+// attributes, scope, and any number of spans), giving full control over the
+// payload. Returns nil without sending if OTLPUrl is empty and debug is off.
+func SendTracesRequest(req ExportTracesRequest, cfg Config) error {
+	if cfg.OTLPUrl == "" && !cfg.Debug {
+		return nil
+	}
+
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshalling OTLP traces request: %w", err)
+	}
+
+	if cfg.Debug {
+		debugLog(cfg, "trace", payload)
+	}
+
+	if cfg.OTLPUrl == "" {
+		return nil
+	}
+
+	return sendOTLP(cfg, "/v1/traces", payload)
+}
+
 // NewToolSpan creates a child span for a PostToolUse or PostToolUseFailure event.
 // startTime is the time the tool began executing (from the PreToolUse event),
 // endTime is the time the tool finished (from the PostToolUse event).

@@ -175,8 +175,21 @@ func SendLog(event map[string]any, cfg Config) error {
 	return sendOTLP(cfg, "/v1/logs", payload)
 }
 
-// sendOTLP sends a payload to the configured OTLP endpoint with a single retry
-// on transient failures (network errors or 5xx responses).
+// SendRawMetrics sends a pre-built OTLP metrics JSON payload to /v1/metrics.
+// Used by the demo generator to emit synthetic VCS metrics.
+func SendRawMetrics(payload []byte, cfg Config) error {
+	if cfg.OTLPUrl == "" && !cfg.Debug {
+		return nil
+	}
+	if cfg.Debug {
+		debugLog(cfg, "metrics", payload)
+	}
+	if cfg.OTLPUrl == "" {
+		return nil
+	}
+	return sendOTLP(cfg, "/v1/metrics", payload)
+}
+
 // CheckConnectivity verifies the OTLP endpoint is reachable and the auth token
 // is valid by sending an empty traces export. Returns nil on success.
 func CheckConnectivity(cfg Config) error {

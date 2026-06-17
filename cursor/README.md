@@ -60,7 +60,9 @@ go test ./...
 Releases are cut via `scripts/release.sh <version>`, which:
 
 1. Bumps the hardcoded `VERSION` in `scripts/on-event.sh`, `scripts/cursor-on-event.sh`,
-   `install-cursor.sh`, `.claude-plugin/plugin.json`, and `.cursor-plugin/plugin.json`.
+   `.claude-plugin/plugin.json`, and `.cursor-plugin/plugin.json`.
+   (`install-cursor.sh` resolves the latest GitHub release at runtime, so it's
+   not bumped here — set `DASH0_VERSION=` to pin a specific version.)
 2. Commits the bumps as `release: v<version>`.
 3. Creates the `v<version>` tag and pushes it.
 

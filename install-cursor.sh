@@ -9,6 +9,8 @@
 #     curl -fsSL .../install-cursor.sh | bash
 #
 # Optional env vars: DASH0_DATASET, DASH0_AGENT_NAME, DASH0_TEAM_NAME.
+#   DASH0_VERSION pins a specific release (e.g. "0.1.9"); without it, the
+#   installer resolves the latest GitHub release at runtime.
 #
 # What this installs:
 #   ~/.local/state/dash0-agent-plugin/cursor/bin/cursor-on-event-<v>-<os>-<arch>
@@ -23,7 +25,6 @@
 set -u
 
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.9"
 
 # Color helpers (skip if stdout isn't a TTY).
 if [ -t 1 ]; then
@@ -58,24 +59,7 @@ esac
 ok "detected $OS/$ARCH"
 
 # ---------------------------------------------------------------------------
-# 2. Resolve install paths.
-# ---------------------------------------------------------------------------
-
-STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor"
-BIN_DIR="$STATE_BASE/bin"
-BIN_PATH="$BIN_DIR/cursor-on-event-${VERSION}-${OS}-${ARCH}"
-
-SHARE_DIR="$HOME/.local/share/dash0-agent-plugin"
-SCRIPT_PATH="$SHARE_DIR/cursor-on-event.sh"
-
-CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
-HOOKS_PATH="$HOME/.cursor/hooks.json"
-
-mkdir -p "$BIN_DIR" "$SHARE_DIR" "$HOME/.cursor" \
-  || die "could not create install directories"
-
-# ---------------------------------------------------------------------------
-# 3. Download the binary and bootstrap script with checksum verification.
+# 2. Set up fetch/checksum helpers.
 # ---------------------------------------------------------------------------
 
 if command -v curl >/dev/null 2>&1; then
@@ -95,6 +79,44 @@ elif command -v shasum >/dev/null 2>&1; then
 else
   sha256() { echo ""; }
 fi
+
+# ---------------------------------------------------------------------------
+# 3. Resolve VERSION.
+#    DASH0_VERSION env var pins a specific release; otherwise query the
+#    GitHub API for the latest published tag.
+# ---------------------------------------------------------------------------
+
+VERSION="${DASH0_VERSION:-}"
+if [ -z "$VERSION" ]; then
+  info "resolving latest release..."
+  LATEST_JSON=$(fetch_stdout "https://api.github.com/repos/${REPO}/releases/latest" || true)
+  VERSION=$(echo "$LATEST_JSON" | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+  if [ -z "$VERSION" ]; then
+    die "could not resolve latest release; set DASH0_VERSION to pin a specific version"
+  fi
+fi
+ok "using v${VERSION}"
+
+# ---------------------------------------------------------------------------
+# 4. Resolve install paths.
+# ---------------------------------------------------------------------------
+
+STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor"
+BIN_DIR="$STATE_BASE/bin"
+BIN_PATH="$BIN_DIR/cursor-on-event-${VERSION}-${OS}-${ARCH}"
+
+SHARE_DIR="$HOME/.local/share/dash0-agent-plugin"
+SCRIPT_PATH="$SHARE_DIR/cursor-on-event.sh"
+
+CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
+HOOKS_PATH="$HOME/.cursor/hooks.json"
+
+mkdir -p "$BIN_DIR" "$SHARE_DIR" "$HOME/.cursor" \
+  || die "could not create install directories"
+
+# ---------------------------------------------------------------------------
+# 5. Download the binary and bootstrap script with checksum verification.
+# ---------------------------------------------------------------------------
 
 BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
 BIN_ASSET="cursor-on-event-${OS}-${ARCH}"
@@ -125,7 +147,7 @@ chmod +x "$SCRIPT_PATH"
 ok "installed bootstrap script → $SCRIPT_PATH"
 
 # ---------------------------------------------------------------------------
-# 4. Collect configuration.
+# 6. Collect configuration.
 #    Precedence: env var > interactive prompt > skip (with warning).
 # ---------------------------------------------------------------------------
 
@@ -181,7 +203,7 @@ if [ -z "$DASH0_OTLP_URL" ] || [ -z "$DASH0_AUTH_TOKEN" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Write the config file (chmod 600 — it holds the token in cleartext).
+# 7. Write the config file (chmod 600 — it holds the token in cleartext).
 # ---------------------------------------------------------------------------
 
 {
@@ -197,7 +219,7 @@ chmod 600 "$CONFIG_PATH"
 ok "wrote config → $CONFIG_PATH (chmod 600)"
 
 # ---------------------------------------------------------------------------
-# 6. Write or warn-about ~/.cursor/hooks.json.
+# 8. Write or warn-about ~/.cursor/hooks.json.
 #    v1: only write when no file exists, to avoid clobbering user hooks.
 # ---------------------------------------------------------------------------
 
@@ -228,7 +250,7 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Connectivity check.
+# 9. Connectivity check.
 #    Pipe a fake sessionStart through the binary. It logs the connectivity
 #    result to stderr; we capture and surface it here.
 # ---------------------------------------------------------------------------
@@ -259,7 +281,7 @@ if [ -n "$DASH0_OTLP_URL" ] && [ -n "$DASH0_AUTH_TOKEN" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Done.
+# 10. Done.
 # ---------------------------------------------------------------------------
 
 printf "\n${C_B}Next steps${C_N}\n"

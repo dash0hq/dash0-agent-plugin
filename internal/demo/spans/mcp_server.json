@@ -1,0 +1,204 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "dash0.resource.id",
+            "value": {
+              "stringValue": "8605565815916585283"
+            }
+          },
+          {
+            "key": "dash0.resource.hash",
+            "value": {
+              "stringValue": "2575364056365318351"
+            }
+          },
+          {
+            "key": "dash0.resource.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "dash0.auth.token",
+            "value": {
+              "stringValue": "jycsmNm"
+            }
+          },
+          {
+            "key": "gen_ai.provider.name",
+            "value": {
+              "stringValue": "anthropic"
+            }
+          },
+          {
+            "key": "process.working_directory",
+            "value": {
+              "stringValue": "/Users/someuser/Documents/dash0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "0.1.9"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "schemaUrl": "https://opentelemetry.io/schemas/1.36.0",
+      "scopeSpans": [
+        {
+          "schemaUrl": "https://opentelemetry.io/schemas/1.36.0",
+          "scope": {
+            "attributes": [],
+            "droppedAttributesCount": 0,
+            "name": "dash0-agent-plugin",
+            "version": "0.1.9"
+          },
+          "spans": [
+            {
+              "attributes": [
+                {
+                  "key": "dash0.gen_ai.tool.mcp_server",
+                  "value": {
+                    "stringValue": "claude_ai_Slack"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.owner.name",
+                  "value": {
+                    "stringValue": "dash0hq"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.provider.name",
+                  "value": {
+                    "stringValue": "github"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.name",
+                  "value": {
+                    "stringValue": "ins-265-api-slo-catalog-additional-ordering-keys-numeric-value"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.revision",
+                  "value": {
+                    "stringValue": "fda8a19d86f30cc56673525418e4bc4343963ce5"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.type",
+                  "value": {
+                    "stringValue": "branch"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.repository.name",
+                  "value": {
+                    "stringValue": "dash0"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.repository.url.full",
+                  "value": {
+                    "stringValue": "https://github.com/dash0hq/dash0"
+                  }
+                },
+                {
+                  "key": "effort",
+                  "value": {
+                    "stringValue": "{\"level\":\"xhigh\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "2d5f565a-fbff-461e-8ac6-0ac7594ccbe2"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-4-8"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": {
+                    "stringValue": "<REDACTED>"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01NDYorChaFy3D2CZ5a8tGif"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.result",
+                  "value": {
+                    "stringValue": "<REDACTED>"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "mcp__claude_ai_Slack__slack_search_public_and_private"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.type",
+                  "value": {
+                    "stringValue": "function"
+                  }
+                },
+                {
+                  "key": "user.name",
+                  "value": {
+                    "stringValue": "Some User"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "droppedEventsCount": 0,
+              "droppedLinksCount": 0,
+              "endTimeUnixNano": "1781603007851123000",
+              "events": [],
+              "flags": 0,
+              "kind": 1,
+              "links": [],
+              "name": "execute_tool mcp__claude_ai_Slack__slack_search_public_and_private",
+              "parentSpanId": "W+boPeIix08=",
+              "spanId": "VaCDBERmu0w=",
+              "startTimeUnixNano": "1781603006549123000",
+              "status": {
+                "code": 0,
+                "message": ""
+              },
+              "traceId": "mukQkaiUYHrm/ZbsUKGFkw==",
+              "traceState": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "resourceLogs": []
+}

@@ -133,6 +133,7 @@ The plugin emits OpenTelemetry spans following [GenAI semantic conventions](http
 | Attribute | Description |
 |---|---|
 | `service.name` | Agent name (configurable via `AGENT_NAME`, defaults to `claude-code`) |
+| `gen_ai.agent.name` | Agent name (configurable via `AGENT_NAME`, defaults to `claude-code`). Sub-agent (`invoke_agent`) spans override it at span level with the sub-agent type. |
 | `gen_ai.provider.name` | LLM provider |
 
 **Span attributes (on all spans)**:

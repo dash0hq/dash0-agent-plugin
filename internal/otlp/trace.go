@@ -225,11 +225,12 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 
 	opName := "chat"
 	spanName := "chat " + model
+	// gen_ai.agent.name is set from agent_type by eventAttributes (via attrKeyMap);
+	// here we only adjust the operation/span name for sub-agent invocations.
 	agentType, _ := event["agent_type"].(string)
 	if agentType != "" {
 		opName = "invoke_agent"
 		spanName = "invoke_agent " + agentType
-		attrs = append(attrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(agentType)})
 	}
 	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal(opName)})
 	attrs = append(attrs, vcsSpanAttributes(cfg)...)

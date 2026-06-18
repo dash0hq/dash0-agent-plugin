@@ -79,6 +79,9 @@ func run() error {
 		Debug:        pluginOptionBool("DEBUG"),
 		DebugFile:    pluginOption("DEBUG_FILE"),
 	}
+	if cfg.AgentName == "" {
+		cfg.AgentName = "claude-code"
+	}
 	pipeline.ValidateOTLPURL(&cfg)
 
 	now := time.Now().UTC()

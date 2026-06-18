@@ -161,6 +161,30 @@ func findSpan(spans []otlp.Span, namePrefix string) *otlp.Span {
 	return nil
 }
 
+// collectingResourceServer captures the resource attributes of every exported
+// trace request (the span collector flattens spans and drops the resource).
+func collectingResourceServer(t *testing.T) (*httptest.Server, *[]otlp.Attribute) {
+	t.Helper()
+	var resourceAttrs []otlp.Attribute
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/traces" {
+			body, _ := io.ReadAll(r.Body)
+			var req otlp.ExportTracesRequest
+			if err := json.Unmarshal(body, &req); err == nil {
+				mu.Lock()
+				for _, rs := range req.ResourceSpans {
+					resourceAttrs = append(resourceAttrs, rs.Resource.Attributes...)
+				}
+				mu.Unlock()
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &resourceAttrs
+}
+
 func TestChatSpanIsRootWithToolChildren(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
@@ -1409,6 +1433,44 @@ func TestSubagentStopEmitsChatSpanWithTokens(t *testing.T) {
 
 	// Sub-agent span should have the agent type attribute.
 	assertStringAttr(t, subagentSpan.Attributes, "gen_ai.agent.name", "Explore")
+
+	count := 0
+	for _, a := range subagentSpan.Attributes {
+		if a.Key == "gen_ai.agent.name" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "gen_ai.agent.name should appear exactly once")
+}
+
+func TestAgentNameDefaultsToClaudeCode(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, resourceAttrs := collectingResourceServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	// No AGENT_NAME / DASH0_AGENT_NAME configured.
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-name","model":"claude-opus-4-8"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-name","prompt":"hi"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-name","model":"claude-opus-4-8"}`)
+
+	// The main chat span's resource should carry the default agent name.
+	assertStringAttr(t, *resourceAttrs, "gen_ai.agent.name", "claude-code")
+}
+
+func TestAgentNameOverrideIsRespected(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, resourceAttrs := collectingResourceServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Setenv("DASH0_AGENT_NAME", "my-agent")
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-name2","model":"claude-opus-4-8"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-name2","prompt":"hi"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-name2","model":"claude-opus-4-8"}`)
+
+	// A configured name must not be overridden by the default.
+	assertStringAttr(t, *resourceAttrs, "gen_ai.agent.name", "my-agent")
 }
 
 func assertStringAttr(t *testing.T, attrs []otlp.Attribute, key, want string) {

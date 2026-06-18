@@ -10,5 +10,5 @@
   "license": "Apache-2.0",
   "keywords": ["observability", "tracing", "opentelemetry", "dash0", "otel"],
   "hooks": "cursor/plugin-hooks.json",
-  "commands": "./commands/dash0-configure.md"
+  "skills": "./skills/"
 }

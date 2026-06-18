@@ -1,12 +1,17 @@
 ---
-description: Configure the Dash0 → Cursor integration (writes ~/.cursor/dash0-agent-plugin.local.md).
+name: dash0-configure
+description: Configure the Dash0 → Cursor telemetry integration by writing the OTLP URL and auth token to ~/.cursor/dash0-agent-plugin.local.md. Use when the user wants to set up Dash0, enable telemetry, paste credentials, or fix an inactive plugin install.
 ---
 
 # Configure Dash0
 
-Writes the config file the `cursor-on-event` hook reads on every Cursor event. The file holds the OTLP endpoint URL and auth token in YAML frontmatter, so we need them from the user.
+Write the config file the `cursor-on-event` hook reads on every Cursor event. The file holds the OTLP endpoint URL and auth token in YAML frontmatter.
 
-## Steps
+## Trigger
+
+The user wants to configure (or reconfigure) the Dash0 plugin: provide their OTLP URL + auth token, change the dataset, set the agent name, etc.
+
+## Workflow
 
 1. If `~/.cursor/dash0-agent-plugin.local.md` already exists, read it and show the user the current values with the `auth_token` masked (show only the last 4 chars). Ask whether to overwrite. If they decline, stop.
 
@@ -36,4 +41,4 @@ Writes the config file the `cursor-on-event` hook reads on every Cursor event. T
 
    > Configuration written. **Quit and relaunch Cursor** (Cmd+Q on macOS) — Cursor only reads `hooks.json` at startup. After that, every prompt you send will emit OTel spans to your Dash0 dataset.
 
-   Re-running this command later takes effect on the next hook fire without a restart, since the bootstrap script re-reads the config on each invocation.
+   Re-running this skill later takes effect on the next hook fire without a restart, since the bootstrap script re-reads the config on each invocation.

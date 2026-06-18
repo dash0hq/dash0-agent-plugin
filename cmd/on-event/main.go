@@ -43,6 +43,7 @@ var (
 	extractBashCommandFamily   = pipeline.ExtractBashCommandFamily
 	extractSkillName           = pipeline.ExtractSkillName
 	extractMCPServer           = pipeline.ExtractMCPServer
+	normalizeMCPToolName       = pipeline.NormalizeMCPToolName
 	extractAgentIDFromResponse = pipeline.ExtractAgentIDFromResponse
 )
 

@@ -1229,14 +1229,38 @@ func TestExtractMCPServer(t *testing.T) {
 		{"linear server", "mcp__linear-server__list_issues", "linear-server"},
 		{"github", "mcp__github__create_pull_request", "github"},
 		{"slack", "mcp__slack__send_message", "slack"},
+		{"claude_ai namespace", "mcp__claude_ai_Linear__list_projects", "claude_ai_Linear"},
+		{"dash0", "mcp__dash0__query_metrics", "dash0"},
 		{"not MCP", "Bash", ""},
 		{"partial MCP prefix", "mcp__", ""},
 		{"no tool part", "mcp__server", "server"},
 		{"empty", "", ""},
+		{"UUID server", "mcp__1a66ca22-a5b4-4d91-b577-b64d7f7bc86c__read_thread", ""},
+		{"uppercase UUID", "mcp__1A66CA22-A5B4-4D91-B577-B64D7F7BC86C__read_thread", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, extractMCPServer(tt.toolName))
+		})
+	}
+}
+
+func TestNormalizeMCPToolName(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		want     string
+	}{
+		{"strips server", "mcp__slack__send_message", "send_message"},
+		{"strips UUID server", "mcp__1a66ca22-a5b4-4d91-b577-b64d7f7bc86c__read_thread", "read_thread"},
+		{"strips namespace", "mcp__claude_ai_Linear__list_projects", "list_projects"},
+		{"non-MCP unchanged", "Bash", "Bash"},
+		{"partial prefix unchanged", "mcp__server", "mcp__server"},
+		{"empty tool part unchanged", "mcp__server__", "mcp__server__"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeMCPToolName(tt.toolName))
 		})
 	}
 }
@@ -1321,6 +1345,27 @@ func TestMCPServerExtracted(t *testing.T) {
 	require.NotNil(t, toolSpan)
 
 	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.mcp_server", "linear-server")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.name", "list_issues")
+	assert.Contains(t, toolSpan.Name, "execute_tool list_issues")
+}
+
+func TestMCPUUIDServerOmitted(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-mcp-uuid","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-mcp-uuid","prompt":"read thread"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-mcp-uuid","tool_name":"mcp__1a66ca22-a5b4-4d91-b577-b64d7f7bc86c__slack_read_thread","tool_use_id":"tu-mcp-uuid"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-mcp-uuid","tool_name":"mcp__1a66ca22-a5b4-4d91-b577-b64d7f7bc86c__slack_read_thread","tool_use_id":"tu-mcp-uuid","tool_response":"thread content"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertAttrAbsent(t, toolSpan.Attributes, "dash0.gen_ai.tool.mcp_server")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.name", "slack_read_thread")
+	assert.Contains(t, toolSpan.Name, "execute_tool slack_read_thread")
 }
 
 func TestLinesOfCodeNotPresentOnNonEditTools(t *testing.T) {

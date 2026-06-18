@@ -251,6 +251,9 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	if server := ExtractMCPServer(toolName); server != "" {
 		event["mcp_server"] = server
 	}
+	if normalized := NormalizeMCPToolName(toolName); normalized != toolName {
+		event["tool_name"] = normalized
+	}
 
 	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
@@ -483,8 +486,23 @@ func ExtractSkillName(v any) string {
 	}
 }
 
+// NormalizeMCPToolName strips the mcp__<server>__ prefix from an MCP tool name,
+// returning just the tool portion (e.g. "send_message"). For non-MCP tools it
+// returns the input unchanged.
+func NormalizeMCPToolName(toolName string) string {
+	if !strings.HasPrefix(toolName, "mcp__") {
+		return toolName
+	}
+	parts := strings.SplitN(toolName, "__", 3)
+	if len(parts) < 3 || parts[2] == "" {
+		return toolName
+	}
+	return parts[2]
+}
+
 // ExtractMCPServer parses the server name from an MCP tool name
-// (format: mcp__<server>__<tool>).
+// (format: mcp__<server>__<tool>). Returns empty string for non-MCP tools
+// and for UUIDs (which are not meaningful server names).
 func ExtractMCPServer(toolName string) string {
 	if !strings.HasPrefix(toolName, "mcp__") {
 		return ""
@@ -493,7 +511,16 @@ func ExtractMCPServer(toolName string) string {
 	if len(parts) < 2 || parts[1] == "" {
 		return ""
 	}
+	if isUUID(parts[1]) {
+		return ""
+	}
 	return parts[1]
+}
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+func isUUID(s string) bool {
+	return uuidPattern.MatchString(s)
 }
 
 // ExtractAgentIDFromResponse is exported for use by source-specific entrypoints

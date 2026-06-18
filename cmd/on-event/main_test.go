@@ -72,22 +72,6 @@ func TestIntegrationFailsOnInvalidJSON(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestExtractAgentIDFromResponseString(t *testing.T) {
-	resp := `{"agentId":"a13ff1c4e70c41cd1","agentType":"general-purpose","content":[]}`
-	assert.Equal(t, "a13ff1c4e70c41cd1", extractAgentIDFromResponse(resp))
-}
-
-func TestExtractAgentIDFromResponseMap(t *testing.T) {
-	resp := map[string]any{"agentId": "abc123", "agentType": "general-purpose"}
-	assert.Equal(t, "abc123", extractAgentIDFromResponse(resp))
-}
-
-func TestExtractAgentIDFromResponseMissing(t *testing.T) {
-	assert.Equal(t, "", extractAgentIDFromResponse(`{"no_agent":"here"}`))
-	assert.Equal(t, "", extractAgentIDFromResponse("not json"))
-	assert.Equal(t, "", extractAgentIDFromResponse(nil))
-	assert.Equal(t, "", extractAgentIDFromResponse(42))
-}
 
 // feed pipes input through run() and fails the test on error.
 func feed(t *testing.T, input string) {
@@ -915,98 +899,7 @@ func TestModelOnToolSpanFromTranscriptWhenSessionStartOmitsModel(t *testing.T) {
 	assertStringAttr(t, chatSpan.Attributes, "gen_ai.request.model", "claude-opus-4-7")
 }
 
-func TestToolResponseText(t *testing.T) {
-	t.Run("string input", func(t *testing.T) {
-		assert.Equal(t, "hello", toolResponseText("hello"))
-	})
-	t.Run("nil input", func(t *testing.T) {
-		assert.Equal(t, "", toolResponseText(nil))
-	})
-	t.Run("Bash response dict", func(t *testing.T) {
-		resp := map[string]any{
-			"stdout":  "output line",
-			"stderr":  "warning",
-			"isImage": false,
-		}
-		text := toolResponseText(resp)
-		assert.Contains(t, text, "output line")
-		assert.Contains(t, text, "warning")
-	})
-	t.Run("dict without stdout falls back to JSON", func(t *testing.T) {
-		resp := map[string]any{"filePath": "/tmp/file.go"}
-		text := toolResponseText(resp)
-		assert.Contains(t, text, "filePath")
-	})
-}
 
-func TestExtractPRURL(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    any
-		expected string
-	}{
-		{"GitHub PR URL", "https://github.com/dash0hq/dash0-agent-plugin/pull/94", "https://github.com/dash0hq/dash0-agent-plugin/pull/94"},
-		{"GitHub PR in multiline output", "Creating pull request...\nhttps://github.com/org/repo/pull/123\nDone.", "https://github.com/org/repo/pull/123"},
-		{"GitLab MR URL", "https://gitlab.com/org/repo/-/merge_requests/42", "https://gitlab.com/org/repo/-/merge_requests/42"},
-		{"Bitbucket PR URL", "https://bitbucket.org/team/repo/pull-requests/7", "https://bitbucket.org/team/repo/pull-requests/7"},
-		{"self-hosted GitHub", "https://github.company.com/team/repo/pull/99", "https://github.company.com/team/repo/pull/99"},
-		{"ignores pull/new from git push", "https://github.com/org/repo/pull/new/feat-branch", ""},
-		{"no PR URL", "file1.go\nfile2.go\nok", ""},
-		{"nil input", nil, ""},
-		{"Bash response dict with PR in stdout", map[string]any{
-			"stdout": "Warning: 2 uncommitted changes\nhttps://github.com/dash0hq/dash0-agent-plugin/pull/94",
-			"stderr": "",
-		}, "https://github.com/dash0hq/dash0-agent-plugin/pull/94"},
-		{"empty string", "", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, extractPRURL(tt.input))
-		})
-	}
-}
-
-func TestExtractIssueURL(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    any
-		expected string
-	}{
-		{"GitHub issue", "https://github.com/dash0hq/dash0-agent-plugin/issues/91", "https://github.com/dash0hq/dash0-agent-plugin/issues/91"},
-		{"GitLab issue", "https://gitlab.com/org/repo/issues/42", "https://gitlab.com/org/repo/issues/42"},
-		{"issue in Bash stdout", map[string]any{
-			"stdout": "Created issue https://github.com/org/repo/issues/5\n",
-		}, "https://github.com/org/repo/issues/5"},
-		{"no issue URL", "file1.go\nfile2.go", ""},
-		{"nil", nil, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, extractIssueURL(tt.input))
-		})
-	}
-}
-
-func TestExtractCommitSHA(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    any
-		expected string
-	}{
-		{"git commit output", "[feat/my-branch 82717dc] feat: add new feature\n 4 files changed", "82717dc"},
-		{"full SHA", "[main abcdef1234567890abcdef1234567890abcdef12] fix: bug", "abcdef1234567890abcdef1234567890abcdef12"},
-		{"Bash response dict", map[string]any{
-			"stdout": "[feat/extract-pr-urls a1b2c3d] feat: extract PR URLs\n 3 files changed",
-		}, "a1b2c3d"},
-		{"no commit", "file1.go\nfile2.go", ""},
-		{"nil", nil, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, extractCommitSHA(tt.input))
-		})
-	}
-}
 
 func TestPRURLSurvivesOmitIO(t *testing.T) {
 	dataDir := t.TempDir()
@@ -1089,100 +982,6 @@ func TestPRURLNotPresentWhenNoMatch(t *testing.T) {
 	}
 }
 
-func TestExtractLinesCounts(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       any
-		wantAdded   int
-		wantRemoved int
-	}{
-		{
-			"Edit with additions and removals",
-			map[string]any{
-				"structuredPatch": []any{
-					map[string]any{
-						"filePath": "main.go",
-						"lines": []any{
-							" unchanged line",
-							"-old line 1",
-							"-old line 2",
-							"+new line 1",
-							"+new line 2",
-							"+new line 3",
-							" another unchanged",
-						},
-					},
-				},
-			},
-			3, 2,
-		},
-		{
-			"Write (new file, no patches)",
-			map[string]any{
-				"structuredPatch": []any{},
-			},
-			0, 0,
-		},
-		{
-			"nil input",
-			nil,
-			0, 0,
-		},
-		{
-			"string input (not a map)",
-			"some text response",
-			0, 0,
-		},
-		{
-			"map without structuredPatch",
-			map[string]any{"filePath": "/tmp/file.go"},
-			0, 0,
-		},
-		{
-			"multiple patches across files",
-			map[string]any{
-				"structuredPatch": []any{
-					map[string]any{
-						"filePath": "a.go",
-						"lines":    []any{"+added1", "+added2", "-removed1"},
-					},
-					map[string]any{
-						"filePath": "b.go",
-						"lines":    []any{"+added3", "-removed2", "-removed3"},
-					},
-				},
-			},
-			3, 3,
-		},
-		{
-			"patch with missing lines field",
-			map[string]any{
-				"structuredPatch": []any{
-					map[string]any{"filePath": "c.go"},
-				},
-			},
-			0, 0,
-		},
-		{
-			"empty line strings are skipped",
-			map[string]any{
-				"structuredPatch": []any{
-					map[string]any{
-						"lines": []any{"", "+added", ""},
-					},
-				},
-			},
-			1, 0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			added, removed := extractLinesCounts(tt.input)
-			assert.Equal(t, tt.wantAdded, added, "lines added")
-			assert.Equal(t, tt.wantRemoved, removed, "lines removed")
-		})
-	}
-}
 
 func assertAttrAbsent(t *testing.T, attrs []otlp.Attribute, key string) {
 	t.Helper()
@@ -1194,76 +993,6 @@ func assertAttrAbsent(t *testing.T, attrs []otlp.Attribute, key string) {
 	}
 }
 
-func TestExtractBashCommandFamily(t *testing.T) {
-	tests := []struct {
-		name  string
-		input any
-		want  string
-	}{
-		{"simple command", "git status", "git"},
-		{"command with args", "npm install express", "npm"},
-		{"env var prefix", "FOO=bar git push", "git"},
-		{"multiple env vars", "A=1 B=2 docker build .", "docker"},
-		{"chained commands", "cd /tmp && make build", "cd"},
-		{"absolute path", "/usr/bin/git log", "git"},
-		{"empty input", "", ""},
-		{"only env vars", "FOO=bar", ""},
-		{"command with flags", "ls -la /tmp", "ls"},
-		{"map with command field", map[string]any{"command": "git log --oneline -3", "description": "Show log"}, "git"},
-		{"map with env var prefix", map[string]any{"command": "DASH0_DEBUG=true claude --debug"}, "claude"},
-		{"map without command field", map[string]any{"description": "no command"}, ""},
-		{"nil input", nil, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractBashCommandFamily(tt.input))
-		})
-	}
-}
-
-func TestExtractSkillName(t *testing.T) {
-	tests := []struct {
-		name  string
-		input any
-		want  string
-	}{
-		{"valid skill JSON string", `{"skill":"translation-updater","args":"Add translations"}`, "translation-updater"},
-		{"skill only JSON string", `{"skill":"reviewer"}`, "reviewer"},
-		{"empty input", "", ""},
-		{"invalid JSON", "not json", ""},
-		{"missing skill field string", `{"args":"something"}`, ""},
-		{"null skill string", `{"skill":null}`, ""},
-		{"map with skill field", map[string]any{"skill": "keybindings-help"}, "keybindings-help"},
-		{"map without skill field", map[string]any{"args": "something"}, ""},
-		{"nil input", nil, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractSkillName(tt.input))
-		})
-	}
-}
-
-func TestExtractMCPServer(t *testing.T) {
-	tests := []struct {
-		name     string
-		toolName string
-		want     string
-	}{
-		{"linear server", "mcp__linear-server__list_issues", "linear-server"},
-		{"github", "mcp__github__create_pull_request", "github"},
-		{"slack", "mcp__slack__send_message", "slack"},
-		{"not MCP", "Bash", ""},
-		{"partial MCP prefix", "mcp__", ""},
-		{"no tool part", "mcp__server", "server"},
-		{"empty", "", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractMCPServer(tt.toolName))
-		})
-	}
-}
 
 func TestLinesOfCodeSurvivesOmitIO(t *testing.T) {
 	dataDir := t.TempDir()
@@ -1345,6 +1074,27 @@ func TestMCPServerExtracted(t *testing.T) {
 	require.NotNil(t, toolSpan)
 
 	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.mcp_server", "linear-server")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.name", "list_issues")
+	assert.Contains(t, toolSpan.Name, "execute_tool list_issues")
+}
+
+func TestMCPUUIDServerOmitted(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-mcp-uuid","model":"claude-sonnet-4-20250514"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-mcp-uuid","prompt":"read thread"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-mcp-uuid","tool_name":"mcp__1a66ca22-a5b4-4d91-b577-b64d7f7bc86c__slack_read_thread","tool_use_id":"tu-mcp-uuid"}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-mcp-uuid","tool_name":"mcp__1a66ca22-a5b4-4d91-b577-b64d7f7bc86c__slack_read_thread","tool_use_id":"tu-mcp-uuid","tool_response":"thread content"}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertAttrAbsent(t, toolSpan.Attributes, "dash0.gen_ai.tool.mcp_server")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.name", "slack_read_thread")
+	assert.Contains(t, toolSpan.Name, "execute_tool slack_read_thread")
 }
 
 func TestLinesOfCodeNotPresentOnNonEditTools(t *testing.T) {

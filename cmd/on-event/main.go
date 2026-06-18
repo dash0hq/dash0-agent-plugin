@@ -32,19 +32,6 @@ func main() {
 	}
 }
 
-// Test seams: aliases for the extractor helpers that moved into the pipeline
-// package, so existing unit tests in this package keep working without churn.
-var (
-	toolResponseText           = pipeline.ToolResponseText
-	extractPRURL               = pipeline.ExtractPRURL
-	extractIssueURL            = pipeline.ExtractIssueURL
-	extractCommitSHA           = pipeline.ExtractCommitSHA
-	extractLinesCounts         = pipeline.ExtractLinesCounts
-	extractBashCommandFamily   = pipeline.ExtractBashCommandFamily
-	extractSkillName           = pipeline.ExtractSkillName
-	extractMCPServer           = pipeline.ExtractMCPServer
-	extractAgentIDFromResponse = pipeline.ExtractAgentIDFromResponse
-)
 
 func run() error {
 	dotenv.Load(".env")

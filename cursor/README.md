@@ -1,14 +1,11 @@
-# Cursor source
+# Cursor source — developer reference
 
 This directory holds the Cursor-side configuration and capture scaffolding
-for the Cursor → Dash0 integration. End users have two install paths:
+for the Cursor → Dash0 integration. It is the developer reference: how to
+build, sideload local changes, cut releases, and collect fixture payloads.
 
-- **Cursor Marketplace plugin** — install from the Marketplace, then run the
-  `/dash0-configure` command inside Cursor to write the config file.
-- **`curl | bash` flow** — `install-cursor.sh` at the repo root, prompts for
-  the OTLP URL + token and writes `~/.cursor/hooks.json` directly.
-
-This README is for developers working on the integration itself.
+End-user install / configure / uninstall docs live in
+[`.cursor-plugin/README.md`](../.cursor-plugin/README.md).
 
 ## Contents
 
@@ -17,7 +14,6 @@ This README is for developers working on the integration itself.
 | `hooks.json` | Hook registration for the `curl \| bash` flow. Uses absolute `$HOME/...` paths because it gets copied to `~/.cursor/hooks.json`. |
 | `plugin-hooks.json` | Hook registration for the Marketplace plugin. Uses relative `./scripts/...` paths because Cursor resolves them from the plugin root. |
 | `capture/` | Records real Cursor hook payloads as test fixtures. See `capture/README.md`. |
-| `cursor-source-handoff-brief.md` | Background research that informed the design. |
 
 The code that consumes Cursor hooks lives elsewhere:
 
@@ -25,8 +21,8 @@ The code that consumes Cursor hooks lives elsewhere:
 - `internal/source/cursor/` — Cursor-specific event normalization
 - `internal/pipeline/` — shared OTLP span emission (also used by Claude Code)
 - `scripts/cursor-on-event.sh` — bootstrap wrapper that downloads + execs the binary
-- `.cursor-plugin/plugin.json` — Marketplace plugin manifest (references `cursor/plugin-hooks.json` and `commands/dash0-configure.md`)
-- `commands/dash0-configure.md` — agent command that walks the user through writing the config file
+- `.cursor-plugin/plugin.json` — Marketplace plugin manifest (references `cursor/plugin-hooks.json` and `skills/`)
+- `skills/dash0-configure/SKILL.md` — agent skill that walks the user through writing the config file
 
 ## Build
 
@@ -80,22 +76,6 @@ both fetch the binary from GitHub Releases by version on first run and
 verify against `checksums.txt`. They also pull `cursor-on-event.sh` itself
 from the matching git tag on `raw.githubusercontent.com`, so the install
 flow has zero dependencies beyond `curl`/`wget` + `sha256sum`/`shasum`.
-
-## Install via the Cursor Marketplace
-
-End-user flow once the plugin is listed:
-
-1. Install `dash0-agent-plugin` from the Cursor Marketplace. Cursor clones
-   the repo, reads `.cursor-plugin/plugin.json`, and registers the hooks
-   declared in `cursor/plugin-hooks.json`.
-2. In Cursor, run `/dash0-configure`. The command prompts for the OTLP URL,
-   auth token, and a few optional fields, then writes
-   `~/.cursor/dash0-agent-plugin.local.md` (chmod 600).
-3. Quit and relaunch Cursor — `hooks.json` is read at startup.
-
-The plugin form ships no binary; the bootstrap script downloads
-`cursor-on-event-<os>-<arch>` from GitHub Releases on first hook fire and
-verifies the checksum, same as the `curl | bash` flow.
 
 ## Install in a local Cursor instance
 

@@ -1,0 +1,240 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "dash0.resource.id",
+            "value": {
+              "stringValue": "8605565815916585283"
+            }
+          },
+          {
+            "key": "dash0.resource.hash",
+            "value": {
+              "stringValue": "13966406995698762797"
+            }
+          },
+          {
+            "key": "dash0.resource.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "dash0.auth.token",
+            "value": {
+              "stringValue": "jycsmNm"
+            }
+          },
+          {
+            "key": "gen_ai.provider.name",
+            "value": {
+              "stringValue": "anthropic"
+            }
+          },
+          {
+            "key": "process.working_directory",
+            "value": {
+              "stringValue": "/Users/user/dev/workspace/dash0/dash0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "0.1.9"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "schemaUrl": "https://opentelemetry.io/schemas/1.36.0",
+      "scopeSpans": [
+        {
+          "schemaUrl": "https://opentelemetry.io/schemas/1.36.0",
+          "scope": {
+            "attributes": [],
+            "droppedAttributesCount": 0,
+            "name": "dash0-agent-plugin",
+            "version": "0.1.9"
+          },
+          "spans": [
+            {
+              "attributes": [
+                {
+                  "key": "background_tasks",
+                  "value": {
+                    "stringValue": "[{\"description\":\"Review the cardinality visibility PRD through independent lenses biased toward simplification and clarity, then synthesize concrete before/after changes\",\"id\":\"w2itsh6av\",\"name\":\"prd-simplify-review\",\"status\":\"running\",\"type\":\"workflow\"}]"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.usage.cost",
+                  "value": {
+                    "doubleValue": 9.311247750000001
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.owner.name",
+                  "value": {
+                    "stringValue": "dash0hq"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.provider.name",
+                  "value": {
+                    "stringValue": "github"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.name",
+                  "value": {
+                    "stringValue": "main"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.revision",
+                  "value": {
+                    "stringValue": "7ac72a432a96a0741cb62df0a244d59ca041509a"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.type",
+                  "value": {
+                    "stringValue": "branch"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.repository.name",
+                  "value": {
+                    "stringValue": "dash0"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.repository.url.full",
+                  "value": {
+                    "stringValue": "https://github.com/dash0hq/dash0"
+                  }
+                },
+                {
+                  "key": "dash0.operation.name",
+                  "value": {
+                    "stringValue": "chat claude-opus-4-8"
+                  }
+                },
+                {
+                  "key": "dash0.operation.ruleId",
+                  "value": {
+                    "stringValue": "headless operation"
+                  }
+                },
+                {
+                  "key": "dash0.operation.type",
+                  "value": {
+                    "stringValue": "headless"
+                  }
+                },
+                {
+                  "key": "effort",
+                  "value": {
+                    "stringValue": "{\"level\":\"xhigh\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "67e7585f-cacf-42f5-851c-8d149920f275"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"parts\":[{\"content\":\"\\u003cREDACTED\\u003e\",\"type\":\"text\"}],\"role\":\"user\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"parts\":[{\"content\":\"\\u003cREDACTED\\u003e\",\"type\":\"text\"}],\"role\":\"assistant\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-4-8"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_creation.input_tokens",
+                  "value": {
+                    "intValue": "355193"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "8504783"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "16003"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "113556"
+                  }
+                },
+                {
+                  "key": "session_crons",
+                  "value": {
+                    "stringValue": "[]"
+                  }
+                },
+                {
+                  "key": "user.name",
+                  "value": {
+                    "stringValue": "Some User"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "droppedEventsCount": 0,
+              "droppedLinksCount": 0,
+              "endTimeUnixNano": "1781602656424518000",
+              "events": [],
+              "flags": 0,
+              "kind": 1,
+              "links": [],
+              "name": "chat claude-opus-4-8",
+              "parentSpanId": "",
+              "spanId": "xni4KthjASQ=",
+              "startTimeUnixNano": "1781602579445278000",
+              "status": {
+                "code": 0,
+                "message": ""
+              },
+              "traceId": "pMOjrsWl3NAciBHnhdPPyQ==",
+              "traceState": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "resourceLogs": []
+}

@@ -1,0 +1,216 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "dash0.resource.id",
+            "value": {
+              "stringValue": "8605565815916585283"
+            }
+          },
+          {
+            "key": "dash0.resource.hash",
+            "value": {
+              "stringValue": "9289508897805583645"
+            }
+          },
+          {
+            "key": "dash0.resource.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "dash0.auth.token",
+            "value": {
+              "stringValue": "jycsmNm"
+            }
+          },
+          {
+            "key": "gen_ai.provider.name",
+            "value": {
+              "stringValue": "anthropic"
+            }
+          },
+          {
+            "key": "process.working_directory",
+            "value": {
+              "stringValue": "/Users/someuser/source/dash0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "dev"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "schemaUrl": "https://opentelemetry.io/schemas/1.36.0",
+      "scopeSpans": [
+        {
+          "schemaUrl": "https://opentelemetry.io/schemas/1.36.0",
+          "scope": {
+            "attributes": [],
+            "droppedAttributesCount": 0,
+            "name": "dash0-agent-plugin",
+            "version": "dev"
+          },
+          "spans": [
+            {
+              "attributes": [
+                {
+                  "key": "dash0.gen_ai.tool.bash.command_family",
+                  "value": {
+                    "stringValue": "#"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.owner.name",
+                  "value": {
+                    "stringValue": "dash0hq"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.provider.name",
+                  "value": {
+                    "stringValue": "github"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.name",
+                  "value": {
+                    "stringValue": "guy/vcs-metrics-full-retention"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.revision",
+                  "value": {
+                    "stringValue": "9978f25a7f3be519e76669deb20bfd339df26dfd"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.ref.head.type",
+                  "value": {
+                    "stringValue": "branch"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.repository.name",
+                  "value": {
+                    "stringValue": "dash0"
+                  }
+                },
+                {
+                  "key": "dash0.gen_ai.vcs.repository.url.full",
+                  "value": {
+                    "stringValue": "https://github.com/dash0hq/dash0"
+                  }
+                },
+                {
+                  "key": "effort",
+                  "value": {
+                    "stringValue": "{\"level\":\"high\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.id",
+                  "value": {
+                    "stringValue": "ab5601d494f3800fe"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "compound-engineering:ce-testing-reviewer"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "16c6f806-a321-49a1-8197-c7e1cdbaf0b2"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-4-8"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": {
+                    "stringValue": "{\"command\":\"# Also check gpt-5.2 vs gpt-5.2-codex collision:\\necho \\\"gpt-5.2 length: $(echo -n 'gpt-5.2' | wc -c | tr -d ' ')\\\"\\necho \\\"gpt-5.2-codex length: $(echo -n 'gpt-5.2-codex' | wc -c | tr -d ' ')\\\"\\n# gpt-5.2: $1.75/$14 vs gpt-5.2-codex: $1.75/$14 -- same pricing! No observable collision issue.\\n\\n# Does gpt-5.3-codex match \\\"gpt-5.3\\\"? \\\"gpt-5.3\\\" is NOT in pricing table.\\n# But \\\"gpt-5.3-codex\\\" contains \\\"gpt-5\\\" (5 chars) and \\\"gpt-5.3-codex\\\" (13 chars)\\necho \\\"\\\"\\necho \\\"gpt-5.3-codex length: $(echo -n 'gpt-5.3-codex' | wc -c | tr -d ' ')\\\"\\n# So if someone passes \\\"gpt-5.3-codex\\\", it gets \\\"gpt-5.3-codex\\\" (13 chars) over \\\"gpt-5\\\" (5 chars) -- correct\\n# But is there a gpt-5.3 entry? No. What about \\\"gpt-5.3\\\" as input? It would match \\\"gpt-5\\\" only. No test for this.\\n\\n# KEY FINDING: gpt-5.4, gpt-5.4-mini, gpt-5.4-nano all have different pricing\\n# and the longest-match behavior for this 3-way overlap is NOT tested\\n# (unlike gpt-5/gpt-5-mini and gpt-5.1-codex/gpt-5.1-codex-mini/max which are tested)\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01KKjLQeeJNkjtcBrJz9RBye"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.result",
+                  "value": {
+                    "stringValue": "{\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false,\"stderr\":\"\",\"stdout\":\"gpt-5.2 length: 7\\ngpt-5.2-codex length: 13\\n\\ngpt-5.3-codex length: 13\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "Bash"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.type",
+                  "value": {
+                    "stringValue": "function"
+                  }
+                },
+                {
+                  "key": "user.name",
+                  "value": {
+                    "stringValue": "Some User"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "droppedEventsCount": 0,
+              "droppedLinksCount": 0,
+              "endTimeUnixNano": "1781603258400538000",
+              "events": [],
+              "flags": 0,
+              "kind": 1,
+              "links": [],
+              "name": "execute_tool Bash",
+              "parentSpanId": "uGWREGf/YLg=",
+              "spanId": "ztcKYKWLXCk=",
+              "startTimeUnixNano": "1781603258315538000",
+              "status": {
+                "code": 0,
+                "message": ""
+              },
+              "traceId": "qcTUseS4C/DEeD5Frq/73w==",
+              "traceState": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "resourceLogs": []
+}

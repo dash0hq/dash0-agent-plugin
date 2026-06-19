@@ -1,17 +1,19 @@
-# Cursor source
+# Cursor source — developer reference
 
 This directory holds the Cursor-side configuration and capture scaffolding
-for the Cursor → Dash0 integration. End users install via the `curl | bash`
-flow (`install-cursor.sh` at the repo root); this README is for developers
-working on the integration itself.
+for the Cursor → Dash0 integration. It is the developer reference: how to
+build, sideload local changes, cut releases, and collect fixture payloads.
+
+End-user install / configure / uninstall docs live in
+[`.cursor-plugin/README.md`](../.cursor-plugin/README.md).
 
 ## Contents
 
 | Path | Purpose |
 |---|---|
-| `hooks.json` | Production hook registration. Installed to `~/.cursor/hooks.json`. |
+| `hooks.json` | Hook registration for the `curl \| bash` flow. Uses absolute `$HOME/...` paths because it gets copied to `~/.cursor/hooks.json`. |
+| `plugin-hooks.json` | Hook registration for the Marketplace plugin. Uses relative `./scripts/...` paths because Cursor resolves them from the plugin root. |
 | `capture/` | Records real Cursor hook payloads as test fixtures. See `capture/README.md`. |
-| `cursor-source-handoff-brief.md` | Background research that informed the design. |
 
 The code that consumes Cursor hooks lives elsewhere:
 
@@ -19,6 +21,8 @@ The code that consumes Cursor hooks lives elsewhere:
 - `internal/source/cursor/` — Cursor-specific event normalization
 - `internal/pipeline/` — shared OTLP span emission (also used by Claude Code)
 - `scripts/cursor-on-event.sh` — bootstrap wrapper that downloads + execs the binary
+- `.cursor-plugin/plugin.json` — Marketplace plugin manifest (references `cursor/plugin-hooks.json` and `skills/`)
+- `skills/dash0-configure/SKILL.md` — agent skill that walks the user through writing the config file
 
 ## Build
 
@@ -52,7 +56,9 @@ go test ./...
 Releases are cut via `scripts/release.sh <version>`, which:
 
 1. Bumps the hardcoded `VERSION` in `scripts/on-event.sh`, `scripts/cursor-on-event.sh`,
-   `install-cursor.sh`, and `.claude-plugin/plugin.json`.
+   `.claude-plugin/plugin.json`, and `.cursor-plugin/plugin.json`.
+   (`install-cursor.sh` resolves the latest GitHub release at runtime, so it's
+   not bumped here — set `DASH0_VERSION=` to pin a specific version.)
 2. Commits the bumps as `release: v<version>`.
 3. Creates the `v<version>` tag and pushes it.
 

@@ -305,7 +305,7 @@ jobs:
           DECLARED_KEYS=$(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json | sort -u)
           MISSING=""
           for key in $DECLARED_KEYS; do
-            if ! grep -qF "| \`$key\`" README.md; then
+            if ! grep -qF "| \`$key\`" .claude-plugin/README.md; then
               MISSING="$MISSING $key"
             fi
           done

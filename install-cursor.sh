@@ -260,7 +260,7 @@ if [ -n "$DASH0_OTLP_URL" ] && [ -n "$DASH0_AUTH_TOKEN" ]; then
   CHECK_OUT=$(
     echo '{"hook_event_name":"sessionStart","session_id":"install-check","conversation_id":"install-check","model":"default"}' \
       | DASH0_OTLP_URL="$DASH0_OTLP_URL" \
-        DASH0_AUTH_TOKEN="$DASH0_AUTH_TOKEN" \
+        CURSOR_PLUGIN_OPTION_AUTH_TOKEN="$DASH0_AUTH_TOKEN" \
         DASH0_DATASET="$DASH0_DATASET" \
         DASH0_PLUGIN_DATA="$(mktemp -d)" \
         "$BIN_PATH" 2>&1 || true

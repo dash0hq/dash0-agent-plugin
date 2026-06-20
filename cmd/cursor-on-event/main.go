@@ -73,7 +73,7 @@ func run() error {
 
 	cfg := otlp.Config{
 		OTLPUrl:      dash0Env("OTLP_URL"),
-		AuthToken:    dash0Env("AUTH_TOKEN"),
+		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
 		Dataset:      dash0Env("DATASET"),
 		AgentName:    agentName(),
 		TeamName:     dash0Env("TEAM_NAME"),
@@ -131,11 +131,23 @@ func agentName() string {
 	return "cursor"
 }
 
-// dash0Env reads DASH0_<key>. Cursor has no userConfig analog, so there is no
-// CLAUDE_PLUGIN_OPTION_ fallback — config flows entirely through env or the
-// dotenv file loaded above.
+// dash0Env reads DASH0_<key>. Used for non-sensitive options; the bootstrap
+// script exports these from the YAML config file, and DASH0_* env vars also
+// work as a fallback (useful for CI/dev).
+//
+// Note: sensitive values (AUTH_TOKEN) must use pluginOptionSecure instead to
+// prevent env var leakage into tool-spawned shells.
 func dash0Env(key string) string {
 	return os.Getenv("DASH0_" + key)
+}
+
+// pluginOptionSecure reads only from CURSOR_PLUGIN_OPTION_<key> without falling
+// back to DASH0_<key>. Use for sensitive values like auth tokens that must not
+// leak into tool-spawned shell environments — Cursor agents can spawn arbitrary
+// processes (via Bash, MCP, etc.) which inherit our env, and other Dash0 tools
+// look for DASH0_AUTH_TOKEN specifically.
+func pluginOptionSecure(key string) string {
+	return os.Getenv("CURSOR_PLUGIN_OPTION_" + key)
 }
 
 // chdirToWorkspaceRoot moves the process into the first workspace root from

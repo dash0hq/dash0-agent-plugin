@@ -33,6 +33,8 @@ DASH0_DATASET=default \
 
 Optional env vars: `DASH0_DATASET`, `DASH0_AGENT_NAME`, `DASH0_TEAM_NAME`, `DASH0_VERSION` (pin a specific release; default: latest GitHub release).
 
+> **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.cursor/dash0-agent-plugin.local.md` (which the bootstrap script then passes to the hook as `CURSOR_PLUGIN_OPTION_AUTH_TOKEN`). This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
+
 After install, **quit and relaunch Cursor.**
 
 ## Configuration

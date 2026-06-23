@@ -125,6 +125,9 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 	if cfg.AgentName != "" {
 		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})
 	}
+	if cfg.HarnessName != "" {
+		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.harness.name", Value: StringVal(cfg.HarnessName)})
+	}
 
 	req := ExportTracesRequest{
 		ResourceSpans: []ResourceSpans{{

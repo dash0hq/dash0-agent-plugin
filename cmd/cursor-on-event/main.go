@@ -76,6 +76,7 @@ func run() error {
 		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
 		Dataset:      dash0Env("DATASET"),
 		AgentName:    agentName(),
+		HarnessName:  "cursor",
 		TeamName:     dash0Env("TEAM_NAME"),
 		OmitUserInfo: dash0EnvBool("OMIT_USER_INFO", false),
 		OmitIO:       dash0EnvBool("OMIT_IO", true),

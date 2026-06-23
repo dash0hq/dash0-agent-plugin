@@ -92,6 +92,7 @@ type Config struct {
 	AuthToken    string
 	Dataset      string
 	AgentName    string
+	HarnessName  string // coding agent platform identity (e.g. "claude-code", "cursor")
 	TeamName     string // when set, tag all spans with the dash0.team.name attribute
 	OmitUserInfo bool   // when true, hash user.name and omit user.email (both span attributes)
 	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
@@ -128,6 +129,9 @@ func SendLog(event map[string]any, cfg Config) error {
 	}
 	if cfg.AgentName != "" {
 		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})
+	}
+	if cfg.HarnessName != "" {
+		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.harness.name", Value: StringVal(cfg.HarnessName)})
 	}
 	// Correlate log record with the session trace.
 	var traceID, spanID string

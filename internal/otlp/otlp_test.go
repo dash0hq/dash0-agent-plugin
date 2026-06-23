@@ -137,6 +137,40 @@ func TestSendLogWithAgentName(t *testing.T) {
 	assertAttr(t, attrs, "gen_ai.agent.name", "my-agent")
 }
 
+func TestSendLogHarnessName(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := Config{OTLPUrl: srv.URL, HarnessName: "claude-code"}
+	require.NoError(t, SendLog(map[string]any{"event": "test"}, cfg))
+
+	attrs := received.ResourceLogs[0].Resource.Attributes
+	assertAttr(t, attrs, "gen_ai.harness.name", "claude-code")
+}
+
+func TestSendLogNoHarnessNameWhenUnset(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := Config{OTLPUrl: srv.URL}
+	require.NoError(t, SendLog(map[string]any{"event": "test"}, cfg))
+
+	attrs := received.ResourceLogs[0].Resource.Attributes
+	assertNoAttr(t, attrs, "gen_ai.harness.name")
+}
+
 func TestSendLogSkipsWhenNotConfigured(t *testing.T) {
 	assert.NoError(t, SendLog(map[string]any{"event": "test"}, Config{}))
 }

@@ -301,6 +301,44 @@ func TestNewSessionSpanOmitUserInfoRedactsCwd(t *testing.T) {
 	assertAttr(t, span.Attributes, "gen_ai.conversation.id", "sess-123")
 }
 
+func TestSendTraceHarnessName(t *testing.T) {
+	var received ExportTracesRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		require.NoError(t, json.Unmarshal(body, &received))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	span := Span{Name: "test", TraceID: "aaaabbbbccccddddaaaabbbbccccdddd", SpanID: "1111222233334444"}
+	cfg := Config{OTLPUrl: srv.URL, HarnessName: "cursor"}
+
+	require.NoError(t, SendTrace(span, map[string]any{}, cfg))
+
+	attrs := received.ResourceSpans[0].Resource.Attributes
+	assertAttr(t, attrs, "gen_ai.harness.name", "cursor")
+}
+
+func TestSendTraceNoHarnessNameWhenUnset(t *testing.T) {
+	var received ExportTracesRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		require.NoError(t, json.Unmarshal(body, &received))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	span := Span{Name: "test", TraceID: "aaaabbbbccccddddaaaabbbbccccdddd", SpanID: "1111222233334444"}
+	cfg := Config{OTLPUrl: srv.URL}
+
+	require.NoError(t, SendTrace(span, map[string]any{}, cfg))
+
+	attrs := received.ResourceSpans[0].Resource.Attributes
+	assertNoAttr(t, attrs, "gen_ai.harness.name")
+}
+
 func TestSendTraceSkipsWhenNotConfigured(t *testing.T) {
 	span := Span{Name: "test"}
 	assert.NoError(t, SendTrace(span, map[string]any{}, Config{}))

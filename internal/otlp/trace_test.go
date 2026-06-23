@@ -205,6 +205,7 @@ func TestSendTrace(t *testing.T) {
 		OTLPUrl:   srv.URL,
 		AuthToken: "test-token",
 		Dataset:   "test-dataset",
+		Provider:  "anthropic",
 	}
 	span := Span{
 		TraceID:           "aaaabbbbccccddddaaaabbbbccccdddd",
@@ -242,6 +243,59 @@ func TestSendTrace(t *testing.T) {
 	assert.Equal(t, SpanKindInternal, s.Kind)
 	assert.Equal(t, "1749988800000000000", s.StartTimeUnixNano)
 	assert.Equal(t, "0", s.EndTimeUnixNano)
+}
+
+// TestSendTraceResolvesProviderFromModel exercises the Cursor runtime shape:
+// Config.Provider is empty so the provider is inferred from event["model"].
+func TestSendTraceResolvesProviderFromModel(t *testing.T) {
+	cases := []struct {
+		name         string
+		model        string
+		wantProvider string
+		wantAttr     bool
+	}{
+		{"openai", "gpt-5", "openai", true},
+		{"anthropic-via-model", "claude-sonnet-4-5", "anthropic", true},
+		{"cursor-auto", "cursor-auto", "cursor", true},
+		{"unknown-model-no-attr", "some-weird-model", "", false},
+		{"no-model-no-attr", "", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var received ExportTracesRequest
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &received)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			event := map[string]any{
+				"hook_event_name": "Stop",
+				"session_id":      "sess-cursor",
+			}
+			if c.model != "" {
+				event["model"] = c.model
+			}
+			cfg := Config{OTLPUrl: srv.URL, AuthToken: "t", Dataset: "d"} // Provider unset (Cursor)
+			span := Span{
+				TraceID:           "aaaabbbbccccddddaaaabbbbccccdddd",
+				SpanID:            "1111222233334444",
+				Name:              "chat",
+				Kind:              SpanKindInternal,
+				StartTimeUnixNano: "1749988800000000000",
+				EndTimeUnixNano:   "1749988801000000000",
+			}
+			require.NoError(t, SendTrace(span, event, cfg))
+			require.Len(t, received.ResourceSpans, 1)
+			attrs := received.ResourceSpans[0].Resource.Attributes
+			if c.wantAttr {
+				assertAttr(t, attrs, "gen_ai.provider.name", c.wantProvider)
+			} else {
+				assertNoAttr(t, attrs, "gen_ai.provider.name")
+			}
+		})
+	}
 }
 
 func TestNewToolSpanOmitIO(t *testing.T) {

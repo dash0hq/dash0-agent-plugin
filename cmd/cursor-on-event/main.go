@@ -71,6 +71,10 @@ func run() error {
 		return nil
 	}
 
+	// Provider is intentionally unset: Cursor proxies many vendors, so the
+	// provider is derived per-event from the model name. Events without a
+	// model (PreToolUse, SessionStart, etc.) simply omit gen_ai.provider.name
+	// — they're not GenAI operations.
 	cfg := otlp.Config{
 		OTLPUrl:      dash0Env("OTLP_URL"),
 		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),

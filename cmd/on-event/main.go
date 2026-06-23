@@ -61,6 +61,7 @@ func run() error {
 		Dataset:      pluginOption("DATASET"),
 		AgentName:    pluginOption("AGENT_NAME"),
 		TeamName:     pluginOption("TEAM_NAME"),
+		Provider:     "anthropic",
 		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", false),
 		OmitIO:       pluginOptionBoolDefault("OMIT_IO", true),
 		Debug:        pluginOptionBool("DEBUG"),

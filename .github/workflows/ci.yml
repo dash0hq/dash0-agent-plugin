@@ -297,6 +297,32 @@ jobs:
             exit 1
           fi
 
+      - name: Runtime component isolation
+        run: |
+          # Cursor auto-discovers commands/, skills/, and hooks/hooks.json at the
+          # repo root when not overridden in .cursor-plugin/plugin.json. Claude
+          # auto-discovers skills/ and commands/ at the root. Keep runtime assets
+          # under claude/ and cursor/ instead.
+          fail=0
+          for dir in commands skills; do
+            if [ -d "$dir" ]; then
+              echo "::error::root $dir/ must not exist — move runtime assets under claude/ or cursor/"
+              fail=1
+            fi
+          done
+          CURSOR_COMMANDS=$(jq -c '.commands // "unset"' .cursor-plugin/plugin.json)
+          CURSOR_SKILLS=$(jq -r '.skills // "unset"' .cursor-plugin/plugin.json)
+          if [ "$CURSOR_COMMANDS" = "unset" ]; then
+            echo "::error::.cursor-plugin/plugin.json must set commands (use []) to block auto-discovery"
+            fail=1
+          fi
+          if [ "$CURSOR_SKILLS" != "./cursor/skills/" ]; then
+            echo "::error::.cursor-plugin/plugin.json skills must point at ./cursor/skills/ (got $CURSOR_SKILLS)"
+            fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "PASS: runtime-specific components are isolated under claude/ and cursor/"
+
       - name: README documents every userConfig option
         run: |
           # Every userConfig option declared in plugin.json must appear as a

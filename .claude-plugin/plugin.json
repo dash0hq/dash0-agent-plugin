@@ -10,7 +10,7 @@
   "license": "Apache-2.0",
   "keywords": ["observability", "tracing", "opentelemetry", "dash0", "otel"],
   "commands": [
-    "./commands/open-session.md"
+    "./claude/commands/open-session.md"
   ],
   "userConfig": {
     "OTLP_URL": {

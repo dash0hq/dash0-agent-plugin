@@ -13,6 +13,7 @@ End-user install / configure / uninstall docs live in
 |---|---|
 | `hooks.json` | Hook registration for the `curl \| bash` flow. Uses absolute `$HOME/...` paths because it gets copied to `~/.cursor/hooks.json`. |
 | `plugin-hooks.json` | Hook registration for the Marketplace plugin. Uses relative `./scripts/...` paths because Cursor resolves them from the plugin root. |
+| `skills/` | Cursor-only agent skills (e.g. `dash0-configure`). Referenced from `.cursor-plugin/plugin.json`. |
 | `capture/` | Records real Cursor hook payloads as test fixtures. See `capture/README.md`. |
 
 The code that consumes Cursor hooks lives elsewhere:
@@ -21,8 +22,8 @@ The code that consumes Cursor hooks lives elsewhere:
 - `internal/source/cursor/` — Cursor-specific event normalization
 - `internal/pipeline/` — shared OTLP span emission (also used by Claude Code)
 - `scripts/cursor-on-event.sh` — bootstrap wrapper that downloads + execs the binary
-- `.cursor-plugin/plugin.json` — Marketplace plugin manifest (references `cursor/plugin-hooks.json` and `skills/`)
-- `skills/dash0-configure/SKILL.md` — agent skill that walks the user through writing the config file
+- `.cursor-plugin/plugin.json` — Marketplace plugin manifest (references `cursor/plugin-hooks.json` and `cursor/skills/`)
+- `cursor/skills/dash0-configure/SKILL.md` — agent skill that walks the user through writing the config file
 
 ## Build
 

@@ -10,7 +10,7 @@ import "strings"
 // Mappings (model prefix → provider):
 //
 //	claude-*                                 → anthropic
-//	gpt-*, o1-*, o3-*, o4-*, codex-*         → openai
+//	gpt-*, o1[-*], o3[-*], o4[-*], codex-*   → openai
 //	gemini-*                                 → gcp.gemini
 //	grok-*                                   → x_ai
 //	deepseek-*                               → deepseek
@@ -20,6 +20,10 @@ import "strings"
 //	                                            not surface the chosen
 //	                                            provider, so we tag the
 //	                                            host instead)
+//
+// OpenAI's reasoning models ship under bare IDs (o1, o3) as well as
+// hyphenated variants (o3-mini, o3-pro), so both forms are matched —
+// see https://developers.openai.com/api/docs/models/all.
 func ProviderForModel(model string) string {
 	switch {
 	case model == "":
@@ -29,9 +33,9 @@ func ProviderForModel(model string) string {
 	case strings.HasPrefix(model, "claude-"):
 		return "anthropic"
 	case strings.HasPrefix(model, "gpt-"),
-		strings.HasPrefix(model, "o1-"),
-		strings.HasPrefix(model, "o3-"),
-		strings.HasPrefix(model, "o4-"),
+		model == "o1", strings.HasPrefix(model, "o1-"),
+		model == "o3", strings.HasPrefix(model, "o3-"),
+		model == "o4", strings.HasPrefix(model, "o4-"),
 		strings.HasPrefix(model, "codex-"):
 		return "openai"
 	case strings.HasPrefix(model, "gemini-"):

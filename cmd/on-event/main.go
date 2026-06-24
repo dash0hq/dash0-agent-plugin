@@ -62,6 +62,7 @@ func run() error {
 		AgentName:    pluginOption("AGENT_NAME"),
 		HarnessName:  "claude-code",
 		TeamName:     pluginOption("TEAM_NAME"),
+		Provider:     "anthropic",
 		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", false),
 		OmitIO:       pluginOptionBoolDefault("OMIT_IO", true),
 		Debug:        pluginOptionBool("DEBUG"),

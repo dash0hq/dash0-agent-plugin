@@ -94,6 +94,7 @@ type Config struct {
 	AgentName    string
 	HarnessName  string // coding agent platform identity (e.g. "claude-code", "cursor")
 	TeamName     string // when set, tag all spans with the dash0.team.name attribute
+	Provider     string // fallback gen_ai.provider.name for events whose model can't be inferred (e.g. SessionStart, PreToolUse). Set by the entrypoint based on host runtime; Cursor leaves it empty since each call's provider is derived from event["model"].
 	OmitUserInfo bool   // when true, hash user.name and omit user.email (both span attributes)
 	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
@@ -125,7 +126,9 @@ func SendLog(event map[string]any, cfg Config) error {
 	resourceAttrs := []Attribute{
 		{Key: "service.name", Value: StringVal(serviceName)},
 		{Key: "service.version", Value: StringVal(version.Version)},
-		{Key: "gen_ai.provider.name", Value: StringVal("anthropic")},
+	}
+	if provider := resolveProvider(event, cfg); provider != "" {
+		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.provider.name", Value: StringVal(provider)})
 	}
 	if cfg.AgentName != "" {
 		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})

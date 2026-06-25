@@ -174,7 +174,7 @@ Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/se
 **Debug mode.** Set `DASH0_DEBUG=true` to print all OTel payloads to stderr:
 
 ```bash
-DASH0_DEBUG=true claude --plugin-dir /path/to/dash0-agent-plugin
+DASH0_DEBUG=true claude
 ```
 
 To write debug output to a file:

@@ -7,15 +7,23 @@
 claude --plugin-dir /path/to/dash0-agent-plugin
 
 # Build the binary locally (instead of downloading from GitHub Releases)
-go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-0.1.11-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/on-event/
+VERSION=$(grep '^VERSION=' scripts/on-event.sh | cut -d'"' -f2)
+go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/on-event/
 ```
 
 ## Releasing
 
-Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release, update the version in `.claude-plugin/plugin.json` and `scripts/on-event.sh`, then tag the commit in main:
+Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release, update the version in:
+
+- `.claude-plugin/plugin.json` — `version` field
+- `.cursor-plugin/plugin.json` — `version` field
+- `scripts/on-event.sh` — `VERSION=` line (Claude Code binary downloader)
+- `scripts/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
+
+Then tag the commit in main:
 
 ```bash
-git tag v0.1.11
+git tag v<version>
 git push --tags
 ```
 

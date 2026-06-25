@@ -49,10 +49,22 @@ dataset: "default"            # optional
 agent_name: "cursor"          # optional — used as service.name
 team_name: "<your-team>"      # optional — tagged as dash0.team.name on every span
 omit_io: false                # set true to redact prompts and tool input/output
+omit_user_info: false         # set true to hash user.name and omit user.email
 ---
 ```
 
 To reconfigure later, re-run the `dash0-configure` skill in Cursor, or edit the file directly. Config changes take effect on the next hook fire — no restart needed. (Restart is only needed if `hooks.json` itself changes, since Cursor reads it at startup.)
+
+## Privacy defaults
+
+| Setting | Default | Behavior |
+|---|---|---|
+| `omit_user_info` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
+| `omit_io` | `false` | When `true`, prompt content and tool call inputs/outputs are stripped from spans. |
+
+**Always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
+
+For the full list of telemetry attributes emitted, see the [Claude Code plugin README](../.claude-plugin/README.md#telemetry-attributes).
 
 ## Verify
 

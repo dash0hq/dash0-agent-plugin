@@ -55,7 +55,7 @@ dataset: "default"
 On session start you should see:
 
 ```
-dash0: connected (v0.1.11)
+dash0: connected (v0.1.12)
 ```
 
 If credentials are missing: `dash0: telemetry is not active — configure the plugin to start sending data.`

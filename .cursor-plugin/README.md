@@ -10,7 +10,16 @@ curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/ins
 
 The installer downloads `cursor-on-event-<os>-<arch>` from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) (verifying the checksum), writes `~/.cursor/hooks.json`, drops the credentials into `~/.cursor/dash0-agent-plugin.local.md`, and installs the `dash0-configure` skill.
 
-Pre-supply credentials via env vars to skip the prompts:
+Pre-supply credentials to skip the prompts. Either pass them as flags:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.sh | bash -s -- \
+  --endpoint https://ingress.<region>.aws.dash0.com \
+  --token <your-token> \
+  --dataset default
+```
+
+Or via environment variables:
 
 ```bash
 DASH0_OTLP_URL=https://ingress.<region>.aws.dash0.com \
@@ -19,7 +28,7 @@ DASH0_DATASET=default \
   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.sh | bash
 ```
 
-Optional env vars: `DASH0_DATASET`, `DASH0_TEAM_NAME`, `DASH0_VERSION` (pin a specific release; default: latest GitHub release).
+Each flag (and its env-var equivalent) skips the corresponding prompt. The team-name prompt has no flag — set `DASH0_TEAM_NAME` if you want to provide it non-interactively. `DASH0_VERSION` pins a specific release; default is the latest GitHub release.
 
 > **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.cursor/dash0-agent-plugin.local.md` (which the bootstrap script then passes to the hook as `CURSOR_PLUGIN_OPTION_AUTH_TOKEN`). This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
 
@@ -71,9 +80,9 @@ tail -F /tmp/dash0-cursor-debug.log
 ## Uninstall
 
 ```bash
-rm -rf ~/.local/state/dash0-agent-plugin \
-       ~/.local/share/dash0-agent-plugin \
-       ~/.cursor/dash0-agent-plugin.local.md \
-       ~/.cursor/hooks.json \
-       ~/.cursor/skills-cursor/dash0-configure
+curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/uninstall-cursor.sh | bash
 ```
+
+Pass `-s -- --yes` to skip the confirmation prompt. The uninstaller only deletes `~/.cursor/hooks.json` when every hook entry references the Dash0 bootstrap script — if you merged the Dash0 hooks into your own `hooks.json`, it leaves the file in place and tells you which entries to remove by hand.
+
+After uninstalling, restart Cursor so it stops registering the hooks.

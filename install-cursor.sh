@@ -4,11 +4,23 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.sh | bash
 #
+# With CLI flags (pass after `bash -s --` when piping from curl):
+#   curl -fsSL .../install-cursor.sh | bash -s -- \
+#     --endpoint https://ingress.<region>.aws.dash0.com \
+#     --token <auth-token> \
+#     --dataset <dataset>
+#
 # Or, non-interactively (e.g. provisioning):
 #   DASH0_OTLP_URL=... DASH0_AUTH_TOKEN=... \
 #     curl -fsSL .../install-cursor.sh | bash
 #
-# Optional env vars: DASH0_DATASET, DASH0_AGENT_NAME, DASH0_TEAM_NAME.
+# Flags (each provided flag skips the corresponding prompt; the value is
+# written to the config file):
+#   --endpoint URL   Dash0 OTLP endpoint URL
+#   --token TOKEN    Dash0 auth token
+#   --dataset NAME   Dash0 dataset
+#
+# Optional env vars: DASH0_DATASET, DASH0_TEAM_NAME.
 #   DASH0_VERSION pins a specific release (e.g. "0.1.9"); without it, the
 #   installer resolves the latest GitHub release at runtime.
 #
@@ -27,6 +39,45 @@
 set -u
 
 REPO="dash0hq/dash0-agent-plugin"
+
+# ---------------------------------------------------------------------------
+# Parse CLI flags. Values land in the same vars the prompt step reads, so a
+# provided flag naturally skips its prompt.
+# ---------------------------------------------------------------------------
+
+DASH0_OTLP_URL="${DASH0_OTLP_URL:-}"
+DASH0_AUTH_TOKEN="${DASH0_AUTH_TOKEN:-}"
+DASH0_DATASET="${DASH0_DATASET:-}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --endpoint)
+      [ $# -ge 2 ] || { printf "✗ --endpoint requires a value\n" >&2; exit 1; }
+      DASH0_OTLP_URL="$2"; shift 2 ;;
+    --token)
+      [ $# -ge 2 ] || { printf "✗ --token requires a value\n" >&2; exit 1; }
+      DASH0_AUTH_TOKEN="$2"; shift 2 ;;
+    --dataset)
+      [ $# -ge 2 ] || { printf "✗ --dataset requires a value\n" >&2; exit 1; }
+      DASH0_DATASET="$2"; shift 2 ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: install-cursor.sh [--endpoint URL] [--token TOKEN] [--dataset NAME]
+
+Flags (each provided flag skips the corresponding prompt):
+  --endpoint URL   Dash0 OTLP endpoint URL
+  --token TOKEN    Dash0 auth token
+  --dataset NAME   Dash0 dataset
+
+Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
+          DASH0_VERSION (pins a specific release).
+EOF
+      exit 0 ;;
+    *)
+      printf "✗ unknown argument: %s (try --help)\n" "$1" >&2
+      exit 1 ;;
+  esac
+done
 
 # Color helpers (skip if stdout isn't a TTY).
 if [ -t 1 ]; then
@@ -207,16 +258,13 @@ prompt_secret() {
   printf -v "$var" "%s" "$val"
 }
 
-DASH0_OTLP_URL="${DASH0_OTLP_URL:-}"
-DASH0_AUTH_TOKEN="${DASH0_AUTH_TOKEN:-}"
-DASH0_DATASET="${DASH0_DATASET:-}"
-DASH0_AGENT_NAME="${DASH0_AGENT_NAME:-cursor}"
+DASH0_AGENT_NAME="cursor"
 DASH0_TEAM_NAME="${DASH0_TEAM_NAME:-}"
 
 prompt_value  DASH0_OTLP_URL    "Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)"
 prompt_secret DASH0_AUTH_TOKEN  "Dash0 auth token"
 prompt_value  DASH0_DATASET     "Dash0 dataset (optional)"               "default"
-prompt_value  DASH0_AGENT_NAME  "Agent name (used as service.name)"      "cursor"
+prompt_value  DASH0_TEAM_NAME   "Team name (optional)"
 
 if [ -z "$DASH0_OTLP_URL" ] || [ -z "$DASH0_AUTH_TOKEN" ]; then
   warn "OTLP URL or auth token not provided. The plugin will install but stay inactive."

@@ -4,23 +4,11 @@ Cursor plugin that emits agent activity as OpenTelemetry spans to your Dash0 end
 
 ## Installation
 
-Two install paths. Both end up with the same on-device layout (`cursor-on-event` binary + bootstrap script + config file + hooks registration).
-
-### Cursor Marketplace (recommended)
-
-1. Install `dash0-agent-plugin` from the Cursor Marketplace. Cursor reads `.cursor-plugin/plugin.json` and registers the hooks declared in `cursor/plugin-hooks.json`.
-2. Ask the agent to *configure Dash0* — the `dash0-configure` skill walks you through writing `~/.cursor/dash0-agent-plugin.local.md` with your OTLP URL, auth token, and optional dataset / team / agent name.
-3. Quit and relaunch Cursor (Cmd+Q on macOS) — Cursor reads `hooks.json` only at startup.
-
-The plugin ships no binary. The bootstrap script downloads `cursor-on-event-<os>-<arch>` from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) on first hook fire and verifies the checksum.
-
-### Shell installer
-
-Non-interactive single-command install. Useful for CI, provisioning, or skipping the configure skill.
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.sh | bash
 ```
+
+The installer downloads `cursor-on-event-<os>-<arch>` from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) (verifying the checksum), writes `~/.cursor/hooks.json`, drops the credentials into `~/.cursor/dash0-agent-plugin.local.md`, and installs the `dash0-configure` skill.
 
 Pre-supply credentials via env vars to skip the prompts:
 
@@ -31,7 +19,7 @@ DASH0_DATASET=default \
   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.sh | bash
 ```
 
-Optional env vars: `DASH0_DATASET`, `DASH0_AGENT_NAME`, `DASH0_TEAM_NAME`, `DASH0_VERSION` (pin a specific release; default: latest GitHub release).
+Optional env vars: `DASH0_DATASET`, `DASH0_TEAM_NAME`, `DASH0_VERSION` (pin a specific release; default: latest GitHub release).
 
 > **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.cursor/dash0-agent-plugin.local.md` (which the bootstrap script then passes to the hook as `CURSOR_PLUGIN_OPTION_AUTH_TOKEN`). This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
 
@@ -85,7 +73,7 @@ tail -F /tmp/dash0-cursor-debug.log
 ```bash
 rm -rf ~/.local/state/dash0-agent-plugin \
        ~/.local/share/dash0-agent-plugin \
-       ~/.cursor/dash0-agent-plugin.local.md
+       ~/.cursor/dash0-agent-plugin.local.md \
+       ~/.cursor/hooks.json \
+       ~/.cursor/skills-cursor/dash0-configure
 ```
-
-If you installed via `install-cursor.sh`, also remove `~/.cursor/hooks.json`. If you installed via the Marketplace, uninstall the plugin from Cursor's plugin UI.

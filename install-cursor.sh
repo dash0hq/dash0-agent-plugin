@@ -21,6 +21,8 @@
 #       YAML-frontmatter config carrying your OTLP URL + auth token.
 #   ~/.cursor/hooks.json
 #       Cursor hook registrations (only added when no file exists yet).
+#   ~/.cursor/skills-cursor/<skill>/SKILL.md
+#       Skills the plugin ships (e.g. dash0-configure).
 
 set -u
 
@@ -110,8 +112,9 @@ SCRIPT_PATH="$SHARE_DIR/cursor-on-event.sh"
 
 CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
 HOOKS_PATH="$HOME/.cursor/hooks.json"
+SKILLS_DIR="$HOME/.cursor/skills-cursor"
 
-mkdir -p "$BIN_DIR" "$SHARE_DIR" "$HOME/.cursor" \
+mkdir -p "$BIN_DIR" "$SHARE_DIR" "$HOME/.cursor" "$SKILLS_DIR" \
   || die "could not create install directories"
 
 # ---------------------------------------------------------------------------
@@ -145,6 +148,24 @@ fetch "$SCRIPT_URL" "$SCRIPT_PATH" \
   || die "failed to download bootstrap script: $SCRIPT_URL"
 chmod +x "$SCRIPT_PATH"
 ok "installed bootstrap script → $SCRIPT_PATH"
+
+# ---------------------------------------------------------------------------
+# 5b. Install skills.
+#     Skills live in the plugin repo under cursor/skills/<name>/SKILL.md.
+#     Cursor picks them up from ~/.cursor/skills-cursor/<name>/SKILL.md.
+# ---------------------------------------------------------------------------
+
+SKILLS="dash0-configure"
+for skill in $SKILLS; do
+  skill_url="https://raw.githubusercontent.com/${REPO}/v${VERSION}/cursor/skills/${skill}/SKILL.md"
+  skill_dest_dir="$SKILLS_DIR/$skill"
+  skill_dest="$skill_dest_dir/SKILL.md"
+  mkdir -p "$skill_dest_dir" || die "could not create $skill_dest_dir"
+  info "downloading skill: $skill..."
+  fetch "$skill_url" "$skill_dest" \
+    || die "failed to download skill: $skill_url"
+  ok "installed skill → $skill_dest"
+done
 
 # ---------------------------------------------------------------------------
 # 6. Collect configuration.
@@ -288,5 +309,5 @@ printf "\n${C_B}Next steps${C_N}\n"
 printf "  1. Quit Cursor (Cmd+Q on macOS) and relaunch — Cursor reads hooks.json on startup.\n"
 printf "  2. Open this repo in Cursor; run a prompt. Spans should land in your Dash0 dataset.\n"
 printf "\nTo reconfigure later, edit %s and restart Cursor.\n" "$CONFIG_PATH"
-printf "To uninstall: rm -rf %s %s %s %s\n" \
-  "$STATE_BASE" "$SHARE_DIR" "$CONFIG_PATH" "$HOOKS_PATH"
+printf "To uninstall: rm -rf %s %s %s %s %s\n" \
+  "$STATE_BASE" "$SHARE_DIR" "$CONFIG_PATH" "$HOOKS_PATH" "$SKILLS_DIR/dash0-configure"

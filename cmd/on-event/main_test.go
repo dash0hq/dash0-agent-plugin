@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -653,6 +656,29 @@ func TestDeriveAppURL(t *testing.T) {
 			assert.Equal(t, tt.want, deriveAppURL(tt.otlpURL))
 		})
 	}
+}
+
+func TestBuildSessionURL(t *testing.T) {
+	u := buildSessionURL("https://app.dash0.com", "sess-abc123")
+	assert.Contains(t, u, "https://app.dash0.com/coding-agents/sessions/details?s=")
+	assert.NotContains(t, u, "agent-monitoring")
+
+	// Round-trip: decode the ?s= param and verify the state structure matches
+	// what the Dash0 UI url-state library expects.
+	parts := strings.SplitN(u, "?s=", 2)
+	require.Len(t, parts, 2)
+	compressed, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(parts[1])
+	require.NoError(t, err)
+	r, err := zlib.NewReader(bytes.NewReader(compressed))
+	require.NoError(t, err)
+	decoded, err := io.ReadAll(r)
+	require.NoError(t, err)
+
+	var state map[string]any
+	require.NoError(t, json.Unmarshal(decoded, &state))
+	page, ok := state["/coding-agents/sessions/details"].(map[string]any)
+	require.True(t, ok, "state must be keyed by pathname")
+	assert.Equal(t, "sess-abc123", page["sessionId"])
 }
 
 func TestSessionStartHintWhenNotConfigured(t *testing.T) {

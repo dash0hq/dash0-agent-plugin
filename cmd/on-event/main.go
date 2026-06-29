@@ -178,23 +178,22 @@ func deriveAppURL(otlpURL string) string {
 // buildSessionURL constructs a full Dash0 session details URL with the encoded
 // URL state parameter that the Dash0 UI expects.
 func buildSessionURL(appURL, sessionID string) string {
+	const sessionDetailsPath = "/coding-agents/sessions/details"
 	state := map[string]any{
-		"/agent-monitoring/claude-code/sessions/details": map[string]any{
-			"agentSession": map[string]any{
-				"sessionId": sessionID,
-			},
+		sessionDetailsPath: map[string]any{
+			"sessionId": sessionID,
 		},
 	}
 	stateJSON, err := json.Marshal(state)
 	if err != nil {
-		return appURL + "/agent-monitoring/claude-code/sessions/details"
+		return appURL + sessionDetailsPath
 	}
 	var buf bytes.Buffer
 	w := zlib.NewWriter(&buf)
 	w.Write(stateJSON)
 	w.Close()
 	encoded := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(buf.Bytes())
-	return appURL + "/agent-monitoring/claude-code/sessions/details?s=" + encoded
+	return appURL + sessionDetailsPath + "?s=" + encoded
 }
 
 // envBool returns true when the environment variable is set to "true" or "1".

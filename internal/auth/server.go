@@ -55,7 +55,7 @@ func StartCallbackServer(desiredPort int) (*CallbackServer, error) {
 func newCallbackServer(listener net.Listener) *CallbackServer {
 	port := listener.Addr().(*net.TCPAddr).Port
 	cs := &CallbackServer{
-		URL:    fmt.Sprintf("http://localhost:%d/callback", port),
+		URL:    fmt.Sprintf("http://127.0.0.1:%d/callback", port),
 		port:   port,
 		result: make(chan CallbackResult, 1),
 	}

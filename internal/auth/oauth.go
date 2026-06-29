@@ -131,8 +131,7 @@ func BuildAuthorizeURL(meta *Metadata, clientID, redirectURI string, pkce *PKCE,
 }
 
 // RefreshCredentials uses the refresh_token in creds to obtain a fresh
-// access_token, attempts to re-mint a long-lived auth_* via the CPA mint
-// endpoint, and persists the updated credentials. Returns the updated
+// access_token and persists the updated credentials. Returns the updated
 // Credentials on success.
 //
 // Callers should invoke this on 401 from an OTLP request. It assumes
@@ -158,17 +157,8 @@ func RefreshCredentials(ctx context.Context, creds *Credentials) (*Credentials, 
 		return nil, err
 	}
 
-	mintURL := deriveCPAURL(creds.AuthURL)
-	if mintURL == "" {
-		mintURL = creds.AuthURL
-	}
-	authToken := tok.AccessToken
-	if minted, mintErr := MintMachineToken(ctx, mintURL, tok.AccessToken, "Dash0 Claude Code Plugin — refreshed"); mintErr == nil {
-		authToken = minted
-	}
-
 	updated := *creds
-	updated.AuthToken = authToken
+	updated.AuthToken = tok.AccessToken
 	if tok.RefreshToken != "" {
 		updated.RefreshToken = tok.RefreshToken
 	}
@@ -211,6 +201,38 @@ func RefreshAccessToken(ctx context.Context, tokenEndpoint, clientID, refreshTok
 		return nil, fmt.Errorf("refresh response missing access_token")
 	}
 	return &tok, nil
+}
+
+// ProvisionIngestionToken calls PUT /api/auth-tokens/claude-code-plugin with
+// the OAuth access token and returns the long-lived auth_* ingestion token.
+// This is a get-or-create call — repeated calls return the same token.
+func ProvisionIngestionToken(ctx context.Context, apiBase, oauthToken string) (string, error) {
+	u := strings.TrimRight(apiBase, "/") + "/api/auth-tokens/claude-code-plugin"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+oauthToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := httpClient().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("provisioning ingestion token: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<14))
+		return "", fmt.Errorf("provisioning ingestion token failed (status %d): %s", resp.StatusCode, string(bodyBytes))
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decoding ingestion token response: %w", err)
+	}
+	if out.Token == "" {
+		return "", fmt.Errorf("ingestion token response missing token field")
+	}
+	return out.Token, nil
 }
 
 // ExchangeCodeForToken trades the authorization code (plus the PKCE

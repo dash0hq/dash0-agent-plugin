@@ -173,7 +173,8 @@ func TestAuthFlow_NewUser(t *testing.T) {
 
 	creds := f.credentials()
 	require.NotNil(t, creds)
-	assert.Equal(t, "auth_mock_machine_token", creds["auth_token"])
+	assert.Equal(t, "dash0_at_mock", creds["auth_token"])
+	assert.Equal(t, "auth_mock", creds["ingestion_token"])
 	assert.Equal(t, "mock-org", creds["organization_technical_id"])
 	assert.Equal(t, f.mockServer.URL, creds["auth_url"])
 
@@ -201,7 +202,7 @@ func TestAuthFlow_ExistingUserSkipsRegister(t *testing.T) {
 	for _, r := range f.mockState.Requests {
 		assert.NotEqual(t, "/oauth/register", r.Path, "register should be skipped when client.json exists")
 	}
-	assert.Equal(t, "auth_mock_machine_token", f.credentials()["auth_token"])
+	assert.Equal(t, "dash0_at_mock", f.credentials()["auth_token"])
 }
 
 // 4 — tamper with `state` in callback; binary must reject.

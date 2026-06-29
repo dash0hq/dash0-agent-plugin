@@ -16,48 +16,27 @@ import (
 )
 
 const (
-	// Clerk OAuth provider hosts. clerk.dash0.com is verified to expose
-	// RFC 8414 OAuth metadata + RS256-signed JWTs. The dev host follows
-	// the same naming pattern (DNS may need to be set up).
-	defaultAuthURL    = "https://clerk.dash0.com"
-	defaultAuthURLDev = "https://clerk.dash0-dev.com"
-	// defaultScope is what we send on the authorize request. openid
-	// makes Clerk issue an id_token-style JWT (passes CPA CheckUserAuth),
-	// email+profile populate claims, offline_access yields a refresh
-	// token.
-	defaultScope = "openid email profile offline_access"
+	// Dash0 regional OAuth server endpoints. The regional API hosts the
+	// OAuth server, issues dash0_at_* tokens, and supports DCR (RFC 7591).
+	defaultAuthURL    = "https://api.eu-west-1.aws.dash0.com"
+	defaultAuthURLDev = "https://api.eu-west-1.aws.dash0-dev.com"
 )
 
 func runLogin(args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
-	authURLFlag := fs.String("auth-url", "", "OAuth authorization server root (default: inferred from DASH0_OTLP_URL or DASH0_AUTH_URL, else "+defaultAuthURL+")")
-	clientIDFlag := fs.String("client-id", "", "Pre-registered OAuth client_id (default: DASH0_OAUTH_CLIENT_ID env)")
-	scopeFlag := fs.String("scope", "", "OAuth scope (default: "+defaultScope+")")
+	authURLFlag := fs.String("auth-url", "", "OAuth authorization server root (default: inferred from OTLP_URL or DASH0_AUTH_URL, else "+defaultAuthURL+")")
 	timeout := fs.Duration("timeout", 5*time.Minute, "How long to wait for the browser redirect")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	authURL := resolveAuthURLForLogin(*authURLFlag)
-	clientID := strings.TrimSpace(*clientIDFlag)
-	if clientID == "" {
-		clientID = strings.TrimSpace(os.Getenv("CLAUDE_PLUGIN_OPTION_OAUTH_CLIENT_ID"))
-	}
-	if clientID == "" {
-		clientID = strings.TrimSpace(os.Getenv("DASH0_OAUTH_CLIENT_ID"))
-	}
-	scope := strings.TrimSpace(*scopeFlag)
-	if scope == "" {
-		scope = defaultScope
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	opts := auth.LoginOptions{
 		AuthURL:         authURL,
-		ClientID:        clientID,
-		Scope:           scope,
 		ClientName:      "Dash0 Claude Code Plugin",
 		ClientURI:       "https://github.com/dash0hq/dash0-agent-plugin",
 		CallbackTimeout: *timeout,
@@ -76,10 +55,11 @@ func runLogin(args []string) error {
 
 // resolveAuthURLForLogin picks the OAuth host based on (in order):
 //  1. --auth-url flag
-//  2. DASH0_AUTH_URL env
-//  3. DASH0_OTLP_URL / CLAUDE_PLUGIN_OPTION_OTLP_URL hostname sniff
-//     (.dash0-dev.com → dev Clerk, .dash0.com → prod Clerk)
-//  4. defaultAuthURL (prod Clerk)
+//  2. CLAUDE_PLUGIN_OPTION_AUTH_URL / DASH0_AUTH_URL env
+//  3. OTLP_URL hostname: replaces "ingress." prefix with "api." to get the
+//     regional API OAuth server (e.g. ingress.eu-west-1.aws.dash0.com →
+//     api.eu-west-1.aws.dash0.com)
+//  4. defaultAuthURL (EU prod)
 func resolveAuthURLForLogin(flagValue string) string {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return v
@@ -97,11 +77,8 @@ func resolveAuthURLForLogin(flagValue string) string {
 	if otlp != "" {
 		if u, err := url.Parse(otlp); err == nil {
 			host := u.Hostname()
-			switch {
-			case strings.HasSuffix(host, ".dash0-dev.com"):
-				return defaultAuthURLDev
-			case strings.HasSuffix(host, ".dash0.com"):
-				return defaultAuthURL
+			if strings.HasPrefix(host, "ingress.") {
+				return "https://api." + strings.TrimPrefix(host, "ingress.")
 			}
 		}
 	}

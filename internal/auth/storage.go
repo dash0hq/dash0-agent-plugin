@@ -11,15 +11,18 @@ import (
 
 // Credentials is the persisted state used by the OTLP hook to authenticate.
 type Credentials struct {
-	// AuthToken is what the hook attaches to outgoing OTLP requests.
-	// It is either a long-lived auth_* token (when CPA mint succeeded
-	// during login) or the short-lived OAuth access_token (when mint
-	// was skipped/failed). The hook code refreshes it on 401 by using
-	// RefreshToken against AuthURL.
+	// AuthToken is the OAuth access_token (dash0_at_*) issued by the Dash0
+	// regional API OAuth server. Refreshed on 401 via RefreshToken.
 	AuthToken string `json:"auth_token"`
+	// IngestionToken is the long-lived auth_* ingestion token provisioned via
+	// PUT /api/auth-tokens/claude-code-plugin after a successful OAuth login.
+	// When set, this is what the OTLP hook sends as the Bearer token instead
+	// of AuthToken — auth_* tokens do not expire and avoid the OAuth token
+	// rotation cycle for OTLP requests.
+	IngestionToken string `json:"ingestion_token,omitempty"`
 	// RefreshToken is used to obtain a fresh AuthToken when the current
-	// one is rejected. Only present when the OAuth server issues one
-	// (Clerk does when offline_access scope is requested).
+	// one expires. Issued by the Dash0 OAuth server with the authorization
+	// code grant.
 	RefreshToken            string `json:"refresh_token,omitempty"`
 	OrganizationTechnicalID string `json:"organization_technical_id,omitempty"`
 	AuthURL                 string `json:"auth_url,omitempty"`

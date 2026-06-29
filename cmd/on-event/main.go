@@ -299,12 +299,16 @@ func pluginOptionBoolDefault(key string, defaultVal bool) bool {
 
 // resolveAuthToken returns the auth token for OTLP ingestion. Precedence:
 //  1. CLAUDE_PLUGIN_OPTION_AUTH_TOKEN (manual paste in /plugin Configure)
-//  2. credentials.json written by /dash0-agent-plugin:login
+//  2. credentials.json IngestionToken (auth_* provisioned at login)
+//  3. credentials.json AuthToken (OAuth access token fallback)
 func resolveAuthToken(creds *auth.Credentials) string {
 	if v := pluginOptionSecure("AUTH_TOKEN"); v != "" {
 		return v
 	}
 	if creds != nil {
+		if creds.IngestionToken != "" {
+			return creds.IngestionToken
+		}
 		return creds.AuthToken
 	}
 	return ""

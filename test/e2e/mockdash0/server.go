@@ -9,8 +9,8 @@
 //   - POST /oauth/register
 //   - GET  /oauth/authorize   (auto-consents and 302s to redirect_uri)
 //   - POST /oauth/token
-//   - POST /public/ui/organization/auth-tokens
 //   - GET  /public/ui/organization/me
+//   - PUT  /api/auth-tokens/{originOrId}
 //   - GET  /requests          (test-only: dumps captured requests)
 package mockdash0
 
@@ -37,8 +37,9 @@ type State struct {
 	Requests       []CapturedRequest
 	IngressURL     string // value returned by /organization/me
 	OrgEndpoint404 bool
-	FailMint       bool
-	FailMintStatus int
+	// IngestionToken is returned by PUT /api/auth-tokens/{originOrId}.
+	// Defaults to "auth_mock" when empty.
+	IngestionToken string
 }
 
 func NewState() *State {
@@ -121,31 +122,19 @@ func Handler(s *State, baseURL func() string) http.Handler {
 
 	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
 		cr := s.capture(r)
-		if cr.Form["grant_type"] != "authorization_code" {
+		switch cr.Form["grant_type"] {
+		case "authorization_code", "refresh_token":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":              "dash0_at_mock",
+				"token_type":                "Bearer",
+				"expires_in":                900,
+				"refresh_token":             "dash0_rt_mock",
+				"scope":                     "*",
+				"organization_technical_id": "mock-org",
+			})
+		default:
 			http.Error(w, "unsupported_grant_type", http.StatusBadRequest)
-			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token":              "dash0_at_mock",
-			"token_type":                "Bearer",
-			"expires_in":                900,
-			"refresh_token":             "dash0_rt_mock",
-			"scope":                     "*",
-			"organization_technical_id": "mock-org",
-		})
-	})
-
-	mux.HandleFunc("/public/ui/organization/auth-tokens", func(w http.ResponseWriter, r *http.Request) {
-		s.capture(r)
-		if s.FailMint {
-			code := s.FailMintStatus
-			if code == 0 {
-				code = http.StatusInternalServerError
-			}
-			w.WriteHeader(code)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "auth_mock_machine_token"})
 	})
 
 	mux.HandleFunc("/public/ui/organization/me", func(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +148,19 @@ func Handler(s *State, baseURL func() string) http.Handler {
 			out["ingress_url"] = s.IngressURL
 		}
 		_ = json.NewEncoder(w).Encode(out)
+	})
+
+	mux.HandleFunc("/api/auth-tokens/", func(w http.ResponseWriter, r *http.Request) {
+		s.capture(r)
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		tok := s.IngestionToken
+		if tok == "" {
+			tok = "auth_mock"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": tok})
 	})
 
 	mux.HandleFunc("/requests", func(w http.ResponseWriter, r *http.Request) {

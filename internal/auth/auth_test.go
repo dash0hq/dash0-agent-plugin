@@ -176,9 +176,6 @@ func TestCallbackServer_Error(t *testing.T) {
 type mockDash0Server struct {
 	server       *httptest.Server
 	registered   atomic.Int32
-	mintCalls    atomic.Int32
-	failMint     bool
-	failMintCode int
 	omitOrgEp    bool
 	overrideOrg  *OrganizationInfo
 	overrideCode string
@@ -222,18 +219,6 @@ func newMockDash0Server() *mockDash0Server {
 			OrganizationTechnicalID: "mock-org",
 		})
 	})
-	mux.HandleFunc("/public/ui/organization/auth-tokens", func(w http.ResponseWriter, r *http.Request) {
-		m.mintCalls.Add(1)
-		if m.failMint {
-			code := m.failMintCode
-			if code == 0 {
-				code = http.StatusInternalServerError
-			}
-			w.WriteHeader(code)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "auth_test_machine_token"})
-	})
 	mux.HandleFunc("/public/ui/organization/me", func(w http.ResponseWriter, r *http.Request) {
 		if m.omitOrgEp {
 			w.WriteHeader(http.StatusNotFound)
@@ -244,6 +229,9 @@ func newMockDash0Server() *mockDash0Server {
 			info = *m.overrideOrg
 		}
 		_ = json.NewEncoder(w).Encode(info)
+	})
+	mux.HandleFunc("/api/auth-tokens/", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": "auth_provisioned"})
 	})
 	m.server = httptest.NewServer(mux)
 	return m
@@ -276,29 +264,6 @@ func TestRegisterClient(t *testing.T) {
 	}
 }
 
-func TestMintMachineToken_NotAdmin(t *testing.T) {
-	m := newMockDash0Server()
-	defer m.Close()
-	m.failMint = true
-	m.failMintCode = http.StatusForbidden
-	_, err := MintMachineToken(context.Background(), m.server.URL, "dash0_at_test", "desc")
-	if err == nil || !errorIs(err, ErrNotAdmin) {
-		t.Fatalf("expected ErrNotAdmin, got %v", err)
-	}
-}
-
-func TestMintMachineToken_Success(t *testing.T) {
-	m := newMockDash0Server()
-	defer m.Close()
-	token, err := MintMachineToken(context.Background(), m.server.URL, "dash0_at_test", "desc")
-	if err != nil {
-		t.Fatalf("MintMachineToken: %v", err)
-	}
-	if token != "auth_test_machine_token" {
-		t.Fatalf("unexpected token: %s", token)
-	}
-}
-
 func TestFetchOrganizationInfo_404IsNotError(t *testing.T) {
 	m := newMockDash0Server()
 	defer m.Close()
@@ -312,20 +277,14 @@ func TestFetchOrganizationInfo_404IsNotError(t *testing.T) {
 	}
 }
 
-// errorIs is a tiny shim that avoids importing errors in test code paths where
-// we want behavioural matching against sentinel errors. Implemented inline so
-// the test file compiles without extra deps.
-func errorIs(err, target error) bool {
-	for err != nil {
-		if err == target {
-			return true
-		}
-		type wrapper interface{ Unwrap() error }
-		if w, ok := err.(wrapper); ok {
-			err = w.Unwrap()
-			continue
-		}
-		return false
+func TestProvisionIngestionToken(t *testing.T) {
+	m := newMockDash0Server()
+	defer m.Close()
+	tok, err := ProvisionIngestionToken(context.Background(), m.server.URL, "dash0_at_test")
+	if err != nil {
+		t.Fatalf("ProvisionIngestionToken: %v", err)
 	}
-	return false
+	if tok != "auth_provisioned" {
+		t.Fatalf("unexpected token: %q", tok)
+	}
 }

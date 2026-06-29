@@ -24,13 +24,7 @@
     },
     "AUTH_URL": {
       "title": "OAuth Authorization Server URL (advanced)",
-      "description": "Override the OAuth authorization server used by /dash0-agent-plugin:login. Default: https://clerk.dash0.com (auto-switches to https://clerk.dash0-dev.com when OTLP_URL points at a .dash0-dev.com host). Only set this for self-hosted or staging Dash0 instances.",
-      "type": "string",
-      "sensitive": false
-    },
-    "OAUTH_CLIENT_ID": {
-      "title": "OAuth Client ID (advanced)",
-      "description": "Pre-registered OAuth client_id for the authorization server. Required for production logins against Clerk (which does not support Dynamic Client Registration). Created once in the Clerk Dashboard → OAuth Applications by a Dash0 admin.",
+      "description": "Override the OAuth authorization server used by /dash0-agent-plugin:login. Defaults to the Dash0 regional API derived from OTLP_URL (e.g. https://api.eu-west-1.aws.dash0.com). Only set this for non-standard Dash0 deployments.",
       "type": "string",
       "sensitive": false
     },

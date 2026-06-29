@@ -3,54 +3,13 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 )
-
-// ErrNotAdmin is returned by MintMachineToken when the server replies 403.
-var ErrNotAdmin = errors.New("not an organization admin")
-
-// MintMachineToken calls POST /public/ui/organization/auth-tokens to mint
-// a long-lived machine token. Returns ErrNotAdmin on 403.
-func MintMachineToken(ctx context.Context, apiBase, accessToken, description string) (string, error) {
-	u := strings.TrimRight(apiBase, "/") + "/public/ui/organization/auth-tokens"
-	body, _ := json.Marshal(map[string]string{"description": description})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	resp, err := httpClient().Do(req)
-	if err != nil {
-		return "", fmt.Errorf("minting machine token: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden {
-		return "", ErrNotAdmin
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<14))
-		return "", fmt.Errorf("mint token failed (status %d): %s", resp.StatusCode, string(bodyBytes))
-	}
-	var out struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decoding mint response: %w", err)
-	}
-	if out.Token == "" {
-		return "", fmt.Errorf("mint response missing token field")
-	}
-	return out.Token, nil
-}
 
 // OrganizationInfo is the subset of org metadata we use to lock in the
 // correct ingestion URL after login.

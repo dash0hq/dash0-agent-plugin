@@ -319,6 +319,7 @@ var attrKeyMap = map[string]string{
 	"bash_command_family": "dash0.gen_ai.tool.bash.command_family",
 	"skill_name":          "dash0.gen_ai.tool.skill.name",
 	"mcp_server":          "dash0.gen_ai.tool.mcp_server",
+	"user_email":          "user.email",
 }
 
 // attrTransformMap maps event field names to a target key and a value transform function.

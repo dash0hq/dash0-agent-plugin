@@ -434,6 +434,32 @@ func TestSendLogOmitUserInfoCwdOutsideHome(t *testing.T) {
 	assertAttr(t, lr.Attributes, "process.working_directory", "/opt/ci/workspace")
 }
 
+func TestSendLogMapsUserEmailAttribute(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "SessionStart",
+		"session_id":      "sess-456",
+		"user_email":      "alice@example.com",
+	}
+	cfg := Config{OTLPUrl: srv.URL}
+
+	require.NoError(t, SendLog(event, cfg))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "user.email", "alice@example.com")
+	for _, a := range lr.Attributes {
+		assert.NotEqual(t, "user_email", a.Key, "raw user_email key should not appear")
+	}
+}
+
 func TestRedactHomeDir(t *testing.T) {
 	home, _ := os.UserHomeDir()
 

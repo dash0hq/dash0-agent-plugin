@@ -63,7 +63,10 @@ Both `enabledPlugins` and `pluginConfigs` are committed to git. Each developer t
 
 ## Configuration
 
-After installing, give the plugin your Dash0 credentials. Find your `otlp_url` and auth token in your Dash0 org settings.
+After installing, you'll need:
+
+- **Auth token** — create one from your organization's [Auth Tokens settings page](https://app.dash0.com/settings/auth-tokens). Use an ingest-only token with permissions limited to the dataset you want to send data to.
+- **OTLP endpoint URL** — find it in the [Endpoints settings page](https://app.dash0.com/settings/endpoints) under the OTLP via HTTP tab (e.g. `https://ingress.<region>.aws.dash0.com`).
 
 ### Settings file
 

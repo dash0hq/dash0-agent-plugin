@@ -30,6 +30,38 @@ claude plugin install dash0@claude-plugins-official --scope user
 
 > Claude Code downloads plugins via SSH by default. The `git config` line forces HTTPS for environments without SSH keys.
 
+### Project-level installation
+
+You can commit the plugin config to your repository so that setup is minimal for each developer.
+
+Add to `<repo-root>/.claude/settings.json`:
+
+```json
+{
+  "enabledPlugins": {
+    "dash0@claude-plugins-official": true
+  }
+}
+```
+
+> If using the Dash0 marketplace instead, add `extraKnownMarketplaces` and enable `dash0-agent-plugin@dash0` — see [From the Dash0 marketplace](#from-the-dash0-marketplace) above.
+
+Add `<repo-root>/.claude/dash0-agent-plugin.local.md` with the shared endpoint and dataset:
+
+```markdown
+---
+otlp_url: "https://ingress.<region>.aws.dash0.com"
+dataset: "default"
+---
+```
+
+Both files are committed to git. Each developer then:
+
+1. Installs the plugin once: `/plugin install dash0@claude-plugins-official`
+2. Adds their auth token: `/plugin` → **dash0** → **Configure** → set `AUTH_TOKEN` (stored in OS keychain)
+
+> **Worktree / multi-clone caveat:** Project-scoped installs are keyed to the repository's absolute path. If you use git worktrees or multiple clones, the plugin fails to load in the second checkout. Use `--scope user` instead (`claude plugin install dash0@claude-plugins-official --scope user`).
+
 ## Configuration
 
 After installing, give the plugin your Dash0 credentials. Find your `otlp_url` and auth token in your Dash0 org settings.

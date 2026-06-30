@@ -40,22 +40,21 @@ Add to `<repo-root>/.claude/settings.json`:
 {
   "enabledPlugins": {
     "dash0@claude-plugins-official": true
+  },
+  "pluginConfigs": {
+    "dash0@claude-plugins-official": {
+      "options": {
+        "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
+        "DATASET": "default"
+      }
+    }
   }
 }
 ```
 
-> If using the Dash0 marketplace instead, add `extraKnownMarketplaces` and enable `dash0-agent-plugin@dash0` — see [From the Dash0 marketplace](#from-the-dash0-marketplace) above.
+> If using the Dash0 marketplace instead, add `extraKnownMarketplaces` and enable `dash0-agent-plugin@dash0` — see [From the Dash0 marketplace](#from-the-dash0-marketplace) above. Use `dash0-agent-plugin@dash0` as the key in `pluginConfigs` accordingly.
 
-Add `<repo-root>/.claude/dash0-agent-plugin.local.md` with the shared endpoint and dataset:
-
-```markdown
----
-otlp_url: "https://ingress.<region>.aws.dash0.com"
-dataset: "default"
----
-```
-
-Both files are committed to git. Each developer then:
+Both `enabledPlugins` and `pluginConfigs` are committed to git. Each developer then:
 
 1. Installs the plugin once: `/plugin install dash0@claude-plugins-official`
 2. Adds their auth token: `/plugin` → **dash0** → **Configure** → set `AUTH_TOKEN` (stored in OS keychain)
@@ -66,7 +65,34 @@ Both files are committed to git. Each developer then:
 
 After installing, give the plugin your Dash0 credentials. Find your `otlp_url` and auth token in your Dash0 org settings.
 
-### Config file (recommended)
+### Settings file
+
+Plugin options can be set directly in `.claude/settings.json` under `pluginConfigs`. This is the same file that `/plugin → Configure` writes to, and it works at both user and project level:
+
+- **User-level** (`~/.claude/settings.json`) — applies to all projects
+- **Project-level** (`<repo-root>/.claude/settings.json`) — shared via git, applies to everyone working on the repo
+
+```json
+{
+  "pluginConfigs": {
+    "dash0@claude-plugins-official": {
+      "options": {
+        "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
+        "AUTH_TOKEN": "your-dash0-auth-token",
+        "DATASET": "default"
+      }
+    }
+  }
+}
+```
+
+> `AUTH_TOKEN` can be set here for user-level config (`~/.claude/settings.json`), but **do not commit it** in a project-level settings file. For project-level setups, omit `AUTH_TOKEN` from the committed file and let each developer set it via `/plugin → Configure` (stored in OS keychain).
+
+### Plugin UI
+
+`/plugin` → **Installed** → **dash0** (or **dash0-agent-plugin** from the Dash0 marketplace) → **Configure**, then `/reload-plugins` to apply. Values are written to `pluginConfigs` in `~/.claude/settings.json`; sensitive values are stored in the OS keychain.
+
+### Config file
 
 Create `~/.claude/dash0-agent-plugin.local.md` (applies to all projects), or `.claude/dash0-agent-plugin.local.md` in a project directory for project-specific config:
 
@@ -77,10 +103,6 @@ auth_token: "your-dash0-auth-token"
 dataset: "default"
 ---
 ```
-
-### Plugin UI
-
-`/plugin` → **Installed** → **dash0** (or **dash0-agent-plugin** from the Dash0 marketplace) → **Configure**, then `/reload-plugins` to apply.
 
 ### Verify
 
@@ -111,10 +133,11 @@ The config file uses lowercase equivalents (`otlp_url`, `auth_token`, `dataset`,
 
 When a value is set in more than one source, highest wins:
 
-1. `/plugin → Configure` UI
-2. Project-level config file (`.claude/dash0-agent-plugin.local.md`)
-3. User-level config file (`~/.claude/dash0-agent-plugin.local.md`)
-4. `DASH0_*` environment variables
+1. `pluginConfigs` in project-level `.claude/settings.json`
+2. `pluginConfigs` in user-level `~/.claude/settings.json` (same as `/plugin → Configure` UI)
+3. Project-level config file (`.claude/dash0-agent-plugin.local.md`)
+4. User-level config file (`~/.claude/dash0-agent-plugin.local.md`)
+5. `DASH0_*` environment variables
 
 The two config files do **not** merge: if a project-level file exists, it is used and the global file is ignored entirely.
 

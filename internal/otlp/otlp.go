@@ -118,6 +118,7 @@ func SendLog(event map[string]any, cfg Config) error {
 	}
 
 	attrs := eventAttributes(event, cfg)
+	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
 
 	serviceName := "claude-code"
 	if cfg.AgentName != "" {
@@ -126,15 +127,6 @@ func SendLog(event map[string]any, cfg Config) error {
 	resourceAttrs := []Attribute{
 		{Key: "service.name", Value: StringVal(serviceName)},
 		{Key: "service.version", Value: StringVal(version.Version)},
-	}
-	if provider := resolveProvider(event, cfg); provider != "" {
-		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.provider.name", Value: StringVal(provider)})
-	}
-	if cfg.AgentName != "" {
-		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})
-	}
-	if cfg.HarnessName != "" {
-		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.harness.name", Value: StringVal(cfg.HarnessName)})
 	}
 	// Correlate log record with the session trace.
 	var traceID, spanID string
@@ -472,6 +464,28 @@ func stringifyValue(v any) string {
 		}
 		return string(b)
 	}
+}
+
+// genAIIdentityAttributes returns the coding-agent identity attributes
+// (gen_ai.provider.name, gen_ai.agent.name, gen_ai.harness.name) that describe
+// which agent/harness/provider produced the telemetry. These belong on each
+// span/log record rather than on the resource.
+//
+// gen_ai.agent.name is set per-event from agent_type by eventAttributes (via
+// attrKeyMap) for sub-agent invocations; we only fall back to the configured
+// agent name when the event doesn't carry one, so the key is never emitted twice.
+func genAIIdentityAttributes(event map[string]any, cfg Config) []Attribute {
+	var attrs []Attribute
+	if provider := resolveProvider(event, cfg); provider != "" {
+		attrs = append(attrs, Attribute{Key: "gen_ai.provider.name", Value: StringVal(provider)})
+	}
+	if agentType, _ := event["agent_type"].(string); agentType == "" && cfg.AgentName != "" {
+		attrs = append(attrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})
+	}
+	if cfg.HarnessName != "" {
+		attrs = append(attrs, Attribute{Key: "gen_ai.harness.name", Value: StringVal(cfg.HarnessName)})
+	}
+	return attrs
 }
 
 // teamSpanAttributes returns the dash0.team.name span attribute when a team name

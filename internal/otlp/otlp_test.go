@@ -30,12 +30,12 @@ func TestSendLog(t *testing.T) {
 	defer srv.Close()
 
 	event := map[string]any{
-		"hook_event_name": "PostToolUse",
-		"session_id":      "sess-123",
-		"cwd":             "/tmp/project",
-		"tool_name":       "Bash",
-		"tool_use_id":     "tu-456",
-		"tool_input":      map[string]any{"command": "ls"},
+		"hook_event_name":        "PostToolUse",
+		"session_id":             "sess-123",
+		"cwd":                    "/tmp/project",
+		"tool_name":              "Bash",
+		"tool_use_id":            "tu-456",
+		"tool_input":             map[string]any{"command": "ls"},
 		"tool_response":          "file1.go\nfile2.go",
 		"timestamp":              "2025-06-15T12:00:00Z",
 		"last_assistant_message": "Here are the files.",
@@ -132,9 +132,9 @@ func TestSendLogWithAgentName(t *testing.T) {
 	}
 	require.NoError(t, SendLog(map[string]any{"event": "test"}, cfg))
 
-	attrs := received.ResourceLogs[0].Resource.Attributes
-	assertAttr(t, attrs, "service.name", "my-agent")
-	assertAttr(t, attrs, "gen_ai.agent.name", "my-agent")
+	assertAttr(t, received.ResourceLogs[0].Resource.Attributes, "service.name", "my-agent")
+	recordAttrs := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes
+	assertAttr(t, recordAttrs, "gen_ai.agent.name", "my-agent")
 }
 
 func TestSendLogHarnessName(t *testing.T) {
@@ -150,7 +150,7 @@ func TestSendLogHarnessName(t *testing.T) {
 	cfg := Config{OTLPUrl: srv.URL, HarnessName: "claude-code"}
 	require.NoError(t, SendLog(map[string]any{"event": "test"}, cfg))
 
-	attrs := received.ResourceLogs[0].Resource.Attributes
+	attrs := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes
 	assertAttr(t, attrs, "gen_ai.harness.name", "claude-code")
 }
 
@@ -167,8 +167,8 @@ func TestSendLogNoHarnessNameWhenUnset(t *testing.T) {
 	cfg := Config{OTLPUrl: srv.URL}
 	require.NoError(t, SendLog(map[string]any{"event": "test"}, cfg))
 
-	attrs := received.ResourceLogs[0].Resource.Attributes
-	assertNoAttr(t, attrs, "gen_ai.harness.name")
+	assertNoAttr(t, received.ResourceLogs[0].Resource.Attributes, "gen_ai.harness.name")
+	assertNoAttr(t, received.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes, "gen_ai.harness.name")
 }
 
 func TestSendLogSkipsWhenNotConfigured(t *testing.T) {

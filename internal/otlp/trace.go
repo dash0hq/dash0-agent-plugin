@@ -121,15 +121,6 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 		{Key: "service.name", Value: StringVal(serviceName)},
 		{Key: "service.version", Value: StringVal(version.Version)},
 	}
-	if provider := resolveProvider(event, cfg); provider != "" {
-		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.provider.name", Value: StringVal(provider)})
-	}
-	if cfg.AgentName != "" {
-		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.agent.name", Value: StringVal(cfg.AgentName)})
-	}
-	if cfg.HarnessName != "" {
-		resourceAttrs = append(resourceAttrs, Attribute{Key: "gen_ai.harness.name", Value: StringVal(cfg.HarnessName)})
-	}
 
 	req := ExportTracesRequest{
 		ResourceSpans: []ResourceSpans{{
@@ -196,6 +187,7 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal("execute_tool")})
 
 	attrs = append(attrs, Attribute{Key: "gen_ai.tool.type", Value: StringVal("function")})
+	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
 	attrs = append(attrs, vcsSpanAttributes(cfg)...)
 	attrs = append(attrs, teamSpanAttributes(cfg)...)
 
@@ -238,6 +230,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 		spanName = "invoke_agent " + agentType
 	}
 	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal(opName)})
+	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
 	attrs = append(attrs, vcsSpanAttributes(cfg)...)
 	attrs = append(attrs, teamSpanAttributes(cfg)...)
 
@@ -267,6 +260,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 // NewSessionSpan creates a root span for a session start event.
 func NewSessionSpan(traceID, spanID string, ts time.Time, event map[string]any, cfg Config) Span {
 	attrs := eventAttributes(event, cfg)
+	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
 	attrs = append(attrs, vcsSpanAttributes(cfg)...)
 	attrs = append(attrs, teamSpanAttributes(cfg)...)
 	tsNano := strconv.FormatInt(ts.UnixNano(), 10)

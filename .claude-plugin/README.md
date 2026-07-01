@@ -117,17 +117,19 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 
 Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/).
 
-**Resource attributes** (on all spans):
+**Resource attributes**:
 
 | Attribute | Description |
 |---|---|
 | `service.name` | Agent name (defaults to `claude-code`) |
-| `gen_ai.provider.name` | LLM provider |
 
 **Span attributes (all spans)**:
 
 | Attribute | Description |
 |---|---|
+| `gen_ai.provider.name` | LLM provider |
+| `gen_ai.agent.name` | Agent name (sub-agent type on sub-agent spans) |
+| `gen_ai.harness.name` | Coding agent platform (e.g. `claude-code`, `cursor`) |
 | `dash0.gen_ai.vcs.repository.name` | Git repository name |
 | `dash0.gen_ai.vcs.ref.head.name` | Git branch |
 | `dash0.gen_ai.vcs.repository.url.full` | Full repository URL |

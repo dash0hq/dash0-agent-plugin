@@ -207,15 +207,8 @@ func TestSendTrace(t *testing.T) {
 		Dataset:   "test-dataset",
 		Provider:  "anthropic",
 	}
-	span := Span{
-		TraceID:           "aaaabbbbccccddddaaaabbbbccccdddd",
-		SpanID:            "1111222233334444",
-		Name:              "session_start",
-		Kind:              SpanKindInternal,
-		StartTimeUnixNano: "1749988800000000000",
-		EndTimeUnixNano:   "0",
-		Status:            SpanStatus{Code: 0},
-	}
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	span := NewSessionSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", ts, event, cfg)
 
 	require.NoError(t, SendTrace(span, event, cfg))
 
@@ -228,7 +221,8 @@ func TestSendTrace(t *testing.T) {
 	rs := received.ResourceSpans[0]
 
 	assertAttr(t, rs.Resource.Attributes, "service.name", "claude-code")
-	assertAttr(t, rs.Resource.Attributes, "gen_ai.provider.name", "anthropic")
+	// gen_ai.provider.name is now a span attribute, not a resource attribute.
+	assertNoAttr(t, rs.Resource.Attributes, "gen_ai.provider.name")
 
 	require.Len(t, rs.ScopeSpans, 1)
 	ss := rs.ScopeSpans[0]
@@ -241,8 +235,7 @@ func TestSendTrace(t *testing.T) {
 	assert.Equal(t, "1111222233334444", s.SpanID)
 	assert.Equal(t, "session_start", s.Name)
 	assert.Equal(t, SpanKindInternal, s.Kind)
-	assert.Equal(t, "1749988800000000000", s.StartTimeUnixNano)
-	assert.Equal(t, "0", s.EndTimeUnixNano)
+	assertAttr(t, s.Attributes, "gen_ai.provider.name", "anthropic")
 }
 
 // TestSendTraceResolvesProviderFromModel exercises the Cursor runtime shape:
@@ -278,21 +271,18 @@ func TestSendTraceResolvesProviderFromModel(t *testing.T) {
 				event["model"] = c.model
 			}
 			cfg := Config{OTLPUrl: srv.URL, AuthToken: "t", Dataset: "d"} // Provider unset (Cursor)
-			span := Span{
-				TraceID:           "aaaabbbbccccddddaaaabbbbccccdddd",
-				SpanID:            "1111222233334444",
-				Name:              "chat",
-				Kind:              SpanKindInternal,
-				StartTimeUnixNano: "1749988800000000000",
-				EndTimeUnixNano:   "1749988801000000000",
-			}
+			start := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+			end := start.Add(time.Second)
+			span := NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "", start, end, event, false, cfg)
 			require.NoError(t, SendTrace(span, event, cfg))
 			require.Len(t, received.ResourceSpans, 1)
-			attrs := received.ResourceSpans[0].Resource.Attributes
+			// gen_ai.provider.name is now a span attribute, not a resource attribute.
+			assertNoAttr(t, received.ResourceSpans[0].Resource.Attributes, "gen_ai.provider.name")
+			spanAttrs := received.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes
 			if c.wantAttr {
-				assertAttr(t, attrs, "gen_ai.provider.name", c.wantProvider)
+				assertAttr(t, spanAttrs, "gen_ai.provider.name", c.wantProvider)
 			} else {
-				assertNoAttr(t, attrs, "gen_ai.provider.name")
+				assertNoAttr(t, spanAttrs, "gen_ai.provider.name")
 			}
 		})
 	}
@@ -365,13 +355,15 @@ func TestSendTraceHarnessName(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	span := Span{Name: "test", TraceID: "aaaabbbbccccddddaaaabbbbccccdddd", SpanID: "1111222233334444"}
 	cfg := Config{OTLPUrl: srv.URL, HarnessName: "cursor"}
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	span := NewSessionSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", ts, map[string]any{}, cfg)
 
 	require.NoError(t, SendTrace(span, map[string]any{}, cfg))
 
-	attrs := received.ResourceSpans[0].Resource.Attributes
-	assertAttr(t, attrs, "gen_ai.harness.name", "cursor")
+	// gen_ai.harness.name is now a span attribute, not a resource attribute.
+	assertNoAttr(t, received.ResourceSpans[0].Resource.Attributes, "gen_ai.harness.name")
+	assertAttr(t, received.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes, "gen_ai.harness.name", "cursor")
 }
 
 func TestSendTraceNoHarnessNameWhenUnset(t *testing.T) {
@@ -384,13 +376,14 @@ func TestSendTraceNoHarnessNameWhenUnset(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	span := Span{Name: "test", TraceID: "aaaabbbbccccddddaaaabbbbccccdddd", SpanID: "1111222233334444"}
 	cfg := Config{OTLPUrl: srv.URL}
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	span := NewSessionSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", ts, map[string]any{}, cfg)
 
 	require.NoError(t, SendTrace(span, map[string]any{}, cfg))
 
-	attrs := received.ResourceSpans[0].Resource.Attributes
-	assertNoAttr(t, attrs, "gen_ai.harness.name")
+	assertNoAttr(t, received.ResourceSpans[0].Resource.Attributes, "gen_ai.harness.name")
+	assertNoAttr(t, received.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes, "gen_ai.harness.name")
 }
 
 func TestSendTraceSkipsWhenNotConfigured(t *testing.T) {

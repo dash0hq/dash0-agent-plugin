@@ -95,6 +95,8 @@ Plugin options can be set directly in `.claude/settings.json` under `pluginConfi
 
 `/plugin` → **Installed** → **dash0** (or **dash0-agent-plugin** from the Dash0 marketplace) → **Configure**, then `/reload-plugins` to apply. Values are written to `pluginConfigs` in `~/.claude/settings.json`; sensitive values are stored in the OS keychain.
 
+> **Claude Desktop limitation:** The Plugin UI writes config keyed to the marketplace plugin identity. Claude Desktop loads plugins under a different internal identity, so Plugin UI configuration is not applied in Desktop sessions. Use the [config file](#config-file) or [settings file](#settings-file) method instead — both work across CLI and Desktop.
+
 ### Config file
 
 Create `~/.claude/dash0-agent-plugin.local.md` (applies to all projects), or `.claude/dash0-agent-plugin.local.md` in a project directory for project-specific config:

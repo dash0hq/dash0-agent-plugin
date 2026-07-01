@@ -35,6 +35,49 @@ The script is idempotent — re-run it to ship new code or change config. It:
 aws lambda invoke --region eu-west-1 --function-name dash0-demo-telemetry /dev/stdout
 ```
 
+## Current deployments
+
+Four functions are currently live. Each was deployed with the command below
+(auth tokens redacted — get the real ones from the corresponding Dash0
+environment). A distinct `FUNCTION_NAME` gives each its own independent Lambda,
+IAM role, and EventBridge rule. The AWS account is `DevRel2`
+
+| Function                          | Region      | Dataset            |
+| --------------------------------- | ----------- | ------------------ |
+| `dash0-coding-agents-demo-dev`    | `eu-west-1` | `demo-app` (dev)   |
+| `dash0-coding-agents-demo-eu`     | `eu-west-1` | `Default`          |
+| `dash0-coding-agents-demo-eu-wad` | `eu-west-1` | from token         |
+| `dash0-coding-agents-demo-us`     | `us-west-2` | `Default`          |
+
+```sh
+# dev environment (dash0-dev.com)
+DASH0_OTLP_URL=https://ingress.eu-west-1.aws.dash0-dev.com \
+  DASH0_AUTH_TOKEN=auth_REDACTED \
+  DASH0_DATASET=demo-app \
+  FUNCTION_NAME=dash0-coding-agents-demo-dev \
+  ./internal/demo/deploy/deploy.sh
+
+# EU production
+DASH0_OTLP_URL=https://ingress.eu-west-1.aws.dash0.com \
+  DASH0_AUTH_TOKEN=auth_REDACTED \
+  DASH0_DATASET=Default \
+  FUNCTION_NAME=dash0-coding-agents-demo-eu \
+  ./internal/demo/deploy/deploy.sh
+
+# EU production, WeAreDevelopers (dataset derived from token)
+DASH0_OTLP_URL=https://ingress.eu-west-1.aws.dash0.com \
+  DASH0_AUTH_TOKEN=auth_REDACTED \
+  FUNCTION_NAME=dash0-coding-agents-demo-eu-wad \
+  ./internal/demo/deploy/deploy.sh
+
+# US production
+DASH0_OTLP_URL=https://ingress.us-west-2.aws.dash0.com \
+  DASH0_AUTH_TOKEN=auth_REDACTED \
+  DASH0_DATASET=Default \
+  FUNCTION_NAME=dash0-coding-agents-demo-us \
+  ./internal/demo/deploy/deploy.sh
+```
+
 ## Configuration
 
 | Variable           | Required | Default              | Purpose                              |

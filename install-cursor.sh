@@ -14,11 +14,16 @@
 #   DASH0_OTLP_URL=... DASH0_AUTH_TOKEN=... \
 #     curl -fsSL .../install-cursor.sh | bash
 #
+# All flags are optional. Any flag not provided is prompted for interactively,
+# or (in a non-interactive run) left blank. Without --endpoint and --token the
+# plugin installs but stays inactive until the config file is filled in.
+#
 # Flags (each provided flag skips the corresponding prompt; the value is
 # written to the config file):
 #   --endpoint URL   Dash0 OTLP endpoint URL
 #   --token TOKEN    Dash0 auth token
-#   --dataset NAME   Dash0 dataset
+#   --dataset NAME   Dash0 dataset (defaults to "default")
+#   --team NAME      Team name
 #
 # Optional env vars: DASH0_DATASET, DASH0_TEAM_NAME.
 #   DASH0_VERSION pins a specific release (e.g. "0.1.9"); without it, the
@@ -48,6 +53,7 @@ REPO="dash0hq/dash0-agent-plugin"
 DASH0_OTLP_URL="${DASH0_OTLP_URL:-}"
 DASH0_AUTH_TOKEN="${DASH0_AUTH_TOKEN:-}"
 DASH0_DATASET="${DASH0_DATASET:-}"
+DASH0_TEAM_NAME="${DASH0_TEAM_NAME:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -60,14 +66,22 @@ while [ $# -gt 0 ]; do
     --dataset)
       [ $# -ge 2 ] || { printf "✗ --dataset requires a value\n" >&2; exit 1; }
       DASH0_DATASET="$2"; shift 2 ;;
+    --team)
+      [ $# -ge 2 ] || { printf "✗ --team requires a value\n" >&2; exit 1; }
+      DASH0_TEAM_NAME="$2"; shift 2 ;;
     -h|--help)
       cat <<'EOF'
-Usage: install-cursor.sh [--endpoint URL] [--token TOKEN] [--dataset NAME]
+Usage: install-cursor.sh [--endpoint URL] [--token TOKEN] [--dataset NAME] [--team NAME]
+
+All flags are optional. Any flag not provided is prompted for interactively,
+or (in a non-interactive run) left blank. Without --endpoint and --token the
+plugin installs but stays inactive.
 
 Flags (each provided flag skips the corresponding prompt):
   --endpoint URL   Dash0 OTLP endpoint URL
   --token TOKEN    Dash0 auth token
-  --dataset NAME   Dash0 dataset
+  --dataset NAME   Dash0 dataset (defaults to "default")
+  --team NAME      Team name
 
 Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
           DASH0_VERSION (pins a specific release).
@@ -259,7 +273,6 @@ prompt_secret() {
 }
 
 DASH0_AGENT_NAME="cursor"
-DASH0_TEAM_NAME="${DASH0_TEAM_NAME:-}"
 
 prompt_value  DASH0_OTLP_URL    "Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)"
 prompt_secret DASH0_AUTH_TOKEN  "Dash0 auth token"

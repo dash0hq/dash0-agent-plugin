@@ -9,7 +9,7 @@
 #
 #   DASH0_OTLP_URL    Dash0 OTLP ingress URL          (required)
 #   DASH0_AUTH_TOKEN  Dash0 auth token                (required)
-#   DASH0_DATASET     Dash0 dataset                   (default: demo)
+#   DASH0_DATASET     Dash0 dataset                   (optional; unset = derived from token)
 #   DEMO_TURNS        turns sent per invocation        (default: 1)
 #
 # Optional infra overrides:
@@ -33,7 +33,7 @@ RUNTIME="provided.al2023"
 ARCH="${ARCH:-arm64}"
 TIMEOUT="${TIMEOUT:-30}"
 
-DASH0_DATASET="${DASH0_DATASET:-demo}"
+DASH0_DATASET="${DASH0_DATASET:-}"
 DEMO_TURNS="${DEMO_TURNS:-1}"
 : "${DASH0_OTLP_URL:?set DASH0_OTLP_URL}"
 : "${DASH0_AUTH_TOKEN:?set DASH0_AUTH_TOKEN}"
@@ -78,7 +78,13 @@ fi
 ROLE_ARN="$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text)"
 
 # --- Lambda function ---------------------------------------------------------
-ENV_VARS="Variables={DASH0_OTLP_URL=$DASH0_OTLP_URL,DASH0_AUTH_TOKEN=$DASH0_AUTH_TOKEN,DASH0_DATASET=$DASH0_DATASET,DEMO_TURNS=$DEMO_TURNS}"
+# Only include DASH0_DATASET when set; otherwise the ingest derives the dataset
+# from the auth token (updating the env replaces it, dropping any prior value).
+ENV_PAIRS="DASH0_OTLP_URL=$DASH0_OTLP_URL,DASH0_AUTH_TOKEN=$DASH0_AUTH_TOKEN,DEMO_TURNS=$DEMO_TURNS"
+if [ -n "$DASH0_DATASET" ]; then
+  ENV_PAIRS="$ENV_PAIRS,DASH0_DATASET=$DASH0_DATASET"
+fi
+ENV_VARS="Variables={$ENV_PAIRS}"
 
 if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" >/dev/null 2>&1; then
   echo "==> Updating function code"

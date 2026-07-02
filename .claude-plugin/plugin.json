@@ -12,6 +12,7 @@
   "commands": [
     "./claude/commands/open-session.md"
   ],
+  "skills": "./claude/skills/",
   "userConfig": {
     "OTLP_URL": {
       "title": "OTLP Endpoint URL",

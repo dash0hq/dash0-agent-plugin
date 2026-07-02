@@ -46,6 +46,8 @@ dataset: "default"
 ---
 ```
 
+Or run `/dash0-configure` to walk through the values interactively — the skill writes the same file for you.
+
 ### Plugin UI
 
 `/plugin` → **Installed** → **dash0** (or **dash0-agent-plugin** from the Dash0 marketplace) → **Configure**, then `/reload-plugins` to apply.
@@ -165,6 +167,12 @@ Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/se
 | Command | Description |
 |---|---|
 | `/open-session` | Print and open the Dash0 session details URL for the current session |
+
+## Skills
+
+| Skill | Description |
+|---|---|
+| `/dash0-configure` | Walk through setting the OTLP URL, auth token, and other options, then write `~/.claude/dash0-agent-plugin.local.md` (user-level) or `.claude/dash0-agent-plugin.local.md` (project-level). Prefer `/plugin → Configure` if you want the auth token stored in the OS keychain. |
 
 ## Troubleshooting
 

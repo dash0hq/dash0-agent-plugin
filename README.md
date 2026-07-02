@@ -15,7 +15,7 @@ This repo ships one shared Go pipeline (`cmd/`, `internal/`, `scripts/`) and two
 
 | Path | Runtime | Purpose |
 |---|---|---|
-| `.claude-plugin/`, `claude/commands/`, `hooks/hooks.json` | Claude Code | Manifest, slash commands, hook registration |
+| `.claude-plugin/`, `claude/commands/`, `claude/skills/`, `hooks/hooks.json` | Claude Code | Manifest, slash commands, configure skill, hook registration |
 | `.cursor-plugin/`, `cursor/plugin-hooks.json`, `cursor/skills/` | Cursor | Manifest, hook registration, configure skill |
 
 Runtime-specific assets live under `claude/` and `cursor/` so neither marketplace auto-discovers the other runtime's components. Shared hook binaries stay in `scripts/`.

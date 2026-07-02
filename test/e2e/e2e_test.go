@@ -5,7 +5,7 @@
 package e2e
 
 import (
-	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -126,13 +126,20 @@ func TestE2EHookInvocation(t *testing.T) {
 func TestE2EFullFlowWithClaude(t *testing.T) {
 	claudeBin, err := exec.LookPath("claude")
 	if err != nil {
-		t.Skip("claude CLI not found in PATH")
+		t.Fatal("claude CLI not found in PATH — install with: npm install -g @anthropic-ai/claude-code")
 	}
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		t.Skip("ANTHROPIC_API_KEY not set — cannot run full Claude flow")
+		t.Fatal("ANTHROPIC_API_KEY not set — required for e2e test")
 	}
 
 	pluginDir := findPluginDir(t)
+
+	// Build the binary.
+	binary := filepath.Join(t.TempDir(), "on-event")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/on-event")
+	build.Dir = pluginDir
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "build failed: %s", string(out))
 
 	var (
 		mu       sync.Mutex
@@ -153,19 +160,45 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Write a .env in a temp work dir so the plugin picks up our mock URL.
+	// Create a staging copy of the plugin with a simplified on-event.sh
+	// that invokes the pre-built binary directly (no GitHub download).
+	stageDir := t.TempDir()
+	copyDir(t, filepath.Join(pluginDir, ".claude-plugin"), filepath.Join(stageDir, ".claude-plugin"))
+	copyDir(t, filepath.Join(pluginDir, "hooks"), filepath.Join(stageDir, "hooks"))
+	copyDir(t, filepath.Join(pluginDir, "claude"), filepath.Join(stageDir, "claude"))
+	require.NoError(t, os.MkdirAll(filepath.Join(stageDir, "scripts"), 0o755))
+
+	// Write a hook script that sets env vars and execs the pre-built binary.
+	// We export CLAUDE_PLUGIN_OPTION_* so the binary sees the OTLP config
+	// without needing the download/config-file logic from the real on-event.sh.
+	hookScript := fmt.Sprintf(`#!/usr/bin/env bash
+export CLAUDE_PLUGIN_OPTION_OTLP_URL="${CLAUDE_PLUGIN_OPTION_OTLP_URL:-%s}"
+export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="${CLAUDE_PLUGIN_OPTION_AUTH_TOKEN:-e2e-test-token}"
+exec %q "$@"
+`, srv.URL, binary)
+	require.NoError(t, os.WriteFile(filepath.Join(stageDir, "scripts", "on-event.sh"), []byte(hookScript), 0o755))
+
 	workDir := t.TempDir()
-	envContent := "DASH0_OTLP_URL=" + srv.URL + "\nDASH0_AUTH_TOKEN=e2e-test-token\n"
+
+	// Also place a .env as fallback (binary reads CWD/.env via dotenv.Load).
+	envContent := fmt.Sprintf("DASH0_OTLP_URL=%s\nDASH0_AUTH_TOKEN=e2e-test-token\n", srv.URL)
 	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".env"), []byte(envContent), 0o644))
 
-	cmd := exec.Command(claudeBin, "--print", "--plugin-dir", pluginDir)
-	cmd.Stdin = nil // empty prompt — claude will just respond and exit
+	cmd := exec.Command(claudeBin,
+		"--print",
+		"--plugin-dir", stageDir,
+		"--dangerously-skip-permissions",
+		"-p", "respond with exactly: hello",
+		"--model", "haiku",
+		"--max-budget-usd", "0.05",
+	)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 
-	output, _ := cmd.CombinedOutput()
-	t.Logf("claude output: %s", string(output))
+	output, cmdErr := cmd.CombinedOutput()
+	t.Logf("claude output (err=%v): %s", cmdErr, string(output))
 
+	// Give hooks time to flush.
 	time.Sleep(3 * time.Second)
 
 	mu.Lock()
@@ -173,10 +206,38 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 
 	t.Logf("requests received: %d", len(requests))
 	for _, r := range requests {
-		t.Logf("  %s %s (%d bytes)", r.method, r.path, len(r.body))
+		t.Logf("  %s %s auth=%q (%d bytes)", r.method, r.path, r.auth, len(r.body))
 	}
 
-	assert.NotEmpty(t, requests, "expected at least one request to mock OTLP server from Claude session")
+	require.NotEmpty(t, requests, "expected at least one OTLP request from the Claude session with the plugin loaded")
+
+	var traceReqs []capturedRequest
+	for _, r := range requests {
+		if r.path == "/v1/traces" {
+			traceReqs = append(traceReqs, r)
+		}
+	}
+	assert.NotEmpty(t, traceReqs, "expected at least one /v1/traces request (connectivity check on SessionStart)")
+}
+
+// copyDir recursively copies src to dst.
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+	require.NoError(t, filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	}))
 }
 
 type capturedRequest struct {
@@ -229,6 +290,3 @@ func findPluginDir(t *testing.T) string {
 		dir = parent
 	}
 }
-
-// Unused but needed to satisfy json import.
-var _ = json.Marshal

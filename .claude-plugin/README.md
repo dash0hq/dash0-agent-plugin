@@ -109,6 +109,9 @@ dataset: "default"
 ---
 ```
 
+Or run `/dash0-configure` to walk through the values interactively — the skill writes the same file for you.
+
+
 ### Verify
 
 On session start you should see:
@@ -177,17 +180,19 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 
 Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/).
 
-**Resource attributes** (on all spans):
+**Resource attributes**:
 
 | Attribute | Description |
 |---|---|
 | `service.name` | Agent name (defaults to `claude-code`) |
-| `gen_ai.provider.name` | LLM provider |
 
 **Span attributes (all spans)**:
 
 | Attribute | Description |
 |---|---|
+| `gen_ai.provider.name` | LLM provider |
+| `gen_ai.agent.name` | Agent name (sub-agent type on sub-agent spans) |
+| `gen_ai.harness.name` | Coding agent platform (e.g. `claude-code`, `cursor`) |
 | `dash0.gen_ai.vcs.repository.name` | Git repository name |
 | `dash0.gen_ai.vcs.ref.head.name` | Git branch |
 | `dash0.gen_ai.vcs.repository.url.full` | Full repository URL |
@@ -223,6 +228,12 @@ Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/se
 | Command | Description |
 |---|---|
 | `/open-session` | Print and open the Dash0 session details URL for the current session |
+
+## Skills
+
+| Skill | Description |
+|---|---|
+| `/dash0-configure` | Walk through setting the OTLP URL, auth token, and other options, then write `~/.claude/dash0-agent-plugin.local.md` (user-level) or `.claude/dash0-agent-plugin.local.md` (project-level). Prefer `/plugin → Configure` if you want the auth token stored in the OS keychain. |
 
 ## Troubleshooting
 

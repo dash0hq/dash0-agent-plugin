@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -72,7 +75,6 @@ func TestIntegrationFailsOnInvalidJSON(t *testing.T) {
 	assert.Error(t, err)
 }
 
-
 // feed pipes input through run() and fails the test on error.
 func feed(t *testing.T, input string) {
 	t.Helper()
@@ -143,30 +145,6 @@ func findSpan(spans []otlp.Span, namePrefix string) *otlp.Span {
 		}
 	}
 	return nil
-}
-
-// collectingResourceServer captures the resource attributes of every exported
-// trace request (the span collector flattens spans and drops the resource).
-func collectingResourceServer(t *testing.T) (*httptest.Server, *[]otlp.Attribute) {
-	t.Helper()
-	var resourceAttrs []otlp.Attribute
-	var mu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/traces" {
-			body, _ := io.ReadAll(r.Body)
-			var req otlp.ExportTracesRequest
-			if err := json.Unmarshal(body, &req); err == nil {
-				mu.Lock()
-				for _, rs := range req.ResourceSpans {
-					resourceAttrs = append(resourceAttrs, rs.Resource.Attributes...)
-				}
-				mu.Unlock()
-			}
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &resourceAttrs
 }
 
 func TestChatSpanIsRootWithToolChildren(t *testing.T) {
@@ -655,6 +633,29 @@ func TestDeriveAppURL(t *testing.T) {
 	}
 }
 
+func TestBuildSessionURL(t *testing.T) {
+	u := buildSessionURL("https://app.dash0.com", "sess-abc123")
+	assert.Contains(t, u, "https://app.dash0.com/coding-agents/sessions/details?s=")
+	assert.NotContains(t, u, "agent-monitoring")
+
+	// Round-trip: decode the ?s= param and verify the state structure matches
+	// what the Dash0 UI url-state library expects.
+	parts := strings.SplitN(u, "?s=", 2)
+	require.Len(t, parts, 2)
+	compressed, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(parts[1])
+	require.NoError(t, err)
+	r, err := zlib.NewReader(bytes.NewReader(compressed))
+	require.NoError(t, err)
+	decoded, err := io.ReadAll(r)
+	require.NoError(t, err)
+
+	var state map[string]any
+	require.NoError(t, json.Unmarshal(decoded, &state))
+	page, ok := state["/coding-agents/sessions/details"].(map[string]any)
+	require.True(t, ok, "state must be keyed by pathname")
+	assert.Equal(t, "sess-abc123", page["sessionId"])
+}
+
 func TestSessionStartHintWhenNotConfigured(t *testing.T) {
 	dataDir := t.TempDir()
 	env := append(os.Environ(),
@@ -899,8 +900,6 @@ func TestModelOnToolSpanFromTranscriptWhenSessionStartOmitsModel(t *testing.T) {
 	assertStringAttr(t, chatSpan.Attributes, "gen_ai.request.model", "claude-opus-4-7")
 }
 
-
-
 func TestPRURLSurvivesOmitIO(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
@@ -982,7 +981,6 @@ func TestPRURLNotPresentWhenNoMatch(t *testing.T) {
 	}
 }
 
-
 func assertAttrAbsent(t *testing.T, attrs []otlp.Attribute, key string) {
 	t.Helper()
 	for _, a := range attrs {
@@ -992,7 +990,6 @@ func assertAttrAbsent(t *testing.T, attrs []otlp.Attribute, key string) {
 		}
 	}
 }
-
 
 func TestLinesOfCodeSurvivesOmitIO(t *testing.T) {
 	dataDir := t.TempDir()
@@ -1196,7 +1193,7 @@ func TestSubagentStopEmitsChatSpanWithTokens(t *testing.T) {
 func TestAgentNameDefaultsToClaudeCode(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
-	srv, resourceAttrs := collectingResourceServer(t)
+	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
 	// No AGENT_NAME / DASH0_AGENT_NAME configured.
 
@@ -1204,14 +1201,16 @@ func TestAgentNameDefaultsToClaudeCode(t *testing.T) {
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-name","prompt":"hi"}`)
 	feed(t, `{"hook_event_name":"Stop","session_id":"sess-name","model":"claude-opus-4-8"}`)
 
-	// The main chat span's resource should carry the default agent name.
-	assertStringAttr(t, *resourceAttrs, "gen_ai.agent.name", "claude-code")
+	// The main chat span should carry the default agent name.
+	chatSpan := findSpan(*spans, "chat")
+	require.NotNil(t, chatSpan)
+	assertStringAttr(t, chatSpan.Attributes, "gen_ai.agent.name", "claude-code")
 }
 
 func TestAgentNameOverrideIsRespected(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
-	srv, resourceAttrs := collectingResourceServer(t)
+	srv, spans, _ := collectingServer(t)
 	t.Setenv("DASH0_OTLP_URL", srv.URL)
 	t.Setenv("DASH0_AGENT_NAME", "my-agent")
 
@@ -1220,7 +1219,9 @@ func TestAgentNameOverrideIsRespected(t *testing.T) {
 	feed(t, `{"hook_event_name":"Stop","session_id":"sess-name2","model":"claude-opus-4-8"}`)
 
 	// A configured name must not be overridden by the default.
-	assertStringAttr(t, *resourceAttrs, "gen_ai.agent.name", "my-agent")
+	chatSpan := findSpan(*spans, "chat")
+	require.NotNil(t, chatSpan)
+	assertStringAttr(t, chatSpan.Attributes, "gen_ai.agent.name", "my-agent")
 }
 
 func assertStringAttr(t *testing.T, attrs []otlp.Attribute, key, want string) {

@@ -6,16 +6,19 @@
 #   ./uninstall-cursor.sh --yes                 # skips confirmation
 #   curl -fsSL .../uninstall-cursor.sh | bash -s -- --yes
 #
-# What this removes (mirror of install-cursor.sh):
-#   ~/.local/state/dash0-agent-plugin/cursor/    cursor-on-event binaries
-#   ~/.local/share/dash0-agent-plugin/cursor-on-event.sh
-#                                                bootstrap script
-#   ~/.cursor/dash0-agent-plugin.local.md        credential config
-#   ~/.cursor/skills-cursor/dash0-configure/     shipped skill
-#   ~/.cursor/hooks.json                         only when every entry points at
-#                                                the Dash0 bootstrap script;
-#                                                otherwise the file is left in
-#                                                place with a warning.
+# What this removes:
+#   Current (native-plugin) layout:
+#     ~/.cursor/plugins/local/dash0-agent-plugin/  entire plugin dir
+#   Legacy (pre-0.1.17 shell-installer) layout:
+#     ~/.local/share/dash0-agent-plugin/           legacy bootstrap script dir
+#     ~/.cursor/skills-cursor/dash0-configure/     legacy skill location
+#     ~/.cursor/hooks.json                         only when every entry points
+#                                                  at the Dash0 bootstrap;
+#                                                  otherwise the file is left
+#                                                  in place with a warning.
+#   Shared (both layouts):
+#     ~/.local/state/dash0-agent-plugin/cursor/    binary cache
+#     ~/.cursor/dash0-agent-plugin.local.md        credential config
 
 set -u
 
@@ -43,7 +46,8 @@ while [ $# -gt 0 ]; do
       cat <<'EOF'
 Usage: uninstall-cursor.sh [--yes]
 
-Removes Dash0 Cursor plugin files previously installed by install-cursor.sh.
+Removes Dash0 Cursor plugin files installed by any version of install-cursor.sh
+(both the current native-plugin layout and the pre-0.1.17 shell-installer layout).
 
 Flags:
   -y, --yes   Skip the confirmation prompt.
@@ -57,25 +61,32 @@ EOF
 done
 
 # ---------------------------------------------------------------------------
-# Resolve paths (must mirror install-cursor.sh).
+# Resolve paths (must mirror install-cursor.sh, current + legacy).
 # ---------------------------------------------------------------------------
 
+# Current native-plugin layout.
+PLUGIN_DIR="$HOME/.cursor/plugins/local/dash0-agent-plugin"
+
+# Legacy shell-installer layout.
+LEGACY_SHARE_DIR="$HOME/.local/share/dash0-agent-plugin"
+LEGACY_SHARE_SCRIPT="$LEGACY_SHARE_DIR/cursor-on-event.sh"
+LEGACY_SKILL_DIR="$HOME/.cursor/skills-cursor/dash0-configure"
+LEGACY_SKILLS_PARENT="$HOME/.cursor/skills-cursor"
+LEGACY_HOOKS_PATH="$HOME/.cursor/hooks.json"
+
+# Shared by both layouts.
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor"
-SHARE_DIR="$HOME/.local/share/dash0-agent-plugin"
-SHARE_FILE="$SHARE_DIR/cursor-on-event.sh"
 CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
-HOOKS_PATH="$HOME/.cursor/hooks.json"
-SKILLS_PARENT="$HOME/.cursor/skills-cursor"
-SKILL_DIR="$SKILLS_PARENT/dash0-configure"
 
 printf "${C_B}Dash0 → Cursor telemetry uninstaller${C_N}\n\n"
-printf "Will remove:\n"
+printf "Will remove (if present):\n"
 printf "  %s\n" \
+  "$PLUGIN_DIR" \
+  "$LEGACY_SHARE_SCRIPT" \
+  "$LEGACY_SKILL_DIR" \
   "$STATE_DIR" \
-  "$SHARE_FILE" \
-  "$CONFIG_PATH" \
-  "$SKILL_DIR"
-printf "  %s (only when it contains exclusively Dash0 hooks)\n" "$HOOKS_PATH"
+  "$CONFIG_PATH"
+printf "  %s (only when it contains exclusively Dash0 hooks)\n" "$LEGACY_HOOKS_PATH"
 printf "\n"
 
 # ---------------------------------------------------------------------------
@@ -108,49 +119,52 @@ remove_path() {
   fi
 }
 
-remove_path "$STATE_DIR"   "binary dir"
-remove_path "$SHARE_FILE"  "bootstrap script"
-remove_path "$CONFIG_PATH" "config file"
-remove_path "$SKILL_DIR"   "configure skill"
+remove_path "$PLUGIN_DIR"           "plugin dir"
+remove_path "$LEGACY_SHARE_SCRIPT"  "legacy bootstrap script"
+remove_path "$LEGACY_SKILL_DIR"     "legacy skill dir"
+remove_path "$STATE_DIR"            "binary cache"
+remove_path "$CONFIG_PATH"          "config file"
 
 # Tidy empty parent directories (silent if they aren't empty or don't exist).
-rmdir "$SHARE_DIR"     2>/dev/null && ok "removed empty $SHARE_DIR"     || true
-rmdir "$SKILLS_PARENT" 2>/dev/null && ok "removed empty $SKILLS_PARENT" || true
+rmdir "$LEGACY_SHARE_DIR"      2>/dev/null && ok "removed empty $LEGACY_SHARE_DIR"      || true
+rmdir "$LEGACY_SKILLS_PARENT"  2>/dev/null && ok "removed empty $LEGACY_SKILLS_PARENT"  || true
 
 # ---------------------------------------------------------------------------
-# Handle hooks.json carefully — it may contain user-authored hooks.
-# Strategy:
+# Handle the legacy ~/.cursor/hooks.json carefully — it may contain
+# user-authored hooks. Strategy:
 #   - jq available: delete the file only if every hook command references
 #     the Dash0 bootstrap script. Otherwise warn and leave it alone.
 #   - jq missing: fall back to a grep heuristic; if it suggests mixed
 #     content, warn and leave the file alone.
+# The new native-plugin layout does not touch this file at all — this cleanup
+# only matters for machines still carrying a pre-0.1.17 install.
 # ---------------------------------------------------------------------------
 
 BOOTSTRAP_BASENAME="cursor-on-event.sh"
 
-if [ -e "$HOOKS_PATH" ]; then
+if [ -e "$LEGACY_HOOKS_PATH" ]; then
   if command -v jq >/dev/null 2>&1; then
     foreign=$(jq -r '
       .hooks // {} | to_entries[] | .value[]? | .command // empty
-    ' "$HOOKS_PATH" 2>/dev/null | grep -v "$BOOTSTRAP_BASENAME" || true)
+    ' "$LEGACY_HOOKS_PATH" 2>/dev/null | grep -v "$BOOTSTRAP_BASENAME" || true)
     if [ -z "$foreign" ]; then
-      rm -f "$HOOKS_PATH" && ok "removed hooks → $HOOKS_PATH"
+      rm -f "$LEGACY_HOOKS_PATH" && ok "removed legacy hooks → $LEGACY_HOOKS_PATH"
     else
-      warn "$HOOKS_PATH contains non-Dash0 hooks; leaving the file in place."
+      warn "$LEGACY_HOOKS_PATH contains non-Dash0 hooks; leaving the file in place."
       warn "Remove the entries whose 'command' contains '$BOOTSTRAP_BASENAME' by hand."
     fi
   else
-    total=$(grep -c '"command"' "$HOOKS_PATH" 2>/dev/null || echo 0)
-    ours=$(grep -c "$BOOTSTRAP_BASENAME" "$HOOKS_PATH" 2>/dev/null || echo 0)
+    total=$(grep -c '"command"' "$LEGACY_HOOKS_PATH" 2>/dev/null || echo 0)
+    ours=$(grep -c "$BOOTSTRAP_BASENAME" "$LEGACY_HOOKS_PATH" 2>/dev/null || echo 0)
     if [ "$total" -gt 0 ] && [ "$total" -eq "$ours" ]; then
-      rm -f "$HOOKS_PATH" && ok "removed hooks → $HOOKS_PATH"
+      rm -f "$LEGACY_HOOKS_PATH" && ok "removed legacy hooks → $LEGACY_HOOKS_PATH"
     else
-      warn "Cannot safely inspect $HOOKS_PATH (jq not installed); leaving it in place."
+      warn "Cannot safely inspect $LEGACY_HOOKS_PATH (jq not installed); leaving it in place."
       warn "Inspect and remove entries that reference '$BOOTSTRAP_BASENAME' by hand."
     fi
   fi
 else
-  info "skip hooks (not present): $HOOKS_PATH"
+  info "skip legacy hooks (not present): $LEGACY_HOOKS_PATH"
 fi
 
 # ---------------------------------------------------------------------------

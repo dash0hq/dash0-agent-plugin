@@ -29,17 +29,23 @@
 #   DASH0_VERSION pins a specific release (e.g. "0.1.9"); without it, the
 #   installer resolves the latest GitHub release at runtime.
 #
-# What this installs:
+# What this installs (Cursor native-plugin layout):
+#   ~/.cursor/plugins/local/dash0-agent-plugin/
+#       .cursor-plugin/plugin.json          Cursor plugin manifest.
+#       cursor/plugin-hooks.json            Hook registrations (relative paths).
+#       cursor/skills/<skill>/SKILL.md      Skills the plugin ships.
+#       scripts/cursor-on-event.sh          Bootstrap script Cursor invokes.
 #   ~/.local/state/dash0-agent-plugin/cursor/bin/cursor-on-event-<v>-<os>-<arch>
-#       The binary that turns Cursor hook events into OTLP spans.
-#   ~/.local/share/dash0-agent-plugin/cursor-on-event.sh
-#       The bootstrap script Cursor's hooks.json invokes.
+#       The binary the bootstrap execs. Downloaded here on first hook fire
+#       or by this installer (whichever runs first).
 #   ~/.cursor/dash0-agent-plugin.local.md
 #       YAML-frontmatter config carrying your OTLP URL + auth token.
-#   ~/.cursor/hooks.json
-#       Cursor hook registrations (only added when no file exists yet).
-#   ~/.cursor/skills-cursor/<skill>/SKILL.md
-#       Skills the plugin ships (e.g. dash0-configure).
+#
+# Cursor scans ~/.cursor/plugins/local/ on startup, so relaunching Cursor is
+# required after install to pick up new or updated hook registrations. Under
+# this layout Cursor invokes hooks with the plugin dir as CWD — per-project
+# config files (.cursor/dash0-agent-plugin.local.md in a repo) are no longer
+# picked up; only the global config path above is honored.
 
 set -u
 
@@ -172,23 +178,49 @@ STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor"
 BIN_DIR="$STATE_BASE/bin"
 BIN_PATH="$BIN_DIR/cursor-on-event-${VERSION}-${OS}-${ARCH}"
 
-SHARE_DIR="$HOME/.local/share/dash0-agent-plugin"
-SCRIPT_PATH="$SHARE_DIR/cursor-on-event.sh"
+PLUGIN_DIR="$HOME/.cursor/plugins/local/dash0-agent-plugin"
+SCRIPT_PATH="$PLUGIN_DIR/scripts/cursor-on-event.sh"
+MANIFEST_PATH="$PLUGIN_DIR/.cursor-plugin/plugin.json"
+HOOKS_MANIFEST_PATH="$PLUGIN_DIR/cursor/plugin-hooks.json"
+SKILLS_DIR="$PLUGIN_DIR/cursor/skills"
 
 CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
-HOOKS_PATH="$HOME/.cursor/hooks.json"
-SKILLS_DIR="$HOME/.cursor/skills-cursor"
+LEGACY_HOOKS_PATH="$HOME/.cursor/hooks.json"
 
-mkdir -p "$BIN_DIR" "$SHARE_DIR" "$HOME/.cursor" "$SKILLS_DIR" \
+# ---------------------------------------------------------------------------
+# 4b. Preflight — refuse to install if an older shell-style install is present.
+#     An old ~/.cursor/hooks.json pointing at cursor-on-event.sh would fire
+#     alongside the new native-plugin hooks and emit every span twice. Runs
+#     before mkdir so a refused install leaves no trace on disk.
+# ---------------------------------------------------------------------------
+
+if [ -e "$LEGACY_HOOKS_PATH" ]; then
+  legacy_ours=""
+  if command -v jq >/dev/null 2>&1; then
+    legacy_ours=$(jq -r '
+      .hooks // {} | to_entries[] | .value[]? | .command // empty
+    ' "$LEGACY_HOOKS_PATH" 2>/dev/null | grep "cursor-on-event.sh" || true)
+  else
+    grep "cursor-on-event.sh" "$LEGACY_HOOKS_PATH" >/dev/null 2>&1 && legacy_ours="yes"
+  fi
+  if [ -n "$legacy_ours" ]; then
+    die "detected an older shell-style install at $LEGACY_HOOKS_PATH; run uninstall-cursor.sh first, then re-run this installer"
+  fi
+fi
+
+mkdir -p "$BIN_DIR" "$PLUGIN_DIR/.cursor-plugin" "$PLUGIN_DIR/cursor" "$PLUGIN_DIR/scripts" "$SKILLS_DIR" "$HOME/.cursor" \
   || die "could not create install directories"
 
 # ---------------------------------------------------------------------------
-# 5. Download the binary and bootstrap script with checksum verification.
+# 5. Download the binary with checksum verification.
+#    Pre-downloading lets the connectivity check below succeed before Cursor
+#    is relaunched. The bootstrap script would otherwise download it on first
+#    hook fire.
 # ---------------------------------------------------------------------------
 
 BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
 BIN_ASSET="cursor-on-event-${OS}-${ARCH}"
-SCRIPT_URL="https://raw.githubusercontent.com/${REPO}/v${VERSION}/scripts/cursor-on-event.sh"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${VERSION}"
 
 info "downloading cursor-on-event v${VERSION}..."
 fetch "$BASE_URL/$BIN_ASSET" "$BIN_PATH" \
@@ -208,28 +240,34 @@ fi
 chmod +x "$BIN_PATH"
 ok "installed binary → $BIN_PATH"
 
-info "downloading bootstrap script..."
-fetch "$SCRIPT_URL" "$SCRIPT_PATH" \
-  || die "failed to download bootstrap script: $SCRIPT_URL"
-chmod +x "$SCRIPT_PATH"
-ok "installed bootstrap script → $SCRIPT_PATH"
+# ---------------------------------------------------------------------------
+# 5b. Install plugin files.
+#     Fetch each plugin file from the tagged git ref so the on-disk layout
+#     is byte-identical to what a native Cursor Marketplace install would
+#     produce. Skills live inside the plugin dir at cursor/skills/<name>/.
+# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# 5b. Install skills.
-#     Skills live in the plugin repo under cursor/skills/<name>/SKILL.md.
-#     Cursor picks them up from ~/.cursor/skills-cursor/<name>/SKILL.md.
-# ---------------------------------------------------------------------------
+install_plugin_file() {
+  # install_plugin_file <repo-relative-source> <local-dest> [--executable]
+  local src="$1" dest="$2" flag="${3:-}"
+  info "downloading ${src}..."
+  fetch "$RAW_BASE/$src" "$dest" \
+    || die "failed to download: $RAW_BASE/$src"
+  if [ "$flag" = "--executable" ]; then
+    chmod +x "$dest"
+  fi
+  ok "installed → $dest"
+}
+
+install_plugin_file ".cursor-plugin/plugin.json"     "$MANIFEST_PATH"
+install_plugin_file "cursor/plugin-hooks.json"       "$HOOKS_MANIFEST_PATH"
+install_plugin_file "scripts/cursor-on-event.sh"     "$SCRIPT_PATH" --executable
 
 SKILLS="dash0-configure"
 for skill in $SKILLS; do
-  skill_url="https://raw.githubusercontent.com/${REPO}/v${VERSION}/cursor/skills/${skill}/SKILL.md"
   skill_dest_dir="$SKILLS_DIR/$skill"
-  skill_dest="$skill_dest_dir/SKILL.md"
   mkdir -p "$skill_dest_dir" || die "could not create $skill_dest_dir"
-  info "downloading skill: $skill..."
-  fetch "$skill_url" "$skill_dest" \
-    || die "failed to download skill: $skill_url"
-  ok "installed skill → $skill_dest"
+  install_plugin_file "cursor/skills/${skill}/SKILL.md" "$skill_dest_dir/SKILL.md"
 done
 
 # ---------------------------------------------------------------------------
@@ -301,35 +339,10 @@ chmod 600 "$CONFIG_PATH"
 ok "wrote config → $CONFIG_PATH (chmod 600)"
 
 # ---------------------------------------------------------------------------
-# 8. Write or warn-about ~/.cursor/hooks.json.
-#    v1: only write when no file exists, to avoid clobbering user hooks.
+# 8. Hook registrations live inside the plugin dir (cursor/plugin-hooks.json)
+#    and are picked up by Cursor's local-plugins scan on startup — no
+#    ~/.cursor/hooks.json write needed.
 # ---------------------------------------------------------------------------
-
-if [ -e "$HOOKS_PATH" ]; then
-  warn "$HOOKS_PATH already exists. Skipping to avoid clobbering."
-  warn "Merge the following entries by hand (each event triggers cursor-on-event.sh):"
-  warn "  sessionStart, sessionEnd, beforeSubmitPrompt, afterAgentResponse,"
-  warn "  preToolUse, postToolUse, postToolUseFailure, subagentStart, subagentStop"
-  warn "  command: \"$SCRIPT_PATH\""
-else
-  cat > "$HOOKS_PATH" <<EOF
-{
-  "version": 1,
-  "hooks": {
-    "sessionStart":        [{"command": "$SCRIPT_PATH"}],
-    "sessionEnd":          [{"command": "$SCRIPT_PATH"}],
-    "beforeSubmitPrompt":  [{"command": "$SCRIPT_PATH"}],
-    "afterAgentResponse":  [{"command": "$SCRIPT_PATH"}],
-    "preToolUse":          [{"command": "$SCRIPT_PATH"}],
-    "postToolUse":         [{"command": "$SCRIPT_PATH"}],
-    "postToolUseFailure":  [{"command": "$SCRIPT_PATH"}],
-    "subagentStart":       [{"command": "$SCRIPT_PATH"}],
-    "subagentStop":        [{"command": "$SCRIPT_PATH"}]
-  }
-}
-EOF
-  ok "wrote hooks → $HOOKS_PATH"
-fi
 
 # ---------------------------------------------------------------------------
 # 9. Connectivity check.
@@ -367,8 +380,7 @@ fi
 # ---------------------------------------------------------------------------
 
 printf "\n${C_B}Next steps${C_N}\n"
-printf "  1. Quit Cursor (Cmd+Q on macOS) and relaunch — Cursor reads hooks.json on startup.\n"
-printf "  2. Open this repo in Cursor; run a prompt. Spans should land in your Dash0 dataset.\n"
-printf "\nTo reconfigure later, edit %s and restart Cursor.\n" "$CONFIG_PATH"
-printf "To uninstall: rm -rf %s %s %s %s %s\n" \
-  "$STATE_BASE" "$SHARE_DIR" "$CONFIG_PATH" "$HOOKS_PATH" "$SKILLS_DIR/dash0-configure"
+printf "  1. Quit Cursor (Cmd+Q on macOS) and relaunch — Cursor scans %s on startup.\n" "$HOME/.cursor/plugins/local/"
+printf "  2. Open any repo in Cursor; run a prompt. Spans should land in your Dash0 dataset.\n"
+printf "\nTo reconfigure later, edit %s (no restart needed).\n" "$CONFIG_PATH"
+printf "To uninstall: curl -fsSL https://raw.githubusercontent.com/%s/main/uninstall-cursor.sh | bash\n" "$REPO"

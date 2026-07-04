@@ -11,7 +11,7 @@ End-user install / configure / uninstall docs live in
 
 | Path | Purpose |
 |---|---|
-| `plugin-hooks.json` | Hook registration installed under `~/.cursor/plugins/local/dash0-agent-plugin/cursor/plugin-hooks.json`. Uses relative `./scripts/...` paths — Cursor resolves them from the plugin root. |
+| `plugin-hooks.json` | Source of truth for which Cursor events the plugin listens to. `install-cursor.sh` reads this file, translates `./scripts/cursor-on-event.sh` to `$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh`, and merges the entries into the user's `~/.cursor/hooks.json` (Cursor doesn't fire hooks from local plugins directly). |
 | `skills/` | Cursor-only agent skills (e.g. `dash0-configure`). Referenced from `.cursor-plugin/plugin.json`. |
 | `capture/` | Records real Cursor hook payloads as test fixtures. See `capture/README.md`. |
 
@@ -21,7 +21,7 @@ The code that consumes Cursor hooks lives elsewhere:
 - `internal/source/cursor/` — Cursor-specific event normalization
 - `internal/pipeline/` — shared OTLP span emission (also used by Claude Code)
 - `scripts/cursor-on-event.sh` — bootstrap wrapper that downloads + execs the binary
-- `.cursor-plugin/plugin.json` — native plugin manifest Cursor reads from `~/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json` (references `cursor/plugin-hooks.json` and `cursor/skills/`)
+- `.cursor-plugin/plugin.json` — native plugin manifest Cursor reads from `~/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json` (declares `skills`; hooks are wired via `~/.cursor/hooks.json` at install time, not via the manifest)
 - `cursor/skills/dash0-configure/SKILL.md` — agent skill that walks the user through writing the config file
 
 ## Build
@@ -95,19 +95,28 @@ go build -o "$BIN_DIR/cursor-on-event-${VERSION}-${OS}-${ARCH}" \
   ./cmd/cursor-on-event
 ```
 
-**2. Symlink the repo into Cursor's local-plugins scan directory:**
+**2. Symlink the repo into Cursor's local-plugins scan directory (surfaces the plugin manifest + skills in Cursor's UI):**
 
 ```bash
 mkdir -p ~/.cursor/plugins/local
 ln -sfn "$PWD" ~/.cursor/plugins/local/dash0-agent-plugin
 ```
 
-The symlink means edits to `cursor/plugin-hooks.json`, `scripts/cursor-on-event.sh`,
-`cursor/skills/**/SKILL.md`, or `.cursor-plugin/plugin.json` in the repo
-take effect the next time Cursor starts (or, for the bootstrap script and
-skill contents, on the next hook fire).
+**3. Merge the plugin's hooks into `~/.cursor/hooks.json`.** Cursor 3.9.x does
+not fire hooks from local-plugin manifests, so hooks must live in the global
+`~/.cursor/hooks.json` file. Same shape as the install-cursor.sh merge, done
+by hand for sideload:
 
-**3. Write a config file** at `~/.cursor/dash0-agent-plugin.local.md`:
+```bash
+jq --arg cmd '$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh' \
+   '{version: (.version // 1), hooks: (.hooks | map_values(map(.command = $cmd)))}' \
+   cursor/plugin-hooks.json > ~/.cursor/hooks.json
+```
+
+Replace the `>` with the merge invocation from `install-cursor.sh` if you
+already have hooks in `~/.cursor/hooks.json` you want to keep.
+
+**4. Write a config file** at `~/.cursor/dash0-agent-plugin.local.md`:
 
 ```yaml
 ---
@@ -126,16 +135,17 @@ omit_io: false
 chmod 600 ~/.cursor/dash0-agent-plugin.local.md
 ```
 
-**4. Quit and relaunch Cursor** (Cmd+Q on macOS) — Cursor scans
-`~/.cursor/plugins/local/` at startup. Subsequent rebuilds (step 1) take
-effect on the next hook fire without another restart, since the bootstrap
-script `exec`'s a fresh binary each time. Only changes to the plugin
-manifest, hook registrations, or skill filenames require a restart.
+**5. Quit and relaunch Cursor** (Cmd+Q on macOS) — Cursor reads
+`~/.cursor/hooks.json` at startup. Subsequent rebuilds (step 1) take effect
+on the next hook fire without another restart, since the bootstrap script
+`exec`'s a fresh binary each time. Changes to the hook event list
+(`cursor/plugin-hooks.json`) require re-running step 3 and restarting.
 
 To tear down the sideload:
 
 ```bash
 rm ~/.cursor/plugins/local/dash0-agent-plugin
+rm ~/.cursor/hooks.json                                # or edit to drop Dash0 entries
 rm ~/.cursor/dash0-agent-plugin.local.md
 rm -rf ~/.local/state/dash0-agent-plugin/cursor
 ```

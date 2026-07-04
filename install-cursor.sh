@@ -29,23 +29,27 @@
 #   DASH0_VERSION pins a specific release (e.g. "0.1.9"); without it, the
 #   installer resolves the latest GitHub release at runtime.
 #
-# What this installs (Cursor native-plugin layout):
+# What this installs:
 #   ~/.cursor/plugins/local/dash0-agent-plugin/
-#       .cursor-plugin/plugin.json          Cursor plugin manifest.
-#       cursor/plugin-hooks.json            Hook registrations (relative paths).
+#       .cursor-plugin/plugin.json          Cursor plugin manifest (name, skills).
+#       cursor/plugin-hooks.json            Source of truth for which Cursor events
+#                                           the plugin listens to — read by this
+#                                           installer to update ~/.cursor/hooks.json.
 #       cursor/skills/<skill>/SKILL.md      Skills the plugin ships.
-#       scripts/cursor-on-event.sh          Bootstrap script Cursor invokes.
+#       scripts/cursor-on-event.sh          Bootstrap Cursor invokes on each event.
 #   ~/.local/state/dash0-agent-plugin/cursor/bin/cursor-on-event-<v>-<os>-<arch>
-#       The binary the bootstrap execs. Downloaded here on first hook fire
-#       or by this installer (whichever runs first).
+#       The binary the bootstrap execs. Pre-downloaded so the connectivity
+#       check below can run before Cursor restarts.
+#   ~/.cursor/hooks.json
+#       Cursor's user-scope hook registrations. This installer merges its
+#       events in (with commands pointing at
+#       $HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh
+#       — Cursor expands $HOME at hook time), preserving any non-Dash0
+#       entries the file already contained. Local plugins are surfaced in
+#       Cursor's UI and provide skills, but Cursor 3.9.x does NOT fire hooks
+#       from local-plugin manifests — hooks must live in this file.
 #   ~/.cursor/dash0-agent-plugin.local.md
 #       YAML-frontmatter config carrying your OTLP URL + auth token.
-#
-# Cursor scans ~/.cursor/plugins/local/ on startup, so relaunching Cursor is
-# required after install to pick up new or updated hook registrations. Under
-# this layout Cursor invokes hooks with the plugin dir as CWD — per-project
-# config files (.cursor/dash0-agent-plugin.local.md in a repo) are no longer
-# picked up; only the global config path above is honored.
 
 set -u
 
@@ -153,6 +157,12 @@ else
   sha256() { echo ""; }
 fi
 
+# Merging Dash0 hook entries into a user-owned ~/.cursor/hooks.json needs
+# reliable JSON manipulation. jq is the de-facto tool; require it explicitly
+# so failure is clear at the top, not hidden inside a merge step.
+command -v jq >/dev/null 2>&1 \
+  || die "jq is required (install via 'brew install jq' on macOS or your distro's package manager on Linux)"
+
 # ---------------------------------------------------------------------------
 # 3. Resolve VERSION.
 #    DASH0_VERSION env var pins a specific release; otherwise query the
@@ -185,28 +195,7 @@ HOOKS_MANIFEST_PATH="$PLUGIN_DIR/cursor/plugin-hooks.json"
 SKILLS_DIR="$PLUGIN_DIR/cursor/skills"
 
 CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
-LEGACY_HOOKS_PATH="$HOME/.cursor/hooks.json"
-
-# ---------------------------------------------------------------------------
-# 4b. Preflight — refuse to install if an older shell-style install is present.
-#     An old ~/.cursor/hooks.json pointing at cursor-on-event.sh would fire
-#     alongside the new native-plugin hooks and emit every span twice. Runs
-#     before mkdir so a refused install leaves no trace on disk.
-# ---------------------------------------------------------------------------
-
-if [ -e "$LEGACY_HOOKS_PATH" ]; then
-  legacy_ours=""
-  if command -v jq >/dev/null 2>&1; then
-    legacy_ours=$(jq -r '
-      .hooks // {} | to_entries[] | .value[]? | .command // empty
-    ' "$LEGACY_HOOKS_PATH" 2>/dev/null | grep "cursor-on-event.sh" || true)
-  else
-    grep "cursor-on-event.sh" "$LEGACY_HOOKS_PATH" >/dev/null 2>&1 && legacy_ours="yes"
-  fi
-  if [ -n "$legacy_ours" ]; then
-    die "detected an older shell-style install at $LEGACY_HOOKS_PATH; run uninstall-cursor.sh first, then re-run this installer"
-  fi
-fi
+HOOKS_PATH="$HOME/.cursor/hooks.json"
 
 mkdir -p "$BIN_DIR" "$PLUGIN_DIR/.cursor-plugin" "$PLUGIN_DIR/cursor" "$PLUGIN_DIR/scripts" "$SKILLS_DIR" "$HOME/.cursor" \
   || die "could not create install directories"
@@ -339,10 +328,50 @@ chmod 600 "$CONFIG_PATH"
 ok "wrote config → $CONFIG_PATH (chmod 600)"
 
 # ---------------------------------------------------------------------------
-# 8. Hook registrations live inside the plugin dir (cursor/plugin-hooks.json)
-#    and are picked up by Cursor's local-plugins scan on startup — no
-#    ~/.cursor/hooks.json write needed.
+# 8. Merge hook registrations into ~/.cursor/hooks.json.
+#    Cursor 3.9.x does not fire hooks declared in a local plugin manifest —
+#    only ~/.cursor/hooks.json (user scope) and <project>/.cursor/hooks.json
+#    are honored. Cursor DOES expand $HOME in the `command` field at hook
+#    invocation time, so we point each entry at
+#    $HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh
+#    (literal $HOME string).
+#
+#    Merge strategy: preserve every existing entry whose command does NOT
+#    contain "cursor-on-event.sh"; replace every entry whose command DOES
+#    (matches both prior Dash0 entries and pre-0.1.17 legacy paths); add our
+#    fresh set from the just-installed cursor/plugin-hooks.json.
 # ---------------------------------------------------------------------------
+
+info "merging Dash0 hook registrations into ${HOOKS_PATH}..."
+
+DASH0_HOOK_CMD='$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh'
+DASH0_HOOKS_TMP=$(mktemp)
+jq --arg cmd "$DASH0_HOOK_CMD" \
+   '{version: (.version // 1), hooks: (.hooks | map_values(map(.command = $cmd)))}' \
+   "$HOOKS_MANIFEST_PATH" > "$DASH0_HOOKS_TMP" \
+  || die "failed to build Dash0 hook entries from $HOOKS_MANIFEST_PATH"
+
+if [ -e "$HOOKS_PATH" ]; then
+  MERGED_TMP=$(mktemp)
+  jq --slurpfile dash0 "$DASH0_HOOKS_TMP" '
+    .version = (.version // 1) |
+    .hooks //= {} |
+    reduce ($dash0[0].hooks | to_entries[]) as $e (
+      .;
+      .hooks[$e.key] = (
+        ((.hooks[$e.key] // []) | map(select(.command | contains("cursor-on-event.sh") | not)))
+        + $e.value
+      )
+    )
+  ' "$HOOKS_PATH" > "$MERGED_TMP" \
+    || { rm -f "$DASH0_HOOKS_TMP" "$MERGED_TMP"; die "failed to merge Dash0 hooks into $HOOKS_PATH"; }
+  mv "$MERGED_TMP" "$HOOKS_PATH"
+  ok "merged Dash0 hooks into $HOOKS_PATH"
+else
+  mv "$DASH0_HOOKS_TMP" "$HOOKS_PATH"
+  ok "wrote hooks → $HOOKS_PATH"
+fi
+rm -f "$DASH0_HOOKS_TMP"
 
 # ---------------------------------------------------------------------------
 # 9. Connectivity check.

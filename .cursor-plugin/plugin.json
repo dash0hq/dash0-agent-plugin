@@ -9,7 +9,6 @@
   "repository": "https://github.com/dash0hq/dash0-agent-plugin",
   "license": "Apache-2.0",
   "keywords": ["observability", "tracing", "opentelemetry", "dash0", "otel"],
-  "hooks": "cursor/plugin-hooks.json",
   "skills": "./cursor/skills/",
   "commands": []
 }

@@ -91,8 +91,12 @@ func (t turn) traces(now time.Time) (otlp.ExportTracesRequest, error) {
 
 	workingDir := fmt.Sprintf("/Users/%s/dev/%s", handle, r.Name)
 
-	// VCS, user, and team attributes are shared by every span in the turn.
-	vcsAttrs := []otlp.Attribute{
+	// Agent identity, VCS, user, and team attributes are shared by every span
+	// in the turn.
+	sharedAttrs := []otlp.Attribute{
+		{Key: "gen_ai.harness.name", Value: otlp.StringVal("claude-code")},
+		{Key: "gen_ai.provider.name", Value: otlp.StringVal("anthropic")},
+		{Key: "gen_ai.agent.name", Value: otlp.StringVal("claude")},
 		{Key: "dash0.gen_ai.vcs.owner.name", Value: otlp.StringVal(r.Owner)},
 		{Key: "dash0.gen_ai.vcs.provider.name", Value: otlp.StringVal("github")},
 		{Key: "dash0.gen_ai.vcs.ref.head.name", Value: otlp.StringVal(branch)},
@@ -126,7 +130,7 @@ func (t turn) traces(now time.Time) (otlp.ExportTracesRequest, error) {
 		{Key: "gen_ai.usage.cache_read.input_tokens", Value: otlp.IntVal(int64(rand.IntN(9000000)))},
 		{Key: "effort", Value: effortVal},
 	}
-	chatAttrs = append(chatAttrs, vcsAttrs...)
+	chatAttrs = append(chatAttrs, sharedAttrs...)
 	chatSpan := otlp.Span{
 		TraceID:           traceID,
 		SpanID:            chatSpanID,
@@ -151,7 +155,7 @@ func (t turn) traces(now time.Time) (otlp.ExportTracesRequest, error) {
 		{Key: "effort", Value: effortVal},
 	}
 	toolName := appendToolKindAttrs(&toolAttrs)
-	toolAttrs = append(toolAttrs, vcsAttrs...)
+	toolAttrs = append(toolAttrs, sharedAttrs...)
 	toolSpan := otlp.Span{
 		TraceID:           traceID,
 		SpanID:            toolSpanID,
@@ -169,7 +173,6 @@ func (t turn) traces(now time.Time) (otlp.ExportTracesRequest, error) {
 	resourceAttrs := []otlp.Attribute{
 		{Key: "service.name", Value: otlp.StringVal("claude-code")},
 		{Key: "service.version", Value: otlp.StringVal(pick(serviceVersions))},
-		{Key: "gen_ai.provider.name", Value: otlp.StringVal("anthropic")},
 		{Key: "process.working_directory", Value: otlp.StringVal(workingDir)},
 	}
 

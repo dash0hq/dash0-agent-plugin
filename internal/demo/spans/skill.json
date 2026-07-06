@@ -28,12 +28,6 @@
             }
           },
           {
-            "key": "gen_ai.provider.name",
-            "value": {
-              "stringValue": "anthropic"
-            }
-          },
-          {
             "key": "process.working_directory",
             "value": {
               "stringValue": "/Users/someuser/Documents/dash0/components/api"
@@ -122,15 +116,33 @@
                   }
                 },
                 {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "claude"
+                  }
+                },
+                {
                   "key": "gen_ai.conversation.id",
                   "value": {
                     "stringValue": "4be21ed5-bcdc-4e77-9614-d4315c92724d"
                   }
                 },
                 {
+                  "key": "gen_ai.harness.name",
+                  "value": {
+                    "stringValue": "claude-code"
+                  }
+                },
+                {
                   "key": "gen_ai.operation.name",
                   "value": {
                     "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "anthropic"
                   }
                 },
                 {

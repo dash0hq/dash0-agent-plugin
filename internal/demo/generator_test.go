@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
 // attrMap flattens a span's attributes into a key/value map for assertions.

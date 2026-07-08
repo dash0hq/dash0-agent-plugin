@@ -386,18 +386,27 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
       - name: Build plugin binary
         run: go build -o bin/on-event-linux-amd64 ./cmd/on-event
 
       - name: Run E2E tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Enables the live Codex drift canary (TestE2EFullFlowWithCodex), which
+          # FAILS when this key is missing (same as the Claude e2e) — so add the
+          # secret before merging or the job goes red. Use a Platform service-account
+          # key (project codex-o11y, budget-capped); see SIG-172/SIG-174. Inherits
+          # this job's fork guard, so a fork PR never receives the secret.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::error::ANTHROPIC_API_KEY secret is not set — add it at Settings → Secrets → Actions"
             exit 1
           fi
-          go test -tags=e2e -v -timeout=120s ./test/e2e/
+          go test -tags=e2e -v -timeout=300s ./test/e2e/
 
   consistency-checks:
     runs-on: ubuntu-latest

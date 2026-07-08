@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+#
+# Aikido Security Configuration
+#
+# This file configures exclusions for Aikido Code Security (SAST) scans.
+# Using string-inclusion matching: if a value appears anywhere in a file path, it's excluded.

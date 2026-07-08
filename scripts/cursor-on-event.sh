@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Bootstrap wrapper for the cursor-on-event binary. Installed at a stable
 # user-owned path by the setup CLI; referenced by absolute path from Cursor's
 # hooks.json so each hook invocation runs:

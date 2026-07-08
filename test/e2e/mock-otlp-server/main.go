@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
 
 // mock-otlp-server is a minimal HTTP server that records OTLP requests
 // and exposes them via GET /requests for test assertions.

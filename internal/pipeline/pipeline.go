@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package pipeline is the source-agnostic engine that turns normalized hook
 // events into OTLP spans. Both the Claude Code and Cursor entrypoints feed
 // already-normalized events into Process; this package owns trace context

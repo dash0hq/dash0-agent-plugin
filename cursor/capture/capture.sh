@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
 # Logs the JSON payload of every Cursor hook invocation to a file under
 # $CAPTURE_DIR for inspection. Always exits 0 so the captured-from session
 # is never blocked by capture failures.

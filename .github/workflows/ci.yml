@@ -1,9 +1,12 @@
 name: CI
 
 on:
+  # PRs are the pre-merge gate (and the only safe path for fork PRs). push is
+  # scoped to main so trunk is validated post-merge without double-running on
+  # every PR-branch push. A branch with no open PR intentionally runs no CI.
   push:
     branches:
-      - '*'
+      - main
   pull_request:
   workflow_dispatch:
 

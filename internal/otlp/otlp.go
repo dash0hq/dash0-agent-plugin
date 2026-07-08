@@ -72,8 +72,8 @@ func debugLog(cfg Config, prefix string, payload []byte) {
 		if err != nil {
 			return
 		}
-		f.WriteString(line)
-		f.Close()
+		_, _ = f.WriteString(line)
+		_ = f.Close()
 	}
 }
 
@@ -237,7 +237,7 @@ func sendOTLP(cfg Config, path string, payload []byte) error {
 			}
 			return lastErr
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		cancel()
 
 		if resp.StatusCode < 300 {

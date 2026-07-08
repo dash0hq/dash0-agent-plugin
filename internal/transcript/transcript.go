@@ -22,10 +22,10 @@ type transcriptEntry struct {
 }
 
 type messageEnvelope struct {
-	Role    string              `json:"role"`
-	Model   string              `json:"model"`
-	Usage   *usageData          `json:"usage"`
-	Content []json.RawMessage   `json:"content"`
+	Role    string            `json:"role"`
+	Model   string            `json:"model"`
+	Usage   *usageData        `json:"usage"`
+	Content []json.RawMessage `json:"content"`
 }
 
 type usageData struct {
@@ -52,7 +52,7 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening transcript: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := json.NewDecoder(f)
 
@@ -124,7 +124,7 @@ func ReadSessionTitle(transcriptPath string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := json.NewDecoder(f)
 	var title string
@@ -147,7 +147,7 @@ func ReadModel(transcriptPath string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := json.NewDecoder(f)
 	var model string

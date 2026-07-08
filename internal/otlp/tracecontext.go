@@ -28,7 +28,7 @@ func SaveTraceContext(ctx TraceContext, dataDir string) error {
 
 // ClearTraceContext removes the persisted trace context file.
 func ClearTraceContext(dataDir string) {
-	os.Remove(filepath.Join(dataDir, traceContextFile))
+	_ = os.Remove(filepath.Join(dataDir, traceContextFile))
 }
 
 // LoadTraceContext reads the persisted trace context from the data directory.

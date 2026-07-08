@@ -197,10 +197,10 @@ func TestNormalize_PreservesUnknownFields(t *testing.T) {
 	// Cursor may add fields in future versions; the adapter should pass them
 	// through untouched rather than swallowing them.
 	ev := map[string]any{
-		"hook_event_name":           "preToolUse",
-		"tool_name":                 "Read",
-		"some_future_cursor_field":  "preserve_me",
-		"another":                   42.0,
+		"hook_event_name":          "preToolUse",
+		"tool_name":                "Read",
+		"some_future_cursor_field": "preserve_me",
+		"another":                  42.0,
 	}
 	out := Normalize(ev)
 	require.NotNil(t, out)

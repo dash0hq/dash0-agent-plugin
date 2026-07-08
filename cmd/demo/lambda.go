@@ -55,8 +55,8 @@ func nextInvocation(client *http.Client, base string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
 	reqID := resp.Header.Get("Lambda-Runtime-Aws-Request-Id")
 	if reqID == "" {
 		return "", fmt.Errorf("missing Lambda-Runtime-Aws-Request-Id header")
@@ -80,5 +80,5 @@ func postString(client *http.Client, url, body string) {
 		fmt.Fprintf(os.Stderr, "demo: runtime post %s: %v\n", url, err)
 		return
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }

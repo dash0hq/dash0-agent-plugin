@@ -14,7 +14,7 @@ func Load(path string) {
 	if err != nil {
 		return // missing file is fine
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -34,7 +34,7 @@ func Load(path string) {
 		}
 		// Don't overwrite existing env vars.
 		if _, exists := os.LookupEnv(key); !exists {
-			os.Setenv(key, val)
+			_ = os.Setenv(key, val)
 		}
 	}
 }

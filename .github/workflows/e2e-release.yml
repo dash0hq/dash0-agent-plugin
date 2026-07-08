@@ -25,7 +25,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Build mock OTLP server
-        run: go build -o /tmp/mock-otlp ./test/e2e/mock-otlp-server
+        run: make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp
 
       - name: Start mock OTLP server
         run: |

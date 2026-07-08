@@ -1,0 +1,39 @@
+version: "2"
+
+run:
+  timeout: 5m
+  allow-parallel-runners: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/dash0hq/
+
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - nakedret
+    - staticcheck
+    - unconvert
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # errcheck is noisy in tests (assertions already gate correctness); ignored
+      # returns there (cleanup, json.Unmarshal on known-good fixtures) are intentional.
+      - path: _test\.go
+        linters:
+          - errcheck

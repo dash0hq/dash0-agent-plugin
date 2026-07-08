@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // Command demo generates mock Claude Code telemetry and sends it to Dash0.
 //
 // The same binary serves two roles:

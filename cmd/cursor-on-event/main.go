@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // cursor-on-event is the Cursor-side entrypoint. Cursor spawns this binary
 // fresh for every hook event (via scripts/cursor-on-event.sh which downloads
 // the matching release on first run), pipes the hook JSON in on stdin, and

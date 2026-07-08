@@ -115,7 +115,7 @@ ok()    { printf "${C_G}✓${C_N} %s\n" "$1"; }
 warn()  { printf "${C_Y}!${C_N} %s\n" "$1"; }
 die()   { printf "${C_R}✗${C_N} %s\n" "$1" >&2; exit 1; }
 
-printf "${C_B}Dash0 → Cursor telemetry installer${C_N}\n\n"
+printf '%sDash0 → Cursor telemetry installer%s\n\n' "$C_B" "$C_N"
 
 # ---------------------------------------------------------------------------
 # 1. Platform detection.
@@ -344,6 +344,7 @@ ok "wrote config → $CONFIG_PATH (chmod 600)"
 
 info "merging Dash0 hook registrations into ${HOOKS_PATH}..."
 
+# shellcheck disable=SC2016 # literal $HOME on purpose: Cursor expands it at hook invocation time
 DASH0_HOOK_CMD='$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh'
 DASH0_HOOKS_TMP=$(mktemp)
 jq --arg cmd "$DASH0_HOOK_CMD" \
@@ -408,7 +409,7 @@ fi
 # 10. Done.
 # ---------------------------------------------------------------------------
 
-printf "\n${C_B}Next steps${C_N}\n"
+printf '\n%sNext steps%s\n' "$C_B" "$C_N"
 printf "  1. Quit Cursor (Cmd+Q on macOS) and relaunch — Cursor scans %s on startup.\n" "$HOME/.cursor/plugins/local/"
 printf "  2. Open any repo in Cursor; run a prompt. Spans should land in your Dash0 dataset.\n"
 printf "\nTo reconfigure later, edit %s (no restart needed).\n" "$CONFIG_PATH"

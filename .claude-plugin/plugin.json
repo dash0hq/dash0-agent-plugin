@@ -26,6 +26,18 @@
       "type": "string",
       "sensitive": true
     },
+    "AUTH_TOKEN_KEYCHAIN_SERVICE": {
+      "title": "Auth Token Keychain Service (macOS)",
+      "description": "Instead of storing the token, name a macOS keychain item to read it from at runtime (e.g. for managed/MDM rollouts). Provision it with: security add-generic-password -s <service> -a <account> -w <token>. A successful lookup takes precedence over AUTH_TOKEN.",
+      "type": "string",
+      "sensitive": false
+    },
+    "AUTH_TOKEN_KEYCHAIN_ACCOUNT": {
+      "title": "Auth Token Keychain Account (macOS)",
+      "description": "Optional account name for the keychain item referenced by AUTH_TOKEN_KEYCHAIN_SERVICE.",
+      "type": "string",
+      "sensitive": false
+    },
     "DATASET": {
       "title": "Dataset",
       "description": "Dash0 dataset name (optional)",

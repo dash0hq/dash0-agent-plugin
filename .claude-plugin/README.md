@@ -128,6 +128,8 @@ If credentials are missing: `dash0: telemetry is not active — configure the pl
 |---|---|---|---|
 | `OTLP_URL` | Dash0 OTLP endpoint URL (e.g. `https://ingress.<region>.aws.dash0.com`) | — | No |
 | `AUTH_TOKEN` | Dash0 authentication token | — | Yes (stored in keychain) |
+| `AUTH_TOKEN_KEYCHAIN_SERVICE` | macOS keychain item to read the token from at runtime, instead of storing it (see [Managed rollout](#managed--mdm-rollout-macos-keychain)) | — | No |
+| `AUTH_TOKEN_KEYCHAIN_ACCOUNT` | Optional account for the keychain item above | — | No |
 | `DATASET` | Dash0 dataset name | — | No |
 | `AGENT_NAME` | Agent name (used as `service.name`) | `claude-code` | No |
 | `TEAM_NAME` | Team name — all spans are tagged with `dash0.team.name` | — | No |
@@ -166,6 +168,30 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 | `DASH0_DEBUG_FILE` | Write debug output to this file path |
 
 > `AUTH_TOKEN` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Use `/plugin → Configure` (OS keychain) or the config file's `auth_token:` field.
+
+### Managed / MDM rollout (macOS keychain)
+
+For fleet rollouts where plugin config is pushed via enterprise [managed settings](https://docs.anthropic.com/en/docs/claude-code/settings) (`managed-settings.json`, distributed by MDM), you can avoid placing the token in that file. Instead, provision the token once per machine in the macOS keychain and point the plugin at it — the managed config only carries a reference, not the secret.
+
+1. Provision the keychain item (via your MDM/onboarding script):
+
+   ```bash
+   security add-generic-password -s "dash0-auth-token" -a "$USER" -w "<your-dash0-auth-token>" -U
+   ```
+
+2. Configure the plugin with the reference instead of `AUTH_TOKEN` (e.g. in `pluginConfigs`):
+
+   ```json
+   "options": {
+     "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
+     "AUTH_TOKEN_KEYCHAIN_SERVICE": "dash0-auth-token",
+     "AUTH_TOKEN_KEYCHAIN_ACCOUNT": "your-account"
+   }
+   ```
+
+   `AUTH_TOKEN_KEYCHAIN_ACCOUNT` is optional; omit it to match by service name alone.
+
+At session start the plugin reads the token from the keychain and uses it exactly as if it had been configured directly. A successful lookup takes precedence over an inline `AUTH_TOKEN`; if the item is missing, the plugin falls back to whatever `AUTH_TOKEN` is otherwise set. This is macOS-only — on other platforms the reference is ignored.
 
 ## Privacy defaults
 

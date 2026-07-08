@@ -7,4 +7,5 @@ events.jsonl
 dist/
 bin/
 cursor/captured/
+copilot/captured/
 cover.out

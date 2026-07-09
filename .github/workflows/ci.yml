@@ -1,9 +1,12 @@
 name: CI
 
 on:
+  # PRs are the pre-merge gate (and the only safe path for fork PRs). push is
+  # scoped to main so trunk is validated post-merge without double-running on
+  # every PR-branch push. A branch with no open PR intentionally runs no CI.
   push:
     branches:
-      - '*'
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -403,12 +406,21 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
       - name: Build plugin binary
         run: make build-binary PKG=./cmd/on-event OUT=bin/on-event-linux-amd64
 
       - name: Run E2E tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Enables the live Codex drift canary (TestE2EFullFlowWithCodex), which
+          # FAILS when this key is missing (same as the Claude e2e) — so add the
+          # secret before merging or the job goes red. Use a Platform service-account
+          # key (project codex-o11y, budget-capped); see SIG-172/SIG-174. Inherits
+          # this job's fork guard, so a fork PR never receives the secret.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::error::ANTHROPIC_API_KEY secret is not set — add it at Settings → Secrets → Actions"

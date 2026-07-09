@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 )
 
 // logEvent mirrors what pipeline.Process does before each hook: stamp a

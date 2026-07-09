@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Dash0 — Cursor telemetry uninstaller.
 #
 # Usage:
@@ -83,7 +86,7 @@ LEGACY_SKILLS_PARENT="$HOME/.cursor/skills-cursor"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor"
 CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
 
-printf "${C_B}Dash0 → Cursor telemetry uninstaller${C_N}\n\n"
+printf '%sDash0 → Cursor telemetry uninstaller%s\n\n' "$C_B" "$C_N"
 printf "Will remove (if present):\n"
 printf "  %s\n" \
   "$PLUGIN_DIR" \
@@ -131,8 +134,8 @@ remove_path "$STATE_DIR"            "binary cache"
 remove_path "$CONFIG_PATH"          "config file"
 
 # Tidy empty parent directories (silent if they aren't empty or don't exist).
-rmdir "$LEGACY_SHARE_DIR"      2>/dev/null && ok "removed empty $LEGACY_SHARE_DIR"      || true
-rmdir "$LEGACY_SKILLS_PARENT"  2>/dev/null && ok "removed empty $LEGACY_SKILLS_PARENT"  || true
+if rmdir "$LEGACY_SHARE_DIR" 2>/dev/null; then ok "removed empty $LEGACY_SHARE_DIR"; fi
+if rmdir "$LEGACY_SKILLS_PARENT" 2>/dev/null; then ok "removed empty $LEGACY_SKILLS_PARENT"; fi
 
 # ---------------------------------------------------------------------------
 # Strip Dash0 entries from ~/.cursor/hooks.json while preserving any
@@ -180,4 +183,4 @@ fi
 # Done.
 # ---------------------------------------------------------------------------
 
-printf "\n${C_B}Done.${C_N} Restart Cursor (Cmd+Q on macOS) so it stops registering the hooks.\n"
+printf '\n%sDone.%s Restart Cursor (Cmd+Q on macOS) so it stops registering the hooks.\n' "$C_B" "$C_N"

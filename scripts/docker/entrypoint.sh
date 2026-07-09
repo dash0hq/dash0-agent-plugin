@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 
 # If DASH0_TOKEN is provided at run time, expose it to the plugin as the auth

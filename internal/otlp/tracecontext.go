@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 package otlp
 
 import (
@@ -28,7 +31,7 @@ func SaveTraceContext(ctx TraceContext, dataDir string) error {
 
 // ClearTraceContext removes the persisted trace context file.
 func ClearTraceContext(dataDir string) {
-	os.Remove(filepath.Join(dataDir, traceContextFile))
+	_ = os.Remove(filepath.Join(dataDir, traceContextFile))
 }
 
 // LoadTraceContext reads the persisted trace context from the data directory.

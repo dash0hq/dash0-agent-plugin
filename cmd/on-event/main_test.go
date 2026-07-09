@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -17,9 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
 // sessionPath returns the path to a file inside the session-scoped directory.
@@ -373,9 +377,10 @@ func TestConcurrentSessionsAreIsolated(t *testing.T) {
 	for _, s := range allSpans {
 		for _, a := range s.Attributes {
 			if a.Key == "gen_ai.conversation.id" {
-				if *a.Value.StringValue == "sess-A" {
+				switch *a.Value.StringValue {
+				case "sess-A":
 					spansA = append(spansA, s)
-				} else if *a.Value.StringValue == "sess-B" {
+				case "sess-B":
 					spansB = append(spansB, s)
 				}
 			}

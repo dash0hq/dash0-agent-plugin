@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -31,7 +34,6 @@ func main() {
 		os.Exit(1)
 	}
 }
-
 
 func run() error {
 	dotenv.Load(".env")
@@ -190,8 +192,8 @@ func buildSessionURL(appURL, sessionID string) string {
 	}
 	var buf bytes.Buffer
 	w := zlib.NewWriter(&buf)
-	w.Write(stateJSON)
-	w.Close()
+	_, _ = w.Write(stateJSON)
+	_ = w.Close()
 	encoded := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(buf.Bytes())
 	return appURL + sessionDetailsPath + "?s=" + encoded
 }

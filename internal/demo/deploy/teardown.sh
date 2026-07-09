@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
 #
 # Removes everything deploy.sh created: the EventBridge rule + target, the
 # Lambda function, and the IAM role. Safe to run repeatedly.

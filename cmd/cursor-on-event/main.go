@@ -1,13 +1,16 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // cursor-on-event is the Cursor-side entrypoint. Cursor spawns this binary
 // fresh for every hook event (via scripts/cursor-on-event.sh which downloads
 // the matching release on first run), pipes the hook JSON in on stdin, and
 // expects a clean exit. The binary:
 //
-//   1. Reads the Cursor hook payload from stdin.
-//   2. Normalizes it to the pipeline's canonical event vocabulary (see
-//      internal/source/cursor).
-//   3. Hands off to pipeline.Process, which writes scratch state, manages
-//      trace context across hook invocations, and emits OTLP spans.
+//  1. Reads the Cursor hook payload from stdin.
+//  2. Normalizes it to the pipeline's canonical event vocabulary (see
+//     internal/source/cursor).
+//  3. Hands off to pipeline.Process, which writes scratch state, manages
+//     trace context across hook invocations, and emits OTLP spans.
 //
 // Telemetry failures never break the user's agent loop: errors are logged to
 // stderr and the process exits 0.

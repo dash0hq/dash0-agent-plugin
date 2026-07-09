@@ -25,10 +25,13 @@ type transcriptEntry struct {
 }
 
 type messageEnvelope struct {
-	Role    string            `json:"role"`
-	Model   string            `json:"model"`
-	Usage   *usageData        `json:"usage"`
-	Content []json.RawMessage `json:"content"`
+	Role  string     `json:"role"`
+	Model string     `json:"model"`
+	Usage *usageData `json:"usage"`
+	// Content is either a plain string (typed user prompts) or an array of
+	// content blocks (tool results, assistant messages), so it is kept raw
+	// and inspected in isRealUserMessage.
+	Content json.RawMessage `json:"content"`
 }
 
 type usageData struct {
@@ -167,7 +170,8 @@ func ReadModel(transcriptPath string) string {
 }
 
 // isRealUserMessage returns true if the entry is a user message that is NOT
-// a tool_result relay. Tool-result messages have content[0].type == "tool_result"
+// a tool_result relay. Typed prompts carry content as a plain string;
+// tool-result relays carry an array with content[0].type == "tool_result"
 // and should not reset the turn boundary.
 func isRealUserMessage(entry transcriptEntry) bool {
 	if entry.Type != "user" {
@@ -176,9 +180,14 @@ func isRealUserMessage(entry transcriptEntry) bool {
 	if entry.Message == nil || entry.Message.Role != "user" {
 		return false
 	}
-	if len(entry.Message.Content) > 0 {
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(entry.Message.Content, &blocks); err != nil {
+		// Not an array — string content, i.e. a typed prompt.
+		return true
+	}
+	if len(blocks) > 0 {
 		var ct contentType
-		if err := json.Unmarshal(entry.Message.Content[0], &ct); err == nil {
+		if err := json.Unmarshal(blocks[0], &ct); err == nil {
 			if ct.Type == "tool_result" {
 				return false
 			}

@@ -16,10 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
-	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
+	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
 )
 
 var update = flag.Bool("update", false, "regenerate the golden span snapshot")

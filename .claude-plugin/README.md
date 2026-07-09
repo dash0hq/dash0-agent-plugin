@@ -86,9 +86,7 @@ Admins can install and configure the plugin for every member with no per-develop
 
 Clients fetch these at startup and re-poll hourly; the payload is cached at `~/.claude/remote-settings.json` and applied in-memory (not written to an on-disk `managed-settings.json`). Requires Claude for Teams/Enterprise and the Owner or Primary Owner role. Server-managed settings are not delivered on Amazon Bedrock, Google Vertex, or Microsoft Foundry.
 
-**The auth token.** Push only the non-secret keys via managed settings, and have each developer add the token once via `/plugin → Configure`. `AUTH_TOKEN` is declared `sensitive`, so Claude Code stores it encrypted in the OS keychain — never in `settings.json`.
-
-Do **not** inline the token into managed `pluginConfigs.options` or the top-level `env` block: those are stored in plaintext (in the admin console and cached at `~/.claude/remote-settings.json` on every machine), and Claude Code has no secret-reference mechanism to avoid it. Even for an ingest-only token, prefer the keychain.
+**The auth token.** Push only the non-secret keys via managed settings, and have each developer add the token once via `/plugin → Configure`. `AUTH_TOKEN` is declared `sensitive`, so Claude Code stores it encrypted in the OS keychain — never in `settings.json`. Avoid inlining it into managed `pluginConfigs.options` or the `env` block, which are stored in plaintext.
 
 **MDM / on-disk alternative.** If you manage devices with MDM (Jamf, Intune, Kandji) or prefer a file on disk, deploy the same JSON as `managed-settings.json` instead of using the console:
 

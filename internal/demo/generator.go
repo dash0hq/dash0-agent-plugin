@@ -36,11 +36,6 @@ type turn struct {
 	session  string
 }
 
-// newcomerProbability is the per-turn chance the selected user is the daily
-// rotating newcomer instead of one of the 40 static contributors. With the
-// default schedule of one turn every 20 minutes (72 turns/day), 0.15 gives a
-// > 99.999% chance that at least one newcomer turn is emitted in any given UTC
-// day, so the billing tables always see a fresh unique user daily.
 const newcomerProbability = 0.15
 
 // newTurn draws all randomized dimensions for one turn from the closed lists in

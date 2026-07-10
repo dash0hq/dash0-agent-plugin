@@ -1,8 +1,18 @@
 package demo
 
+import (
+	"fmt"
+	"time"
+)
+
 // Closed lists of mock data. One element of each is chosen at random per
 // generated turn so the resulting telemetry looks like many different users
 // working across a handful of repositories.
+
+// newcomersTeam is the team every daily rotating "newcomer" user is attributed
+// to. Kept separate from the 40 static contributors so consumers can filter
+// them in or out via dash0.team.name.
+const newcomersTeam = "Newcomers"
 
 // repo describes a mock VCS repository. The working directory for a turn is
 // derived from the user handle and the repository name.
@@ -22,7 +32,9 @@ var repos = []repo{
 	{Owner: "dash0hq", Name: "dash0-docs", URLFull: "https://github.com/dash0hq/dash0-docs"},
 }
 
-// teams is the closed list of 6 teams users are organized into.
+// teams is the closed list of teams users are organized into. The last entry,
+// "Newcomers", is reserved for the daily rotating newcomer user built by
+// newcomerUser and never appears in the static users slice.
 var teams = []string{
 	"Platform",
 	"Observability",
@@ -30,6 +42,19 @@ var teams = []string{
 	"Frontend",
 	"Developer Experience",
 	"SRE",
+	newcomersTeam,
+}
+
+// newcomerUser returns a synthetic contributor whose name is stable within a
+// UTC calendar day and changes at the day boundary. Emitting one turn per day
+// as this user guarantees at least one brand-new unique user per day in the
+// billing tables, which gives the billing views realistic churn to render.
+func newcomerUser(now time.Time) user {
+	day := now.UTC().Format("2006-01-02")
+	return user{
+		Name: fmt.Sprintf("Newcomer %s", day),
+		Team: newcomersTeam,
+	}
 }
 
 // user is a mock contributor and the team they belong to. Team membership is

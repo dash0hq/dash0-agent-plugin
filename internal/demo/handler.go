@@ -23,7 +23,7 @@ import (
 // shared by local invocation and (in the future) the Lambda handler.
 func Handle(ctx context.Context, cfg otlp.Config) error {
 	now := time.Now().UTC()
-	t := newTurn()
+	t := newTurn(now)
 
 	req, err := t.traces(now)
 	if err != nil {

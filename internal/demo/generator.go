@@ -36,12 +36,19 @@ type turn struct {
 	session  string
 }
 
+// newcomerProbability is the per-turn chance the selected user is the daily
+// rotating newcomer instead of one of the 40 static contributors. With the
+// default schedule of one turn every 20 minutes (72 turns/day), 0.15 gives a
+// > 99.999% chance that at least one newcomer turn is emitted in any given UTC
+// day, so the billing tables always see a fresh unique user daily.
+const newcomerProbability = 0.15
+
 // newTurn draws all randomized dimensions for one turn from the closed lists in
-// data.go.
-func newTurn() turn {
+// data.go. now anchors the daily rotating newcomer user (see pickUser).
+func newTurn(now time.Time) turn {
 	return turn{
 		repo:   pick(repos),
-		user:   pick(users),
+		user:   pickUser(now),
 		model:  pick(models),
 		effort: pick(effortLevels),
 		msg:    pick(messagePairs),
@@ -50,6 +57,17 @@ func newTurn() turn {
 		revision: randomHex(40),
 		session:  randomUUID(),
 	}
+}
+
+// pickUser returns either the daily rotating newcomer (with probability
+// newcomerProbability) or one of the 40 static contributors chosen uniformly
+// at random. The newcomer name is stable within a UTC calendar day and rolls
+// over at the day boundary.
+func pickUser(now time.Time) user {
+	if rand.Float64() < newcomerProbability {
+		return newcomerUser(now)
+	}
+	return pick(users)
 }
 
 // GenerateTurn builds a mock OTLP traces request representing exactly one agent
@@ -61,7 +79,7 @@ func newTurn() turn {
 // now is the wall-clock instant the turn ends; the span timestamps are derived
 // from it so callers can produce deterministic output in tests.
 func GenerateTurn(now time.Time) (otlp.ExportTracesRequest, error) {
-	return newTurn().traces(now)
+	return newTurn(now).traces(now)
 }
 
 // traces builds the OTLP traces request for the turn.

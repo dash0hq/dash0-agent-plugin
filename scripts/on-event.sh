@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 
@@ -45,7 +47,7 @@ load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
 PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.16"
+VERSION="0.1.19"
 
 # Detect OS and architecture.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

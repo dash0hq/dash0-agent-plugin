@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package cursor normalizes Cursor hook payloads into the pipeline's canonical
 // event vocabulary. The pipeline then handles trace context, span emission,
 // and OTLP export uniformly across sources.

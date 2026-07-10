@@ -8,7 +8,9 @@ Cursor plugin that emits agent activity as OpenTelemetry spans to your Dash0 end
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.sh | bash
 ```
 
-The installer downloads `cursor-on-event-<os>-<arch>` from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) (verifying the checksum), writes `~/.cursor/hooks.json`, drops the credentials into `~/.cursor/dash0-agent-plugin.local.md`, and installs the `dash0-configure` skill.
+The installer lays the plugin down under `~/.cursor/plugins/local/dash0-agent-plugin/` — Cursor scans that directory on startup and picks up the plugin manifest and shipped skills. Hook registrations are merged into `~/.cursor/hooks.json` at the user scope (Cursor doesn't fire hooks from local-plugin manifests, only from `~/.cursor/hooks.json` and project-scope `.cursor/hooks.json`). Any hooks you already had in that file are preserved; only entries whose `command` references `cursor-on-event.sh` are managed by this installer. Credentials go to `~/.cursor/dash0-agent-plugin.local.md`, and the binary is fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) (verifying the checksum) into `~/.local/state/dash0-agent-plugin/cursor/bin/`.
+
+Requires `jq` (`brew install jq` on macOS; your distro's package manager on Linux) so the installer can safely merge into your `~/.cursor/hooks.json`.
 
 Pre-supply credentials to skip the prompts. Either pass them as flags:
 
@@ -50,7 +52,9 @@ omit_user_info: false         # set true to hash user.name and omit user.email
 ---
 ```
 
-To reconfigure later, re-run the `dash0-configure` skill in Cursor, or edit the file directly. Config changes take effect on the next hook fire — no restart needed. (Restart is only needed if `hooks.json` itself changes, since Cursor reads it at startup.)
+To reconfigure later, re-run the `dash0-configure` skill in Cursor, or edit the file directly. Config changes take effect on the next hook fire — no restart needed. (Restart is only needed after upgrading the plugin's registered event set, since Cursor reads `~/.cursor/hooks.json` at startup.)
+
+Per-project overrides work: drop a `.cursor/dash0-agent-plugin.local.md` inside your repo and it takes precedence over the global file (the bootstrap script checks the workspace CWD first, then `$HOME/.cursor/`).
 
 ## Privacy defaults
 
@@ -83,6 +87,6 @@ tail -F /tmp/dash0-cursor-debug.log
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/uninstall-cursor.sh | bash
 ```
 
-Pass `-s -- --yes` to skip the confirmation prompt. The uninstaller only deletes `~/.cursor/hooks.json` when every hook entry references the Dash0 bootstrap script — if you merged the Dash0 hooks into your own `hooks.json`, it leaves the file in place and tells you which entries to remove by hand.
+Pass `-s -- --yes` to skip the confirmation prompt. The uninstaller removes the entire `~/.cursor/plugins/local/dash0-agent-plugin/` directory plus the credential config and cached binary, and strips Dash0's entries from `~/.cursor/hooks.json` while preserving any hooks you added yourself (if the file ends up with no entries, it's deleted). It also cleans up files left behind by pre-0.1.17 shell-installer versions (a legacy `~/.local/share/dash0-agent-plugin/` and `~/.cursor/skills-cursor/dash0-configure/`). `jq` must be installed.
 
 After uninstalling, restart Cursor so it stops registering the hooks.

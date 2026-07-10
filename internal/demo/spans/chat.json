@@ -28,12 +28,6 @@
             }
           },
           {
-            "key": "gen_ai.provider.name",
-            "value": {
-              "stringValue": "anthropic"
-            }
-          },
-          {
             "key": "process.working_directory",
             "value": {
               "stringValue": "/Users/user/dev/workspace/dash0/dash0"
@@ -146,9 +140,21 @@
                   }
                 },
                 {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "claude"
+                  }
+                },
+                {
                   "key": "gen_ai.conversation.id",
                   "value": {
                     "stringValue": "67e7585f-cacf-42f5-851c-8d149920f275"
+                  }
+                },
+                {
+                  "key": "gen_ai.harness.name",
+                  "value": {
+                    "stringValue": "claude-code"
                   }
                 },
                 {
@@ -167,6 +173,12 @@
                   "key": "gen_ai.output.messages",
                   "value": {
                     "stringValue": "[{\"parts\":[{\"content\":\"\\u003cREDACTED\\u003e\",\"type\":\"text\"}],\"role\":\"assistant\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "anthropic"
                   }
                 },
                 {

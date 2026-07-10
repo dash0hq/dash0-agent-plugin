@@ -28,12 +28,6 @@
             }
           },
           {
-            "key": "gen_ai.provider.name",
-            "value": {
-              "stringValue": "anthropic"
-            }
-          },
-          {
             "key": "process.working_directory",
             "value": {
               "stringValue": "/Users/someuser/source/dash0"
@@ -140,9 +134,21 @@
                   }
                 },
                 {
+                  "key": "gen_ai.harness.name",
+                  "value": {
+                    "stringValue": "claude-code"
+                  }
+                },
+                {
                   "key": "gen_ai.operation.name",
                   "value": {
                     "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "anthropic"
                   }
                 },
                 {

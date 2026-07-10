@@ -1,13 +1,33 @@
 name: CI
 
 on:
+  # PRs are the pre-merge gate (and the only safe path for fork PRs). push is
+  # scoped to main so trunk is validated post-merge without double-running on
+  # every PR-branch push. A branch with no open PR intentionally runs no CI.
   push:
     branches:
-      - '*'
+      - main
   pull_request:
   workflow_dispatch:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: shellcheck version
+        run: shellcheck --version
+
+      - name: Lint
+        run: make lint
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -20,10 +40,10 @@ jobs:
           go-version-file: go.mod
 
       - name: Build
-        run: go build ./...
+        run: make build
 
       - name: Test
-        run: go test ./...
+        run: make test
 
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
@@ -166,8 +186,8 @@ jobs:
           # and stand up the mock OTLP server (records requests + auth header on :4319).
           VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//;s/"//')
           mkdir -p "$CLAUDE_PLUGIN_DATA/bin"
-          go build -o "$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-linux-amd64" ./cmd/on-event
-          go build -o /tmp/mock-otlp ./test/e2e/mock-otlp-server
+          make build-binary PKG=./cmd/on-event OUT="$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-linux-amd64"
+          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp
           /tmp/mock-otlp &
           sleep 1
 
@@ -207,6 +227,170 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
           echo "PASS: both config-file and env-var credentials flow through on-event.sh to real OTLP requests"
 
+      - name: "Contract D — Cursor credential delivery reaches a real OTLP request (config file + env vars)"
+        run: |
+          # Mirror of Contract C for the Cursor side. Contract C's mock-OTLP
+          # doesn't survive across step shells (GitHub Actions cleans up
+          # backgrounded processes on step exit), so we start a fresh one on
+          # the same port. Asserts that credentials supplied via config file
+          # or env vars both reach the wire via scripts/cursor-on-event.sh.
+          export DASH0_PLUGIN_DATA=/tmp/cursor-pdata
+          VERSION=$(grep '^VERSION=' scripts/cursor-on-event.sh | sed 's/VERSION="//;s/"//')
+          mkdir -p "$DASH0_PLUGIN_DATA/bin"
+          make build-binary PKG=./cmd/cursor-on-event OUT="$DASH0_PLUGIN_DATA/bin/cursor-on-event-${VERSION}-linux-amd64"
+          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp-cursor
+          /tmp/mock-otlp-cursor &
+          sleep 1
+
+          # D1 — credentials from ~/.cursor/dash0-agent-plugin.local.md.
+          export HOME=/tmp/cursor-home-cfg
+          mkdir -p "$HOME/.cursor"
+          cat > "$HOME/.cursor/dash0-agent-plugin.local.md" <<'MD'
+          ---
+          otlp_url: "http://localhost:4319"
+          auth_token: "cursor-cfg-token"
+          dataset: "cursor-cfg-ds"
+          ---
+          MD
+          # Run from a clean cwd so the repo's own .cursor/ can't shadow the
+          # global config file (cursor-on-event.sh checks project first).
+          ( cd "$(mktemp -d)" \
+            && echo '{"hook_event_name":"sessionStart","session_id":"contract-d1","conversation_id":"contract-d1","model":"default"}' \
+               | bash "$GITHUB_WORKSPACE/scripts/cursor-on-event.sh" )
+
+          # D2 — credentials from env vars only, no config file present.
+          export HOME=/tmp/cursor-home-env
+          mkdir -p "$HOME/.cursor"
+          ( cd "$(mktemp -d)" \
+            && echo '{"hook_event_name":"sessionStart","session_id":"contract-d2","conversation_id":"contract-d2","model":"default"}' \
+               | DASH0_OTLP_URL=http://localhost:4319 \
+                 CURSOR_PLUGIN_OPTION_AUTH_TOKEN=cursor-env-token \
+                 DASH0_DATASET=cursor-env-ds \
+                 bash "$GITHUB_WORKSPACE/scripts/cursor-on-event.sh" )
+
+          sleep 2
+          RESULT=$(curl -s http://localhost:4319/requests)
+          echo "::group::mock requests"; echo "$RESULT" | jq .; echo "::endgroup::"
+          fail=0
+          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer cursor-cfg-token")]|length')" -ge 1 ] \
+            || { echo "::error::cursor config-file token did not reach the OTLP request"; fail=1; }
+          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer cursor-env-token")]|length')" -ge 1 ] \
+            || { echo "::error::cursor env-var token did not reach the OTLP request"; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PASS: both config-file and env-var credentials flow through cursor-on-event.sh to real OTLP requests"
+
+      - name: "Contract E — install-cursor.sh lays out the plugin dir + merges into ~/.cursor/hooks.json (preserving user entries)"
+        run: |
+          # Cursor 3.9.x doesn't fire hooks from local-plugin manifests, so
+          # install-cursor.sh writes the plugin dir AND merges hook entries
+          # into ~/.cursor/hooks.json at the user scope (with commands pointing
+          # at $HOME/.cursor/plugins/local/...). This step verifies both
+          # sides and — importantly — that a preexisting non-Dash0 hook in
+          # ~/.cursor/hooks.json survives the merge.
+          DASH0_VERSION=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest \
+            | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+          [ -n "$DASH0_VERSION" ] || { echo "::warning::could not resolve latest release, skipping Contract E"; exit 0; }
+          echo "testing installer against v$DASH0_VERSION artifacts"
+
+          export HOME=/tmp/cursor-installer-home
+          export XDG_STATE_HOME=/tmp/cursor-installer-state
+          rm -rf "$HOME" "$XDG_STATE_HOME"
+          mkdir -p "$HOME/.cursor"
+
+          # Seed a foreign hook the installer must preserve.
+          cat > "$HOME/.cursor/hooks.json" <<'JSON'
+          {
+            "version": 1,
+            "hooks": {
+              "beforeSubmitPrompt": [{"command": "/tmp/user-owned-hook.sh"}]
+            }
+          }
+          JSON
+
+          DASH0_VERSION="$DASH0_VERSION" \
+          DASH0_OTLP_URL=http://localhost:4319 \
+          DASH0_AUTH_TOKEN=e2e-token \
+            bash "$GITHUB_WORKSPACE/install-cursor.sh" 2>&1 | tail -25
+
+          fail=0
+          # Plugin dir + shared paths as before.
+          EXPECTED_PATHS=(
+            "$HOME/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json"
+            "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/plugin-hooks.json"
+            "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/skills/dash0-configure/SKILL.md"
+            "$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh"
+            "$HOME/.cursor/dash0-agent-plugin.local.md"
+            "$HOME/.cursor/hooks.json"
+          )
+          for p in "${EXPECTED_PATHS[@]}"; do
+            if [ ! -f "$p" ]; then
+              echo "::error::installer did not create expected file: $p"; fail=1
+            fi
+          done
+          if [ ! -x "$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh" ]; then
+            echo "::error::bootstrap script is not executable"; fail=1
+          fi
+
+          echo "::group::resulting hooks.json"; cat "$HOME/.cursor/hooks.json"; echo "::endgroup::"
+
+          # Dash0 entries land under 9 event keys with $HOME-based command paths.
+          EXPECTED_CMD='$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh'
+          for ev in sessionStart sessionEnd beforeSubmitPrompt afterAgentResponse preToolUse postToolUse postToolUseFailure subagentStart subagentStop; do
+            got=$(jq -r --arg ev "$ev" '.hooks[$ev] // [] | map(select(.command | contains("cursor-on-event.sh"))) | .[0].command // ""' "$HOME/.cursor/hooks.json")
+            if [ "$got" != "$EXPECTED_CMD" ]; then
+              echo "::error::hooks.json missing or wrong command for $ev (got: $got)"; fail=1
+            fi
+          done
+
+          # User-owned foreign entry must still be present under beforeSubmitPrompt.
+          user_hook=$(jq -r '.hooks.beforeSubmitPrompt[] | select(.command == "/tmp/user-owned-hook.sh") | .command' "$HOME/.cursor/hooks.json")
+          if [ "$user_hook" != "/tmp/user-owned-hook.sh" ]; then
+            echo "::error::installer removed user-authored beforeSubmitPrompt hook /tmp/user-owned-hook.sh"; fail=1
+          fi
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PASS: installer produced expected plugin dir + merged hooks with foreign entry preserved"
+
+      - name: "Contract F — uninstall-cursor.sh strips Dash0 entries, preserves non-Dash0 hooks"
+        run: |
+          # Assumes Contract E ran and left a mixed hooks.json in place.
+          export HOME=/tmp/cursor-installer-home
+          export XDG_STATE_HOME=/tmp/cursor-installer-state
+          [ -f "$HOME/.cursor/hooks.json" ] || { echo "::error::Contract E did not produce a hooks.json"; exit 1; }
+
+          bash "$GITHUB_WORKSPACE/uninstall-cursor.sh" --yes 2>&1 | tail -20
+
+          fail=0
+          # Plugin dir + config + state should be gone entirely.
+          for p in \
+            "$HOME/.cursor/plugins/local/dash0-agent-plugin" \
+            "$HOME/.cursor/dash0-agent-plugin.local.md" \
+            "$XDG_STATE_HOME/dash0-agent-plugin/cursor" ; do
+            if [ -e "$p" ]; then
+              echo "::error::uninstaller left behind: $p"; fail=1
+            fi
+          done
+
+          # hooks.json must still exist because a non-Dash0 entry was present.
+          if [ ! -f "$HOME/.cursor/hooks.json" ]; then
+            echo "::error::uninstaller deleted ~/.cursor/hooks.json but a user-owned entry was present"; fail=1
+          else
+            echo "::group::hooks.json after uninstall"; cat "$HOME/.cursor/hooks.json"; echo "::endgroup::"
+            # No cursor-on-event.sh entries should remain.
+            dash0_left=$(jq -r '.hooks | to_entries[] | .value[]? | .command // empty' "$HOME/.cursor/hooks.json" | grep -c "cursor-on-event.sh" || true)
+            if [ "$dash0_left" -ne 0 ]; then
+              echo "::error::uninstaller left $dash0_left Dash0 hook entry/entries in $HOME/.cursor/hooks.json"; fail=1
+            fi
+            # The user's foreign entry must survive.
+            user_hook=$(jq -r '.hooks.beforeSubmitPrompt[]? | select(.command == "/tmp/user-owned-hook.sh") | .command' "$HOME/.cursor/hooks.json")
+            if [ "$user_hook" != "/tmp/user-owned-hook.sh" ]; then
+              echo "::error::uninstaller removed user-authored beforeSubmitPrompt hook"; fail=1
+            fi
+          fi
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PASS: uninstaller stripped Dash0 entries and preserved the user-authored hook"
+
   e2e:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -222,18 +406,27 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
       - name: Build plugin binary
-        run: go build -o bin/on-event-linux-amd64 ./cmd/on-event
+        run: make build-binary PKG=./cmd/on-event OUT=bin/on-event-linux-amd64
 
       - name: Run E2E tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Enables the live Codex drift canary (TestE2EFullFlowWithCodex), which
+          # FAILS when this key is missing (same as the Claude e2e) — so add the
+          # secret before merging or the job goes red. Use a Platform service-account
+          # key (project codex-o11y, budget-capped); see SIG-172/SIG-174. Inherits
+          # this job's fork guard, so a fork PR never receives the secret.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::error::ANTHROPIC_API_KEY secret is not set — add it at Settings → Secrets → Actions"
             exit 1
           fi
-          go test -tags=e2e -v -timeout=120s ./test/e2e/
+          make test-e2e
 
   consistency-checks:
     runs-on: ubuntu-latest
@@ -249,6 +442,19 @@ jobs:
           echo "on-event.sh: $SCRIPT_VERSION"
           if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
             echo "::error::Version mismatch: plugin.json=$PLUGIN_VERSION, on-event.sh=$SCRIPT_VERSION"
+            exit 1
+          fi
+
+      - name: Version consistency (Cursor plugin.json == cursor-on-event.sh)
+        run: |
+          # Mirror of the Claude version check. Both files are bumped together
+          # by scripts/release.sh; this guards against a hand-edit drifting.
+          PLUGIN_VERSION=$(jq -r '.version' .cursor-plugin/plugin.json)
+          SCRIPT_VERSION=$(grep '^VERSION=' scripts/cursor-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          echo ".cursor-plugin/plugin.json: $PLUGIN_VERSION"
+          echo "scripts/cursor-on-event.sh: $SCRIPT_VERSION"
+          if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
+            echo "::error::Version mismatch: .cursor-plugin/plugin.json=$PLUGIN_VERSION, cursor-on-event.sh=$SCRIPT_VERSION"
             exit 1
           fi
 
@@ -312,12 +518,29 @@ jobs:
           done
           CURSOR_COMMANDS=$(jq -c '.commands // "unset"' .cursor-plugin/plugin.json)
           CURSOR_SKILLS=$(jq -r '.skills // "unset"' .cursor-plugin/plugin.json)
+          CURSOR_HOOKS=$(jq -r '.hooks // "unset"' .cursor-plugin/plugin.json)
           if [ "$CURSOR_COMMANDS" = "unset" ]; then
             echo "::error::.cursor-plugin/plugin.json must set commands (use []) to block auto-discovery"
             fail=1
           fi
           if [ "$CURSOR_SKILLS" != "./cursor/skills/" ]; then
             echo "::error::.cursor-plugin/plugin.json skills must point at ./cursor/skills/ (got $CURSOR_SKILLS)"
+            fail=1
+          fi
+          if [ ! -d "cursor/skills" ]; then
+            echo "::error::.cursor-plugin/plugin.json skills references cursor/skills/ but the directory is missing"
+            fail=1
+          fi
+          # Cursor 3.9.x silently ignores `hooks` in local-plugin manifests, so we
+          # deliberately omit it. install-cursor.sh reads cursor/plugin-hooks.json
+          # directly instead. Assert the field is absent so it doesn't sneak back
+          # in and mislead future readers.
+          if [ "$CURSOR_HOOKS" != "unset" ]; then
+            echo "::error::.cursor-plugin/plugin.json must NOT set 'hooks' — Cursor ignores it for local plugins; installer reads cursor/plugin-hooks.json directly"
+            fail=1
+          fi
+          if [ ! -f "cursor/plugin-hooks.json" ]; then
+            echo "::error::cursor/plugin-hooks.json is missing (installer reads this file as the source of truth for hook events)"
             fail=1
           fi
           if [ "$fail" -ne 0 ]; then exit 1; fi
@@ -360,3 +583,39 @@ jobs:
             echo "::error::hooks.json command ($HOOK_CMD) does not match expected ($EXPECTED)"
             exit 1
           fi
+
+      - name: Cursor hook script is valid
+        run: |
+          # Mirror of the Claude hook-script check for the Cursor side. Verifies
+          # the bootstrap script is executable, has a shebang, and that every
+          # command referenced from cursor/plugin-hooks.json resolves to a file
+          # relative to the repo root — which is the plugin root Cursor will
+          # resolve against when the plugin is dropped into ~/.cursor/plugins/.
+          if [ ! -x scripts/cursor-on-event.sh ]; then
+            echo "::error::scripts/cursor-on-event.sh is not executable"
+            exit 1
+          fi
+          HEAD=$(head -1 scripts/cursor-on-event.sh)
+          if [[ "$HEAD" != "#!/"* ]]; then
+            echo "::error::scripts/cursor-on-event.sh missing shebang"
+            exit 1
+          fi
+          COMMANDS=$(jq -r '.hooks | to_entries[] | .value[] | .command' cursor/plugin-hooks.json | sort -u)
+          if [ -z "$COMMANDS" ]; then
+            echo "::error::cursor/plugin-hooks.json has no hook commands"
+            exit 1
+          fi
+          fail=0
+          for cmd in $COMMANDS; do
+            # Resolve relative to the plugin root (repo root here).
+            resolved="${cmd#./}"
+            if [ ! -f "$resolved" ]; then
+              echo "::error::cursor/plugin-hooks.json references missing command: $cmd (resolved to $resolved)"
+              fail=1
+            elif [ ! -x "$resolved" ]; then
+              echo "::error::cursor/plugin-hooks.json references non-executable command: $cmd"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "PASS: cursor/plugin-hooks.json commands all resolve to executable files"

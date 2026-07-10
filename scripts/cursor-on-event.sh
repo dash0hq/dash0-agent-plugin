@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Bootstrap wrapper for the cursor-on-event binary. Installed at a stable
 # user-owned path by the setup CLI; referenced by absolute path from Cursor's
 # hooks.json so each hook invocation runs:
@@ -76,7 +79,7 @@ load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
 BASE="${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor}"
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.16"
+VERSION="0.1.19"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)

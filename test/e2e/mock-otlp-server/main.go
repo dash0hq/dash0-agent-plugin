@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
 
 // mock-otlp-server is a minimal HTTP server that records OTLP requests
 // and exposes them via GET /requests for test assertions.
@@ -48,9 +49,9 @@ func main() {
 			"requests": s.requests,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	fmt.Println("mock-otlp-server listening on :4319")
-	http.ListenAndServe(":4319", nil)
+	_ = http.ListenAndServe(":4319", nil)
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package demo generates and sends mock Claude Code telemetry to Dash0. It
 // simulates users exercising the agent plugin so the agent-monitoring views
 // have realistic data to display. Each invocation produces exactly one agent

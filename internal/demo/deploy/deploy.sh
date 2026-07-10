@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
 #
 # Deploys the demo telemetry generator as an AWS Lambda function triggered every
 # 20 minutes by an EventBridge (CloudWatch Events) rule. Idempotent: re-running

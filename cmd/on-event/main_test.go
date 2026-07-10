@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -17,9 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
 // sessionPath returns the path to a file inside the session-scoped directory.
@@ -373,9 +377,10 @@ func TestConcurrentSessionsAreIsolated(t *testing.T) {
 	for _, s := range allSpans {
 		for _, a := range s.Attributes {
 			if a.Key == "gen_ai.conversation.id" {
-				if *a.Value.StringValue == "sess-A" {
+				switch *a.Value.StringValue {
+				case "sess-A":
 					spansA = append(spansA, s)
-				} else if *a.Value.StringValue == "sess-B" {
+				case "sess-B":
 					spansB = append(spansB, s)
 				}
 			}
@@ -635,7 +640,7 @@ func TestDeriveAppURL(t *testing.T) {
 
 func TestBuildSessionURL(t *testing.T) {
 	u := buildSessionURL("https://app.dash0.com", "sess-abc123")
-	assert.Contains(t, u, "https://app.dash0.com/coding-agents/sessions/details?s=")
+	assert.Contains(t, u, "https://app.dash0.com/coding-agents?s=")
 	assert.NotContains(t, u, "agent-monitoring")
 
 	// Round-trip: decode the ?s= param and verify the state structure matches
@@ -651,9 +656,13 @@ func TestBuildSessionURL(t *testing.T) {
 
 	var state map[string]any
 	require.NoError(t, json.Unmarshal(decoded, &state))
-	page, ok := state["/coding-agents/sessions/details"].(map[string]any)
+	page, ok := state["/coding-agents"].(map[string]any)
 	require.True(t, ok, "state must be keyed by pathname")
-	assert.Equal(t, "sess-abc123", page["sessionId"])
+	// agentSession drives the detail sidebar; the sessions tab must be selected.
+	assert.Equal(t, "sess-abc123", page["agentSession"])
+	tab, ok := page["tab"].(map[string]any)
+	require.True(t, ok, "coding-agents state must carry a tab selection")
+	assert.Equal(t, "sessions", tab["pageTab"])
 }
 
 func TestSessionStartHintWhenNotConfigured(t *testing.T) {

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package pipeline is the source-agnostic engine that turns normalized hook
 // events into OTLP spans. Both the Claude Code and Cursor entrypoints feed
 // already-normalized events into Process; this package owns trace context
@@ -79,7 +82,7 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 			}, sessionDir); err != nil {
 				return res, err
 			}
-			os.WriteFile(startedFile, nil, 0o644)
+			_ = os.WriteFile(startedFile, nil, 0o644)
 		}
 	}
 
@@ -114,8 +117,8 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 	}
 
 	if hookEvent == "SessionStart" && !sessionAlreadyStarted {
-		switch {
-		case cfg.OTLPUrl == "":
+		switch cfg.OTLPUrl {
+		case "":
 			res.Messages = append(res.Messages, Message{
 				UserText: "dash0: telemetry is not active — configure the plugin to start sending data.",
 			})
@@ -156,7 +159,7 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 	}
 
 	if hookEvent == "SessionEnd" {
-		os.RemoveAll(sessionDir)
+		_ = os.RemoveAll(sessionDir)
 	}
 
 	return res, nil
@@ -313,10 +316,10 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 			fmt.Fprintf(os.Stderr, "on-event: reading transcript: %v\n", err)
 		}
 		if usage != nil {
-			event["gen_ai.usage.input_tokens"] = int64(usage.InputTokens)
-			event["gen_ai.usage.output_tokens"] = int64(usage.OutputTokens)
-			event["gen_ai.usage.cache_creation.input_tokens"] = int64(usage.CacheCreationInputTokens)
-			event["gen_ai.usage.cache_read.input_tokens"] = int64(usage.CacheReadInputTokens)
+			event["gen_ai.usage.input_tokens"] = usage.InputTokens
+			event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+			event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
+			event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
 		}
 
 		if title := transcript.ReadSessionTitle(transcriptPath); title != "" {

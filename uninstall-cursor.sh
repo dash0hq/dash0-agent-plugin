@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Dash0 — Cursor telemetry uninstaller.
 #
 # Usage:
@@ -6,16 +9,21 @@
 #   ./uninstall-cursor.sh --yes                 # skips confirmation
 #   curl -fsSL .../uninstall-cursor.sh | bash -s -- --yes
 #
-# What this removes (mirror of install-cursor.sh):
-#   ~/.local/state/dash0-agent-plugin/cursor/    cursor-on-event binaries
-#   ~/.local/share/dash0-agent-plugin/cursor-on-event.sh
-#                                                bootstrap script
-#   ~/.cursor/dash0-agent-plugin.local.md        credential config
-#   ~/.cursor/skills-cursor/dash0-configure/     shipped skill
-#   ~/.cursor/hooks.json                         only when every entry points at
-#                                                the Dash0 bootstrap script;
-#                                                otherwise the file is left in
-#                                                place with a warning.
+# What this removes:
+#   Plugin dir:
+#     ~/.cursor/plugins/local/dash0-agent-plugin/  entire plugin dir
+#   Global hooks (Cursor's user-scope registrations):
+#     ~/.cursor/hooks.json                         Dash0 entries only — any
+#                                                  user-authored hooks in the
+#                                                  same file are preserved.
+#                                                  If the file ends up empty
+#                                                  after removal, it's deleted.
+#   Pre-0.1.17 shell-installer leftovers:
+#     ~/.local/share/dash0-agent-plugin/           legacy bootstrap script dir
+#     ~/.cursor/skills-cursor/dash0-configure/     legacy skill location
+#   Binary + config (shared across all layouts):
+#     ~/.local/state/dash0-agent-plugin/cursor/    binary cache
+#     ~/.cursor/dash0-agent-plugin.local.md        credential config
 
 set -u
 
@@ -43,7 +51,9 @@ while [ $# -gt 0 ]; do
       cat <<'EOF'
 Usage: uninstall-cursor.sh [--yes]
 
-Removes Dash0 Cursor plugin files previously installed by install-cursor.sh.
+Removes Dash0 Cursor plugin files installed by any version of install-cursor.sh.
+Non-Dash0 entries in ~/.cursor/hooks.json are preserved; only entries whose
+command references cursor-on-event.sh are stripped.
 
 Flags:
   -y, --yes   Skip the confirmation prompt.
@@ -57,25 +67,34 @@ EOF
 done
 
 # ---------------------------------------------------------------------------
-# Resolve paths (must mirror install-cursor.sh).
+# Resolve paths (must mirror install-cursor.sh, current + legacy).
 # ---------------------------------------------------------------------------
 
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor"
-SHARE_DIR="$HOME/.local/share/dash0-agent-plugin"
-SHARE_FILE="$SHARE_DIR/cursor-on-event.sh"
-CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
-HOOKS_PATH="$HOME/.cursor/hooks.json"
-SKILLS_PARENT="$HOME/.cursor/skills-cursor"
-SKILL_DIR="$SKILLS_PARENT/dash0-configure"
+# Plugin directory (native local plugin — provides skills + UI surface).
+PLUGIN_DIR="$HOME/.cursor/plugins/local/dash0-agent-plugin"
 
-printf "${C_B}Dash0 → Cursor telemetry uninstaller${C_N}\n\n"
-printf "Will remove:\n"
+# Global hooks registration — Dash0 entries stripped selectively.
+HOOKS_PATH="$HOME/.cursor/hooks.json"
+
+# Pre-0.1.17 shell-installer leftovers.
+LEGACY_SHARE_DIR="$HOME/.local/share/dash0-agent-plugin"
+LEGACY_SHARE_SCRIPT="$LEGACY_SHARE_DIR/cursor-on-event.sh"
+LEGACY_SKILL_DIR="$HOME/.cursor/skills-cursor/dash0-configure"
+LEGACY_SKILLS_PARENT="$HOME/.cursor/skills-cursor"
+
+# Binary cache + credential config.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor"
+CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
+
+printf '%sDash0 → Cursor telemetry uninstaller%s\n\n' "$C_B" "$C_N"
+printf "Will remove (if present):\n"
 printf "  %s\n" \
+  "$PLUGIN_DIR" \
+  "$LEGACY_SHARE_SCRIPT" \
+  "$LEGACY_SKILL_DIR" \
   "$STATE_DIR" \
-  "$SHARE_FILE" \
-  "$CONFIG_PATH" \
-  "$SKILL_DIR"
-printf "  %s (only when it contains exclusively Dash0 hooks)\n" "$HOOKS_PATH"
+  "$CONFIG_PATH"
+printf "  %s (Dash0 entries only; user hooks preserved)\n" "$HOOKS_PATH"
 printf "\n"
 
 # ---------------------------------------------------------------------------
@@ -108,45 +127,52 @@ remove_path() {
   fi
 }
 
-remove_path "$STATE_DIR"   "binary dir"
-remove_path "$SHARE_FILE"  "bootstrap script"
-remove_path "$CONFIG_PATH" "config file"
-remove_path "$SKILL_DIR"   "configure skill"
+remove_path "$PLUGIN_DIR"           "plugin dir"
+remove_path "$LEGACY_SHARE_SCRIPT"  "legacy bootstrap script"
+remove_path "$LEGACY_SKILL_DIR"     "legacy skill dir"
+remove_path "$STATE_DIR"            "binary cache"
+remove_path "$CONFIG_PATH"          "config file"
 
 # Tidy empty parent directories (silent if they aren't empty or don't exist).
-rmdir "$SHARE_DIR"     2>/dev/null && ok "removed empty $SHARE_DIR"     || true
-rmdir "$SKILLS_PARENT" 2>/dev/null && ok "removed empty $SKILLS_PARENT" || true
+if rmdir "$LEGACY_SHARE_DIR" 2>/dev/null; then ok "removed empty $LEGACY_SHARE_DIR"; fi
+if rmdir "$LEGACY_SKILLS_PARENT" 2>/dev/null; then ok "removed empty $LEGACY_SKILLS_PARENT"; fi
 
 # ---------------------------------------------------------------------------
-# Handle hooks.json carefully — it may contain user-authored hooks.
-# Strategy:
-#   - jq available: delete the file only if every hook command references
-#     the Dash0 bootstrap script. Otherwise warn and leave it alone.
-#   - jq missing: fall back to a grep heuristic; if it suggests mixed
-#     content, warn and leave the file alone.
+# Strip Dash0 entries from ~/.cursor/hooks.json while preserving any
+# user-authored entries. Match by command basename cursor-on-event.sh —
+# same filename in both the current $HOME/.cursor/plugins/local/… layout
+# and the pre-0.1.17 ~/.local/share/… legacy path.
+#
+# If the file ends up with no hook entries, delete it entirely. Otherwise
+# write back the reduced JSON.
 # ---------------------------------------------------------------------------
 
 BOOTSTRAP_BASENAME="cursor-on-event.sh"
 
 if [ -e "$HOOKS_PATH" ]; then
-  if command -v jq >/dev/null 2>&1; then
-    foreign=$(jq -r '
-      .hooks // {} | to_entries[] | .value[]? | .command // empty
-    ' "$HOOKS_PATH" 2>/dev/null | grep -v "$BOOTSTRAP_BASENAME" || true)
-    if [ -z "$foreign" ]; then
-      rm -f "$HOOKS_PATH" && ok "removed hooks → $HOOKS_PATH"
-    else
-      warn "$HOOKS_PATH contains non-Dash0 hooks; leaving the file in place."
-      warn "Remove the entries whose 'command' contains '$BOOTSTRAP_BASENAME' by hand."
-    fi
+  if ! command -v jq >/dev/null 2>&1; then
+    warn "$HOOKS_PATH exists but jq is not installed — cannot safely strip Dash0 entries."
+    warn "Install jq and re-run, or remove entries whose 'command' contains '$BOOTSTRAP_BASENAME' by hand."
   else
-    total=$(grep -c '"command"' "$HOOKS_PATH" 2>/dev/null || echo 0)
-    ours=$(grep -c "$BOOTSTRAP_BASENAME" "$HOOKS_PATH" 2>/dev/null || echo 0)
-    if [ "$total" -gt 0 ] && [ "$total" -eq "$ours" ]; then
-      rm -f "$HOOKS_PATH" && ok "removed hooks → $HOOKS_PATH"
+    REDUCED=$(mktemp)
+    jq --arg marker "$BOOTSTRAP_BASENAME" '
+      .hooks //= {} |
+      .hooks |= (
+        map_values(map(select(.command | contains($marker) | not)))
+        | with_entries(select(.value | length > 0))
+      )
+    ' "$HOOKS_PATH" > "$REDUCED" 2>/dev/null
+
+    if [ ! -s "$REDUCED" ]; then
+      warn "failed to inspect $HOOKS_PATH (invalid JSON?) — leaving the file in place."
+      rm -f "$REDUCED"
     else
-      warn "Cannot safely inspect $HOOKS_PATH (jq not installed); leaving it in place."
-      warn "Inspect and remove entries that reference '$BOOTSTRAP_BASENAME' by hand."
+      remaining=$(jq '.hooks | length' "$REDUCED" 2>/dev/null || echo 0)
+      if [ "$remaining" -eq 0 ]; then
+        rm -f "$HOOKS_PATH" "$REDUCED" && ok "removed hooks (no user entries left) → $HOOKS_PATH"
+      else
+        mv "$REDUCED" "$HOOKS_PATH" && ok "stripped Dash0 entries from $HOOKS_PATH ($remaining event(s) preserved)"
+      fi
     fi
   fi
 else
@@ -157,4 +183,4 @@ fi
 # Done.
 # ---------------------------------------------------------------------------
 
-printf "\n${C_B}Done.${C_N} Restart Cursor (Cmd+Q on macOS) so it stops registering the hooks.\n"
+printf '\n%sDone.%s Restart Cursor (Cmd+Q on macOS) so it stops registering the hooks.\n' "$C_B" "$C_N"

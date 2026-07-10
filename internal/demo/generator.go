@@ -36,6 +36,13 @@ type turn struct {
 	session  string
 }
 
+// newcomerProbability is the per-turn chance the selected user is the daily
+// rotating newcomer instead of one of the 40 static contributors. With the
+// default schedule of one turn every 20 minutes (72 turns/day), 0.15 gives a
+// > 99.999% chance that at least one newcomer turn is emitted in any given UTC
+// day, so the billing tables always see a fresh unique user daily.
+const newcomerProbability = 0.15
+
 // newTurn draws all randomized dimensions for one turn from the closed lists in
 // data.go. now anchors the daily rotating newcomer user (see pickUser).
 func newTurn(now time.Time) turn {
@@ -52,16 +59,15 @@ func newTurn(now time.Time) turn {
 	}
 }
 
-// pickUser returns a uniformly random user from a pool of the 40 static
-// contributors plus today's rotating newcomer (see newcomerUser). The
-// newcomer's name is stable within a UTC calendar day and rolls over at
-// midnight UTC.
+// pickUser returns either the daily rotating newcomer (with probability
+// newcomerProbability) or one of the 40 static contributors chosen uniformly
+// at random. The newcomer name is stable within a UTC calendar day and rolls
+// over at the day boundary.
 func pickUser(now time.Time) user {
-	idx := rand.IntN(len(users) + 1)
-	if idx == len(users) {
+	if rand.Float64() < newcomerProbability {
 		return newcomerUser(now)
 	}
-	return users[idx]
+	return pick(users)
 }
 
 // GenerateTurn builds a mock OTLP traces request representing exactly one agent

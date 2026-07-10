@@ -141,9 +141,8 @@ func TestPickUserYieldsBothCohorts(t *testing.T) {
 	now := time.Date(2026, time.July, 10, 12, 0, 0, 0, time.UTC)
 	sawNewcomer, sawStatic := false, false
 
-	// The pool is the 40 static users + 1 newcomer, sampled uniformly. Over
-	// 5000 draws both cohorts must appear; missing either is astronomically
-	// unlikely.
+	// Over 5000 draws, both cohorts must appear at newcomerProbability=0.15;
+	// the probability of missing either is astronomically small.
 	for i := 0; i < 5000; i++ {
 		u := pickUser(now)
 		if u.Team == newcomersTeam {

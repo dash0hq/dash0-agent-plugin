@@ -19,23 +19,48 @@ func TestTrustHashMatchesRealCodexOracles(t *testing.T) {
 		command = `python3 "/Users/guymoses/.codex/hooks/dash0_capture.py"`
 		status  = "dash0 capture"
 	)
-	// Golden: event key label -> Codex-written trusted_hash.
-	oracles := map[string]string{
-		"session_start":      "sha256:e8921449ec9766690a30cbc6a68bf459ce0be93a061acbeb20b0a5beb5fc579a",
-		"pre_tool_use":       "sha256:2b1107769357c304823db5e1677922cbaf815706fd2226efffd3a6ed5c531dc2",
-		"post_tool_use":      "sha256:76a4262fc3b174f56d4180b92e55cc613dd5b941415e0f98f8198d041572fd09",
-		"permission_request": "sha256:54e0238a6a8699f8493d9ae6012e5707b600b981db66f98fae2f7cdda92293b3",
-		"pre_compact":        "sha256:51772c948e900ca85ca1c25ee97d45167deca12961d664bc7d30e1ab56a62378",
-		"post_compact":       "sha256:0f3f6e9ba8ebd3e66532a3fc04ad6c1285bbb6ddf9cc0b272bf995b976cfef6b",
-		"subagent_start":     "sha256:d0ef9d51acbaab1b98d712c10270528041320d68bdb7457fbeee48e1c55a8703",
-		"subagent_stop":      "sha256:03979c8047705e864045a3a80fd35d596681ace80cca494b2338d3cf610dd590",
+	// Golden: event key label -> {hasMatcher, Codex-written trusted_hash}. All ten
+	// events verified. Stop and UserPromptSubmit hash WITHOUT the matcher (Codex
+	// normalizes it to None for events with nothing to match); the rest keep it.
+	type oracle struct {
+		hasMatcher bool
+		hash       string
 	}
-	for label, want := range oracles {
+	oracles := map[string]oracle{
+		"session_start":      {true, "sha256:e8921449ec9766690a30cbc6a68bf459ce0be93a061acbeb20b0a5beb5fc579a"},
+		"user_prompt_submit": {false, "sha256:f1c538f65d6b831e8d357406f3d31f5a3812735d96927d72fd4e8e8711a3c368"},
+		"pre_tool_use":       {true, "sha256:2b1107769357c304823db5e1677922cbaf815706fd2226efffd3a6ed5c531dc2"},
+		"post_tool_use":      {true, "sha256:76a4262fc3b174f56d4180b92e55cc613dd5b941415e0f98f8198d041572fd09"},
+		"stop":               {false, "sha256:9b44a430246550d6bf6ae8b250e66c5926238b97b50b77da7c74522ade8c5df8"},
+		"permission_request": {true, "sha256:54e0238a6a8699f8493d9ae6012e5707b600b981db66f98fae2f7cdda92293b3"},
+		"pre_compact":        {true, "sha256:51772c948e900ca85ca1c25ee97d45167deca12961d664bc7d30e1ab56a62378"},
+		"post_compact":       {true, "sha256:0f3f6e9ba8ebd3e66532a3fc04ad6c1285bbb6ddf9cc0b272bf995b976cfef6b"},
+		"subagent_start":     {true, "sha256:d0ef9d51acbaab1b98d712c10270528041320d68bdb7457fbeee48e1c55a8703"},
+		"subagent_stop":      {true, "sha256:03979c8047705e864045a3a80fd35d596681ace80cca494b2338d3cf610dd590"},
+	}
+	// Every registered event must have an oracle here, so a new event can't ship
+	// untested.
+	assert.Len(t, oracles, len(HookEvents))
+	for label, o := range oracles {
 		t.Run(label, func(t *testing.T) {
-			got, err := TrustHash(label, "*", command, status)
+			got, err := TrustHash(label, o.hasMatcher, command, status)
 			require.NoError(t, err)
-			assert.Equal(t, want, got)
+			assert.Equal(t, o.hash, got)
 		})
+	}
+}
+
+// TestHookEventsMatcherPartition pins which events drop the matcher from the
+// hashed identity — the distinction that determines trust for Stop/UserPromptSubmit.
+func TestHookEventsMatcherPartition(t *testing.T) {
+	want := map[string]bool{
+		"session_start": true, "user_prompt_submit": false, "pre_tool_use": true,
+		"post_tool_use": true, "stop": false, "subagent_start": true,
+		"subagent_stop": true, "pre_compact": true, "post_compact": true,
+		"permission_request": true,
+	}
+	for _, e := range HookEvents {
+		assert.Equal(t, want[e.KeyLabel], e.HasMatcher, "HasMatcher for %s", e.KeyLabel)
 	}
 }
 
@@ -44,9 +69,9 @@ func TestTrustHashMatchesRealCodexOracles(t *testing.T) {
 // a present one — so the installer must keep the written block and the hash in
 // sync on this field.
 func TestTrustHashDropsEmptyStatusMessage(t *testing.T) {
-	withStatus, err := TrustHash("stop", "*", "echo hi", "dash0")
+	withStatus, err := TrustHash("stop", false, "echo hi", "dash0")
 	require.NoError(t, err)
-	without, err := TrustHash("stop", "*", "echo hi", "")
+	without, err := TrustHash("stop", false, "echo hi", "")
 	require.NoError(t, err)
 	assert.NotEqual(t, withStatus, without)
 }
@@ -65,7 +90,7 @@ func TestRenderManagedBlockFreshConfig(t *testing.T) {
 		assert.Contains(t, out, fmt.Sprintf("[hooks.state.%q]", cfg+":"+e.KeyLabel+":0:0"))
 	}
 	// The emitted hash matches TrustHash for the same command.
-	want, err := TrustHash("session_start", "*", cmd, codexHookStatusMessage)
+	want, err := TrustHash("session_start", true, cmd, codexHookStatusMessage)
 	require.NoError(t, err)
 	assert.Contains(t, out, want)
 	// The written block carries the statusMessage the hash depends on.

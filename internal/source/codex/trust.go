@@ -58,28 +58,35 @@ const (
 type HookEvent struct {
 	ConfigName string // e.g. "PreToolUse"
 	KeyLabel   string // e.g. "pre_tool_use"
+	// HasMatcher is whether Codex keeps the matcher in this event's normalized
+	// hook identity. Events with nothing to match against (Stop, UserPromptSubmit)
+	// have their matcher normalized to None, which changes the trust hash — so the
+	// hash for those MUST omit the matcher or Codex silently treats the hook as
+	// untrusted. Verified against real 0.142.5 oracles for all ten events.
+	HasMatcher bool
 }
 
 // HookEvents is the full set of Codex hook events the plugin registers, in a
 // stable order. Codex 0.142.5 exposes exactly these ten.
 var HookEvents = []HookEvent{
-	{"SessionStart", "session_start"},
-	{"UserPromptSubmit", "user_prompt_submit"},
-	{"PreToolUse", "pre_tool_use"},
-	{"PostToolUse", "post_tool_use"},
-	{"Stop", "stop"},
-	{"SubagentStart", "subagent_start"},
-	{"SubagentStop", "subagent_stop"},
-	{"PreCompact", "pre_compact"},
-	{"PostCompact", "post_compact"},
-	{"PermissionRequest", "permission_request"},
+	{"SessionStart", "session_start", true},
+	{"UserPromptSubmit", "user_prompt_submit", false},
+	{"PreToolUse", "pre_tool_use", true},
+	{"PostToolUse", "post_tool_use", true},
+	{"Stop", "stop", false},
+	{"SubagentStart", "subagent_start", true},
+	{"SubagentStop", "subagent_stop", true},
+	{"PreCompact", "pre_compact", true},
+	{"PostCompact", "post_compact", true},
+	{"PermissionRequest", "permission_request", true},
 }
 
 // TrustHash returns the Codex trusted_hash ("sha256:<hex>") for a command hook
-// registered on the given event with the given command string. matcher and
-// statusMessage are the values written into the hook block; they must match what
-// the installer writes, or Codex will treat the hook as modified and skip it.
-func TrustHash(eventKeyLabel, matcher, command, statusMessage string) (string, error) {
+// registered on the given event. hasMatcher must reflect whether Codex keeps the
+// matcher for this event (see HookEvent.HasMatcher); command and statusMessage
+// must match what the installer writes, or Codex treats the hook as modified and
+// skips it.
+func TrustHash(eventKeyLabel string, hasMatcher bool, command, statusMessage string) (string, error) {
 	handler := map[string]any{
 		"type":    "command",
 		"command": command,
@@ -93,8 +100,11 @@ func TrustHash(eventKeyLabel, matcher, command, statusMessage string) (string, e
 	}
 	identity := map[string]any{
 		"event_name": eventKeyLabel,
-		"matcher":    matcher,
 		"hooks":      []any{handler},
+	}
+	// Only matcher-bearing events keep the matcher in the hashed identity.
+	if hasMatcher {
+		identity["matcher"] = codexHookMatcher
 	}
 
 	// Match serde_json exactly: sorted keys (Go default for maps), no whitespace,
@@ -136,7 +146,9 @@ func RenderManagedBlock(configPath, command, existingConfig string) (string, err
 		fmt.Fprintf(&b, "\n[[hooks.%s]]\nmatcher = \"%s\"\n[[hooks.%s.hooks]]\ntype = \"command\"\ncommand = '%s'\nstatusMessage = \"%s\"\n",
 			e.ConfigName, codexHookMatcher, e.ConfigName, command, codexHookStatusMessage)
 
-		hash, err := TrustHash(e.KeyLabel, codexHookMatcher, command, codexHookStatusMessage)
+		// The block writes matcher = "*" uniformly; Codex normalizes it away for
+		// matcher-less events when hashing, so the hash must follow e.HasMatcher.
+		hash, err := TrustHash(e.KeyLabel, e.HasMatcher, command, codexHookStatusMessage)
 		if err != nil {
 			return "", err
 		}

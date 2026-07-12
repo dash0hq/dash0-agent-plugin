@@ -75,6 +75,11 @@ func TestGoldenSpanTree(t *testing.T) {
 		if c, ok := event["cwd"].(string); ok && c != "" {
 			cwds[c] = true
 		}
+		// The captured rollout paths are absolute to the machine that recorded
+		// them; redirect them at the bundled fixtures (matched by basename) so the
+		// token-usage reader runs deterministically here and in CI.
+		rebaseRolloutPath(event, "transcript_path")
+		rebaseRolloutPath(event, "agent_transcript_path")
 
 		ts := base.Add(time.Duration(i) * time.Second)
 		i++
@@ -129,6 +134,15 @@ func TestGoldenSpanTree(t *testing.T) {
 	want, err := os.ReadFile(goldenPath)
 	require.NoError(t, err, "missing golden file; run with -update")
 	assert.Equal(t, string(want), string(got))
+}
+
+// rebaseRolloutPath rewrites an absolute captured rollout path under event[key]
+// to the bundled testdata/rollouts fixture with the same basename, so replaying
+// the capture reads deterministic token usage instead of a machine-local file.
+func rebaseRolloutPath(event map[string]any, key string) {
+	if p, ok := event[key].(string); ok && p != "" {
+		event[key] = filepath.Join("testdata", "rollouts", filepath.Base(p))
+	}
 }
 
 // goldenSpan is the stable, snapshot-friendly projection of an OTLP span.

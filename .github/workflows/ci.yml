@@ -391,6 +391,156 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
           echo "PASS: uninstaller stripped Dash0 entries and preserved the user-authored hook"
 
+      - name: "Contract G — Codex credential delivery reaches a real OTLP request (config file + env vars)"
+        run: |
+          # Mirror of Contract D for the Codex side. Asserts that credentials
+          # supplied via config file or env vars both reach the wire through
+          # scripts/codex-on-event.sh. The bootstrap is version-pinned; build the
+          # binary at that exact path so no release download is needed.
+          export DASH0_PLUGIN_DATA=/tmp/codex-pdata
+          VERSION=$(grep '^VERSION=' scripts/codex-on-event.sh | sed 's/VERSION="//;s/"//')
+          mkdir -p "$DASH0_PLUGIN_DATA/bin"
+          make build-binary PKG=./cmd/codex-on-event OUT="$DASH0_PLUGIN_DATA/bin/codex-on-event-${VERSION}-linux-amd64"
+          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp-codex
+          /tmp/mock-otlp-codex &
+          sleep 1
+
+          # G1 — credentials from ~/.codex/dash0-agent-plugin.local.md.
+          export HOME=/tmp/codex-home-cfg
+          mkdir -p "$HOME/.codex"
+          cat > "$HOME/.codex/dash0-agent-plugin.local.md" <<'MD'
+          ---
+          otlp_url: "http://localhost:4319"
+          auth_token: "codex-cfg-token"
+          dataset: "codex-cfg-ds"
+          ---
+          MD
+          # Clean cwd so the repo's own .codex/ can't shadow the global config
+          # (codex-on-event.sh checks the project file first).
+          ( cd "$(mktemp -d)" \
+            && echo '{"hook_event_name":"SessionStart","session_id":"contract-g1","model":"gpt-5.5","source":"startup"}' \
+               | bash "$GITHUB_WORKSPACE/scripts/codex-on-event.sh" )
+
+          # G2 — credentials from env vars only, no config file present.
+          export HOME=/tmp/codex-home-env
+          mkdir -p "$HOME/.codex"
+          ( cd "$(mktemp -d)" \
+            && echo '{"hook_event_name":"SessionStart","session_id":"contract-g2","model":"gpt-5.5","source":"startup"}' \
+               | DASH0_OTLP_URL=http://localhost:4319 \
+                 CODEX_PLUGIN_OPTION_AUTH_TOKEN=codex-env-token \
+                 DASH0_DATASET=codex-env-ds \
+                 bash "$GITHUB_WORKSPACE/scripts/codex-on-event.sh" )
+
+          sleep 2
+          RESULT=$(curl -s http://localhost:4319/requests)
+          echo "::group::mock requests"; echo "$RESULT" | jq .; echo "::endgroup::"
+          fail=0
+          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer codex-cfg-token")]|length')" -ge 1 ] \
+            || { echo "::error::codex config-file token did not reach the OTLP request"; fail=1; }
+          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer codex-env-token")]|length')" -ge 1 ] \
+            || { echo "::error::codex env-var token did not reach the OTLP request"; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PASS: both config-file and env-var credentials flow through codex-on-event.sh to real OTLP requests"
+
+      - name: "Contract H — install-codex.sh merges hooks + pre-trust into config.toml, preserving user content"
+        run: |
+          # Codex has no release yet (M4), so pre-stage the version-pinned binary
+          # and bootstrap; install-codex.sh skips the download when they're
+          # present. This exercises the real merge: managed block appended,
+          # [hooks.state] trust entries written, and any user-authored hooks /
+          # settings preserved. DASH0_VERSION pins the path so no release lookup.
+          export HOME=/tmp/codex-installer-home
+          export XDG_STATE_HOME=/tmp/codex-installer-state
+          rm -rf "$HOME" "$XDG_STATE_HOME"
+          VERSION=$(grep '^VERSION=' scripts/codex-on-event.sh | sed 's/VERSION="//;s/"//')
+          STATE_BASE="$XDG_STATE_HOME/dash0-agent-plugin/codex"
+          mkdir -p "$STATE_BASE/bin" "$HOME/.codex"
+          make build-binary PKG=./cmd/codex-on-event OUT="$STATE_BASE/bin/codex-on-event-${VERSION}-linux-amd64"
+          cp scripts/codex-on-event.sh "$STATE_BASE/codex-on-event.sh"
+
+          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp-codex-h
+          /tmp/mock-otlp-codex-h &
+          sleep 1
+
+          # Seed config.toml with an unrelated setting AND a user-authored hook the
+          # installer must preserve.
+          cat > "$HOME/.codex/config.toml" <<'TOML'
+          model = "gpt-5.5"
+
+          [[hooks.PreToolUse]]
+          matcher = "*"
+          [[hooks.PreToolUse.hooks]]
+          type = "command"
+          command = 'echo user-hook'
+          TOML
+
+          DASH0_VERSION="$VERSION" \
+          DASH0_OTLP_URL=http://localhost:4319 \
+          DASH0_AUTH_TOKEN=codex-install-token \
+            bash "$GITHUB_WORKSPACE/install-codex.sh" 2>&1 | tail -25
+
+          CONFIG_TOML="$HOME/.codex/config.toml"
+          echo "::group::resulting config.toml"; cat "$CONFIG_TOML"; echo "::endgroup::"
+          fail=0
+          [ -f "$HOME/.codex/dash0-agent-plugin.local.md" ] \
+            || { echo "::error::installer did not write the config .local.md"; fail=1; }
+          grep -q ">>> dash0-agent-plugin (managed)" "$CONFIG_TOML" \
+            || { echo "::error::managed block not appended to config.toml"; fail=1; }
+          trust_n=$(grep -c 'trusted_hash = "sha256:' "$CONFIG_TOML" || true)
+          [ "$trust_n" -eq 10 ] \
+            || { echo "::error::expected 10 pre-trust entries, found $trust_n"; fail=1; }
+
+          # Structural assertions via a real TOML parser: valid TOML, user setting
+          # and user hook preserved, our hooks + 10 trust-state keys present.
+          python3 - "$CONFIG_TOML" <<'PY' || fail=1
+          import sys, tomllib
+          d = tomllib.load(open(sys.argv[1], "rb"))
+          assert d.get("model") == "gpt-5.5", "user setting lost"
+          pre = d["hooks"]["PreToolUse"]
+          cmds = [h["command"] for g in pre for h in g["hooks"]]
+          assert any(c == "echo user-hook" for c in cmds), "user hook lost"
+          assert any("codex-on-event.sh" in c for c in cmds), "dash0 PreToolUse hook missing"
+          assert len(d["hooks"]["state"]) == 10, f"expected 10 trust keys, got {len(d['hooks']['state'])}"
+          print("TOML OK: user content preserved, dash0 hooks + trust present")
+          PY
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PASS: install-codex.sh merged hooks + pre-trust and preserved user config"
+
+      - name: "Contract I — uninstall-codex.sh strips the managed block, preserves user content"
+        run: |
+          # Assumes Contract H ran and left a merged config.toml in place.
+          export HOME=/tmp/codex-installer-home
+          export XDG_STATE_HOME=/tmp/codex-installer-state
+          CONFIG_TOML="$HOME/.codex/config.toml"
+          [ -f "$CONFIG_TOML" ] || { echo "::error::Contract H did not produce a config.toml"; exit 1; }
+
+          bash "$GITHUB_WORKSPACE/uninstall-codex.sh" --yes 2>&1 | tail -20
+
+          echo "::group::config.toml after uninstall"; cat "$CONFIG_TOML"; echo "::endgroup::"
+          fail=0
+          # config .local.md and state dir gone entirely.
+          for p in "$HOME/.codex/dash0-agent-plugin.local.md" "$XDG_STATE_HOME/dash0-agent-plugin/codex"; do
+            [ -e "$p" ] && { echo "::error::uninstaller left behind: $p"; fail=1; }
+          done
+          # config.toml still exists (user content), with NO managed block or trust.
+          grep -q ">>> dash0-agent-plugin (managed)" "$CONFIG_TOML" \
+            && { echo "::error::managed block survived uninstall"; fail=1; }
+          grep -q 'codex-on-event.sh' "$CONFIG_TOML" \
+            && { echo "::error::dash0 hook command survived uninstall"; fail=1; }
+          python3 - "$CONFIG_TOML" <<'PY' || fail=1
+          import sys, tomllib
+          d = tomllib.load(open(sys.argv[1], "rb"))
+          assert d.get("model") == "gpt-5.5", "user setting lost on uninstall"
+          cmds = [h["command"] for g in d["hooks"]["PreToolUse"] for h in g["hooks"]]
+          assert cmds == ["echo user-hook"], f"user hook not cleanly preserved: {cmds}"
+          assert "state" not in d.get("hooks", {}), "trust state survived uninstall"
+          print("TOML OK: user content intact, dash0 fully removed")
+          PY
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PASS: uninstall-codex.sh stripped the managed block and preserved user config"
+
   e2e:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository

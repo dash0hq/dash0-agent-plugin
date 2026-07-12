@@ -61,7 +61,7 @@
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
       "gen_ai.usage.cache_read.input_tokens": "int:29312",
-      "gen_ai.usage.input_tokens": "int:5153",
+      "gen_ai.usage.input_tokens": "int:34465",
       "gen_ai.usage.output_tokens": "int:161",
       "turn_id": "019f3be8-05bd-7fe1-a139-fb244f6c0f04"
     }
@@ -128,7 +128,7 @@
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
       "gen_ai.usage.cache_read.input_tokens": "int:29824",
-      "gen_ai.usage.input_tokens": "int:5929",
+      "gen_ai.usage.input_tokens": "int:35753",
       "gen_ai.usage.output_tokens": "int:127",
       "turn_id": "019f3bf0-d15b-7393-a174-85a31f0194a3"
     }
@@ -289,7 +289,7 @@
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
       "gen_ai.usage.cache_read.input_tokens": "int:18176",
-      "gen_ai.usage.input_tokens": "int:4587",
+      "gen_ai.usage.input_tokens": "int:22763",
       "gen_ai.usage.output_tokens": "int:67",
       "turn_id": "019f3bf3-6124-7c70-a5ca-e8009c1ebe71"
     }
@@ -382,7 +382,7 @@
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
       "gen_ai.usage.cache_read.input_tokens": "int:31360",
-      "gen_ai.usage.input_tokens": "int:2977",
+      "gen_ai.usage.input_tokens": "int:34337",
       "gen_ai.usage.output_tokens": "int:210",
       "turn_id": "019f3bf3-6091-70f0-8f09-be34a2a11e62"
     }
@@ -427,7 +427,7 @@
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
       "gen_ai.usage.cache_read.input_tokens": "int:31360",
-      "gen_ai.usage.input_tokens": "int:2972",
+      "gen_ai.usage.input_tokens": "int:34332",
       "gen_ai.usage.output_tokens": "int:215",
       "turn_id": "019f3bf3-5fe4-7a30-b800-02777660b362"
     }
@@ -606,7 +606,7 @@
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
       "gen_ai.usage.cache_read.input_tokens": "int:88576",
-      "gen_ai.usage.input_tokens": "int:28979",
+      "gen_ai.usage.input_tokens": "int:117555",
       "gen_ai.usage.output_tokens": "int:1500",
       "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
     }

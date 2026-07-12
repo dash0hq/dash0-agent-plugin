@@ -10,12 +10,16 @@ import (
 	"strings"
 )
 
-// Usage holds aggregated token usage for a single Codex turn, already mapped to
-// the disjoint input/cache-read convention Dash0's cost processor expects (see
-// ReadTurnUsage for why the mapping is not a straight copy of Codex's fields).
+// Usage holds aggregated token usage for a single Codex turn. Field semantics
+// match the OTel GenAI convention the Dash0 cost processor expects: InputTokens
+// is the TOTAL prompt count, inclusive of the cached portion, and
+// CacheReadInputTokens is a subset of it. The processor derives the uncached
+// input itself (input − cache_read − cache_creation), so we must not subtract
+// here. Codex reports tokens the same way (input_tokens includes cached), so the
+// mapping is a straight copy.
 type Usage struct {
-	InputTokens           int64 // prompt tokens NOT served from cache
-	CacheReadInputTokens  int64 // prompt tokens served from the prompt cache
+	InputTokens           int64 // total prompt tokens, INCLUDING the cached portion
+	CacheReadInputTokens  int64 // prompt tokens served from cache (a subset of InputTokens)
 	OutputTokens          int64 // completion tokens (includes reasoning tokens)
 	ReasoningOutputTokens int64 // reasoning tokens (a subset of OutputTokens); parsed for future use, not yet emitted
 }
@@ -93,15 +97,12 @@ func ReadTurnUsage(rolloutPath string) (*Usage, error) {
 			hasUsage = false
 		case "token_count":
 			u := line.Payload.Info.LastTokenUsage
-			// Codex reports input_tokens INCLUSIVE of the cached portion, whereas
-			// Dash0 (following the Anthropic convention) prices input and
-			// cache-read tokens separately and expects them disjoint. Subtract the
-			// cached portion so the cost processor doesn't charge it twice.
-			uncached := u.InputTokens - u.CachedInputTokens
-			if uncached < 0 {
-				uncached = 0 // defensive: never let a bad record produce negatives
-			}
-			turn.InputTokens += uncached
+			// Emit Codex's counts as-is. input_tokens is the total prompt count
+			// inclusive of the cached portion — which is exactly what the cost
+			// processor expects (it derives uncached = input − cache_read −
+			// cache_creation itself). Subtracting cached here would double-count
+			// the discount and under-price the turn.
+			turn.InputTokens += u.InputTokens
 			turn.CacheReadInputTokens += u.CachedInputTokens
 			turn.OutputTokens += u.OutputTokens
 			turn.ReasoningOutputTokens += u.ReasoningOutputTokens

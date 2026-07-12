@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
@@ -61,6 +62,17 @@ func injectTokenUsage(event map[string]any) {
 		path = atp
 	}
 	if path == "" {
+		return
+	}
+
+	// A compressed rollout is unreadable without a zstd dependency this module
+	// deliberately avoids. Mark the span (dash0.* vendor namespace — the gen_ai.*
+	// semconv namespace stays clean) so the missing usage is visible in telemetry
+	// as a known gap rather than a bug, and queryable to catch the day Codex
+	// starts compressing rollouts in the field.
+	if strings.HasSuffix(path, ".zst") {
+		fmt.Fprintf(os.Stderr, "codex: token usage unavailable for compressed rollout (zstd unsupported): %s\n", path)
+		event["dash0.codex.rollout.compressed"] = true
 		return
 	}
 

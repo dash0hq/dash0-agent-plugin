@@ -135,6 +135,36 @@ func TestNormalizeOverCapturedFixtures(t *testing.T) {
 	t.Logf("PostToolUse: %d total, %d with derived duration", posts, withDuration)
 }
 
+// A compressed rollout can't be read without a zstd dependency; the Stop event
+// gets no token usage but is marked so the gap is visible/queryable in telemetry.
+func TestNormalizeMarksCompressedRollout(t *testing.T) {
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "s1",
+		"transcript_path": "/home/u/.codex/sessions/rollout-x.jsonl.zst",
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, true, out["dash0.codex.rollout.compressed"])
+	_, hasUsage := out["gen_ai.usage.input_tokens"]
+	assert.False(t, hasUsage, "compressed rollout must not produce token usage")
+}
+
+// A sub-agent's compressed rollout (agent_transcript_path) is marked the same way.
+func TestNormalizeMarksCompressedSubagentRollout(t *testing.T) {
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "s1",
+		"transcript_path":       "/home/u/.codex/sessions/rollout-main.jsonl",
+		"agent_transcript_path": "/home/u/.codex/sessions/rollout-worker.jsonl.zst",
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, true, out["dash0.codex.rollout.compressed"])
+}
+
 func cloneMap(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {

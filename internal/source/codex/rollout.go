@@ -56,13 +56,14 @@ type codexTokenUsage struct {
 // interrupted turn) so the caller emits the span without token attributes.
 //
 // Compressed rollouts (.jsonl.zst, opt-in on newer Codex builds) are not yet
-// supported: a .zst path yields (nil, nil) with a stderr note rather than an
-// error. Adding zstd support is a localized change here — no runtime dependency
-// exists in this module today and no compressed rollout has been observed to
-// test against (Codex 0.142.5 writes plain .jsonl).
+// supported: a .zst path yields (nil, nil) so the caller emits the span without
+// token attributes. The caller (Normalize) detects the same suffix and marks the
+// span dash0.codex.rollout.compressed so the gap is visible in telemetry. Adding
+// zstd support is a localized change here — no runtime dependency exists in this
+// module today and no compressed rollout has been observed to test against (Codex
+// 0.142.5 writes plain .jsonl).
 func ReadTurnUsage(rolloutPath string) (*Usage, error) {
 	if strings.HasSuffix(rolloutPath, ".zst") {
-		fmt.Fprintf(os.Stderr, "codex: token usage unavailable for compressed rollout (zstd unsupported): %s\n", rolloutPath)
 		return nil, nil
 	}
 

@@ -56,18 +56,15 @@ func TestE2EFullFlowWithCodex(t *testing.T) {
 
 	pluginDir := findPluginDir(t)
 
-	// Hermetic Codex home so we never touch the developer's real ~/.codex.
-	codexHome := t.TempDir()
+	// Hermetic HOME + state so install-codex.sh writes to a throwaway ~/.codex and
+	// never touches the developer's real config.
+	home := t.TempDir()
+	state := t.TempDir()
+	codexHome := filepath.Join(home, ".codex")
+	require.NoError(t, os.MkdirAll(codexHome, 0o755))
 	if !authenticateCodex(t, codexBin, codexHome) {
 		t.Fatal("no Codex auth available — set OPENAI_API_KEY (CI: a service-account key) or run `codex login` (local)")
 	}
-
-	// Build the Codex entrypoint binary.
-	binary := filepath.Join(t.TempDir(), "codex-on-event")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/codex-on-event")
-	build.Dir = pluginDir
-	out, err := build.CombinedOutput()
-	require.NoError(t, err, "build failed: %s", string(out))
 
 	// Mock OTLP server records every request body.
 	var (
@@ -83,24 +80,11 @@ func TestE2EFullFlowWithCodex(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	pluginData := t.TempDir()
-
-	// Bootstrap wrapper: injects OTLP config into the environment and execs the
-	// binary. Codex runs this as the hook command and pipes the event on stdin.
-	wrapper := filepath.Join(t.TempDir(), "codex-on-event-wrapper.sh")
-	wrapperScript := fmt.Sprintf(`#!/usr/bin/env bash
-export DASH0_OTLP_URL=%q
-export CODEX_PLUGIN_OPTION_AUTH_TOKEN="e2e-codex-token"
-export DASH0_PLUGIN_DATA=%q
-export DASH0_OMIT_IO="false"
-exec %q
-`, srv.URL, pluginData, binary)
-	require.NoError(t, os.WriteFile(wrapper, []byte(wrapperScript), 0o755))
-
-	// Install hooks the customer way: register in config.toml AND pre-trust them
-	// via the installer's own emit path. The command written must match what we
-	// hash, so emit owns both. No bypass flag below — this is the real path.
-	writeCodexHooksTrusted(t, codexHome, binary, fmt.Sprintf("bash %q", wrapper))
+	// Install exactly as a customer would: run install-codex.sh, which appends the
+	// hooks + reproduced trust to ~/.codex/config.toml and writes the creds config.
+	// This drives the whole path in one test — installer → config.toml → live Codex
+	// → OTLP — so a break anywhere (config merge, trust hash, hook contract) fails here.
+	installCodex(t, pluginDir, home, state, srv.URL, "e2e-codex-token")
 
 	// Work in a throwaway git repo so the agent has somewhere to write.
 	workDir := t.TempDir()
@@ -109,16 +93,18 @@ exec %q
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
-	// NOTE: deliberately NO --dangerously-bypass-hook-trust — the hooks above are
-	// pre-trusted, exactly as a customer install leaves them.
+	// NOTE: deliberately NO --dangerously-bypass-hook-trust — install-codex.sh
+	// pre-trusted the hooks, exactly as a real install leaves them.
 	cmd := exec.CommandContext(ctx, codexBin, "exec",
 		"-s", "workspace-write",
 		"-c", "approval_policy=\"never\"",
 		"-C", workDir,
 		"Create a file hello.txt containing exactly the text 'hi from codex', then run the shell command 'cat hello.txt'. Keep it brief.",
 	)
-	cmd.Env = append(os.Environ(), "CODEX_HOME="+codexHome)
-	out, err = cmd.CombinedOutput()
+	// The hook (bootstrap → binary) inherits this env: HOME locates the creds
+	// config, XDG_STATE_HOME the installed binary, CODEX_HOME the config.toml.
+	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_STATE_HOME="+state, "CODEX_HOME="+codexHome)
+	out, err := cmd.CombinedOutput()
 	t.Logf("codex exec output (err=%v):\n%s", err, string(out))
 	require.NoError(t, err, "codex exec failed")
 
@@ -189,15 +175,72 @@ func spanHasPositiveTokenUsage(s otlp.Span) bool {
 	return false
 }
 
-// writeCodexHooksTrusted writes CODEX_HOME/config.toml using the installer's own
-// emit path: hooks + reproduced [hooks.state] trusted_hash for the given command.
-func writeCodexHooksTrusted(t *testing.T, codexHome, binary, command string) {
+// installCodex runs install-codex.sh the customer way against a hermetic HOME +
+// XDG_STATE_HOME, so it appends hooks + reproduced trust to $HOME/.codex/config.toml
+// and writes the creds config. The version-pinned binary and the bootstrap are
+// pre-staged so the script skips the release download (none exists until M4);
+// everything else — the config.toml merge, trust emission, and creds file — is
+// the real installer exercised end to end.
+func installCodex(t *testing.T, pluginDir, home, state, otlpURL, token string) {
 	t.Helper()
-	configPath := filepath.Join(codexHome, "config.toml")
-	cmd := exec.Command(binary, "emit-codex-hooks", "--config", configPath, "--command", command)
-	block, err := cmd.CombinedOutput()
-	require.NoError(t, err, "emit-codex-hooks failed: %s", string(block))
-	require.NoError(t, os.WriteFile(configPath, block, 0o644))
+	ver := codexPluginVersion(t, pluginDir)
+	goos, arch := unameOSArch(t)
+
+	codexState := filepath.Join(state, "dash0-agent-plugin", "codex")
+	require.NoError(t, os.MkdirAll(filepath.Join(codexState, "bin"), 0o755))
+	binPath := filepath.Join(codexState, "bin", fmt.Sprintf("codex-on-event-%s-%s-%s", ver, goos, arch))
+	build := exec.Command("go", "build", "-o", binPath, "./cmd/codex-on-event")
+	build.Dir = pluginDir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", string(out))
+	}
+	bootstrap, err := os.ReadFile(filepath.Join(pluginDir, "scripts", "codex-on-event.sh"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(codexState, "codex-on-event.sh"), bootstrap, 0o755))
+
+	cmd := exec.Command("bash", filepath.Join(pluginDir, "install-codex.sh"))
+	cmd.Env = append(os.Environ(),
+		"HOME="+home, "XDG_STATE_HOME="+state,
+		"DASH0_VERSION="+ver, "DASH0_OTLP_URL="+otlpURL,
+		"DASH0_AUTH_TOKEN="+token, "DASH0_DATASET=default",
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("install-codex.sh output:\n%s", string(out))
+	require.NoError(t, err, "install-codex.sh failed")
+}
+
+// codexPluginVersion reads the pinned VERSION from scripts/codex-on-event.sh so
+// the pre-staged binary path matches what install-codex.sh derives.
+func codexPluginVersion(t *testing.T, pluginDir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(pluginDir, "scripts", "codex-on-event.sh"))
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VERSION=") {
+			return strings.Trim(strings.TrimPrefix(line, "VERSION="), `"`)
+		}
+	}
+	t.Fatal("VERSION= not found in scripts/codex-on-event.sh")
+	return ""
+}
+
+// unameOSArch mirrors install-codex.sh's platform detection so the pre-staged
+// binary name matches exactly.
+func unameOSArch(t *testing.T) (string, string) {
+	t.Helper()
+	osOut, err := exec.Command("uname", "-s").Output()
+	require.NoError(t, err)
+	archOut, err := exec.Command("uname", "-m").Output()
+	require.NoError(t, err)
+	goos := strings.ToLower(strings.TrimSpace(string(osOut)))
+	arch := strings.TrimSpace(string(archOut))
+	switch arch {
+	case "x86_64":
+		arch = "amd64"
+	case "aarch64", "arm64":
+		arch = "arm64"
+	}
+	return goos, arch
 }
 
 // authenticateCodex sets up auth inside a hermetic CODEX_HOME. Returns false

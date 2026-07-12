@@ -149,6 +149,115 @@ exec %q
 	t.Logf("live Codex e2e: %d spans, harness=codex=%v tool=%v chat=%v", len(spans), harnessCodex, toolSpan, chatSpan)
 }
 
+// TestE2ECodexHookTrustNoBypass is the trust-path canary for M3's install: it
+// registers hooks in config.toml AND writes the reproduced [hooks.state]
+// trusted_hash entries (via `codex-on-event emit-codex-hooks`, the same path the
+// installer uses), then runs real Codex WITHOUT --dangerously-bypass-hook-trust.
+//
+// If our reproduced trust hash matches what Codex computes, the hooks are Trusted
+// and fire → spans arrive. If a future Codex changes its hook-identity
+// serialization, the hash won't match, Codex silently skips the hooks, no spans
+// arrive → this FAILS. That converts a silent-telemetry-loss regression in the
+// field into a red CI build.
+func TestE2ECodexHookTrustNoBypass(t *testing.T) {
+	codexBin, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal("codex CLI not found in PATH — install with: npm install -g @openai/codex")
+	}
+	pluginDir := findPluginDir(t)
+
+	codexHome := t.TempDir()
+	if !authenticateCodex(t, codexBin, codexHome) {
+		t.Fatal("no Codex auth available — set OPENAI_API_KEY or run `codex login`")
+	}
+
+	binary := filepath.Join(t.TempDir(), "codex-on-event")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/codex-on-event")
+	build.Dir = pluginDir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", string(out))
+	}
+
+	var (
+		mu     sync.Mutex
+		bodies [][]byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, b)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	pluginData := t.TempDir()
+	wrapper := filepath.Join(t.TempDir(), "codex-on-event-wrapper.sh")
+	wrapperScript := fmt.Sprintf(`#!/usr/bin/env bash
+export DASH0_OTLP_URL=%q
+export CODEX_PLUGIN_OPTION_AUTH_TOKEN="e2e-codex-token"
+export DASH0_PLUGIN_DATA=%q
+export DASH0_OMIT_IO="false"
+exec %q
+`, srv.URL, pluginData, binary)
+	require.NoError(t, os.WriteFile(wrapper, []byte(wrapperScript), 0o755))
+
+	// Register hooks + pre-trust exactly as install-codex.sh does: the command
+	// written into config.toml must equal what we hash, so emit owns both.
+	command := fmt.Sprintf("bash %q", wrapper)
+	writeCodexHooksTrusted(t, codexHome, binary, command)
+
+	workDir := t.TempDir()
+	gitInit(t, workDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	// NOTE: no --dangerously-bypass-hook-trust — this is the whole point.
+	cmd := exec.CommandContext(ctx, codexBin, "exec",
+		"-s", "workspace-write",
+		"-c", "approval_policy=\"never\"",
+		"-C", workDir,
+		"Create a file hello.txt containing exactly the text 'hi from codex', then run the shell command 'cat hello.txt'. Keep it brief.",
+	)
+	cmd.Env = append(os.Environ(), "CODEX_HOME="+codexHome)
+	out, err := cmd.CombinedOutput()
+	t.Logf("codex exec output (err=%v):\n%s", err, string(out))
+	require.NoError(t, err, "codex exec failed")
+
+	time.Sleep(500 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+
+	spans := collectSpans(t, bodies)
+	require.NotEmpty(t, spans,
+		"no spans with pre-trusted hooks and NO bypass flag — the reproduced trusted_hash "+
+			"likely no longer matches Codex's (serialization drift); see internal/source/codex/trust.go")
+	logSpanTree(t, spans)
+
+	var harnessCodex bool
+	for _, s := range spans {
+		for _, a := range s.Attributes {
+			if a.Key == "gen_ai.harness.name" && a.Value.StringValue != nil && *a.Value.StringValue == "codex" {
+				harnessCodex = true
+			}
+		}
+	}
+	assert.True(t, harnessCodex, "expected a codex-harness span from pre-trusted hooks")
+	t.Logf("trust-path canary: %d spans with pre-trusted hooks, no bypass flag", len(spans))
+}
+
+// writeCodexHooksTrusted writes CODEX_HOME/config.toml using the installer's own
+// emit path: hooks + reproduced [hooks.state] trusted_hash for the given command.
+func writeCodexHooksTrusted(t *testing.T, codexHome, binary, command string) {
+	t.Helper()
+	configPath := filepath.Join(codexHome, "config.toml")
+	cmd := exec.Command(binary, "emit-codex-hooks", "--config", configPath, "--command", command)
+	block, err := cmd.CombinedOutput()
+	require.NoError(t, err, "emit-codex-hooks failed: %s", string(block))
+	require.NoError(t, os.WriteFile(configPath, block, 0o644))
+}
+
 // authenticateCodex sets up auth inside a hermetic CODEX_HOME. Returns false
 // when no auth source is available (the caller then fails).
 func authenticateCodex(t *testing.T, codexBin, codexHome string) bool {

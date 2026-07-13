@@ -3,10 +3,7 @@
 
 package demo
 
-import (
-	"fmt"
-	"time"
-)
+import "time"
 
 // Closed lists of mock data. One element of each is chosen at random per
 // generated turn so the resulting telemetry looks like many different users
@@ -48,14 +45,83 @@ var teams = []string{
 	newcomersTeam,
 }
 
+// newcomerNames is the closed pool of realistic fantasy names the daily
+// rotating newcomer is drawn from. Sized at 60 so a name doesn't repeat
+// inside any 30-day billing period. Names are disjoint from users so a
+// newcomer is always a "fresh" identity relative to the static contributors.
+var newcomerNames = []string{
+	"Hollis Ambergate",
+	"Sable Whitmoor",
+	"Merrick Ashdown",
+	"Elowen Kirsch",
+	"Percival Rhodenhurst",
+	"Vashti Ollenberg",
+	"Fenris Callaway",
+	"Zelda Marchbank",
+	"Kester Vallon",
+	"Odette Prendergast",
+	"Silas Torrenberg",
+	"Amara Fenwick",
+	"Ronin Blackwood",
+	"Isabeau Merritt",
+	"Corbin Halberd",
+	"Nerissa Vane",
+	"Ludovic Trenholm",
+	"Beatrix Alderman",
+	"Ansel Weatherby",
+	"Ottoline Grimshaw",
+	"Sebastien Kolbe",
+	"Freya Millerand",
+	"Hendrik Bauwens",
+	"Cordelia Foxglove",
+	"Alaric Sundstrom",
+	"Rhiannon Trask",
+	"Casimir Northgate",
+	"Selene Farthingale",
+	"Emmerich Vollrath",
+	"Ianthe Weybridge",
+	"Rowan Ledoux",
+	"Perdita Ashkirk",
+	"Balthazar Reine",
+	"Sionna Kolstad",
+	"Elias Frankenreiter",
+	"Xanthe Marchmont",
+	"Osric Palethorpe",
+	"Bettina Lynwood",
+	"Callum Ravensdale",
+	"Mireille Osterberg",
+	"Sigrid Bramwell",
+	"Torvald Aikenhead",
+	"Persephone Halstrom",
+	"Willem Osgoode",
+	"Aisling Vellacott",
+	"Griffin Kildare",
+	"Rosalind Thornbury",
+	"Ephraim Vasquenza",
+	"Hyacinth Marlowe",
+	"Reinhardt Colville",
+	"Ottilie Blackfell",
+	"Kristofer Vanheusen",
+	"Damaris Ashenhurst",
+	"Piero Bellamont",
+	"Winifred Blackthorn",
+	"Dashiell Kentworth",
+	"Belladonna Kestrel",
+	"Iver Halloway",
+	"Solveig Ashenford",
+	"Cormac Whitleigh",
+}
+
 // newcomerUser returns a synthetic contributor whose name is stable within a
-// UTC calendar day and changes at the day boundary. Emitting one turn per day
-// as this user guarantees at least one brand-new unique user per day in the
-// billing tables, which gives the billing views realistic churn to render.
+// UTC calendar day and changes at the day boundary. The name is drawn from the
+// closed newcomerNames pool by UTC-day index, so the identity is unique per
+// day within a ~60-day window and looks like a real person in the billing
+// views. Emitting turns as this user gives the billing tables a fresh unique
+// user daily.
 func newcomerUser(now time.Time) user {
-	day := now.UTC().Format("2006-01-02")
+	idx := int(now.UTC().Unix()/86400) % len(newcomerNames)
 	return user{
-		Name: fmt.Sprintf("Newcomer %s", day),
+		Name: newcomerNames[idx],
 		Team: newcomersTeam,
 	}
 }

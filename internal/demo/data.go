@@ -9,9 +9,6 @@ import "time"
 // generated turn so the resulting telemetry looks like many different users
 // working across a handful of repositories.
 
-// newcomersTeam is the team every daily rotating "newcomer" user is attributed
-// to. Kept separate from the 40 static contributors so consumers can filter
-// them in or out via dash0.team.name.
 const newcomersTeam = "Newcomers"
 
 // repo describes a mock VCS repository. The working directory for a turn is

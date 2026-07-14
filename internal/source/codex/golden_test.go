@@ -75,6 +75,11 @@ func TestGoldenSpanTree(t *testing.T) {
 		if c, ok := event["cwd"].(string); ok && c != "" {
 			cwds[c] = true
 		}
+		// The captured rollout paths are absolute to the machine that recorded
+		// them; redirect them at the bundled fixtures (matched by basename) so the
+		// token-usage reader runs deterministically here and in CI.
+		rebaseRolloutPath(event, "transcript_path")
+		rebaseRolloutPath(event, "agent_transcript_path")
 
 		ts := base.Add(time.Duration(i) * time.Second)
 		i++
@@ -115,6 +120,19 @@ func TestGoldenSpanTree(t *testing.T) {
 	for _, s := range canon {
 		assert.False(t, strings.HasPrefix(s.Parent, "MISSING"),
 			"span %q (%s) has a dangling parent %s", s.Name, s.Span, s.Parent)
+
+		// Cost-contract invariant: the Dash0 cost processor treats
+		// gen_ai.usage.input_tokens as the TOTAL prompt count and derives the
+		// uncached portion by subtracting cache_read/cache_creation. So the
+		// emitted input MUST include cache_read (input >= cache_read); pre-
+		// subtracting it (the M2 regression) would under-price the turn. This
+		// fails even if the golden is blindly re-blessed with a wrong value.
+		if in, ok := goldenIntAttr(s, "gen_ai.usage.input_tokens"); ok {
+			cacheRead, _ := goldenIntAttr(s, "gen_ai.usage.cache_read.input_tokens")
+			assert.GreaterOrEqualf(t, in, cacheRead,
+				"span %q: input_tokens (%d) must be inclusive of cache_read (%d), not pre-subtracted",
+				s.Name, in, cacheRead)
+		}
 	}
 
 	got := marshalGolden(t, canon)
@@ -129,6 +147,29 @@ func TestGoldenSpanTree(t *testing.T) {
 	want, err := os.ReadFile(goldenPath)
 	require.NoError(t, err, "missing golden file; run with -update")
 	assert.Equal(t, string(want), string(got))
+}
+
+// goldenIntAttr reads a canonicalized int attribute (stored as "int:<n>") off a
+// golden span, returning the value and whether it was present as an int.
+func goldenIntAttr(s goldenSpan, key string) (int64, bool) {
+	v, ok := s.Attributes[key]
+	if !ok || !strings.HasPrefix(v, "int:") {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimPrefix(v, "int:"), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// rebaseRolloutPath rewrites an absolute captured rollout path under event[key]
+// to the bundled testdata/rollouts fixture with the same basename, so replaying
+// the capture reads deterministic token usage instead of a machine-local file.
+func rebaseRolloutPath(event map[string]any, key string) {
+	if p, ok := event[key].(string); ok && p != "" {
+		event[key] = filepath.Join("testdata", "rollouts", filepath.Base(p))
+	}
 }
 
 // goldenSpan is the stable, snapshot-friendly projection of an OTLP span.

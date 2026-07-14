@@ -11,13 +11,22 @@
 // diffing timestamps. The pipeline uses duration_ms to back-date the tool span's
 // start time.
 //
-// Token usage is intentionally NOT handled here — it lives in the Codex rollout
-// file (transcript_path / agent_transcript_path) and is read by the pipeline's
-// transcript layer.
+// Token usage lives in the Codex rollout file (transcript_path, or
+// agent_transcript_path for a sub-agent) rather than the hook payload, so on the
+// stop-family events that produce a chat/invoke_agent span we read the rollout
+// and inject gen_ai.usage.* onto the event (see injectTokenUsage + rollout.go).
+// This mirrors how the Cursor normalizer injects usage; the pipeline's span
+// builder emits any gen_ai.usage.* keys verbatim, so no pipeline change is
+// needed. The Claude transcript reader the pipeline also runs no-ops on a Codex
+// rollout (its records never carry a top-level "assistant" type), so it never
+// clobbers what we set here.
 package codex
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
@@ -34,9 +43,52 @@ func Normalize(event map[string]any, sessionDir string, now time.Time) map[strin
 	case "PostToolUse", "PostToolUseFailure":
 		ensureDurationMs(event, sessionDir, now)
 		anchorSpawnAgent(event)
+	case "Stop", "StopFailure", "SubagentStop":
+		injectTokenUsage(event)
 	}
 
 	return event
+}
+
+// injectTokenUsage reads the just-completed turn's token usage from the Codex
+// rollout file and writes it onto the event as gen_ai.usage.* attributes, which
+// the pipeline's LLM span builder emits verbatim. A sub-agent has its own rollout
+// (agent_transcript_path); the main session uses transcript_path. Best-effort: on
+// a missing path or any read/parse failure the event is left unchanged and the
+// span is emitted without token attributes.
+func injectTokenUsage(event map[string]any) {
+	path, _ := event["transcript_path"].(string)
+	if atp, _ := event["agent_transcript_path"].(string); atp != "" {
+		path = atp
+	}
+	if path == "" {
+		return
+	}
+
+	// A compressed rollout is unreadable without a zstd dependency this module
+	// deliberately avoids. Mark the span (dash0.* vendor namespace — the gen_ai.*
+	// semconv namespace stays clean) so the missing usage is visible in telemetry
+	// as a known gap rather than a bug, and queryable to catch the day Codex
+	// starts compressing rollouts in the field. The span attribute (plus the e2e
+	// canary) is the reachable signal; Codex does not surface hook stderr, so we
+	// don't bother logging here.
+	if strings.HasSuffix(path, ".zst") {
+		event["dash0.codex.rollout.compressed"] = true
+		return
+	}
+
+	usage, err := ReadTurnUsage(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "codex: reading rollout usage: %v\n", err)
+		return
+	}
+	if usage == nil {
+		return
+	}
+
+	event["gen_ai.usage.input_tokens"] = usage.InputTokens
+	event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+	event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
 }
 
 // anchorSpawnAgent makes Codex's sub-agent delegation parent correctly.

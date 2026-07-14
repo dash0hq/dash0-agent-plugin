@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -26,10 +27,15 @@ import (
 )
 
 // TestE2EFullFlowWithCodex is the Codex drift canary: it runs the REAL codex
-// CLI with our hooks installed and asserts that a live session produces Codex
-// telemetry in the shape the plugin expects. Unlike the golden test (which
-// replays frozen fixtures), this catches Codex-side changes — payload/event
-// renames, hook contract drift — that a new Codex version could introduce.
+// CLI with our hooks installed exactly the way a customer installs them —
+// registered in config.toml and PRE-TRUSTED (no --dangerously-bypass-hook-trust)
+// — and asserts that a live session produces Codex telemetry in the shape the
+// plugin expects. Unlike the golden test (which replays frozen fixtures), this
+// catches Codex-side changes a new version could introduce: payload/event
+// renames, hook contract drift, AND hook-trust serialization changes that would
+// make our reproduced trusted_hash stop matching (Codex would then silently skip
+// the hooks → no spans → this fails). trust_test.go pinpoints hash-algorithm
+// drift without a live binary; this proves the whole path against real Codex.
 //
 // Gated behind the e2e build tag. Like the Claude e2e, it FAILS (not skips)
 // when the codex CLI or auth is missing, so a misconfigured secret is loud
@@ -91,8 +97,10 @@ exec %q
 `, srv.URL, pluginData, binary)
 	require.NoError(t, os.WriteFile(wrapper, []byte(wrapperScript), 0o755))
 
-	// Register the hooks in the hermetic CODEX_HOME config.toml.
-	writeCodexHooks(t, codexHome, wrapper)
+	// Install hooks the customer way: register in config.toml AND pre-trust them
+	// via the installer's own emit path. The command written must match what we
+	// hash, so emit owns both. No bypass flag below — this is the real path.
+	writeCodexHooksTrusted(t, codexHome, binary, fmt.Sprintf("bash %q", wrapper))
 
 	// Work in a throwaway git repo so the agent has somewhere to write.
 	workDir := t.TempDir()
@@ -101,8 +109,9 @@ exec %q
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
+	// NOTE: deliberately NO --dangerously-bypass-hook-trust — the hooks above are
+	// pre-trusted, exactly as a customer install leaves them.
 	cmd := exec.CommandContext(ctx, codexBin, "exec",
-		"--dangerously-bypass-hook-trust",
 		"-s", "workspace-write",
 		"-c", "approval_policy=\"never\"",
 		"-C", workDir,
@@ -121,13 +130,17 @@ exec %q
 	defer mu.Unlock()
 
 	spans := collectSpans(t, bodies)
-	require.NotEmpty(t, spans, "expected at least one span from the live Codex session")
+	require.NotEmpty(t, spans,
+		"no spans from a live Codex session with pre-trusted hooks (no bypass flag). "+
+			"If trust_test.go still passes, Codex likely changed hook payloads/events; if it "+
+			"fails too, the reproduced trusted_hash no longer matches — see internal/source/codex/trust.go")
 	logSpanTree(t, spans)
 
 	var (
 		harnessCodex bool
 		toolSpan     bool
 		chatSpan     bool
+		chatHasUsage bool
 	)
 	for _, s := range spans {
 		for _, a := range s.Attributes {
@@ -140,13 +153,51 @@ exec %q
 			toolSpan = true
 		case strings.HasPrefix(s.Name, "chat"):
 			chatSpan = true
+			if spanHasPositiveTokenUsage(s) {
+				chatHasUsage = true
+			}
 		}
 	}
 
 	assert.True(t, harnessCodex, "expected a span tagged gen_ai.harness.name=codex")
 	assert.True(t, toolSpan, "expected at least one execute_tool span (the agent should run a tool)")
 	assert.True(t, chatSpan, "expected a chat span (the turn should close with Stop)")
-	t.Logf("live Codex e2e: %d spans, harness=codex=%v tool=%v chat=%v", len(spans), harnessCodex, toolSpan, chatSpan)
+	// Token usage is read from the session's rollout file (see internal/source/codex/rollout.go).
+	// This assertion doubles as a compression drift canary: if a future Codex writes
+	// rollouts as .jsonl.zst, the reader emits no usage and this goes red, signalling
+	// that zstd support is now required.
+	assert.True(t, chatHasUsage, "expected the chat span to carry gen_ai.usage.*_tokens > 0 "+
+		"(no usage may mean Codex now writes compressed .jsonl.zst rollouts — see rollout.go)")
+	t.Logf("live Codex e2e: %d spans, harness=codex=%v tool=%v chat=%v chatUsage=%v",
+		len(spans), harnessCodex, toolSpan, chatSpan, chatHasUsage)
+}
+
+// spanHasPositiveTokenUsage reports whether the span carries a gen_ai.usage.*_tokens
+// attribute with a positive value (OTLP encodes int64 attributes as strings).
+func spanHasPositiveTokenUsage(s otlp.Span) bool {
+	for _, a := range s.Attributes {
+		if !strings.HasPrefix(a.Key, "gen_ai.usage.") || !strings.HasSuffix(a.Key, "_tokens") {
+			continue
+		}
+		if a.Value.IntValue == nil {
+			continue
+		}
+		if n, err := strconv.ParseInt(*a.Value.IntValue, 10, 64); err == nil && n > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// writeCodexHooksTrusted writes CODEX_HOME/config.toml using the installer's own
+// emit path: hooks + reproduced [hooks.state] trusted_hash for the given command.
+func writeCodexHooksTrusted(t *testing.T, codexHome, binary, command string) {
+	t.Helper()
+	configPath := filepath.Join(codexHome, "config.toml")
+	cmd := exec.Command(binary, "emit-codex-hooks", "--config", configPath, "--command", command)
+	block, err := cmd.CombinedOutput()
+	require.NoError(t, err, "emit-codex-hooks failed: %s", string(block))
+	require.NoError(t, os.WriteFile(configPath, block, 0o644))
 }
 
 // authenticateCodex sets up auth inside a hermetic CODEX_HOME. Returns false
@@ -174,23 +225,6 @@ func authenticateCodex(t *testing.T, codexBin, codexHome string) bool {
 		return false
 	}
 	return os.WriteFile(filepath.Join(codexHome, "auth.json"), data, 0o600) == nil
-}
-
-// writeCodexHooks registers the capture hooks in CODEX_HOME/config.toml for the
-// events the pipeline needs to build a full turn (trace context → tool → chat).
-func writeCodexHooks(t *testing.T, codexHome, command string) {
-	t.Helper()
-	var b []byte
-	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"} {
-		b = append(b, []byte(fmt.Sprintf(`[[hooks.%s]]
-matcher = "*"
-[[hooks.%s.hooks]]
-type = "command"
-command = 'bash %q'
-
-`, event, event, command))...)
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), b, 0o644))
 }
 
 func gitInit(t *testing.T, dir string) {

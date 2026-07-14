@@ -17,6 +17,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -31,12 +32,65 @@ import (
 )
 
 func main() {
+	// Install-time subcommand: emit the managed config.toml block (hook
+	// registrations + reproduced trust hashes) for install-codex.sh to append.
+	// Kept in the binary so the trust-hash logic has one tested home.
+	if len(os.Args) > 1 && os.Args[1] == "emit-codex-hooks" {
+		if err := emitCodexHooks(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "codex-on-event: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Codex, like Cursor, can treat a non-zero hook exit as a blocking failure.
 	// We always exit 0 so a broken exporter never breaks the user's session —
 	// errors land on stderr only.
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "codex-on-event: %v\n", err)
 	}
+}
+
+// emitCodexHooks prints the marker-delimited config.toml block the installer
+// appends: --command is the exact hook command string, --config is the absolute
+// path of the config file it will be written into (part of each trust key).
+// existing config content is read from --config (if present) so pre-existing
+// user hook groups are counted for correct trust-key indices.
+func emitCodexHooks(args []string) error {
+	fs := flag.NewFlagSet("emit-codex-hooks", flag.ContinueOnError)
+	command := fs.String("command", "", "exact hook command string Codex will run")
+	configPath := fs.String("config", "", "absolute path of the config.toml the block is written into")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *command == "" || *configPath == "" {
+		return fmt.Errorf("emit-codex-hooks requires --command and --config")
+	}
+
+	// Codex keys hook trust on its RESOLVED config path (it realpath's the file),
+	// so the trust-state key must use the canonical path or Codex won't find our
+	// entry and will treat the hook as untrusted. Resolve symlinks on the parent
+	// dir (the file itself may not exist yet) and rejoin the filename.
+	keyPath := *configPath
+	if resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(*configPath)); err == nil {
+		keyPath = filepath.Join(resolvedDir, filepath.Base(*configPath))
+	}
+
+	// Read existing config minus any prior managed block, so re-installs count
+	// only the user's own hook groups.
+	var existing string
+	if data, err := os.ReadFile(*configPath); err == nil {
+		existing = codex.StripManagedBlock(string(data))
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("reading %s: %w", *configPath, err)
+	}
+
+	block, err := codex.RenderManagedBlock(keyPath, *command, existing)
+	if err != nil {
+		return err
+	}
+	fmt.Print(block)
+	return nil
 }
 
 func run() error {
@@ -102,8 +156,10 @@ func run() error {
 		return err
 	}
 
-	// Codex ignores stdout for observational hooks; surface status on stderr so
-	// it appears in Codex's hook log without affecting the agent loop.
+	// Codex ignores stdout for observational hooks and does not surface hook
+	// stderr in the TUI or any documented log, so this is best-effort diagnostic
+	// output only (visible when running the binary directly or in the e2e
+	// harness); it never affects the agent loop.
 	for _, msg := range result.Messages {
 		if msg.UserText != "" {
 			fmt.Fprintln(os.Stderr, msg.UserText)

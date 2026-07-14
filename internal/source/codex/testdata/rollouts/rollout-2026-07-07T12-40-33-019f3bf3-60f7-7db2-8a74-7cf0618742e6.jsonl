@@ -1,0 +1,5 @@
+{"type":"session_meta","payload":{"id":"fixture"}}
+{"timestamp":"2026-07-07T09:40:35.316Z","type":"event_msg","payload":{"type":"user_message","message":"<scrubbed>"}}
+{"timestamp":"2026-07-07T09:40:38.288Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":11334,"cached_input_tokens":9088,"output_tokens":56,"reasoning_output_tokens":0,"total_tokens":11390},"total_token_usage":{"input_tokens":11334,"cached_input_tokens":9088,"output_tokens":56,"reasoning_output_tokens":0,"total_tokens":11390}}}}
+{"timestamp":"2026-07-07T09:40:40.125Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":11429,"cached_input_tokens":9088,"output_tokens":11,"reasoning_output_tokens":0,"total_tokens":11440},"total_token_usage":{"input_tokens":22763,"cached_input_tokens":18176,"output_tokens":67,"reasoning_output_tokens":0,"total_tokens":22830}}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant"}}

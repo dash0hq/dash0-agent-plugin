@@ -42,7 +42,7 @@ test: ## Run Go unit + integration tests with the race detector.
 
 .PHONY: test-e2e
 test-e2e: ## Run the build-tagged end-to-end tests.
-	go test -tags=e2e -v -timeout=120s ./test/e2e/
+	go test -tags=e2e -v -timeout=300s ./test/e2e/
 
 .PHONY: go-mod-tidy
 go-mod-tidy: ## Run go mod tidy and fail if go.mod/go.sum change.

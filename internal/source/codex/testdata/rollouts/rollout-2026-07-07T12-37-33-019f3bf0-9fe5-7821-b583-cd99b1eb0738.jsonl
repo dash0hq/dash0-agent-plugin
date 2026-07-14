@@ -1,0 +1,6 @@
+{"type":"session_meta","payload":{"id":"fixture"}}
+{"timestamp":"2026-07-07T09:37:46.055Z","type":"event_msg","payload":{"type":"user_message","message":"<scrubbed>"}}
+{"timestamp":"2026-07-07T09:37:49.236Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":11824,"cached_input_tokens":9088,"output_tokens":56,"reasoning_output_tokens":0,"total_tokens":11880},"total_token_usage":{"input_tokens":11824,"cached_input_tokens":9088,"output_tokens":56,"reasoning_output_tokens":0,"total_tokens":11880}}}}
+{"timestamp":"2026-07-07T09:37:51.620Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":11919,"cached_input_tokens":9088,"output_tokens":51,"reasoning_output_tokens":0,"total_tokens":11970},"total_token_usage":{"input_tokens":23743,"cached_input_tokens":18176,"output_tokens":107,"reasoning_output_tokens":0,"total_tokens":23850}}}}
+{"timestamp":"2026-07-07T09:37:53.986Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":12010,"cached_input_tokens":11648,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":12030},"total_token_usage":{"input_tokens":35753,"cached_input_tokens":29824,"output_tokens":127,"reasoning_output_tokens":0,"total_tokens":35880}}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant"}}

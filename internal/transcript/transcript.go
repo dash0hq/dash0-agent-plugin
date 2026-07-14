@@ -25,10 +25,13 @@ type transcriptEntry struct {
 }
 
 type messageEnvelope struct {
-	Role    string            `json:"role"`
-	Model   string            `json:"model"`
-	Usage   *usageData        `json:"usage"`
-	Content []json.RawMessage `json:"content"`
+	Role  string     `json:"role"`
+	Model string     `json:"model"`
+	Usage *usageData `json:"usage"`
+	// Content is either a plain string (typed user prompts) or an array of
+	// content blocks (tool results, assistant messages), so it is kept raw
+	// and inspected in isRealUserMessage.
+	Content json.RawMessage `json:"content"`
 }
 
 type usageData struct {
@@ -114,14 +117,19 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	return &usage, nil
 }
 
-// titleEntry captures the custom-title field from transcript JSONL entries.
+// titleEntry captures the title fields from transcript JSONL entries. Claude
+// Code writes an auto-generated name as an "ai-title" entry (aiTitle) and, when
+// the user runs /rename, a "custom-title" entry (customTitle) that overrides it.
 type titleEntry struct {
 	Type        string `json:"type"`
 	CustomTitle string `json:"customTitle"`
+	AITitle     string `json:"aiTitle"`
 }
 
-// ReadSessionTitle reads the transcript file and returns the most recent
-// custom-title value, or empty string if none is found.
+// ReadSessionTitle reads the transcript file and returns the session name,
+// preferring the most recent user-set custom title (/rename) and falling back
+// to the most recent auto-generated title. Returns empty string if neither is
+// found. This mirrors the precedence Claude Code uses in the UI (/status).
 func ReadSessionTitle(transcriptPath string) string {
 	f, err := os.Open(transcriptPath)
 	if err != nil {
@@ -130,17 +138,27 @@ func ReadSessionTitle(transcriptPath string) string {
 	defer func() { _ = f.Close() }()
 
 	dec := json.NewDecoder(f)
-	var title string
+	var customTitle, aiTitle string
 	for dec.More() {
 		var entry titleEntry
 		if err := dec.Decode(&entry); err != nil {
 			continue
 		}
-		if entry.Type == "custom-title" && entry.CustomTitle != "" {
-			title = entry.CustomTitle
+		switch entry.Type {
+		case "custom-title":
+			if entry.CustomTitle != "" {
+				customTitle = entry.CustomTitle
+			}
+		case "ai-title":
+			if entry.AITitle != "" {
+				aiTitle = entry.AITitle
+			}
 		}
 	}
-	return title
+	if customTitle != "" {
+		return customTitle
+	}
+	return aiTitle
 }
 
 // ReadModel reads the transcript file and returns the model from the most
@@ -167,7 +185,8 @@ func ReadModel(transcriptPath string) string {
 }
 
 // isRealUserMessage returns true if the entry is a user message that is NOT
-// a tool_result relay. Tool-result messages have content[0].type == "tool_result"
+// a tool_result relay. Typed prompts carry content as a plain string;
+// tool-result relays carry an array with content[0].type == "tool_result"
 // and should not reset the turn boundary.
 func isRealUserMessage(entry transcriptEntry) bool {
 	if entry.Type != "user" {
@@ -176,9 +195,14 @@ func isRealUserMessage(entry transcriptEntry) bool {
 	if entry.Message == nil || entry.Message.Role != "user" {
 		return false
 	}
-	if len(entry.Message.Content) > 0 {
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(entry.Message.Content, &blocks); err != nil {
+		// Not an array — string content, i.e. a typed prompt.
+		return true
+	}
+	if len(blocks) > 0 {
 		var ct contentType
-		if err := json.Unmarshal(entry.Message.Content[0], &ct); err == nil {
+		if err := json.Unmarshal(blocks[0], &ct); err == nil {
 			if ct.Type == "tool_result" {
 				return false
 			}

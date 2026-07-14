@@ -94,6 +94,50 @@ func TestReadTurnUsageIgnoresPreviousTurns(t *testing.T) {
 	assert.Equal(t, int64(50), usage.OutputTokens)
 }
 
+func TestReadTurnUsageResetsOnStringContentUserMessage(t *testing.T) {
+	// Real Claude Code transcripts store typed prompts as a plain string in
+	// message.content (not an array of blocks). These must reset the turn,
+	// otherwise usage accumulates across the whole session.
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first prompt"}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"resp1"}],"usage":{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":11,"cache_read_input_tokens":22}}}`,
+		`{"type":"user","message":{"role":"user","content":"second prompt"}}`,
+		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","content":[{"type":"text","text":"resp2"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":1,"cache_read_input_tokens":2}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	// Only the second turn is counted.
+	assert.Equal(t, int64(100), usage.InputTokens)
+	assert.Equal(t, int64(50), usage.OutputTokens)
+	assert.Equal(t, int64(1), usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(2), usage.CacheReadInputTokens)
+}
+
+func TestReadTurnUsageStringContentTurnWithToolResults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first prompt"}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"resp1"}],"usage":{"input_tokens":1000,"output_tokens":500}}}`,
+		`{"type":"user","message":{"role":"user","content":"second prompt"}}`,
+		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","content":[{"type":"text","text":"using tool"}],"usage":{"input_tokens":100,"output_tokens":50}}}`,
+		// Tool result within the second turn — must NOT reset.
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]}}`,
+		`{"type":"assistant","requestId":"req_003","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":200,"output_tokens":80}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	// Both API calls of the second turn, nothing from the first.
+	assert.Equal(t, int64(300), usage.InputTokens)
+	assert.Equal(t, int64(130), usage.OutputTokens)
+}
+
 func TestReadTurnUsageIgnoresToolResultUser(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	writeTranscript(t, path, []string{
@@ -212,6 +256,27 @@ func TestReadSessionTitleUsesLatest(t *testing.T) {
 	})
 
 	assert.Equal(t, "renamed session", ReadSessionTitle(path))
+}
+
+func TestReadSessionTitleFallsBackToAITitle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"ai-title","aiTitle":"first auto name","sessionId":"sess-1"}`,
+		`{"type":"ai-title","aiTitle":"refined auto name","sessionId":"sess-1"}`,
+	})
+
+	assert.Equal(t, "refined auto name", ReadSessionTitle(path))
+}
+
+func TestReadSessionTitlePrefersCustomOverAI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"ai-title","aiTitle":"auto name","sessionId":"sess-1"}`,
+		`{"type":"custom-title","customTitle":"renamed by user","sessionId":"sess-1"}`,
+	})
+
+	assert.Equal(t, "renamed by user", ReadSessionTitle(path))
 }
 
 func TestReadSessionTitleMissing(t *testing.T) {

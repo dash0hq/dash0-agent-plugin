@@ -69,9 +69,10 @@ func injectTokenUsage(event map[string]any) {
 	// deliberately avoids. Mark the span (dash0.* vendor namespace — the gen_ai.*
 	// semconv namespace stays clean) so the missing usage is visible in telemetry
 	// as a known gap rather than a bug, and queryable to catch the day Codex
-	// starts compressing rollouts in the field.
+	// starts compressing rollouts in the field. The span attribute (plus the e2e
+	// canary) is the reachable signal; Codex does not surface hook stderr, so we
+	// don't bother logging here.
 	if strings.HasSuffix(path, ".zst") {
-		fmt.Fprintf(os.Stderr, "codex: token usage unavailable for compressed rollout (zstd unsupported): %s\n", path)
 		event["dash0.codex.rollout.compressed"] = true
 		return
 	}

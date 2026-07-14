@@ -139,26 +139,38 @@ BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
 BIN_ASSET="codex-on-event-${OS}-${ARCH}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${VERSION}"
 
-info "downloading codex-on-event v${VERSION}..."
-fetch "$BASE_URL/$BIN_ASSET" "$BIN_PATH" || die "failed to download binary: $BASE_URL/$BIN_ASSET"
-CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt" || true)
-if [ -n "$CHECKSUMS" ]; then
-  EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
-  if [ -n "$EXPECTED" ]; then
-    ACTUAL=$(sha256 "$BIN_PATH")
-    if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-      rm -f "$BIN_PATH"; die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
+# The binary path is version-pinned, so an already-present binary is exactly
+# this version — skip the download (idempotent re-install; also lets an offline
+# or pre-staged binary work). A version bump changes BIN_PATH, forcing a fetch.
+if [ -x "$BIN_PATH" ]; then
+  ok "binary already present → $BIN_PATH"
+else
+  info "downloading codex-on-event v${VERSION}..."
+  fetch "$BASE_URL/$BIN_ASSET" "$BIN_PATH" || die "failed to download binary: $BASE_URL/$BIN_ASSET"
+  CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt" || true)
+  if [ -n "$CHECKSUMS" ]; then
+    EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
+    if [ -n "$EXPECTED" ]; then
+      ACTUAL=$(sha256 "$BIN_PATH")
+      if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+        rm -f "$BIN_PATH"; die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
+      fi
     fi
   fi
+  chmod +x "$BIN_PATH"
+  ok "installed binary → $BIN_PATH"
 fi
-chmod +x "$BIN_PATH"
-ok "installed binary → $BIN_PATH"
 
-# 5b. Install the bootstrap script from the tagged ref.
-info "downloading codex-on-event.sh..."
-fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_PATH" || die "failed to download: $RAW_BASE/scripts/codex-on-event.sh"
-chmod +x "$SCRIPT_PATH"
-ok "installed bootstrap → $SCRIPT_PATH"
+# 5b. Install the bootstrap script from the tagged ref (skip if already present).
+if [ -f "$SCRIPT_PATH" ]; then
+  chmod +x "$SCRIPT_PATH"
+  ok "bootstrap already present → $SCRIPT_PATH"
+else
+  info "downloading codex-on-event.sh..."
+  fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_PATH" || die "failed to download: $RAW_BASE/scripts/codex-on-event.sh"
+  chmod +x "$SCRIPT_PATH"
+  ok "installed bootstrap → $SCRIPT_PATH"
+fi
 
 # 6. Collect configuration (env var > interactive prompt > skip).
 prompt_value() {

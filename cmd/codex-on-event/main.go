@@ -156,8 +156,10 @@ func run() error {
 		return err
 	}
 
-	// Codex ignores stdout for observational hooks; surface status on stderr so
-	// it appears in Codex's hook log without affecting the agent loop.
+	// Codex ignores stdout for observational hooks and does not surface hook
+	// stderr in the TUI or any documented log, so this is best-effort diagnostic
+	// output only (visible when running the binary directly or in the e2e
+	// harness); it never affects the agent loop.
 	for _, msg := range result.Messages {
 		if msg.UserText != "" {
 			fmt.Fprintln(os.Stderr, msg.UserText)

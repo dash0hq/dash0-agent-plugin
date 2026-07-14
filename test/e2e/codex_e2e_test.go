@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -139,6 +140,7 @@ exec %q
 		harnessCodex bool
 		toolSpan     bool
 		chatSpan     bool
+		chatHasUsage bool
 	)
 	for _, s := range spans {
 		for _, a := range s.Attributes {
@@ -151,13 +153,40 @@ exec %q
 			toolSpan = true
 		case strings.HasPrefix(s.Name, "chat"):
 			chatSpan = true
+			if spanHasPositiveTokenUsage(s) {
+				chatHasUsage = true
+			}
 		}
 	}
 
 	assert.True(t, harnessCodex, "expected a span tagged gen_ai.harness.name=codex")
 	assert.True(t, toolSpan, "expected at least one execute_tool span (the agent should run a tool)")
 	assert.True(t, chatSpan, "expected a chat span (the turn should close with Stop)")
-	t.Logf("live Codex e2e: %d spans, harness=codex=%v tool=%v chat=%v", len(spans), harnessCodex, toolSpan, chatSpan)
+	// Token usage is read from the session's rollout file (see internal/source/codex/rollout.go).
+	// This assertion doubles as a compression drift canary: if a future Codex writes
+	// rollouts as .jsonl.zst, the reader emits no usage and this goes red, signalling
+	// that zstd support is now required.
+	assert.True(t, chatHasUsage, "expected the chat span to carry gen_ai.usage.*_tokens > 0 "+
+		"(no usage may mean Codex now writes compressed .jsonl.zst rollouts — see rollout.go)")
+	t.Logf("live Codex e2e: %d spans, harness=codex=%v tool=%v chat=%v chatUsage=%v",
+		len(spans), harnessCodex, toolSpan, chatSpan, chatHasUsage)
+}
+
+// spanHasPositiveTokenUsage reports whether the span carries a gen_ai.usage.*_tokens
+// attribute with a positive value (OTLP encodes int64 attributes as strings).
+func spanHasPositiveTokenUsage(s otlp.Span) bool {
+	for _, a := range s.Attributes {
+		if !strings.HasPrefix(a.Key, "gen_ai.usage.") || !strings.HasSuffix(a.Key, "_tokens") {
+			continue
+		}
+		if a.Value.IntValue == nil {
+			continue
+		}
+		if n, err := strconv.ParseInt(*a.Value.IntValue, 10, 64); err == nil && n > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // writeCodexHooksTrusted writes CODEX_HOME/config.toml using the installer's own

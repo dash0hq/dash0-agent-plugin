@@ -333,6 +333,27 @@ func TestReadSessionTitleUsesLatest(t *testing.T) {
 	assert.Equal(t, "renamed session", ReadSessionTitle(path))
 }
 
+func TestReadSessionTitleFallsBackToAITitle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"ai-title","aiTitle":"first auto name","sessionId":"sess-1"}`,
+		`{"type":"ai-title","aiTitle":"refined auto name","sessionId":"sess-1"}`,
+	})
+
+	assert.Equal(t, "refined auto name", ReadSessionTitle(path))
+}
+
+func TestReadSessionTitlePrefersCustomOverAI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"ai-title","aiTitle":"auto name","sessionId":"sess-1"}`,
+		`{"type":"custom-title","customTitle":"renamed by user","sessionId":"sess-1"}`,
+	})
+
+	assert.Equal(t, "renamed by user", ReadSessionTitle(path))
+}
+
 func TestReadSessionTitleMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	writeTranscript(t, path, []string{

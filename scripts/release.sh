@@ -29,14 +29,16 @@ sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .claude-plugi
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .cursor-plugin/plugin.json
 sed -i '' "s/VERSION=\"[^\"]*\"/VERSION=\"${VERSION}\"/" scripts/on-event.sh
 sed -i '' "s/VERSION=\"[^\"]*\"/VERSION=\"${VERSION}\"/" scripts/cursor-on-event.sh
+sed -i '' "s/VERSION=\"[^\"]*\"/VERSION=\"${VERSION}\"/" scripts/codex-on-event.sh
 
 echo "Updated versions:"
 grep '"version"' .claude-plugin/plugin.json
 grep '"version"' .cursor-plugin/plugin.json
 grep 'VERSION=' scripts/on-event.sh
 grep 'VERSION=' scripts/cursor-on-event.sh
+grep 'VERSION=' scripts/codex-on-event.sh
 
-git add .claude-plugin/plugin.json .cursor-plugin/plugin.json scripts/on-event.sh scripts/cursor-on-event.sh
+git add .claude-plugin/plugin.json .cursor-plugin/plugin.json scripts/on-event.sh scripts/cursor-on-event.sh scripts/codex-on-event.sh
 git commit -m "release: ${TAG}"
 git tag "$TAG"
 git push

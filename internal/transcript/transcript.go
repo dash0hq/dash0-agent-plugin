@@ -35,10 +35,30 @@ type messageEnvelope struct {
 }
 
 type usageData struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	InputTokens              int64       `json:"input_tokens"`
+	OutputTokens             int64       `json:"output_tokens"`
+	CacheCreationInputTokens int64       `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64       `json:"cache_read_input_tokens"`
+	Iterations               []usageData `json:"iterations"`
+}
+
+// effective returns the token counts to attribute to this API call. When a
+// request is retried on a fallback model, the top-level fields mirror only the
+// final iteration while usage.iterations lists every billed attempt — in that
+// case the iterations are summed. With zero or one iteration the top-level
+// fields already hold the full picture and are returned unchanged.
+func (u *usageData) effective() usageData {
+	if len(u.Iterations) <= 1 {
+		return *u
+	}
+	var sum usageData
+	for _, it := range u.Iterations {
+		sum.InputTokens += it.InputTokens
+		sum.OutputTokens += it.OutputTokens
+		sum.CacheCreationInputTokens += it.CacheCreationInputTokens
+		sum.CacheReadInputTokens += it.CacheReadInputTokens
+	}
+	return sum
 }
 
 // contentType is used to peek at a content block's type field without fully
@@ -52,7 +72,9 @@ type contentType struct {
 // message). Returns nil when no usage data is found.
 //
 // Streaming duplicates (same requestId across multiple transcript entries) are
-// deduplicated so usage is counted only once per API call.
+// deduplicated so usage is counted only once per API call. When a call was
+// retried on a fallback model, all billed iterations are summed (see
+// usageData.effective).
 func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	f, err := os.Open(transcriptPath)
 	if err != nil {
@@ -95,20 +117,22 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 		if entry.RequestID != "" {
 			perReq[entry.RequestID] = u
 		} else {
-			noReqUsage.InputTokens += u.InputTokens
-			noReqUsage.OutputTokens += u.OutputTokens
-			noReqUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
-			noReqUsage.CacheReadInputTokens += u.CacheReadInputTokens
+			eff := u.effective()
+			noReqUsage.InputTokens += eff.InputTokens
+			noReqUsage.OutputTokens += eff.OutputTokens
+			noReqUsage.CacheCreationInputTokens += eff.CacheCreationInputTokens
+			noReqUsage.CacheReadInputTokens += eff.CacheReadInputTokens
 		}
 	}
 
 	// Sum final usage across all API calls in the turn.
 	usage := noReqUsage
 	for _, u := range perReq {
-		usage.InputTokens += u.InputTokens
-		usage.OutputTokens += u.OutputTokens
-		usage.CacheCreationInputTokens += u.CacheCreationInputTokens
-		usage.CacheReadInputTokens += u.CacheReadInputTokens
+		eff := u.effective()
+		usage.InputTokens += eff.InputTokens
+		usage.OutputTokens += eff.OutputTokens
+		usage.CacheCreationInputTokens += eff.CacheCreationInputTokens
+		usage.CacheReadInputTokens += eff.CacheReadInputTokens
 	}
 
 	if !hasUsage {

@@ -4,7 +4,7 @@
     "kind": 1,
     "trace": "trace-1",
     "span": "span-1",
-    "parent": "span-3",
+    "parent": "span-4",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.name": "codex",
@@ -26,7 +26,7 @@
     "kind": 1,
     "trace": "trace-1",
     "span": "span-2",
-    "parent": "span-3",
+    "parent": "span-4",
     "durationMs": 1000,
     "attributes": {
       "dash0.gen_ai.tool.bash.command_family": "wc",
@@ -45,12 +45,35 @@
     }
   },
   {
-    "name": "chat gpt-5.5",
+    "name": "execute_tool echo",
     "kind": 1,
     "trace": "trace-1",
     "span": "span-3",
+    "parent": "span-4",
+    "durationMs": 1000,
+    "attributes": {
+      "dash0.gen_ai.tool.mcp_server": "everything",
+      "gen_ai.agent.name": "codex",
+      "gen_ai.conversation.id": "019f3be8-053a-78c3-9096-e9ab264c13a0",
+      "gen_ai.harness.name": "codex",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.tool.call.arguments": "{\"message\":\"dash0-mcp-probe\"}",
+      "gen_ai.tool.call.id": "call_ljaDC0sXe6Ys52D2uKiWf0KN",
+      "gen_ai.tool.call.result": "{\"content\":[{\"text\":\"Echo: dash0-mcp-probe\",\"type\":\"text\"}]}",
+      "gen_ai.tool.name": "echo",
+      "gen_ai.tool.type": "function",
+      "turn_id": "019f3be8-05bd-7fe1-a139-fb244f6c0f04"
+    }
+  },
+  {
+    "name": "chat gpt-5.5",
+    "kind": 1,
+    "trace": "trace-1",
+    "span": "span-4",
     "parent": "",
-    "durationMs": 5000,
+    "durationMs": 7000,
     "attributes": {
       "gen_ai.agent.name": "codex",
       "gen_ai.conversation.id": "019f3be8-053a-78c3-9096-e9ab264c13a0",
@@ -60,6 +83,9 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"`hello.txt` is 14 bytes.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_read.input_tokens": "int:29312",
+      "gen_ai.usage.input_tokens": "int:34465",
+      "gen_ai.usage.output_tokens": "int:161",
       "turn_id": "019f3be8-05bd-7fe1-a139-fb244f6c0f04"
     }
   },
@@ -67,8 +93,8 @@
     "name": "execute_tool apply_patch",
     "kind": 1,
     "trace": "trace-2",
-    "span": "span-4",
-    "parent": "span-6",
+    "span": "span-5",
+    "parent": "span-7",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.name": "codex",
@@ -89,8 +115,8 @@
     "name": "execute_tool Bash",
     "kind": 1,
     "trace": "trace-2",
-    "span": "span-5",
-    "parent": "span-6",
+    "span": "span-6",
+    "parent": "span-7",
     "durationMs": 1000,
     "attributes": {
       "dash0.gen_ai.tool.bash.command_family": "cat",
@@ -112,7 +138,7 @@
     "name": "chat gpt-5.5",
     "kind": 1,
     "trace": "trace-2",
-    "span": "span-6",
+    "span": "span-7",
     "parent": "",
     "durationMs": 5000,
     "attributes": {
@@ -124,6 +150,9 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Created `foo.txt` and confirmed its contents:\\n\\n```text\\nhello\\n```\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_read.input_tokens": "int:29824",
+      "gen_ai.usage.input_tokens": "int:35753",
+      "gen_ai.usage.output_tokens": "int:127",
       "turn_id": "019f3bf0-d15b-7393-a174-85a31f0194a3"
     }
   },
@@ -131,8 +160,8 @@
     "name": "execute_tool Agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-7",
-    "parent": "span-27",
+    "span": "span-8",
+    "parent": "span-28",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-5f80-7ca3-81a0-298149d46129",
@@ -154,8 +183,8 @@
     "name": "execute_tool Agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-8",
-    "parent": "span-27",
+    "span": "span-9",
+    "parent": "span-28",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-605d-7393-ac4f-63f8dcc20260",
@@ -177,8 +206,8 @@
     "name": "execute_tool Agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-9",
-    "parent": "span-27",
+    "span": "span-10",
+    "parent": "span-28",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-60f7-7db2-8a74-7cf0618742e6",
@@ -200,8 +229,8 @@
     "name": "execute_tool apply_patch",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-10",
-    "parent": "span-8",
+    "span": "span-11",
+    "parent": "span-9",
     "durationMs": 2000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-605d-7393-ac4f-63f8dcc20260",
@@ -223,8 +252,8 @@
     "name": "execute_tool apply_patch",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-11",
-    "parent": "span-9",
+    "span": "span-12",
+    "parent": "span-10",
     "durationMs": 2000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-60f7-7db2-8a74-7cf0618742e6",
@@ -246,8 +275,8 @@
     "name": "execute_tool apply_patch",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-12",
-    "parent": "span-7",
+    "span": "span-13",
+    "parent": "span-8",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-5f80-7ca3-81a0-298149d46129",
@@ -269,8 +298,8 @@
     "name": "invoke_agent worker",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-13",
-    "parent": "span-9",
+    "span": "span-14",
+    "parent": "span-10",
     "durationMs": 8000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-60f7-7db2-8a74-7cf0618742e6",
@@ -282,6 +311,9 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Changed path: `c.txt`\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_read.input_tokens": "int:18176",
+      "gen_ai.usage.input_tokens": "int:22763",
+      "gen_ai.usage.output_tokens": "int:67",
       "turn_id": "019f3bf3-6124-7c70-a5ca-e8009c1ebe71"
     }
   },
@@ -289,8 +321,8 @@
     "name": "execute_tool multi_agent_v1wait_agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-14",
-    "parent": "span-27",
+    "span": "span-15",
+    "parent": "span-28",
     "durationMs": 8000,
     "attributes": {
       "gen_ai.agent.name": "codex",
@@ -311,8 +343,8 @@
     "name": "execute_tool Bash",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-15",
-    "parent": "span-8",
+    "span": "span-16",
+    "parent": "span-9",
     "durationMs": 1000,
     "attributes": {
       "dash0.gen_ai.tool.bash.command_family": "wc",
@@ -335,8 +367,8 @@
     "name": "execute_tool Bash",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-16",
-    "parent": "span-7",
+    "span": "span-17",
+    "parent": "span-8",
     "durationMs": 1000,
     "attributes": {
       "dash0.gen_ai.tool.bash.command_family": "od",
@@ -359,8 +391,8 @@
     "name": "invoke_agent worker",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-17",
-    "parent": "span-8",
+    "span": "span-18",
+    "parent": "span-9",
     "durationMs": 15000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-605d-7393-ac4f-63f8dcc20260",
@@ -372,6 +404,9 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Created [b.txt](\u003cCWD\u003e/b.txt) with exactly `B\\\\n`.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_read.input_tokens": "int:31360",
+      "gen_ai.usage.input_tokens": "int:34337",
+      "gen_ai.usage.output_tokens": "int:210",
       "turn_id": "019f3bf3-6091-70f0-8f09-be34a2a11e62"
     }
   },
@@ -379,8 +414,8 @@
     "name": "execute_tool multi_agent_v1wait_agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-18",
-    "parent": "span-27",
+    "span": "span-19",
+    "parent": "span-28",
     "durationMs": 2000,
     "attributes": {
       "gen_ai.agent.name": "codex",
@@ -401,8 +436,8 @@
     "name": "invoke_agent worker",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-19",
-    "parent": "span-7",
+    "span": "span-20",
+    "parent": "span-8",
     "durationMs": 17000,
     "attributes": {
       "gen_ai.agent.id": "019f3bf3-5f80-7ca3-81a0-298149d46129",
@@ -414,6 +449,9 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Changed path: [a.txt](\u003cCWD\u003e/a.txt)\\n\\nVerified it contains exactly `A` followed by a newline.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_read.input_tokens": "int:31360",
+      "gen_ai.usage.input_tokens": "int:34332",
+      "gen_ai.usage.output_tokens": "int:215",
       "turn_id": "019f3bf3-5fe4-7a30-b800-02777660b362"
     }
   },
@@ -421,8 +459,8 @@
     "name": "execute_tool multi_agent_v1wait_agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-20",
-    "parent": "span-27",
+    "span": "span-21",
+    "parent": "span-28",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.name": "codex",
@@ -443,8 +481,8 @@
     "name": "execute_tool Bash",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-21",
-    "parent": "span-27",
+    "span": "span-22",
+    "parent": "span-28",
     "durationMs": 1000,
     "attributes": {
       "dash0.gen_ai.tool.bash.command_family": "od",
@@ -466,8 +504,8 @@
     "name": "execute_tool Bash",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-22",
-    "parent": "span-27",
+    "span": "span-23",
+    "parent": "span-28",
     "durationMs": 2000,
     "attributes": {
       "dash0.gen_ai.tool.bash.command_family": "od",
@@ -489,8 +527,8 @@
     "name": "execute_tool Bash",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-23",
-    "parent": "span-27",
+    "span": "span-24",
+    "parent": "span-28",
     "durationMs": 2000,
     "attributes": {
       "dash0.gen_ai.tool.bash.command_family": "od",
@@ -512,8 +550,8 @@
     "name": "execute_tool multi_agent_v1close_agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-24",
-    "parent": "span-27",
+    "span": "span-25",
+    "parent": "span-28",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.name": "codex",
@@ -534,8 +572,8 @@
     "name": "execute_tool multi_agent_v1close_agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-25",
-    "parent": "span-27",
+    "span": "span-26",
+    "parent": "span-28",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.name": "codex",
@@ -556,8 +594,8 @@
     "name": "execute_tool multi_agent_v1close_agent",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-26",
-    "parent": "span-27",
+    "span": "span-27",
+    "parent": "span-28",
     "durationMs": 1000,
     "attributes": {
       "gen_ai.agent.name": "codex",
@@ -578,7 +616,7 @@
     "name": "chat gpt-5.5",
     "kind": 1,
     "trace": "trace-3",
-    "span": "span-27",
+    "span": "span-28",
     "parent": "",
     "durationMs": 32000,
     "attributes": {
@@ -590,6 +628,9 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Done. Three parallel worker subagents created:\\n\\n- [a.txt](\u003cCWD\u003e/a.txt): `A`\\n- [b.txt](\u003cCWD\u003e/b.txt): `B`\\n- [c.txt](\u003cCWD\u003e/c.txt): `C`\\n\\nVerified bytes: `41 0a`, `42 0a`, and `43 0a`, so each file contains the requested letter followed by a newline.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_read.input_tokens": "int:88576",
+      "gen_ai.usage.input_tokens": "int:117555",
+      "gen_ai.usage.output_tokens": "int:1500",
       "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
     }
   }

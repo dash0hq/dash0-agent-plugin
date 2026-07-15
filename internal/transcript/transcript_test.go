@@ -75,6 +75,81 @@ func TestReadTurnUsageAggregatesMultipleIterations(t *testing.T) {
 	assert.Equal(t, int64(60), usage.CacheReadInputTokens)
 }
 
+// fallbackUsage is a two-iteration usage payload modeled on a real fallback
+// request (Fable attempt, then Opus fallback): the top-level fields mirror only
+// the final iteration.
+const fallbackUsage = `{"input_tokens":5607,"output_tokens":698,"cache_creation_input_tokens":100,"cache_read_input_tokens":2000,"cache_creation":{"ephemeral_1h_input_tokens":100,"ephemeral_5m_input_tokens":0},"iterations":[{"type":"message","model":"claude-fable-5","input_tokens":5607,"output_tokens":2,"cache_creation_input_tokens":50,"cache_read_input_tokens":1000},{"type":"fallback_message","model":"claude-opus-4-8","input_tokens":5607,"output_tokens":698,"cache_creation_input_tokens":100,"cache_read_input_tokens":2000}]}`
+
+func TestReadTurnUsageSumsFallbackIterations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":` + fallbackUsage + `}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	// Both iterations are billed, so all fields are summed across them.
+	assert.Equal(t, int64(11214), usage.InputTokens)
+	assert.Equal(t, int64(700), usage.OutputTokens)
+	assert.Equal(t, int64(150), usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(3000), usage.CacheReadInputTokens)
+}
+
+func TestReadTurnUsageSingleIterationMatchesTopLevel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		// The single iteration duplicates the top-level fields, as observed in
+		// real transcripts; behavior must be identical to no iterations at all.
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":300,"iterations":[{"type":"message","input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":300}]}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(100), usage.InputTokens)
+	assert.Equal(t, int64(50), usage.OutputTokens)
+	assert.Equal(t, int64(200), usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(300), usage.CacheReadInputTokens)
+}
+
+func TestReadTurnUsageDeduplicatesFallbackIterations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		// Streaming split: both entries repeat the same usage incl. iterations.
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."}],"usage":` + fallbackUsage + `}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":` + fallbackUsage + `}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	// Iterations are summed once per requestId, not once per entry.
+	assert.Equal(t, int64(11214), usage.InputTokens)
+	assert.Equal(t, int64(700), usage.OutputTokens)
+}
+
+func TestReadTurnUsageEmptyIterations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"iterations":[]}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(100), usage.InputTokens)
+	assert.Equal(t, int64(50), usage.OutputTokens)
+}
+
 func TestReadTurnUsageIgnoresPreviousTurns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	writeTranscript(t, path, []string{
@@ -256,6 +331,27 @@ func TestReadSessionTitleUsesLatest(t *testing.T) {
 	})
 
 	assert.Equal(t, "renamed session", ReadSessionTitle(path))
+}
+
+func TestReadSessionTitleFallsBackToAITitle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"ai-title","aiTitle":"first auto name","sessionId":"sess-1"}`,
+		`{"type":"ai-title","aiTitle":"refined auto name","sessionId":"sess-1"}`,
+	})
+
+	assert.Equal(t, "refined auto name", ReadSessionTitle(path))
+}
+
+func TestReadSessionTitlePrefersCustomOverAI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"ai-title","aiTitle":"auto name","sessionId":"sess-1"}`,
+		`{"type":"custom-title","customTitle":"renamed by user","sessionId":"sess-1"}`,
+	})
+
+	assert.Equal(t, "renamed by user", ReadSessionTitle(path))
 }
 
 func TestReadSessionTitleMissing(t *testing.T) {

@@ -8,15 +8,17 @@ Trace through a session, see what each turn cost, find where the agent got stuck
 
 - **Claude Code** — installation, configuration, and usage in [`.claude-plugin/README.md`](./.claude-plugin/README.md).
 - **Cursor** — installation, configuration, and usage in [`.cursor-plugin/README.md`](./.cursor-plugin/README.md).
+- **OpenAI Codex** — installation, configuration, and usage in [`.codex-plugin/README.md`](./.codex-plugin/README.md).
 
 ## Repository layout
 
-This repo ships one shared Go pipeline (`cmd/`, `internal/`, `scripts/`) and two runtime-specific plugin surfaces:
+This repo ships one shared Go pipeline (`cmd/`, `internal/`, `scripts/`) and runtime-specific plugin surfaces:
 
 | Path | Runtime | Purpose |
 |---|---|---|
 | `.claude-plugin/`, `claude/commands/`, `claude/skills/`, `hooks/hooks.json` | Claude Code | Manifest, slash commands, configure skill, hook registration |
 | `.cursor-plugin/`, `cursor/plugin-hooks.json`, `cursor/skills/` | Cursor | Manifest, hook registration, configure skill |
+| `.codex-plugin/`, `install-codex.sh` | OpenAI Codex | Docs + installer; hooks are registered in the user's `~/.codex/config.toml` |
 
 Runtime-specific assets live under `claude/` and `cursor/` so neither marketplace auto-discovers the other runtime's components. Shared hook binaries stay in `scripts/`.
 

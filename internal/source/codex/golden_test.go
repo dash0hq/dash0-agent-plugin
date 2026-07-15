@@ -135,6 +135,23 @@ func TestGoldenSpanTree(t *testing.T) {
 		}
 	}
 
+	// MCP attribution invariant: Codex emits MCP tool calls with the same
+	// mcp__<server>__<tool> naming as Claude Code, so the pipeline's generic
+	// ExtractMCPServer/NormalizeMCPToolName must strip the prefix (tool name ->
+	// "echo") and attribute the server ("everything") with no Codex-specific code.
+	// Guards the captured mcp__everything__echo pair; fails even if the golden is
+	// blindly re-blessed with wrong values.
+	var sawMCP bool
+	for _, s := range canon {
+		if s.Attributes["dash0.gen_ai.tool.mcp_server"] == "everything" {
+			sawMCP = true
+			assert.Equal(t, "echo", s.Attributes["gen_ai.tool.name"],
+				"MCP tool name must be normalized (mcp__server__ prefix stripped)")
+			assert.Equal(t, "execute_tool", s.Attributes["gen_ai.operation.name"])
+		}
+	}
+	assert.True(t, sawMCP, "expected an MCP tool span with mcp_server attribution")
+
 	got := marshalGolden(t, canon)
 	goldenPath := filepath.Join("testdata", "golden_spans.json")
 

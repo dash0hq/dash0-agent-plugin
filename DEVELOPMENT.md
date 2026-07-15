@@ -28,6 +28,9 @@ Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Act
 - `.cursor-plugin/plugin.json` — `version` field
 - `scripts/on-event.sh` — `VERSION=` line (Claude Code binary downloader)
 - `scripts/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
+- `scripts/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
+
+`scripts/release.sh <version>` updates all of these in one commit, tags, and pushes.
 
 Then tag the commit in main:
 

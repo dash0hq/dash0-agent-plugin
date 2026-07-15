@@ -34,6 +34,21 @@ builds:
     main: ./cmd/cursor-on-event
     binary: "cursor-on-event-{{ .Os }}-{{ .Arch }}"
     no_unique_dist_dir: true
+  - id: codex-on-event
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/dash0hq/dash0-agent-plugin/internal/version.Version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    dir: ./
+    main: ./cmd/codex-on-event
+    binary: "codex-on-event-{{ .Os }}-{{ .Arch }}"
+    no_unique_dist_dir: true
 
 archives:
   - formats: ["binary"]

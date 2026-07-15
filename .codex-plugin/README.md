@@ -2,6 +2,8 @@
 
 Emit OpenAI Codex agent activity as OpenTelemetry spans to your Dash0 endpoint — prompts and responses, tool calls, MCP calls, and sub-agent activity, with shared trace context across each turn.
 
+**Requirements:** the OpenAI Codex CLI, on macOS or Linux.
+
 ## Installation
 
 ```bash
@@ -71,7 +73,7 @@ Per-project overrides work: drop a `.codex/dash0-agent-plugin.local.md` inside y
 | `omit_user_info` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
 | `omit_io` | `false` | When `true`, prompt content and tool call inputs/outputs are stripped from spans. |
 
-**Always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
+**Always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, VCS repository/branch info.
 
 For the full list of telemetry attributes emitted, see the [Claude Code plugin README](../.claude-plugin/README.md#telemetry-attributes).
 
@@ -84,6 +86,20 @@ Send a prompt that uses a tool. In Dash0 you should see one trace per turn with:
 - the same `traceId` on every span in the turn
 
 Sub-agents appear as `invoke_agent` spans parenting their own tool calls, and MCP calls carry `dash0.gen_ai.tool.mcp_server`.
+
+## Troubleshooting
+
+If no traces arrive:
+
+- Confirm you started a **new** Codex session after installing.
+- In Codex, run `/hooks` and check that the Dash0 hooks are listed and **Active**.
+- Enable the debug log — add `debug: true` and `debug_file: /tmp/dash0-codex-debug.log` to `~/.codex/dash0-agent-plugin.local.md`, then run Codex and watch it:
+
+  ```bash
+  tail -F /tmp/dash0-codex-debug.log
+  ```
+
+  Every emitted span is appended there as a `[dash0:trace] {...}` line. If spans are logged but don't reach Dash0, re-check `otlp_url` and `auth_token` in the config.
 
 ## Uninstall
 

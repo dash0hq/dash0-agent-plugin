@@ -26,9 +26,11 @@ Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Act
 
 - `.claude-plugin/plugin.json` — `version` field
 - `.cursor-plugin/plugin.json` — `version` field
+- `copilot/plugin.json` — `version` field
 - `scripts/on-event.sh` — `VERSION=` line (Claude Code binary downloader)
 - `scripts/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
 - `scripts/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
+- `copilot/copilot-on-event.sh` — `VERSION=` line (Copilot binary downloader; vendored inside the `copilot/` subpath-install package)
 
 `scripts/release.sh <version>` updates all of these in one commit, tags, and pushes.
 

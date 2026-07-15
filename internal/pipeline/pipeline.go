@@ -145,9 +145,24 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
 		otlp.ClearTraceContext(sessionDir)
+	case "SubagentStart":
+		// Snapshot the current trace context for this agent so its
+		// SubagentStop still finds the spawning turn's trace even when it
+		// arrives after Stop (context cleared) or after the next prompt
+		// (context replaced).
+		if agentID != "" {
+			if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
+				if err := otlp.SaveAgentTraceContext(*ctx, sessionDir, agentID); err != nil {
+					fmt.Fprintf(os.Stderr, "on-event: saving agent trace context: %v\n", err)
+				}
+			}
+		}
 	case "SubagentStop":
 		if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
+		}
+		if agentID != "" {
+			otlp.ClearAgentTraceContext(sessionDir, agentID)
 		}
 	case "SessionEnd":
 		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
@@ -263,9 +278,21 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 }
 
 func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir string, failed bool) error {
-	ctx, err := otlp.LoadTraceContext(dataDir)
-	if err != nil || ctx == nil {
-		return fmt.Errorf("no trace context available for LLM span")
+	agentID, _ := event["agent_id"].(string)
+
+	// For subagent spans, prefer the snapshot taken at SubagentStart: by the
+	// time a SubagentStop arrives the session context may already be cleared
+	// (Stop) or belong to the next turn (UserPromptSubmit).
+	var ctx *otlp.TraceContext
+	if agentID != "" {
+		ctx, _ = otlp.LoadAgentTraceContext(dataDir, agentID)
+	}
+	if ctx == nil {
+		var err error
+		ctx, err = otlp.LoadTraceContext(dataDir)
+		if err != nil || ctx == nil {
+			return fmt.Errorf("no trace context available for LLM span")
+		}
 	}
 
 	traceID := ctx.TraceID
@@ -293,7 +320,6 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		}
 	}
 
-	agentID, _ := event["agent_id"].(string)
 	parentSpanID := ""
 	if agentID != "" {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -391,4 +392,155 @@ func TestProcess_SessionStart_ReInitializesAfterSessionEnd(t *testing.T) {
 	ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
 	require.NoError(t, err)
 	assert.Equal(t, "sonnet", ctx.Model)
+}
+
+// intAttr returns the stringified int value of an attribute, or "" if absent.
+func intAttr(attrs []otlp.Attribute, key string) string {
+	for _, a := range attrs {
+		if a.Key == key && a.Value.IntValue != nil {
+			return *a.Value.IntValue
+		}
+	}
+	return ""
+}
+
+// writeAgentTranscript creates a minimal subagent transcript (prompt + one
+// assistant call with usage) and returns its path.
+func writeAgentTranscript(t *testing.T, inputTokens, outputTokens int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "agent-transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"agent prompt"}}`,
+		`{"type":"assistant","requestId":"req_agent_1","message":{"role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":` +
+			strconv.Itoa(inputTokens) + `,"output_tokens":` + strconv.Itoa(outputTokens) + `,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+	}
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
+	return path
+}
+
+// 14. The observed real-world ordering: a subagent's SubagentStop arrives
+// AFTER the turn's Stop has already cleared the session trace context.
+// The snapshot taken at SubagentStart must keep the subagent span — and its
+// token usage — attached to the spawning turn's trace instead of dropping it.
+func TestProcess_SubagentStopAfterStop_UsesSnapshotContext(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	agentTranscript := writeAgentTranscript(t, 2393, 2172)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+
+	turnCtx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, turnCtx)
+
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+
+	// Session context is gone — before the fix this dropped the span.
+	cleared, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.Nil(t, cleared)
+
+	s.feed(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": agentTranscript,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 2, "chat span from Stop AND subagent span from SubagentStop")
+	sub := (*spans)[1]
+	assert.Equal(t, turnCtx.TraceID, sub.TraceID, "subagent span must join the spawning turn's trace")
+	assert.Equal(t, otlp.SpanIDFromAgentID("agent1"), sub.ParentSpanID, "parented under the Agent tool span")
+	assert.Equal(t, "2393", intAttr(sub.Attributes, "gen_ai.usage.input_tokens"))
+	assert.Equal(t, "2172", intAttr(sub.Attributes, "gen_ai.usage.output_tokens"), "subagent token usage must survive the Stop ordering")
+}
+
+// 15. A SubagentStop that straggles past the NEXT turn's UserPromptSubmit must
+// still attach to the turn that spawned it, not to the new turn's trace.
+func TestProcess_SubagentStopAfterNextPrompt_KeepsSpawningTrace(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	agentTranscript := writeAgentTranscript(t, 100, 50)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "turn 1"})
+
+	turn1Ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, turn1Ctx)
+
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "turn 2"})
+
+	turn2Ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, turn2Ctx)
+	require.NotEqual(t, turn1Ctx.TraceID, turn2Ctx.TraceID)
+
+	s.feed(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": agentTranscript,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 2)
+	sub := (*spans)[1]
+	assert.Equal(t, turn1Ctx.TraceID, sub.TraceID, "late subagent span belongs to turn 1, not turn 2")
+}
+
+// 16. Without a SubagentStart snapshot (e.g. plugin installed mid-session),
+// SubagentStop falls back to the live session context as before.
+func TestProcess_SubagentStopWithoutSnapshot_FallsBackToSessionContext(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	agentTranscript := writeAgentTranscript(t, 100, 50)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+
+	turnCtx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, turnCtx)
+
+	// No SubagentStart — straight to SubagentStop while the turn is live.
+	s.feed(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": agentTranscript,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	assert.Equal(t, turnCtx.TraceID, (*spans)[0].TraceID)
+}
+
+// 17. SubagentStop consumes its snapshot: the per-agent file is removed so a
+// long-lived session does not accumulate stale agent contexts.
+func TestProcess_SubagentStop_CleansUpSnapshot(t *testing.T) {
+	url, _, _ := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+
+	snap, err := otlp.LoadAgentTraceContext(s.sessionDir("sess-1"), "agent1")
+	require.NoError(t, err)
+	require.NotNil(t, snap, "SubagentStart must persist a snapshot")
+
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": "agent1"})
+
+	snap, err = otlp.LoadAgentTraceContext(s.sessionDir("sess-1"), "agent1")
+	require.NoError(t, err)
+	assert.Nil(t, snap, "snapshot must be removed after SubagentStop")
 }

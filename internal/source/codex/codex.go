@@ -45,6 +45,7 @@ func Normalize(event map[string]any, sessionDir string, now time.Time) map[strin
 		anchorSpawnAgent(event)
 	case "Stop", "StopFailure", "SubagentStop":
 		injectTokenUsage(event)
+		injectBillingMode(event)
 	}
 
 	return event

@@ -31,6 +31,12 @@ var update = flag.Bool("update", false, "regenerate the golden span snapshot")
 // context, workspace paths) are canonicalized so the snapshot is stable across
 // machines and runs. Regenerate with: go test ./internal/source/codex -run Golden -update
 func TestGoldenSpanTree(t *testing.T) {
+	// Deterministic billing mode: point the auth.json reader at a fixed fixture
+	// (auth_mode=chatgpt) instead of the machine's real ~/.codex/auth.json, so
+	// dash0.codex.billing_mode is stable in the snapshot.
+	authPathOverride = filepath.Join("testdata", "auth.json")
+	defer func() { authPathOverride = "" }()
+
 	var mu sync.Mutex
 	var bodies [][]byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

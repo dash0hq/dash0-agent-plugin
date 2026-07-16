@@ -75,6 +75,7 @@
     "parent": "",
     "durationMs": 7000,
     "attributes": {
+      "dash0.codex.billing_mode": "subscription",
       "gen_ai.agent.name": "codex",
       "gen_ai.conversation.id": "019f3be8-053a-78c3-9096-e9ab264c13a0",
       "gen_ai.harness.name": "codex",
@@ -142,6 +143,7 @@
     "parent": "",
     "durationMs": 5000,
     "attributes": {
+      "dash0.codex.billing_mode": "subscription",
       "gen_ai.agent.name": "codex",
       "gen_ai.conversation.id": "019f3bf0-9fe5-7821-b583-cd99b1eb0738",
       "gen_ai.harness.name": "codex",
@@ -302,6 +304,7 @@
     "parent": "span-10",
     "durationMs": 8000,
     "attributes": {
+      "dash0.codex.billing_mode": "subscription",
       "gen_ai.agent.id": "019f3bf3-60f7-7db2-8a74-7cf0618742e6",
       "gen_ai.agent.name": "worker",
       "gen_ai.conversation.id": "019f3bf3-29e5-7320-a40b-883e09c7601a",
@@ -395,6 +398,7 @@
     "parent": "span-9",
     "durationMs": 15000,
     "attributes": {
+      "dash0.codex.billing_mode": "subscription",
       "gen_ai.agent.id": "019f3bf3-605d-7393-ac4f-63f8dcc20260",
       "gen_ai.agent.name": "worker",
       "gen_ai.conversation.id": "019f3bf3-29e5-7320-a40b-883e09c7601a",
@@ -440,6 +444,7 @@
     "parent": "span-8",
     "durationMs": 17000,
     "attributes": {
+      "dash0.codex.billing_mode": "subscription",
       "gen_ai.agent.id": "019f3bf3-5f80-7ca3-81a0-298149d46129",
       "gen_ai.agent.name": "worker",
       "gen_ai.conversation.id": "019f3bf3-29e5-7320-a40b-883e09c7601a",
@@ -620,6 +625,7 @@
     "parent": "",
     "durationMs": 32000,
     "attributes": {
+      "dash0.codex.billing_mode": "subscription",
       "gen_ai.agent.name": "codex",
       "gen_ai.conversation.id": "019f3bf3-29e5-7320-a40b-883e09c7601a",
       "gen_ai.harness.name": "codex",

@@ -60,7 +60,7 @@ DASH0_OTLP_URL=https://ingress.eu-west-1.aws.dash0-dev.com \
 # EU production
 DASH0_OTLP_URL=https://ingress.eu-west-1.aws.dash0.com \
   DASH0_AUTH_TOKEN=auth_REDACTED \
-  DASH0_DATASET=Default \
+  DASH0_DATASET=default \
   FUNCTION_NAME=dash0-coding-agents-demo-eu \
   ./internal/demo/deploy/deploy.sh
 
@@ -73,7 +73,7 @@ DASH0_OTLP_URL=https://ingress.eu-west-1.aws.dash0.com \
 # US production
 DASH0_OTLP_URL=https://ingress.us-west-2.aws.dash0.com \
   DASH0_AUTH_TOKEN=auth_REDACTED \
-  DASH0_DATASET=Default \
+  DASH0_DATASET=default \
   FUNCTION_NAME=dash0-coding-agents-demo-us \
   ./internal/demo/deploy/deploy.sh
 ```

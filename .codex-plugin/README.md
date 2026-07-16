@@ -10,9 +10,13 @@ Emit OpenAI Codex agent activity as OpenTelemetry spans to your Dash0 endpoint �
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-codex.sh | bash
 ```
 
-The installer registers the plugin's hooks in `~/.codex/config.toml` (as a managed block, preserving any hooks and config you already have), fetches the `codex-on-event` binary from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) — verifying the checksum — into `~/.local/state/dash0-agent-plugin/codex/bin/`, and writes credentials to `~/.codex/dash0-agent-plugin.local.md` (chmod 600).
+You'll be prompted for your Dash0 endpoint, token, and dataset. The installer registers the plugin's hooks in `~/.codex/config.toml` (as a managed block, preserving any hooks and config you already have), fetches the `codex-on-event` binary from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) — verifying the checksum — into `~/.local/state/dash0-agent-plugin/codex/bin/`, and writes credentials to `~/.codex/dash0-agent-plugin.local.md` (chmod 600).
 
-Pre-supply credentials to skip the prompts. Either pass them as flags:
+After install, **start a new Codex session.**
+
+### Headless / non-interactive (CI, containers, fleet rollout)
+
+Pass credentials up front so there are no prompts — as flags:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-codex.sh | bash -s -- \
@@ -21,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/ins
   --dataset default
 ```
 
-Or via environment variables:
+…or as environment variables:
 
 ```bash
 DASH0_OTLP_URL=https://ingress.<region>.aws.dash0.com \
@@ -30,11 +34,9 @@ DASH0_DATASET=default \
   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-codex.sh | bash
 ```
 
-Each flag (and its env-var equivalent) skips the corresponding prompt. The team-name prompt has no flag — set `DASH0_TEAM_NAME` if you want to provide it non-interactively. `DASH0_VERSION` pins a specific release; default is the latest GitHub release.
+Each flag (and its env-var equivalent) skips the corresponding prompt, so the installer runs fully unattended. The team-name prompt has no flag — set `DASH0_TEAM_NAME` to provide it. `DASH0_VERSION` pins a specific release; the default is the latest. With no credentials supplied, the installer still completes but stays inactive until you fill in `~/.codex/dash0-agent-plugin.local.md`.
 
 > **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.codex/dash0-agent-plugin.local.md` (which the bootstrap script passes to the hook as `CODEX_PLUGIN_OPTION_AUTH_TOKEN`). This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
-
-After install, **start a new Codex session.**
 
 ## Upgrading
 

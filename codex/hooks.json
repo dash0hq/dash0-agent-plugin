@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart":      [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "PreToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "PostToolUse":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "SubagentStart":     [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "SubagentStop":      [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "PreCompact":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "PostCompact":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }],
+    "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/codex-on-event.sh" }] }]
+  }
+}

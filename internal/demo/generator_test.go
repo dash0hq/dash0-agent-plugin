@@ -123,3 +123,58 @@ func TestGenerateTurnUniqueSessions(t *testing.T) {
 		seen[conv] = true
 	}
 }
+
+func TestNewcomerUserDailyRollover(t *testing.T) {
+	d1 := time.Date(2026, time.July, 10, 12, 0, 0, 0, time.UTC)
+	d2 := d1.AddDate(0, 0, 1)
+
+	u1 := newcomerUser(d1)
+	u2 := newcomerUser(d2)
+
+	assert.Equal(t, newcomersTeam, u1.Team)
+	assert.Equal(t, newcomersTeam, u2.Team)
+	assert.Contains(t, newcomerNames, u1.Name, "newcomer name must come from the closed pool")
+	assert.Contains(t, newcomerNames, u2.Name, "newcomer name must come from the closed pool")
+	assert.NotEqual(t, u1.Name, u2.Name, "newcomer name must change across UTC days")
+
+	// Within the same UTC day the name is stable.
+	assert.Equal(t, u1, newcomerUser(d1.Add(6*time.Hour)))
+}
+
+// TestNewcomerNamesDisjointFromUsers guards against future edits that would
+// let a name appear both as a static contributor and as a newcomer, which
+// would defeat the "brand-new unique user" role of the newcomer cohort.
+func TestNewcomerNamesDisjointFromUsers(t *testing.T) {
+	staticNames := make(map[string]struct{}, len(users))
+	for _, u := range users {
+		staticNames[u.Name] = struct{}{}
+	}
+	for _, name := range newcomerNames {
+		_, clash := staticNames[name]
+		assert.Falsef(t, clash, "newcomer name %q also appears in the static users list", name)
+	}
+}
+
+func TestPickUserYieldsBothCohorts(t *testing.T) {
+	now := time.Date(2026, time.July, 10, 12, 0, 0, 0, time.UTC)
+	todaysNewcomer := newcomerUser(now)
+	sawNewcomer, sawStatic := false, false
+
+	// Over 5000 draws, both cohorts must appear at newcomerProbability=0.15;
+	// the probability of missing either is astronomically small.
+	for i := 0; i < 5000; i++ {
+		u := pickUser(now)
+		if u.Team == newcomersTeam {
+			sawNewcomer = true
+			assert.Equal(t, todaysNewcomer.Name, u.Name, "newcomer draws must all yield today's rotating name")
+		} else {
+			sawStatic = true
+			assert.Contains(t, users, u, "static pick must come from the closed users list")
+		}
+		if sawNewcomer && sawStatic {
+			break
+		}
+	}
+	assert.True(t, sawNewcomer, "newcomer must be selected at least once at p=0.15")
+	assert.True(t, sawStatic, "static contributors must be selected at least once")
+}

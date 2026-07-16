@@ -100,3 +100,73 @@ tail -F /tmp/dash0-codex-debug.log        # each span logged as [dash0:trace] {.
 ```
 
 Rebuild loop — just step 1, then a new session. No re-trust: the trust hash is over the hook *command* (the bootstrap path), so editing the bootstrap or the Go binary is picked up without touching `config.toml`. (`</dev/null` keeps `codex exec` from blocking on stdin.)
+
+## Copilot CLI e2e — local run with a PAT
+
+Deterministic Copilot tests (no auth):
+
+```bash
+go test ./internal/source/copilot/ ./test/consistency/
+go test -tags=e2e -run 'TestE2ECopilot' ./test/e2e/          # L2 + fail-open + L3 credential contracts
+```
+
+The live canary `TestE2EFullFlowWithCopilot` (L6) runs the real `copilot` CLI and
+**fails** unless `COPILOT_GITHUB_TOKEN` is set (loud, like the Claude/Codex
+canaries), so scope the `-run` filter above to the deterministic tests when you
+have no token. It installs the camelCase hooks
+into a hermetic `COPILOT_HOME`, enables native OTel into a per-session file, runs
+`copilot -p`, and asserts the emitted canonical `chat` span carries per-turn
+`gen_ai.usage.*` sourced from that file. To run it:
+
+```bash
+npm install -g @github/copilot   # if needed
+COPILOT_GITHUB_TOKEN=<pat-with-Copilot-Requests> \
+  go test -tags=e2e -run TestE2EFullFlowWithCopilot ./test/e2e/ -v
+```
+
+To also exercise the real `:copilot` subpath install + the `dash0-configure`
+launch function (not just the test's hook injection), after pushing this branch:
+`copilot plugin install dash0hq/dash0-agent-plugin:copilot`, run `/dash0-configure`,
+open a new shell, and confirm per-turn spans reach your Dash0 dataset.
+
+## Copilot — sub-agent handling & limitations
+
+Copilot spawns sub-agents via the `task` tool. Each sub-agent runs a **full,
+independent hook lifecycle** (`userPromptSubmitted` → `postToolUse` → `agentStop`)
+under a **synthetic `session_id` = `call_<toolCallId>`** — distinct per sub-agent,
+with **no field in the hook payload linking back to the parent conversation**
+(verified against captured payloads).
+
+Because the plugin keys traces on `session_id`, each `call_` session would
+otherwise mint its own trace — a spurious, token-less "conversation" per
+sub-agent. So the normalizer (`internal/source/copilot/copilot.go`) **drops every
+`call_`-prefixed session** wholesale. Net behavior:
+
+- **One conversation per real turn** — no per-sub-agent conversations.
+- **Sub-agent tokens roll into the parent turn** (flat attribution): their
+  native-OTel `chat` spans share the parent's `gen_ai.conversation.id`, so the
+  parent's `agentStop` sums them via the OTel reader.
+- **Each spawn shows as a `task` `execute_tool` span** on the parent, labeled with
+  the instance name (`dash0.gen_ai.tool.task.name`, e.g. `echo-runner`) and the
+  sub-agent's result summary (`gen_ai.tool.call.result`).
+
+### Shortcoming: sub-agent internals are not nested
+
+A sub-agent's **own inner spans** (its `chat` turns and tool calls) are **not
+emitted** — you see the parent's `task` tool span and its result, not the work
+inside. True nesting is **not achievable from the hook stream**:
+
+- The only parent↔sub-agent link lives in Copilot's native-OTel file: the
+  `execute_tool task` span's `gen_ai.tool.call.id` equals the sub-agent's hook
+  `session_id` (`call_X`), and that span's tree ancestor carries the parent
+  `gen_ai.conversation.id`.
+- **Timing blocks real-time re-parenting:** the `execute_tool task` span is only
+  written when the task *returns* — after the sub-agent's own hooks have already
+  fired. At hook time the linking span does not yet exist.
+
+Nested sub-agent traces would therefore require **reconstructing the sub-agent
+OTel subtree at parent-task-completion** and re-emitting it (a new capability — the
+plugin currently reads only usage/model/messages from OTel, never whole span
+trees), plus a fuzzy hook↔OTel match (the parent's `task` hook carries no
+`call_X`; it would match the OTel span by `toolArgs.name` + timing). Judged not
+worth the cost/fragility and **deferred**.

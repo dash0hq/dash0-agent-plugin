@@ -117,6 +117,13 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # copilot-requests lets the built-in token authenticate the live Copilot
+    # canary (TestE2EFullFlowWithCopilot) — no PAT secret needed; it is passed to
+    # the test as COPILOT_GITHUB_TOKEN below. Setting a job-level permissions block
+    # scopes the token to exactly what this job uses (contents: read for checkout).
+    permissions:
+      contents: read
+      copilot-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -132,8 +139,8 @@ jobs:
       - name: Install Codex CLI
         run: npm install -g @openai/codex
 
-      - name: Build plugin binary
-        run: make build-binary PKG=./cmd/on-event OUT=bin/on-event-linux-amd64
+      - name: Install GitHub Copilot CLI
+        run: npm install -g @github/copilot
 
       - name: Run E2E tests
         env:
@@ -144,12 +151,14 @@ jobs:
           # key (project codex-o11y, budget-capped); see SIG-172/SIG-174. Inherits
           # this job's fork guard, so a fork PR never receives the secret.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::error::ANTHROPIC_API_KEY secret is not set — add it at Settings → Secrets → Actions"
-            exit 1
-          fi
-          make test-e2e
+          # Activates the live Copilot canary (TestE2EFullFlowWithCopilot), which
+          # reads COPILOT_GITHUB_TOKEN and FAILS (not skips) when it is empty.
+          # No secret: the built-in Actions token authenticates Copilot requests via
+          # this job's copilot-requests: write permission. Requires the org to
+          # have Copilot enabled for Actions, else this canary goes red. Inherits
+          # the fork guard above, so a fork PR never runs it.
+          COPILOT_GITHUB_TOKEN: ${{ github.token }}
+        run: make test-e2e
 
   consistency-checks:
     runs-on: ubuntu-latest

@@ -170,6 +170,54 @@ func TestProcess_UserPromptSubmit_GeneratesFreshTraceID(t *testing.T) {
 	assert.Equal(t, "opus", ctx.Model, "model from SessionStart should carry forward")
 }
 
+// Reordered startup: some runtimes (e.g. Copilot) deliver UserPromptSubmit
+// BEFORE SessionStart. SessionStart must merge into the existing context, not
+// blank the trace_id/chat_span_id the prompt already established.
+func TestProcess_SessionStartAfterUserPromptSubmit_PreservesTurnContext(t *testing.T) {
+	s := newSetup(t, "")
+
+	// UserPromptSubmit arrives first and mints the turn's IDs.
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	before, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotEmpty(t, before.TraceID)
+	require.NotEmpty(t, before.SpanID)
+
+	// SessionStart arrives late — it must preserve those IDs and only fill in
+	// the fields it owns (SessionID, Model).
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	after, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, before.TraceID, after.TraceID, "late SessionStart must not blank the turn's trace_id")
+	assert.Equal(t, before.SpanID, after.SpanID, "late SessionStart must not blank the chat span")
+	assert.Equal(t, "opus", after.Model, "SessionStart's model should merge into the existing context")
+	assert.Equal(t, "sess-1", after.SessionID)
+}
+
+// A Stop whose loaded trace context has a blank TraceID (a context that somehow
+// lost its IDs) must NOT emit a chat span with an empty trace id — sendLLMTrace
+// refuses it, the same way the SessionEnd fallback guards on ctx.TraceID != "".
+// This is what lets the Copilot entrypoint defer such a turn rather than drop it.
+func TestProcess_Stop_BlankTraceIDEmitsNoSpan(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	sessionDir := s.sessionDir("sess-1")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, otlp.SaveTraceContext(otlp.TraceContext{SessionID: "sess-1"}, sessionDir))
+
+	s.feed(t, map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "sess-1",
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Empty(t, *spans, "a Stop with a blank-TraceID context must emit no span")
+}
+
 //  4. A UserPromptSubmit whose agent_id is set belongs to a sub-agent and
 //     must NOT clobber the main turn's trace context — sub-agent activity
 //     needs to nest under the in-flight main turn.

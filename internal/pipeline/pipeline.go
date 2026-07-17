@@ -75,11 +75,20 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		if _, err := os.Stat(startedFile); err == nil {
 			sessionAlreadyStarted = true
 		} else {
-			model, _ := event["model"].(string)
-			if err := otlp.SaveTraceContext(otlp.TraceContext{
-				SessionID: sessionID,
-				Model:     model,
-			}, sessionDir); err != nil {
+			// Merge, don't overwrite. Most runtimes deliver SessionStart first, so
+			// there is no context yet and this builds a fresh one. But an agent may
+			// deliver UserPromptSubmit before SessionStart (e.g. Copilot's
+			// nondeterministic startup ordering), which has already established this
+			// turn's TraceID/SpanID — preserve them rather than blanking the context.
+			ctx, _ := otlp.LoadTraceContext(sessionDir)
+			if ctx == nil {
+				ctx = &otlp.TraceContext{}
+			}
+			ctx.SessionID = sessionID
+			if model, _ := event["model"].(string); model != "" {
+				ctx.Model = model
+			}
+			if err := otlp.SaveTraceContext(*ctx, sessionDir); err != nil {
 				return res, err
 			}
 			_ = os.WriteFile(startedFile, nil, 0o644)
@@ -264,7 +273,7 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 
 func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir string, failed bool) error {
 	ctx, err := otlp.LoadTraceContext(dataDir)
-	if err != nil || ctx == nil {
+	if err != nil || ctx == nil || ctx.TraceID == "" {
 		return fmt.Errorf("no trace context available for LLM span")
 	}
 

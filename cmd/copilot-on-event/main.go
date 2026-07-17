@@ -93,26 +93,16 @@ func run() error {
 
 	// Copilot fires sessionStart and userPromptSubmitted at session startup in a
 	// NONDETERMINISTIC order (unlike Claude/Cursor, where sessionStart is always
-	// first). Routing SessionStart through pipeline.Process saves a fresh trace
-	// context that BLANKS the trace/span IDs userPromptSubmitted established for
-	// the turn's chat span — leaving the chat span uncorrelated. So the adapter
-	// absorbs the ordering quirk: handle SessionStart here (connectivity check
-	// only) and keep it off the pipeline.
+	// first). pipeline.Process handles this generally: its SessionStart branch
+	// MERGES into any existing trace context rather than overwriting it, so the
+	// trace/span IDs an already-delivered userPromptSubmitted established survive.
+	// SessionStart can therefore flow through the pipeline like every other event
+	// (connectivity check + "started" marker included) — the only Copilot-specific
+	// need here is sweeping stale native-OTel files.
 	if hookEvent == "SessionStart" {
 		// Sweep native-OTel files left behind by prior unclean exits (where the
 		// launcher's rm never ran) so the convention dir doesn't grow unbounded.
 		copilot.SweepOldOtelFiles(time.Now())
-		// Connectivity check once per session: Copilot re-fires SessionStart on
-		// each --resume, so gate on a marker to avoid a repeated round-trip and
-		// "dash0: connected" line (the pipeline does the same for other runtimes).
-		sessionID, _ := event["session_id"].(string)
-		sessionDir := pipeline.SessionDir(dataDir, sessionID)
-		if _, err := os.Stat(filepath.Join(sessionDir, "started")); err != nil {
-			reportConnectivity(cfg)
-			_ = os.MkdirAll(sessionDir, 0o755)
-			_ = os.WriteFile(filepath.Join(sessionDir, "started"), nil, 0o644)
-		}
-		return nil
 	}
 
 	// On a turn boundary, recover this turn's usage from the native-OTel file
@@ -185,22 +175,6 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 			event["last_assistant_message"] = u.ResponseText
 		}
 	}
-}
-
-// reportConnectivity runs the SessionStart connectivity check and prints a
-// status line to stderr — mirroring what pipeline.Process does for the other
-// runtimes, but WITHOUT routing SessionStart through the pipeline (which would
-// clobber the turn's trace context; see run()).
-func reportConnectivity(cfg otlp.Config) {
-	if cfg.OTLPUrl == "" {
-		fmt.Fprintln(os.Stderr, "dash0: telemetry is not active — configure the plugin to start sending data.")
-		return
-	}
-	if err := otlp.CheckConnectivity(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "dash0: connectivity check failed — %v\n", err)
-		return
-	}
-	fmt.Fprintln(os.Stderr, "dash0: connected")
 }
 
 // resolveDataDir picks the per-session scratch root. Precedence:

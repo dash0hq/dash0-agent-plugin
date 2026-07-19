@@ -349,3 +349,58 @@ func spanTag(s otlp.Span) string {
 	}
 	return "  [" + strings.Join(parts, " ") + "]"
 }
+
+// TestE2ECodexMarketplaceInstall validates the self-hosted plugin marketplace:
+// `codex plugin marketplace add <repo>` + `codex plugin add` must INDEX and
+// install the plugin declared in .agents/plugins/marketplace.json. A static
+// consistency check proves the JSON is well-formed and matches the manifest,
+// but only the real codex CLI proves Codex actually indexes it — the failure we
+// hit (an external `github` plugin source) looked valid yet was silently never
+// indexed, surfacing only as a bare "plugin not found". This is that guard.
+//
+// No auth/LLM session is needed (plugin add only fetches + copies), so this runs
+// in CI without OPENAI_API_KEY. Gated behind the e2e build tag; FAILS (not skips)
+// if the codex CLI is missing so a misconfigured CI is loud.
+func TestE2ECodexMarketplaceInstall(t *testing.T) {
+	codexBin, err := exec.LookPath("codex")
+	require.NoError(t, err, "codex CLI not found on PATH — install @openai/codex")
+
+	pluginDir := findPluginDir(t)
+	codexHome := t.TempDir() // hermetic — never touches the developer's ~/.codex
+	env := append(os.Environ(), "CODEX_HOME="+codexHome)
+
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command(codexBin, args...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	// 1. Add the repo as a local marketplace (its .agents/plugins/marketplace.json
+	//    lists the plugin at path ".").
+	out, err := run("plugin", "marketplace", "add", pluginDir)
+	require.NoError(t, err, "marketplace add failed:\n%s", out)
+
+	// 2. The plugin must be INDEXED — this is exactly what a github source failed.
+	out, err = run("plugin", "list")
+	require.NoError(t, err, "plugin list failed:\n%s", out)
+	require.Contains(t, out, "dash0-agent-plugin@dash0",
+		"plugin not indexed from marketplace.json (check source type/path):\n%s", out)
+
+	// 3. Install must succeed.
+	out, err = run("plugin", "add", "dash0-agent-plugin@dash0")
+	require.NoError(t, err, "plugin add failed:\n%s", out)
+
+	// 4. The installed plugin must carry the manifest, hook registration, and bootstrap.
+	matches, _ := filepath.Glob(filepath.Join(codexHome, "plugins", "cache", "dash0", "dash0-agent-plugin", "*"))
+	require.NotEmpty(t, matches, "plugin cache dir not created")
+	root := matches[0]
+	for _, f := range []string{
+		filepath.Join(".codex-plugin", "plugin.json"),
+		filepath.Join("codex", "hooks.json"),
+		filepath.Join("scripts", "codex-on-event.sh"),
+	} {
+		_, statErr := os.Stat(filepath.Join(root, f))
+		require.NoError(t, statErr, "installed plugin missing %s", f)
+	}
+}

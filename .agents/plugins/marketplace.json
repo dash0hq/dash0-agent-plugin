@@ -1,0 +1,27 @@
+{
+  "name": "dash0",
+  "interface": {
+    "displayName": "Dash0"
+  },
+  "plugins": [
+    {
+      "name": "dash0-agent-plugin",
+      "description": "OpenTelemetry observability for OpenAI Codex sessions — prompts, tool calls, MCP calls, sub-agent activity, and token usage as OTel traces to Dash0.",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "author": {
+        "name": "Dash0",
+        "email": "support@dash0.com"
+      },
+      "homepage": "https://dash0.com",
+      "repository": "https://github.com/dash0hq/dash0-agent-plugin",
+      "license": "Apache-2.0",
+      "category": "Developer Tools",
+      "policy": {
+        "installation": "AVAILABLE"
+      }
+    }
+  ]
+}

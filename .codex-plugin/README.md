@@ -38,6 +38,22 @@ Each flag (and its env-var equivalent) skips the corresponding prompt, so the in
 
 > **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.codex/dash0-agent-plugin.local.md` (which the bootstrap script passes to the hook as `CODEX_PLUGIN_OPTION_AUTH_TOKEN`). This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
 
+### Via the Codex plugin marketplace
+
+If you prefer Codex's native plugin flow:
+
+```bash
+codex plugin marketplace add dash0hq/dash0-agent-plugin
+codex plugin add dash0-agent-plugin@dash0
+```
+
+Then two manual steps the installer would otherwise handle for you:
+
+1. **Credentials** — create `~/.codex/dash0-agent-plugin.local.md` with your endpoint and token (see [Configuration](#configuration)).
+2. **Trust** — in Codex, run `/hooks` and trust the Dash0 hooks (press `t`). Codex does not auto-trust a plugin's hooks on install.
+
+Start a new Codex session. The `curl … install-codex.sh` flow above does both of these for you, so it's the simpler path unless you specifically want the plugin managed by `codex plugin`.
+
 ## Upgrading
 
 Re-run the installer:

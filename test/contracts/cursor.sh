@@ -52,8 +52,10 @@ fail=0
 echo "PASS D: config-file and env-var credentials flow through cursor-on-event.sh to real OTLP requests"
 
 echo "== Contract E — install-cursor.sh lays out the plugin dir + merges into ~/.cursor/hooks.json =="
-DASH0_VERSION=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest \
-  | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+# Capture curl output first, then parse — piping directly into `grep -m1` closes
+# the pipe early and makes curl exit 23 (write error) under `set -o pipefail`.
+latest_json=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest) || true
+DASH0_VERSION=$(printf '%s' "$latest_json" | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//' || true)
 [ -n "$DASH0_VERSION" ] || { echo "WARNING: could not resolve latest release, skipping Contracts E/F"; exit 0; }
 echo "testing installer against v$DASH0_VERSION artifacts"
 

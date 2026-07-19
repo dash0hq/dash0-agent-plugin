@@ -11,6 +11,11 @@ export REPO
 # Native OS/arch in the release-asset naming the bootstraps resolve via uname.
 os_arch() { echo "$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"; }
 
+# force_https — clone github over HTTPS (CI runners have no SSH key). Writes to
+# the CURRENT $HOME's gitconfig, so call it AFTER switching HOME (keeps it
+# hermetic — it never touches your real ~/.gitconfig).
+force_https() { git config --global url."https://github.com/".insteadOf "git@github.com:"; }
+
 _bg_pids=()
 _cleanup() { for p in "${_bg_pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap _cleanup EXIT

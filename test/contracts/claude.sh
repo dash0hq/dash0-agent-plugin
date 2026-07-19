@@ -12,6 +12,7 @@ command -v claude >/dev/null || { echo "ERROR: claude CLI required for Contracts
 
 echo "== Contract A — settings.json alone does NOT install the plugin =="
 export HOME=/tmp/home-neg; rm -rf "$HOME"; mkdir -p "$HOME/.claude"
+force_https
 cat > "$HOME/.claude/settings.json" <<'JSON'
 {
   "extraKnownMarketplaces": {
@@ -36,6 +37,7 @@ if [ "$(uname -s)" != "Linux" ]; then
   echo "SKIP B: --config credential-storage layout is Linux-specific (validated in CI)"
 else
 export HOME=/tmp/home-pos; rm -rf "$HOME"; mkdir -p "$HOME/.claude"
+force_https
 # Published Dash0 marketplace installs into ~/.claude/plugins/cache — the
 # cleanest signal to assert "installed" on.
 claude plugin marketplace add dash0hq/claude-marketplace --scope user

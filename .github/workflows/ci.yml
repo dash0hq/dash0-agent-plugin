@@ -105,9 +105,6 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Force HTTPS for marketplace clones (runner has no SSH key)
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
       - name: Claude install/config contracts (A–C)
         run: ./test/contracts/claude.sh
 

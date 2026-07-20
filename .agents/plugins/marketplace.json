@@ -1,0 +1,19 @@
+{
+  "name": "dash0",
+  "interface": {
+    "displayName": "Dash0"
+  },
+  "plugins": [
+    {
+      "name": "dash0-agent-plugin",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "category": "Developer Tools",
+      "policy": {
+        "installation": "AVAILABLE"
+      }
+    }
+  ]
+}

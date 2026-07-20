@@ -310,6 +310,14 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 				event["prompt"] = prompt
 			}
 		}
+		// A source may mark the prompt's role (e.g. an agent-injected turn that is
+		// not user input); carry it to the chat span so the input message renders
+		// with that role instead of the default "user".
+		if role, ok := promptEvent["prompt_role"].(string); ok && role != "" {
+			if _, has := event["prompt_role"]; !has {
+				event["prompt_role"] = role
+			}
+		}
 	}
 
 	agentID, _ := event["agent_id"].(string)

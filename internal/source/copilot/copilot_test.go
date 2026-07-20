@@ -70,6 +70,21 @@ func TestNormalize_dropsSubAgentSessions(t *testing.T) {
 	assert.Equal(t, "bd34642e-4962-4930-bb77-fb1b00db2c00", out["session_id"])
 }
 
+func TestNormalize_systemNotificationPromptRole(t *testing.T) {
+	// Copilot injects sub-agent notices as a synthetic userPromptSubmitted wrapped
+	// in <system_notification>; mark it prompt_role=assistant so the chat span
+	// renders it as agent-side, not user input.
+	n := Normalize("userPromptSubmitted", parse(t, `{"sessionId":"c","prompt":"<system_notification>\nAgent \"time-ticker\" (task) has finished processing and is now idle."}`))
+	require.NotNil(t, n)
+	assert.Equal(t, "assistant", n["prompt_role"])
+
+	// A genuine user prompt is untouched (stays user input).
+	u := Normalize("userPromptSubmitted", parse(t, `{"sessionId":"c","prompt":"what is 2+2?"}`))
+	require.NotNil(t, u)
+	_, has := u["prompt_role"]
+	assert.False(t, has, "real user prompts must not be tagged")
+}
+
 func TestNormalize_nilEventDoesNotPanic(t *testing.T) {
 	// A JSON `null` payload decodes to a nil map; Normalize must return nil, not
 	// panic — the process is required to stay fail-open (exit 0).

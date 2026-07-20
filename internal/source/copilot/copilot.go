@@ -74,6 +74,15 @@ func Normalize(eventName string, event map[string]any) map[string]any {
 	// doesn't need; the prompt for the chat span comes from userPromptSubmitted.
 	delete(event, "initialPrompt")
 
+	// Copilot injects its own turns as synthetic userPromptSubmitted events whose
+	// prompt is wrapped in <system_notification> (e.g. "Agent \"x\" (task) has
+	// finished processing…" when a sub-agent goes idle). That's agent-side context
+	// the model reacts to, NOT something the user typed — mark it so the chat span
+	// renders it as an assistant-role input message rather than user input.
+	if p, _ := event["prompt"].(string); strings.HasPrefix(strings.TrimSpace(p), "<system_notification>") {
+		event["prompt_role"] = "assistant"
+	}
+
 	return event
 }
 

@@ -270,6 +270,7 @@ var attrSkipKeys = map[string]bool{
 	"timestamp":             true,
 	"source":                true,
 	"duration_ms":           true,
+	"prompt_role":           true,
 }
 
 // MaxContentBytes is the maximum size for content attributes (tool I/O, prompts).
@@ -351,6 +352,17 @@ func transformMessage(role string, v any) string {
 func transformAssistantMessage(v any) string { return transformMessage("assistant", v) }
 func transformUserMessage(v any) string      { return transformMessage("user", v) }
 
+// inputMessageRole is the role for the chat span's input message. It defaults to
+// "user", unless the source marked the turn's prompt as agent-side via
+// prompt_role (e.g. Copilot's injected <system_notification> turns set
+// "assistant") — so the input message isn't mislabeled as something the user typed.
+func inputMessageRole(event map[string]any) string {
+	if r, _ := event["prompt_role"].(string); r != "" {
+		return r
+	}
+	return "user"
+}
+
 // eventAttributes converts all fields in the event map to OTLP log attributes.
 func eventAttributes(event map[string]any, cfg Config) []Attribute {
 	var attrs []Attribute
@@ -374,8 +386,11 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 				key = mapped
 			}
 			if t, ok := attrTransformMap[k]; ok {
-				// Apply transform with redacted placeholder to preserve JSON structure
+				// Apply transform with redacted placeholder to preserve JSON structure.
 				redactedTransformed := t.transform(redactedValue)
+				if k == "prompt" {
+					redactedTransformed = transformMessage(inputMessageRole(event), redactedValue)
+				}
 				attrs = append(attrs, Attribute{Key: t.key, Value: StringVal(redactedTransformed)})
 			} else {
 				attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactedValue)})
@@ -384,6 +399,9 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 		}
 		if t, ok := attrTransformMap[k]; ok {
 			s := t.transform(v)
+			if k == "prompt" {
+				s = transformMessage(inputMessageRole(event), v)
+			}
 			if s != "" {
 				if contentKeys[k] {
 					s = truncateContent(s)

@@ -372,6 +372,57 @@ func TestE2ECopilotDropsSubAgentSessions(t *testing.T) {
 	assert.Empty(t, spans, "sub-agent (call_) session events must be dropped — no spans emitted")
 }
 
+// TestE2ECopilotSystemNotificationInput asserts that a Copilot-injected
+// <system_notification> turn (fired as a synthetic userPromptSubmitted, e.g.
+// when a sub-agent goes idle) renders its input message with role "assistant",
+// not "user" — it's agent-side context, not something the user typed.
+func TestE2ECopilotSystemNotificationInput(t *testing.T) {
+	pluginDir := findPluginDir(t)
+	bin := buildCopilotBinary(t, pluginDir)
+	cap, srv := newOTLPCapture(t)
+	defer srv.Close()
+
+	pluginData := t.TempDir()
+	otelDir := t.TempDir()
+
+	run := func(eventName, payload string) {
+		cmd := exec.Command(bin, eventName)
+		cmd.Env = append(os.Environ(),
+			"DASH0_OTLP_URL="+srv.URL,
+			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+			"COPILOT_PLUGIN_DATA="+pluginData,
+			"DASH0_COPILOT_OTEL_DIR="+otelDir,
+			"DASH0_OMIT_IO=false",
+		)
+		cmd.Stdin = strings.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s failed: %s", eventName, out)
+	}
+
+	sid := `"sessionId":"` + copilotConvID + `"`
+	run("userPromptSubmitted", `{`+sid+`,"prompt":"<system_notification>\nAgent \"time-ticker\" (task) has finished processing and is now idle."}`)
+	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
+
+	time.Sleep(200 * time.Millisecond)
+	bodies, _ := cap.snapshot()
+	spans := collectSpans(t, bodies)
+	require.NotEmpty(t, spans)
+
+	var input string
+	for _, s := range spans {
+		if strings.HasPrefix(s.Name, "chat") {
+			for _, a := range s.Attributes {
+				if a.Key == "gen_ai.input.messages" && a.Value.StringValue != nil {
+					input = *a.Value.StringValue
+				}
+			}
+		}
+	}
+	require.NotEmpty(t, input, "chat span must carry gen_ai.input.messages")
+	assert.Contains(t, input, `"role":"assistant"`, "a <system_notification> turn must render as an assistant-role input message")
+	assert.NotContains(t, input, `"role":"user"`, "must not be labeled as user input")
+}
+
 // TestE2ECopilotFailOpen asserts the binary never exits non-zero, even on
 // malformed input — mandatory because Copilot's tool hooks are fail-closed.
 func TestE2ECopilotFailOpen(t *testing.T) {

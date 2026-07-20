@@ -58,8 +58,10 @@ func TestCopilotVersionParity(t *testing.T) {
 
 // TestCopilotHooksAreCamelCaseWithAgentStop guards the load-bearing facts:
 // registration must be camelCase (so agentStop/userPromptSubmitted actually
-// fire), must include agentStop (the per-turn trigger), must NOT include the
-// fail-closed preToolUse, and each command must pass its event name as an argv.
+// fire), must include agentStop (the per-turn trigger), and must NOT include
+// the fail-closed preToolUse nor postToolUse/postToolUseFailure (tool spans are
+// sourced from the native-OTel file, not hooks); each command must pass its
+// event name as an argv.
 func TestCopilotHooksAreCamelCaseWithAgentStop(t *testing.T) {
 	root := repoRoot(t)
 	hooks := readJSON(t, filepath.Join(root, "copilot", "hooks.json"))
@@ -72,9 +74,8 @@ func TestCopilotHooksAreCamelCaseWithAgentStop(t *testing.T) {
 	}
 	sort.Strings(keys)
 	assert.Equal(t, []string{
-		"agentStop", "postToolUse", "postToolUseFailure",
-		"sessionEnd", "sessionStart", "userPromptSubmitted",
-	}, keys, "hooks.json must register exactly the camelCase set incl. agentStop, excl. preToolUse")
+		"agentStop", "sessionEnd", "sessionStart", "userPromptSubmitted",
+	}, keys, "hooks.json must register exactly the lifecycle camelCase set incl. agentStop, excl. preToolUse/postToolUse*")
 
 	for name, v := range hookMap {
 		entries, ok := v.([]any)

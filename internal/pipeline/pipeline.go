@@ -211,7 +211,7 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	agentID, _ := event["agent_id"].(string)
 
 	var spanID string
-	if toolName == "Agent" {
+	if strings.EqualFold(toolName, "Agent") {
 		resultAgentID := extractAgentIDFromResponse(event["tool_response"])
 		if resultAgentID != "" {
 			spanID = otlp.SpanIDFromAgentID(resultAgentID)
@@ -229,10 +229,23 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		}
 	}
 
-	if toolName != "Agent" && agentID != "" {
+	if !strings.EqualFold(toolName, "Agent") && agentID != "" {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
 	}
 
+	EnrichToolEvent(event)
+
+	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
+	return otlp.SendTrace(span, event, cfg)
+}
+
+// EnrichToolEvent applies the source-agnostic extractor rules to a tool event
+// whose tool_name/tool_input/tool_response are already populated in the
+// pipeline's canonical shape. It derives the semantic attributes (PR/issue/commit
+// URLs, line counts, bash command family, skill name, MCP server) and normalizes
+// the MCP tool name in place. Tool-name matching is case-insensitive so every
+// runtime shares one rule set (Claude emits "Bash"/"Skill", Copilot "bash"/"skill").
+func EnrichToolEvent(event map[string]any) {
 	resp := event["tool_response"]
 	if prURL := ExtractPRURL(resp); prURL != "" {
 		event["pr_url"] = prURL
@@ -243,19 +256,19 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	if sha := ExtractCommitSHA(resp); sha != "" {
 		event["commit_sha"] = sha
 	}
-
 	if added, removed := ExtractLinesCounts(resp); added > 0 || removed > 0 {
 		event["lines_added"] = int64(added)
 		event["lines_removed"] = int64(removed)
 	}
 
+	toolName, _ := event["tool_name"].(string)
 	toolInput := event["tool_input"]
-	if toolName == "Bash" {
+	if strings.EqualFold(toolName, "Bash") {
 		if family := ExtractBashCommandFamily(toolInput); family != "" {
 			event["bash_command_family"] = family
 		}
 	}
-	if toolName == "Skill" {
+	if strings.EqualFold(toolName, "Skill") {
 		if skill := ExtractSkillName(toolInput); skill != "" {
 			event["skill_name"] = skill
 		}
@@ -266,9 +279,6 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	if normalized := NormalizeMCPToolName(toolName); normalized != toolName {
 		event["tool_name"] = normalized
 	}
-
-	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
-	return otlp.SendTrace(span, event, cfg)
 }
 
 func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir string, failed bool) error {

@@ -8,10 +8,14 @@
 //  1. Reads the event name from argv (camelCase Copilot payloads carry no
 //     hook_event_name field) and the payload from stdin.
 //  2. Normalizes it to the pipeline's canonical vocabulary (internal/source/copilot).
-//  3. On a turn boundary (agentStop→Stop), recovers that turn's token/cost/model
-//     from Copilot's native-OTel file and attaches it to the event.
-//  4. Hands off to pipeline.Process, which emits canonical spans — the same
-//     shape as the Claude Code and Cursor runtimes.
+//  3. On a turn boundary (agentStop→Stop), recovers the whole turn from
+//     Copilot's native-OTel file: token/cost/model/response (attached to the
+//     Stop event for the pipeline's chat span) AND the turn's tool executions.
+//  4. Hands off to pipeline.Process for the chat span, then emits one
+//     execute_tool span per recovered tool call — real durations, sub-agent
+//     tools nested under their spawning `task` span. (Copilot's postToolUse
+//     hooks are NOT used for tool spans: they carry no duration and never fire
+//     inside sub-agents; the native-OTel file is the authoritative source.)
 //
 // Telemetry failures never break the user's session: errors go to stderr and
 // the process always exits 0. This fail-open contract is mandatory (Copilot's
@@ -105,41 +109,45 @@ func run() error {
 		copilot.SweepOldOtelFiles(time.Now())
 	}
 
-	// On a turn boundary, recover this turn's usage from the native-OTel file
-	// and attach it before pipeline.Process (the Cursor pattern). transcript_path
-	// is intentionally absent, so the pipeline's Claude-transcript reader is skipped.
-	var usageCursor, usageCursorDir string
+	// On a turn boundary, recover the whole turn from the native-OTel file:
+	// usage/model/response are attached to the Stop event before pipeline.Process
+	// (the Cursor pattern; transcript_path is intentionally absent, so the
+	// pipeline's Claude-transcript reader is skipped), and the turn's tool calls
+	// are emitted as spans after Process. The trace context must be captured
+	// BEFORE Process — the Stop branch clears it.
+	var turn *copilot.Turn
+	var turnCtx *otlp.TraceContext
+	var turnCursor, turnDir string
 	if hookEvent == "Stop" {
 		sessionID, _ := event["session_id"].(string)
 		sessionDir := pipeline.SessionDir(dataDir, sessionID)
 		_ = os.MkdirAll(sessionDir, 0o755)
-		if usage, newCursor := copilot.ReadTurnUsage(sessionID, sessionDir); usage != nil {
-			attachUsage(event, usage)
-			usageCursor, usageCursorDir = newCursor, sessionDir
-		}
-	}
-
-	// Tool spans (PostToolUse) carry no model in the payload, and the pipeline's
-	// transcript fallback is disabled for Copilot; tag them with the turn's model
-	// from the native-OTel file so they match the Claude/Cursor tool spans.
-	if hookEvent == "PostToolUse" || hookEvent == "PostToolUseFailure" {
-		if _, has := event["model"]; !has {
-			sessionID, _ := event["session_id"].(string)
-			if m := copilot.LatestModel(sessionID); m != "" {
-				event["model"] = m
+		if t, newCursor := copilot.ReadTurn(sessionID, sessionDir); t != nil {
+			turn = t
+			if t.Usage != nil {
+				attachUsage(event, t.Usage)
 			}
+			turnCursor, turnDir = newCursor, sessionDir
 		}
+		turnCtx, _ = otlp.LoadTraceContext(sessionDir)
 	}
 
 	result, err := pipeline.Process(event, cfg, dataDir, time.Now().UTC())
 	if err != nil {
 		return err
 	}
-	// Advance the usage cursor only AFTER Process — so a turn whose span can't be
-	// built (e.g. missing trace context) isn't marked consumed and instead folds
-	// into a later turn.
-	if usageCursorDir != "" {
-		copilot.SaveCursor(usageCursorDir, usageCursor)
+	if turnDir != "" {
+		// Emit the tool spans and advance the cursor TOGETHER, gated on an intact
+		// trace context (captured before Process, which clears it). When the context
+		// is missing — blank TraceID — skip BOTH: pipeline.Process likewise refuses
+		// to emit the chat span (see sendLLMTrace), so leaving the cursor put folds
+		// this turn's usage and tools into a later turn instead of marking them
+		// consumed and dropping them. Advancing only after a successful emit — and
+		// only after Process — keeps the cursor and the spans from drifting apart.
+		if turn != nil && turnCtx != nil && turnCtx.TraceID != "" {
+			emitToolSpans(turn, turnCtx, cfg)
+			copilot.SaveCursor(turnDir, turnCursor)
+		}
 	}
 	for _, msg := range result.Messages {
 		if msg.UserText != "" {
@@ -173,6 +181,66 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 	if u.ResponseText != "" {
 		if _, has := event["last_assistant_message"]; !has {
 			event["last_assistant_message"] = u.ResponseText
+		}
+	}
+}
+
+// emitToolSpans emits one execute_tool span per tool call recovered from the
+// native-OTel file, onto the turn's trace: native span ids are reused verbatim
+// (same 16-hex format as ours — idempotent across re-reads), timings are the
+// tool's real start/end, and parents collapse the native invoke_agent/chat
+// layers — a sub-agent's tools nest under their spawning `task` span, top-level
+// tools under the turn's chat span. Events are synthesized in the pipeline's
+// canonical shape and run through the same extractor enrichments as
+// hook-sourced tool events on the other runtimes, so OmitIO redaction and the
+// dash0.gen_ai.* details stay uniform. Export failures log and continue —
+// fail-open, and one lost span must not block the rest.
+func emitToolSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) {
+	for _, tc := range turn.Tools {
+		event := map[string]any{
+			"session_id": ctx.SessionID,
+			"tool_name":  tc.Name,
+		}
+		// Native arguments are a JSON string; decode so extractors (command
+		// family, skill name) see the same map shape hooks deliver elsewhere.
+		var args map[string]any
+		if json.Unmarshal([]byte(tc.Arguments), &args) == nil && args != nil {
+			event["tool_input"] = args
+		} else if tc.Arguments != "" {
+			event["tool_input"] = tc.Arguments
+		}
+		if tc.Result != "" {
+			event["tool_response"] = tc.Result
+		}
+		if tc.CallID != "" {
+			event["tool_use_id"] = tc.CallID
+		}
+		if turn.Usage != nil && turn.Usage.Model != "" {
+			event["model"] = turn.Usage.Model
+		}
+
+		// Derive the shared semantic attributes (URLs, line counts, bash/skill,
+		// MCP server + normalized name). Same rule set the hook-driven path runs,
+		// so OmitIO redaction and the dash0.gen_ai.* details stay uniform.
+		pipeline.EnrichToolEvent(event)
+
+		// Label a sub-agent spawn with its instance name (e.g. "echo-runner") so
+		// task spans are tellable apart; a non-content field, so not OmitIO-gated.
+		// Set directly under its wire key (the pipeline passes unmapped keys
+		// through verbatim), keeping this Copilot-specific detail local.
+		if strings.EqualFold(tc.Name, "task") && args != nil {
+			if name, _ := args["name"].(string); name != "" {
+				event["dash0.gen_ai.tool.task.name"] = name
+			}
+		}
+
+		parent := tc.ParentSpanID
+		if parent == "" {
+			parent = ctx.SpanID // top-level tool → the turn's chat span
+		}
+		span := otlp.NewToolSpan(ctx.TraceID, tc.SpanID, parent, tc.Start, tc.End, event, tc.Failed, cfg)
+		if err := otlp.SendTrace(span, event, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "copilot-on-event: tool span export: %v\n", err)
 		}
 	}
 }

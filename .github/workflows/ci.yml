@@ -105,13 +105,13 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Claude install/config contracts (A–C)
+      - name: Claude install/config contracts
         run: ./test/contracts/claude.sh
 
-      - name: Cursor install/config contracts (D–F)
+      - name: Cursor install/config contracts
         run: ./test/contracts/cursor.sh
 
-      - name: Codex install/config contracts (G–I)
+      - name: Codex install/config contracts
         run: ./test/contracts/codex.sh
 
   e2e:

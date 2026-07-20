@@ -181,6 +181,29 @@ jobs:
             exit 1
           fi
 
+      - name: Codex marketplace consistency (marketplace.json ↔ plugin manifest)
+        run: |
+          # A Codex marketplace must CONTAIN the plugin via a local path (external
+          # github sources are not indexed). Guard against silent breakage: a
+          # mismatched name or a non-local/dangling source makes `codex plugin add`
+          # fail with a bare "plugin not found" and no other signal.
+          MP=.agents/plugins/marketplace.json
+          jq empty "$MP"
+          MP_NAME=$(jq -r '.plugins[0].name' "$MP")
+          MANIFEST_NAME=$(jq -r '.name' .codex-plugin/plugin.json)
+          SRC_TYPE=$(jq -r '.plugins[0].source.source' "$MP")
+          SRC_PATH=$(jq -r '.plugins[0].source.path' "$MP")
+          echo "marketplace: plugin=$MP_NAME source=$SRC_TYPE:$SRC_PATH ; manifest name=$MANIFEST_NAME"
+          if [ "$MP_NAME" != "$MANIFEST_NAME" ]; then
+            echo "::error::marketplace.json plugin name ($MP_NAME) != .codex-plugin/plugin.json name ($MANIFEST_NAME)"; exit 1
+          fi
+          if [ "$SRC_TYPE" != "local" ]; then
+            echo "::error::Codex plugin source must be 'local' (external sources are not indexed); got '$SRC_TYPE'"; exit 1
+          fi
+          if [ ! -f "$SRC_PATH/.codex-plugin/plugin.json" ]; then
+            echo "::error::source.path '$SRC_PATH' has no .codex-plugin/plugin.json"; exit 1
+          fi
+
       - name: Release assets exist for configured version
         run: |
           VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//' | sed 's/"//')

@@ -25,6 +25,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
 const copilotConvID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
@@ -74,15 +76,35 @@ func bootstrapVersion(t *testing.T, pluginDir string) string {
 	return string(m[1])
 }
 
-func stagedChatSpan(dir, conv string) {
-	line := fmt.Sprintf(`{"type":"span","name":"chat gpt-5.3-codex","attributes":{"gen_ai.conversation.id":%q,"gen_ai.request.model":"gpt-5.3-codex","gen_ai.usage.input_tokens":14613,"gen_ai.usage.output_tokens":68,"gen_ai.usage.cache_read.input_tokens":14592,"github.copilot.cost":1.0,"gen_ai.output.messages":"[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Echo complete.\"}]}]"}}`+"\n", conv)
-	_ = os.WriteFile(filepath.Join(dir, "otel.jsonl"), []byte(line), 0o644)
+// stagedOtelTurn writes a realistic native-OTel file for one turn, mirroring a
+// real capture: an invoke_agent root, a chat span (usage + response), a
+// top-level bash tool (real 0.5s duration), and a task spawn whose sub-agent
+// runs its own bash — the sub-agent's tool hangs off an invoke_agent-task layer
+// that the plugin must collapse.
+func stagedOtelTurn(dir, conv string) {
+	const trace = "11111111111111111111111111111111"
+	lines := []string{
+		// chat span: usage/model/response for the turn.
+		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa01","parentSpanId":"aaaaaaaaaaaaaa00","name":"chat gpt-5.3-codex","startTime":[1000,0],"endTime":[1001,0],"status":{"code":0},"attributes":{"gen_ai.conversation.id":%q,"gen_ai.request.model":"gpt-5.3-codex","gen_ai.usage.input_tokens":14613,"gen_ai.usage.output_tokens":68,"gen_ai.usage.cache_read.input_tokens":14592,"github.copilot.cost":1.0,"gen_ai.output.messages":"[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Echo complete.\"}]}]"}}`, trace, conv),
+		// top-level bash: 0.5s real duration.
+		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa02","parentSpanId":"aaaaaaaaaaaaaa00","name":"execute_tool bash","startTime":[1001,0],"endTime":[1001,500000000],"status":{"code":0},"attributes":{"gen_ai.tool.name":"bash","gen_ai.tool.call.id":"call_top","gen_ai.tool.call.arguments":"{\"command\":\"echo hi\"}","gen_ai.tool.call.result":"hi"}}`, trace),
+		// sub-agent's bash, under the invoke_agent-task layer.
+		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa05","parentSpanId":"aaaaaaaaaaaaaa04","name":"execute_tool bash","startTime":[1002,0],"endTime":[1002,250000000],"status":{"code":0},"attributes":{"gen_ai.tool.name":"bash","gen_ai.tool.call.id":"call_sub","gen_ai.tool.call.arguments":"{\"command\":\"echo hello\"}","gen_ai.tool.call.result":"hello"}}`, trace),
+		// the sub-agent root (collapsed by the plugin).
+		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa04","parentSpanId":"aaaaaaaaaaaaaa03","name":"invoke_agent task","startTime":[1001,600000000],"endTime":[1003,0],"status":{"code":0},"attributes":{"gen_ai.conversation.id":%q}}`, trace, conv),
+		// the task spawn itself.
+		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa03","parentSpanId":"aaaaaaaaaaaaaa00","name":"execute_tool task","startTime":[1001,600000000],"endTime":[1003,100000000],"status":{"code":0},"attributes":{"gen_ai.tool.name":"task","gen_ai.tool.call.id":"call_spawn","gen_ai.tool.call.arguments":"{\"agent_type\":\"task\",\"name\":\"echo-runner\"}","gen_ai.tool.call.result":"done"}}`, trace),
+		// the turn's invoke_agent root.
+		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa00","parentSpanId":"","name":"invoke_agent","startTime":[1000,0],"endTime":[1004,0],"status":{"code":0},"attributes":{"gen_ai.conversation.id":%q}}`, trace, conv),
+	}
+	_ = os.WriteFile(filepath.Join(dir, "otel.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
 
-// TestE2ECopilotPerTurnSpans (L2) feeds a full turn of synthetic camelCase hook
+// TestE2ECopilotPerTurnSpans (L2) feeds a turn of synthetic camelCase hook
 // events through the built binary with a staged native-OTel file, and asserts
-// the emitted canonical spans include a chat span carrying per-turn tokens and a
-// tool span — all keyed to one conversation, harness github-copilot-cli.
+// the emitted canonical spans: a chat span carrying per-turn tokens + response,
+// and OTel-sourced execute_tool spans with REAL durations — the top-level tool
+// under the chat span, the sub-agent's tool nested under its `task` spawn.
 func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	pluginDir := findPluginDir(t)
 	bin := buildCopilotBinary(t, pluginDir)
@@ -91,7 +113,7 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 
 	pluginData := t.TempDir()
 	otelDir := t.TempDir()
-	stagedChatSpan(otelDir, copilotConvID)
+	stagedOtelTurn(otelDir, copilotConvID)
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
@@ -110,7 +132,6 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	sid := `"sessionId":"` + copilotConvID + `"`
 	run("sessionStart", `{`+sid+`,"cwd":"`+t.TempDir()+`","source":"new"}`)
 	run("userPromptSubmitted", `{`+sid+`,"prompt":"run echo hi"}`)
-	run("postToolUse", `{`+sid+`,"toolName":"bash","toolArgs":{"command":"echo hi"},"toolResult":"hi"}`)
 	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
 
 	time.Sleep(200 * time.Millisecond)
@@ -119,7 +140,9 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	require.NotEmpty(t, spans)
 	logSpanTree(t, spans)
 
-	var chatWithUsage, chatWithResponse, toolSpan, harnessOK bool
+	var chatWithUsage, chatWithResponse, harnessOK bool
+	chatSpanID := ""
+	tools := map[string]otlp.Span{} // by native span id
 	for _, s := range spans {
 		for _, a := range s.Attributes {
 			if a.Key == "gen_ai.harness.name" && a.Value.StringValue != nil && *a.Value.StringValue == "github-copilot-cli" {
@@ -128,6 +151,7 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 		}
 		switch {
 		case strings.HasPrefix(s.Name, "chat"):
+			chatSpanID = s.SpanID
 			if spanHasPositiveTokenUsage(s) {
 				chatWithUsage = true
 			}
@@ -137,13 +161,102 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 				}
 			}
 		case strings.HasPrefix(s.Name, "execute_tool"):
-			toolSpan = true
+			tools[s.SpanID] = s
 		}
 	}
 	assert.True(t, harnessOK, "expected a span tagged gen_ai.harness.name=github-copilot-cli")
-	assert.True(t, toolSpan, "expected an execute_tool span from postToolUse")
 	assert.True(t, chatWithUsage, "expected the chat span to carry per-turn gen_ai.usage.*_tokens from the native-OTel file")
 	assert.True(t, chatWithResponse, "expected the chat span to carry gen_ai.output.messages (the agent response) from the native-OTel file")
+
+	require.Len(t, tools, 3, "all execute_tool spans (top-level bash, task spawn, sub-agent bash) must be emitted from the native-OTel file")
+	topBash, ok := tools["aaaaaaaaaaaaaa02"]
+	require.True(t, ok, "top-level bash keeps its native span id")
+	assert.Equal(t, chatSpanID, topBash.ParentSpanID, "top-level tool must parent under the turn's chat span")
+	assert.Equal(t, "execute_tool bash", topBash.Name)
+	assert.NotEqual(t, topBash.StartTimeUnixNano, topBash.EndTimeUnixNano, "tool spans must carry the REAL duration, not a zero-length instant")
+
+	task, ok := tools["aaaaaaaaaaaaaa03"]
+	require.True(t, ok, "task spawn emitted")
+	assert.Equal(t, chatSpanID, task.ParentSpanID)
+	taskName := ""
+	for _, a := range task.Attributes {
+		if a.Key == "dash0.gen_ai.tool.task.name" && a.Value.StringValue != nil {
+			taskName = *a.Value.StringValue
+		}
+	}
+	assert.Equal(t, "echo-runner", taskName, "task spans carry their instance name")
+
+	subBash, ok := tools["aaaaaaaaaaaaaa05"]
+	require.True(t, ok, "sub-agent tool emitted")
+	assert.Equal(t, "aaaaaaaaaaaaaa03", subBash.ParentSpanID, "sub-agent tool must nest under its spawning task span (invoke_agent layer collapsed)")
+}
+
+// TestE2ECopilotDefersTurnWhenTraceContextMissing (L2) guards the F1 invariant:
+// when a Stop lands without an intact trace context (only sessionStart ran, so no
+// TraceID was minted), the turn must be DEFERRED, not consumed — no chat/tool
+// spans emit and the native-OTel cursor is left untouched — so the turn's usage
+// and tools fold into the next valid turn instead of being silently dropped.
+func TestE2ECopilotDefersTurnWhenTraceContextMissing(t *testing.T) {
+	pluginDir := findPluginDir(t)
+	bin := buildCopilotBinary(t, pluginDir)
+	cap, srv := newOTLPCapture(t)
+	defer srv.Close()
+
+	pluginData := t.TempDir()
+	otelDir := t.TempDir()
+	stagedOtelTurn(otelDir, copilotConvID)
+
+	run := func(eventName, payload string) {
+		cmd := exec.Command(bin, eventName)
+		cmd.Env = append(os.Environ(),
+			"DASH0_OTLP_URL="+srv.URL,
+			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+			"COPILOT_PLUGIN_DATA="+pluginData,
+			"DASH0_COPILOT_OTEL_DIR="+otelDir,
+			"DASH0_OMIT_IO=false",
+		)
+		cmd.Stdin = strings.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s failed: %s", eventName, out)
+	}
+
+	countKinds := func() (chat, tools int) {
+		bodies, _ := cap.snapshot()
+		for _, s := range collectSpans(t, bodies) {
+			switch {
+			case strings.HasPrefix(s.Name, "chat"):
+				chat++
+			case strings.HasPrefix(s.Name, "execute_tool"):
+				tools++
+			}
+		}
+		return chat, tools
+	}
+
+	sid := `"sessionId":"` + copilotConvID + `"`
+	cursorFile := filepath.Join(pluginData, copilotConvID, "otel_cursor.json")
+
+	// Phase 1: sessionStart records only SessionID (no TraceID minted), so a Stop
+	// now has no intact context. The turn must be deferred.
+	run("sessionStart", `{`+sid+`,"cwd":"`+t.TempDir()+`","source":"new"}`)
+	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
+
+	time.Sleep(200 * time.Millisecond)
+	chat, tools := countKinds()
+	assert.Zero(t, chat, "a Stop without trace context must emit no chat span")
+	assert.Zero(t, tools, "a Stop without trace context must emit no tool spans")
+	require.NoFileExists(t, cursorFile, "the OTel cursor must not advance when the turn is deferred")
+
+	// Phase 2: a normal turn (userPromptSubmitted mints the trace) re-reads the
+	// SAME native-OTel spans — the cursor never moved — and emits them now.
+	run("userPromptSubmitted", `{`+sid+`,"prompt":"run echo hi"}`)
+	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
+
+	time.Sleep(200 * time.Millisecond)
+	chat, tools = countKinds()
+	assert.Equal(t, 1, chat, "the deferred turn's chat span emits on the next valid turn")
+	assert.Equal(t, 3, tools, "the deferred turn's tool spans fold into the next valid turn")
+	assert.FileExists(t, cursorFile, "the cursor advances once the turn is actually emitted")
 }
 
 // TestE2ECopilotVCSAttributes (L2) proves the binary chdirs into the hook
@@ -251,7 +364,6 @@ func TestE2ECopilotDropsSubAgentSessions(t *testing.T) {
 
 	sub := `"sessionId":"call_s6uW2cBFL6xsNgNWRM66Zx1o"`
 	run("userPromptSubmitted", `{`+sub+`,"prompt":"echo hello"}`)
-	run("postToolUse", `{`+sub+`,"toolName":"bash","toolArgs":{"command":"echo hello"},"toolResult":"hello"}`)
 	run("agentStop", `{`+sub+`,"stopReason":"end_turn"}`)
 
 	time.Sleep(200 * time.Millisecond)
@@ -370,7 +482,7 @@ exec %q "$@"
 	require.NoError(t, os.MkdirAll(filepath.Join(copilotHome, "hooks"), 0o755))
 	// camelCase registration with the event name as argv — matches copilot/hooks.json.
 	hookJSON := `{"version":1,"hooks":{`
-	events := []string{"sessionStart", "userPromptSubmitted", "postToolUse", "agentStop", "sessionEnd"}
+	events := []string{"sessionStart", "userPromptSubmitted", "agentStop", "sessionEnd"}
 	for i, e := range events {
 		if i > 0 {
 			hookJSON += ","

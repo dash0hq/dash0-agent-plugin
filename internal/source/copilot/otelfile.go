@@ -24,14 +24,39 @@ type Usage struct {
 	ResponseText          string // final assistant text of the turn (from gen_ai.output.messages)
 }
 
-// chatSpan is one native-OTel `chat` span: its unique span id (top-level) plus
-// its attribute map.
-type chatSpan struct {
-	spanID string
-	attrs  map[string]any
+// ToolCall is one tool execution of the turn, recovered from a native-OTel
+// execute_tool span. Unlike Copilot's postToolUse hooks (zero duration, parent
+// turn only), these carry real timing and cover sub-agent tool calls too.
+type ToolCall struct {
+	SpanID       string // native span id, reused verbatim (16-char hex, same format as ours)
+	ParentSpanID string // nearest execute_tool ancestor emitted this turn, or "" (→ the turn's chat span)
+	Name         string // gen_ai.tool.name (e.g. "bash", "task")
+	Arguments    string // gen_ai.tool.call.arguments (JSON string)
+	Result       string // gen_ai.tool.call.result
+	CallID       string // gen_ai.tool.call.id (e.g. "call_…"; for `task` this is the sub-agent's hook session id)
+	Start, End   time.Time
+	Failed       bool // native span status code == ERROR
 }
 
-// cursorFile persists the id of the last consumed chat span (see cursor).
+// Turn is everything recovered from the native-OTel file for the turn that just
+// ended: aggregated usage (nil if no chat span flushed yet) and the turn's tool
+// executions, parent and sub-agent alike.
+type Turn struct {
+	Usage *Usage
+	Tools []ToolCall
+}
+
+// otelSpan is one native-OTel span record belonging to this conversation.
+type otelSpan struct {
+	spanID       string
+	parentSpanID string
+	name         string
+	start, end   time.Time
+	failed       bool
+	attrs        map[string]any
+}
+
+// cursorFile persists the id of the last consumed native span (see cursor).
 const cursorFile = "otel_cursor.json"
 
 // staleFileTTL bounds how long a native-OTel file (or an empty dir) left behind
@@ -65,24 +90,32 @@ func OtelDir() string {
 	return filepath.Join(home, ".local", "state", "dash0-agent-plugin", "copilot", "otel")
 }
 
-// ReadTurnUsage recovers usage for the turn that just ended and returns the
-// cursor value the caller must persist (via SaveCursor) once the span is
-// emitted. It reads the NEWEST native-OTel file carrying this conversation's
-// spans (so a stale file left by an unclean prior exit is never preferred over
-// the live one), then sums the chat spans after the last-consumed span id.
+// ReadTurn recovers everything for the turn that just ended — aggregated usage
+// AND the turn's tool executions — and returns the cursor value the caller must
+// persist (via SaveCursor) once the spans are emitted. It reads the NEWEST
+// native-OTel file carrying this conversation's spans (so a stale file left by
+// an unclean prior exit is never preferred over the live one), then consumes
+// the spans after the last-consumed span id.
 //
 // Correct across --resume / rotation / re-runs: each launch writes an
 // append-only file of disjoint span ids, so an unknown cursor means a fresh
 // file (all spans new) and a known cursor bounds exactly this turn's new spans;
-// re-running the same Stop finds the cursor at the end → nothing new. Sub-agent
-// chat spans share the conversation.id and so fold into the turn total (flat
-// attribution). Returns (nil, "") when there is no file or nothing new — the
-// caller then emits the span without usage (graceful degradation).
-func ReadTurnUsage(sessionID, sessionDir string) (*Usage, string) {
+// re-running the same Stop finds the cursor at the end → nothing new.
+//
+// Usage sums the window's `chat` spans; sub-agent chat spans share the
+// conversation and fold into the turn total (flat attribution). Tools are the
+// window's `execute_tool` spans — including those inside sub-agents — with the
+// intermediate invoke_agent/chat layers collapsed: each tool's parent resolves
+// to the nearest execute_tool ancestor emitted this turn (nesting a sub-agent's
+// tools under its spawning `task` span), or "" for top-level tools (the caller
+// parents those under the turn's chat span). A span that Copilot flushes late
+// (after this read) folds into the next turn's window — graceful, slightly
+// misattributed, rare. Returns (nil, "") when there is no file or nothing new.
+func ReadTurn(sessionID, sessionDir string) (*Turn, string) {
 	if sessionID == "" {
 		return nil, ""
 	}
-	spans := newestConversationChatSpans(OtelDir(), sessionID)
+	spans := newestConversationSpans(OtelDir(), sessionID)
 	if len(spans) == 0 {
 		return nil, ""
 	}
@@ -91,22 +124,74 @@ func ReadTurnUsage(sessionID, sessionDir string) (*Usage, string) {
 		return nil, ""
 	}
 
-	u := &Usage{}
+	turn := &Turn{}
+	freshTools := make(map[string]bool)
 	for _, s := range fresh {
-		a := s.attrs
-		u.InputTokens += attrInt(a, "gen_ai.usage.input_tokens")
-		u.OutputTokens += attrInt(a, "gen_ai.usage.output_tokens")
-		u.CacheReadInputTokens += attrInt(a, "gen_ai.usage.cache_read.input_tokens")
-		u.ReasoningOutputTokens += attrInt(a, "gen_ai.usage.reasoning.output_tokens")
-		u.Cost += attrFloat(a, "github.copilot.cost")
-		if m := attrString(a, "gen_ai.request.model"); m != "" {
-			u.Model = m // last non-empty model in the turn
-		}
-		if txt := assistantTextFromOutput(attrString(a, "gen_ai.output.messages")); txt != "" {
-			u.ResponseText = txt // last non-empty assistant text in the turn = the final response
+		switch {
+		case strings.HasPrefix(s.name, "chat "):
+			if turn.Usage == nil {
+				turn.Usage = &Usage{}
+			}
+			u, a := turn.Usage, s.attrs
+			u.InputTokens += attrInt(a, "gen_ai.usage.input_tokens")
+			u.OutputTokens += attrInt(a, "gen_ai.usage.output_tokens")
+			u.CacheReadInputTokens += attrInt(a, "gen_ai.usage.cache_read.input_tokens")
+			u.ReasoningOutputTokens += attrInt(a, "gen_ai.usage.reasoning.output_tokens")
+			u.Cost += attrFloat(a, "github.copilot.cost")
+			if m := attrString(a, "gen_ai.request.model"); m != "" {
+				u.Model = m // last non-empty model in the turn
+			}
+			if txt := assistantTextFromOutput(attrString(a, "gen_ai.output.messages")); txt != "" {
+				u.ResponseText = txt // last non-empty assistant text in the turn = the final response
+			}
+		case strings.HasPrefix(s.name, "execute_tool"):
+			freshTools[s.spanID] = true
+			turn.Tools = append(turn.Tools, ToolCall{
+				SpanID:    s.spanID,
+				Name:      attrString(s.attrs, "gen_ai.tool.name"),
+				Arguments: attrString(s.attrs, "gen_ai.tool.call.arguments"),
+				Result:    attrString(s.attrs, "gen_ai.tool.call.result"),
+				CallID:    attrString(s.attrs, "gen_ai.tool.call.id"),
+				Start:     s.start,
+				End:       s.end,
+				Failed:    s.failed,
+			})
 		}
 	}
-	return u, fresh[len(fresh)-1].spanID
+
+	// Collapse the invoke_agent/chat layers: parent each tool to its nearest
+	// execute_tool ancestor emitted this turn. Ancestry walks the FULL span list
+	// (a parent record precedes only by id, not necessarily by window), but the
+	// resolved parent must itself be emitted this turn to keep the link intact.
+	byID := make(map[string]otelSpan, len(spans))
+	for _, s := range spans {
+		byID[s.spanID] = s
+	}
+	for i := range turn.Tools {
+		turn.Tools[i].ParentSpanID = nearestFreshToolAncestor(byID, freshTools, turn.Tools[i].SpanID)
+	}
+
+	return turn, fresh[len(fresh)-1].spanID
+}
+
+// nearestFreshToolAncestor walks up the native parent chain from spanID and
+// returns the first execute_tool ancestor that is being emitted this turn, or
+// "" if the chain exits the known tree first (top-level tool → chat span).
+func nearestFreshToolAncestor(byID map[string]otelSpan, freshTools map[string]bool, spanID string) string {
+	seen := map[string]bool{spanID: true}
+	cur := byID[spanID].parentSpanID
+	for cur != "" && !seen[cur] {
+		seen[cur] = true
+		s, ok := byID[cur]
+		if !ok {
+			return ""
+		}
+		if strings.HasPrefix(s.name, "execute_tool") && freshTools[s.spanID] {
+			return s.spanID
+		}
+		cur = s.parentSpanID
+	}
+	return ""
 }
 
 // assistantTextFromOutput extracts the assistant's text from a chat span's
@@ -150,28 +235,11 @@ func assistantTextFromOutput(outputMessages string) string {
 	return last
 }
 
-// LatestModel returns the model of the most recent chat span for this
-// conversation (from the newest native-OTel file), or "" if unavailable. Used
-// to tag tool spans (PostToolUse), which otherwise carry no model — the file's
-// chat spans are the only place Copilot's model surfaces.
-func LatestModel(sessionID string) string {
-	if sessionID == "" {
-		return ""
-	}
-	spans := newestConversationChatSpans(OtelDir(), sessionID)
-	for i := len(spans) - 1; i >= 0; i-- {
-		if m := attrString(spans[i].attrs, "gen_ai.request.model"); m != "" {
-			return m
-		}
-	}
-	return ""
-}
-
 // spansAfterCursor returns the spans following the one whose id == last. If last
 // is empty (first turn) or absent from this file (a new/rotated file after
 // --resume), ALL spans are returned — correct because each launch's file holds
 // only its own, disjoint spans.
-func spansAfterCursor(spans []chatSpan, last string) []chatSpan {
+func spansAfterCursor(spans []otelSpan, last string) []otelSpan {
 	if last == "" {
 		return spans
 	}
@@ -183,16 +251,16 @@ func spansAfterCursor(spans []chatSpan, last string) []chatSpan {
 	return spans
 }
 
-// newestConversationChatSpans returns the chat spans (in file order) from the
-// most-recently-modified *.jsonl file that contains this conversation's spans.
-// Preferring the newest file avoids reading a frozen stale file that an unclean
-// prior exit left behind with the same conversation.id.
-func newestConversationChatSpans(dir, sessionID string) []chatSpan {
+// newestConversationSpans returns this conversation's spans (in file order)
+// from the most-recently-modified *.jsonl file that contains them. Preferring
+// the newest file avoids reading a frozen stale file that an unclean prior exit
+// left behind with the same conversation.id.
+func newestConversationSpans(dir, sessionID string) []otelSpan {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
-	var best []chatSpan
+	var best []otelSpan
 	var bestMod time.Time
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
@@ -202,7 +270,7 @@ func newestConversationChatSpans(dir, sessionID string) []chatSpan {
 		if err != nil {
 			continue
 		}
-		spans := chatSpansForConversation(filepath.Join(dir, e.Name()), sessionID)
+		spans := conversationSpans(filepath.Join(dir, e.Name()), sessionID)
 		if len(spans) == 0 {
 			continue
 		}
@@ -213,20 +281,32 @@ func newestConversationChatSpans(dir, sessionID string) []chatSpan {
 	return best
 }
 
-func chatSpansForConversation(path, sessionID string) []chatSpan {
+// rawSpan is one parsed native-OTel span record before conversation filtering.
+type rawSpan struct {
+	span    otelSpan
+	traceID string
+	conv    string
+}
+
+// conversationSpans returns the file's spans belonging to this conversation, in
+// file order. Only `chat` and `invoke_agent` spans carry gen_ai.conversation.id;
+// execute_tool spans carry none — but every span of a turn (sub-agents included,
+// via context propagation) shares the turn's native traceId. Membership is
+// therefore: carries the conversation.id directly, OR shares a traceId with a
+// span that does.
+func conversationSpans(path, sessionID string) []otelSpan {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer func() { _ = f.Close() }()
 
-	var spans []chatSpan
+	var raws []rawSpan
+	convTraces := make(map[string]bool)
 	sc := bufio.NewScanner(f)
-	// 8MB per-line cap. Native-OTel content capture is off by default, so chat
-	// spans are small and this is effectively never hit; a span exceeding it
-	// would stop the scan, dropping that span and later ones. Accepted v1
-	// limitation (code review #9) — revisit (skip-and-continue) if content
-	// capture becomes common.
+	// 8MB per-line cap. A span exceeding it would stop the scan, dropping that
+	// span and later ones. Accepted v1 limitation (code review #9) — revisit
+	// (skip-and-continue) if oversized spans show up in practice.
 	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -240,25 +320,69 @@ func chatSpansForConversation(path, sessionID string) []chatSpan {
 		if t, _ := rec["type"].(string); t != "span" {
 			continue
 		}
-		// Native chat spans are named "chat <model>"; the trailing space avoids
-		// matching unrelated names like "chatbot".
-		if name, _ := rec["name"].(string); !strings.HasPrefix(name, "chat ") {
-			continue
-		}
 		attrs, _ := rec["attributes"].(map[string]any)
 		if attrs == nil {
 			continue
 		}
-		if conv, _ := attrs["gen_ai.conversation.id"].(string); conv != sessionID {
-			continue
-		}
 		spanID, _ := rec["spanId"].(string)
-		spans = append(spans, chatSpan{spanID: spanID, attrs: attrs})
+		parentID, _ := rec["parentSpanId"].(string)
+		name, _ := rec["name"].(string)
+		traceID, _ := rec["traceId"].(string)
+		conv := attrString(attrs, "gen_ai.conversation.id")
+		if conv == sessionID && traceID != "" {
+			convTraces[traceID] = true
+		}
+		raws = append(raws, rawSpan{
+			span: otelSpan{
+				spanID:       spanID,
+				parentSpanID: parentID,
+				name:         name,
+				start:        otelTime(rec["startTime"]),
+				end:          otelTime(rec["endTime"]),
+				failed:       otelFailed(rec["status"]),
+				attrs:        attrs,
+			},
+			traceID: traceID,
+			conv:    conv,
+		})
 	}
 	// Tolerate scan errors (e.g. an oversized/torn line from a concurrent
-	// writer): return whatever parsed cleanly — graceful degradation.
+	// writer): keep whatever parsed cleanly — graceful degradation.
 	_ = sc.Err()
+
+	var spans []otelSpan
+	for _, r := range raws {
+		if r.conv == sessionID || (r.traceID != "" && convTraces[r.traceID]) {
+			spans = append(spans, r.span)
+		}
+	}
 	return spans
+}
+
+// otelTime converts a native-OTel timestamp — a [seconds, nanoseconds] JSON
+// array — to a time.Time. Returns the zero time if the shape is unexpected.
+func otelTime(v any) time.Time {
+	arr, ok := v.([]any)
+	if !ok || len(arr) != 2 {
+		return time.Time{}
+	}
+	sec, ok1 := arr[0].(float64)
+	nsec, ok2 := arr[1].(float64)
+	if !ok1 || !ok2 {
+		return time.Time{}
+	}
+	return time.Unix(int64(sec), int64(nsec)).UTC()
+}
+
+// otelFailed reports whether a native span's status marks it as failed
+// (OTel status code 2 = ERROR).
+func otelFailed(v any) bool {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	code, _ := m["code"].(float64)
+	return code == 2
 }
 
 func loadCursor(sessionDir string) string {

@@ -35,16 +35,6 @@ func TestNormalize_agentStopToStop(t *testing.T) {
 	assert.False(t, hasRaw)
 }
 
-func TestNormalize_postToolUseFields(t *testing.T) {
-	e := Normalize("postToolUse", parse(t,
-		`{"sessionId":"c","cwd":"/x","toolName":"bash","toolArgs":{"command":"echo hi"},"toolResult":"hi"}`))
-	require.NotNil(t, e)
-	assert.Equal(t, "PostToolUse", e["hook_event_name"])
-	assert.Equal(t, "bash", e["tool_name"])
-	assert.NotNil(t, e["tool_input"])
-	assert.Equal(t, "hi", e["tool_response"])
-}
-
 func TestNormalize_userPromptAndSession(t *testing.T) {
 	up := Normalize("userPromptSubmitted", parse(t, `{"sessionId":"c","prompt":"do a thing"}`))
 	require.NotNil(t, up)
@@ -59,7 +49,9 @@ func TestNormalize_userPromptAndSession(t *testing.T) {
 }
 
 func TestNormalize_dropsUnconsumedEvents(t *testing.T) {
-	for _, name := range []string{"preToolUse", "subagentStop", "subagentStart", "notification", "preCompact", "permissionRequest", "errorOccurred"} {
+	// postToolUse/postToolUseFailure are deliberately unconsumed: tool spans come
+	// from the native-OTel file (real durations, sub-agent nesting), not hooks.
+	for _, name := range []string{"preToolUse", "postToolUse", "postToolUseFailure", "subagentStop", "subagentStart", "notification", "preCompact", "permissionRequest", "errorOccurred"} {
 		assert.Nil(t, Normalize(name, parse(t, `{"sessionId":"c"}`)), "%s must be dropped", name)
 	}
 }
@@ -69,28 +61,13 @@ func TestNormalize_dropsSubAgentSessions(t *testing.T) {
 	// link to the parent, so every sub-agent lifecycle event is dropped — otherwise
 	// each mints a spurious, token-less conversation.
 	assert.Nil(t, Normalize("userPromptSubmitted", parse(t, `{"sessionId":"call_s6uW2cBFL6xsNgNWRM66Zx1o","prompt":"echo hello"}`)))
-	assert.Nil(t, Normalize("postToolUse", parse(t, `{"sessionId":"call_abc","toolName":"bash","toolResult":"hello"}`)))
 	assert.Nil(t, Normalize("agentStop", parse(t, `{"sessionId":"call_abc","stopReason":"end_turn"}`)))
 
 	// A real conversation (UUID session) is unaffected.
-	out := Normalize("postToolUse", parse(t, `{"sessionId":"bd34642e-4962-4930-bb77-fb1b00db2c00","toolName":"bash","toolResult":"hi"}`))
+	out := Normalize("agentStop", parse(t, `{"sessionId":"bd34642e-4962-4930-bb77-fb1b00db2c00","stopReason":"end_turn"}`))
 	require.NotNil(t, out)
-	assert.Equal(t, "PostToolUse", out["hook_event_name"])
+	assert.Equal(t, "Stop", out["hook_event_name"])
 	assert.Equal(t, "bd34642e-4962-4930-bb77-fb1b00db2c00", out["session_id"])
-}
-
-func TestNormalize_liftsTaskName(t *testing.T) {
-	// The task (sub-agent spawn) tool buries its instance name in a JSON-string
-	// toolArgs; the normalizer lifts it to task_name so the tool span is identifiable.
-	out := Normalize("postToolUse", parse(t, `{"sessionId":"11111111-1111-1111-1111-111111111111","toolName":"task","toolArgs":"{\"agent_type\":\"task\",\"name\":\"echo-runner\",\"description\":\"Run echo\"}","toolResult":"hello"}`))
-	require.NotNil(t, out)
-	assert.Equal(t, "echo-runner", out["dash0.gen_ai.tool.task.name"])
-
-	// A non-task tool is untouched.
-	b := Normalize("postToolUse", parse(t, `{"sessionId":"11111111-1111-1111-1111-111111111111","toolName":"bash","toolArgs":{"command":"echo hi"},"toolResult":"hi"}`))
-	require.NotNil(t, b)
-	_, has := b["dash0.gen_ai.tool.task.name"]
-	assert.False(t, has, "non-task tools must not get the task name attribute")
 }
 
 func TestNormalize_nilEventDoesNotPanic(t *testing.T) {
@@ -108,7 +85,7 @@ func chatSpanLine(spanID, conv string, in, out, cacheRead, reasoning int, cost f
 		spanID, model, conv, model, in, out, cacheRead, reasoning, cost)
 }
 
-func TestReadTurnUsage_perTurnCursor(t *testing.T) {
+func TestReadTurn_perTurnCursor(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
 	sessionDir := t.TempDir()
@@ -116,32 +93,34 @@ func TestReadTurnUsage_perTurnCursor(t *testing.T) {
 
 	// Turn 1: one chat span.
 	writeLines(t, f, chatSpanLine("s1", "conv-1", 100, 20, 90, 5, 1.0, "gpt-5.3-codex"))
-	u1, c1 := ReadTurnUsage("conv-1", sessionDir)
-	require.NotNil(t, u1)
-	assert.Equal(t, int64(100), u1.InputTokens)
-	assert.Equal(t, int64(20), u1.OutputTokens)
-	assert.Equal(t, int64(90), u1.CacheReadInputTokens)
-	assert.Equal(t, int64(5), u1.ReasoningOutputTokens)
-	assert.Equal(t, "gpt-5.3-codex", u1.Model)
+	t1, c1 := ReadTurn("conv-1", sessionDir)
+	require.NotNil(t, t1)
+	require.NotNil(t, t1.Usage)
+	assert.Equal(t, int64(100), t1.Usage.InputTokens)
+	assert.Equal(t, int64(20), t1.Usage.OutputTokens)
+	assert.Equal(t, int64(90), t1.Usage.CacheReadInputTokens)
+	assert.Equal(t, int64(5), t1.Usage.ReasoningOutputTokens)
+	assert.Equal(t, "gpt-5.3-codex", t1.Usage.Model)
 	assert.Equal(t, "s1", c1)
 	SaveCursor(sessionDir, c1)
 
 	// Turn 2: append a second span; the reader returns ONLY turn 2.
 	appendLines(t, f, chatSpanLine("s2", "conv-1", 200, 30, 150, 0, 2.0, "gpt-5.3-codex"))
-	u2, c2 := ReadTurnUsage("conv-1", sessionDir)
-	require.NotNil(t, u2)
-	assert.Equal(t, int64(200), u2.InputTokens, "must not double-count turn 1")
-	assert.Equal(t, int64(30), u2.OutputTokens)
+	t2, c2 := ReadTurn("conv-1", sessionDir)
+	require.NotNil(t, t2)
+	require.NotNil(t, t2.Usage)
+	assert.Equal(t, int64(200), t2.Usage.InputTokens, "must not double-count turn 1")
+	assert.Equal(t, int64(30), t2.Usage.OutputTokens)
 	assert.Equal(t, "s2", c2)
 	SaveCursor(sessionDir, c2)
 
 	// Re-run with no new spans → nil (idempotent, no double-count).
-	u3, c3 := ReadTurnUsage("conv-1", sessionDir)
-	assert.Nil(t, u3)
+	t3, c3 := ReadTurn("conv-1", sessionDir)
+	assert.Nil(t, t3)
 	assert.Empty(t, c3)
 }
 
-func TestReadTurnUsage_subAgentRollup(t *testing.T) {
+func TestReadTurn_subAgentRollup(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
 	sessionDir := t.TempDir()
@@ -150,19 +129,20 @@ func TestReadTurnUsage_subAgentRollup(t *testing.T) {
 		chatSpanLine("s1", "conv-1", 100, 20, 0, 0, 1.0, "gpt"),
 		chatSpanLine("s2", "conv-1", 50, 10, 0, 0, 0.5, "gpt"),
 		chatSpanLine("s3", "conv-1", 40, 8, 0, 0, 0.5, "gpt"))
-	u, c := ReadTurnUsage("conv-1", sessionDir)
-	require.NotNil(t, u)
-	assert.Equal(t, int64(190), u.InputTokens, "sub-agent input tokens roll into the turn total")
-	assert.Equal(t, int64(38), u.OutputTokens, "sub-agent output tokens roll into the turn total")
-	assert.InDelta(t, 2.0, u.Cost, 0.001)
+	turn, c := ReadTurn("conv-1", sessionDir)
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, int64(190), turn.Usage.InputTokens, "sub-agent input tokens roll into the turn total")
+	assert.Equal(t, int64(38), turn.Usage.OutputTokens, "sub-agent output tokens roll into the turn total")
+	assert.InDelta(t, 2.0, turn.Usage.Cost, 0.001)
 	assert.Equal(t, "s3", c, "cursor is the last consumed span")
 }
 
-// TestReadTurnUsage_resumeRotatedFile is the core cross-launch case: a resumed
+// TestReadTurn_resumeRotatedFile is the core cross-launch case: a resumed
 // session writes a NEW file (newer mtime) with disjoint span ids. The reader
 // must prefer the newest file and, finding the old cursor absent from it, treat
 // all its spans as fresh — so the recovered session still reports per-turn usage.
-func TestReadTurnUsage_resumeRotatedFile(t *testing.T) {
+func TestReadTurn_resumeRotatedFile(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
 	sessionDir := t.TempDir()
@@ -170,7 +150,7 @@ func TestReadTurnUsage_resumeRotatedFile(t *testing.T) {
 	// Launch 1.
 	fileA := filepath.Join(otelDir, "otel-A.jsonl")
 	writeLines(t, fileA, chatSpanLine("a1", "conv-1", 100, 20, 0, 0, 1, "gpt"))
-	_, c1 := ReadTurnUsage("conv-1", sessionDir)
+	_, c1 := ReadTurn("conv-1", sessionDir)
 	SaveCursor(sessionDir, c1) // cursor = "a1"
 
 	// Launch 2 (resume): brand-new file, disjoint ids, made newer than A.
@@ -179,31 +159,33 @@ func TestReadTurnUsage_resumeRotatedFile(t *testing.T) {
 	older := time.Now().Add(-time.Hour)
 	require.NoError(t, os.Chtimes(fileA, older, older))
 
-	u, c := ReadTurnUsage("conv-1", sessionDir)
-	require.NotNil(t, u, "resumed session must still get per-turn usage")
-	assert.Equal(t, int64(300), u.InputTokens)
+	turn, c := ReadTurn("conv-1", sessionDir)
+	require.NotNil(t, turn, "resumed session must still get per-turn usage")
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, int64(300), turn.Usage.InputTokens)
 	assert.Equal(t, "b1", c)
 }
 
-func TestReadTurnUsage_fileDiscoveryByConversationID(t *testing.T) {
+func TestReadTurn_fileDiscoveryByConversationID(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
 	sessionDir := t.TempDir()
 	// Two concurrent sessions' files; the reader must pick ours by conversation.id.
 	writeLines(t, filepath.Join(otelDir, "other.jsonl"), chatSpanLine("o1", "conv-OTHER", 999, 999, 0, 0, 9, "gpt"))
 	writeLines(t, filepath.Join(otelDir, "ours.jsonl"), chatSpanLine("m1", "conv-MINE", 100, 20, 0, 0, 1, "gpt"))
-	u, _ := ReadTurnUsage("conv-MINE", sessionDir)
-	require.NotNil(t, u)
-	assert.Equal(t, int64(100), u.InputTokens)
+	turn, _ := ReadTurn("conv-MINE", sessionDir)
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, int64(100), turn.Usage.InputTokens)
 }
 
-func TestReadTurnUsage_absentGraceful(t *testing.T) {
+func TestReadTurn_absentGraceful(t *testing.T) {
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", t.TempDir()) // empty dir
-	u1, c1 := ReadTurnUsage("conv-1", t.TempDir())
-	assert.Nil(t, u1)
+	t1, c1 := ReadTurn("conv-1", t.TempDir())
+	assert.Nil(t, t1)
 	assert.Empty(t, c1)
-	u2, _ := ReadTurnUsage("", t.TempDir())
-	assert.Nil(t, u2)
+	t2, _ := ReadTurn("", t.TempDir())
+	assert.Nil(t, t2)
 }
 
 // chatSpanWithOutput builds a chat-span line carrying gen_ai.output.messages
@@ -225,10 +207,10 @@ func chatSpanWithOutput(t *testing.T, spanID, conv, outputMessages string) strin
 	return string(line)
 }
 
-// ReadTurnUsage recovers the turn's final assistant text from the chat span's
+// ReadTurn recovers the turn's final assistant text from the chat span's
 // gen_ai.output.messages so the pipeline can render gen_ai.output.messages (the
 // agent response) — Copilot's agentStop payload carries no response text.
-func TestReadTurnUsage_responseText(t *testing.T) {
+func TestReadTurn_responseText(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
 	sessionDir := t.TempDir()
@@ -242,9 +224,10 @@ func TestReadTurnUsage_responseText(t *testing.T) {
 		chatSpanWithOutput(t, "s2", "conv-1",
 			`[{"role":"assistant","parts":[{"type":"text","content":"All done."}],"finish_reason":"stop"}]`))
 
-	u, _ := ReadTurnUsage("conv-1", sessionDir)
-	require.NotNil(t, u)
-	assert.Equal(t, "All done.", u.ResponseText)
+	turn, _ := ReadTurn("conv-1", sessionDir)
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, "All done.", turn.Usage.ResponseText)
 }
 
 func TestAssistantTextFromOutput(t *testing.T) {
@@ -280,15 +263,101 @@ func TestSweepOldOtelFiles(t *testing.T) {
 	assert.FileExists(t, freshF, "recent file should be kept")
 }
 
-func TestLatestModel(t *testing.T) {
+// nativeSpanLine builds a full native-OTel span record in the file-exporter
+// format: top-level traceId/spanId/parentSpanId/name, [sec,nsec] timestamps,
+// and a status object — the shape execute_tool recovery depends on.
+func nativeSpanLine(t *testing.T, traceID, spanID, parentID, name string, startSec, endSec float64, statusCode int, attrs map[string]any) string {
+	t.Helper()
+	rec := map[string]any{
+		"type":         "span",
+		"traceId":      traceID,
+		"spanId":       spanID,
+		"parentSpanId": parentID,
+		"name":         name,
+		"startTime":    []any{int64(startSec), int64((startSec - float64(int64(startSec))) * 1e9)},
+		"endTime":      []any{int64(endSec), int64((endSec - float64(int64(endSec))) * 1e9)},
+		"status":       map[string]any{"code": statusCode},
+		"attributes":   attrs,
+	}
+	line, err := json.Marshal(rec)
+	require.NoError(t, err)
+	return string(line)
+}
+
+// TestReadTurn_toolCalls covers the OTel-sourced tool recovery: execute_tool
+// spans (which carry NO conversation.id — membership goes via the shared
+// traceId) come back with real timings and failure status, and parents collapse
+// the invoke_agent layers — a sub-agent's tool nests under its spawning `task`
+// span, top-level tools resolve to "" (→ the caller's chat span).
+func TestReadTurn_toolCalls(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
+	sessionDir := t.TempDir()
+
+	// Mirrors a real capture:
+	//   invoke_agent (conv-1)
+	//     chat gpt
+	//     execute_tool bash            (top-level, 0.5s, ok)
+	//     execute_tool task (call_X)
+	//       invoke_agent task (conv-1)
+	//         execute_tool bash        (sub-agent, failed)
 	writeLines(t, filepath.Join(otelDir, "otel.jsonl"),
-		chatSpanLine("s1", "conv-1", 10, 2, 0, 0, 0, "gpt-5.3-codex"),
-		chatSpanLine("s2", "conv-1", 10, 2, 0, 0, 0, "gpt-5.3-codex-v2"))
-	assert.Equal(t, "gpt-5.3-codex-v2", LatestModel("conv-1"), "returns the most recent chat span's model")
-	assert.Empty(t, LatestModel("conv-none"))
-	assert.Empty(t, LatestModel(""))
+		nativeSpanLine(t, "t1", "ch1", "ia1", "chat gpt", 100, 101, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1", "gen_ai.request.model": "gpt",
+			"gen_ai.usage.input_tokens": 100, "gen_ai.usage.output_tokens": 10,
+		}),
+		nativeSpanLine(t, "t1", "e1", "ia1", "execute_tool bash", 101, 101.5, 0, map[string]any{
+			"gen_ai.tool.name": "bash", "gen_ai.tool.call.id": "call_A",
+			"gen_ai.tool.call.arguments": `{"command":"echo one"}`, "gen_ai.tool.call.result": "one",
+		}),
+		nativeSpanLine(t, "t1", "e3", "ia2", "execute_tool bash", 102, 102.25, 2, map[string]any{
+			"gen_ai.tool.name": "bash", "gen_ai.tool.call.id": "call_B",
+			"gen_ai.tool.call.arguments": `{"command":"false"}`, "gen_ai.tool.call.result": "exit 1",
+		}),
+		nativeSpanLine(t, "t1", "ia2", "e2", "invoke_agent task", 101.5, 103, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1",
+		}),
+		nativeSpanLine(t, "t1", "e2", "ia1", "execute_tool task", 101.5, 103.5, 0, map[string]any{
+			"gen_ai.tool.name": "task", "gen_ai.tool.call.id": "call_X",
+			"gen_ai.tool.call.arguments": `{"agent_type":"task","name":"echo-runner"}`,
+			"gen_ai.tool.call.result":    "done",
+		}),
+		nativeSpanLine(t, "t1", "ia1", "", "invoke_agent", 100, 104, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1",
+		}),
+	)
+
+	turn, c := ReadTurn("conv-1", sessionDir)
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage, "chat span still summed for usage")
+	assert.Equal(t, int64(100), turn.Usage.InputTokens)
+	require.Len(t, turn.Tools, 3, "every execute_tool span recovered — invoke_agent/chat layers are not tools")
+	byID := map[string]ToolCall{}
+	for _, tc := range turn.Tools {
+		byID[tc.SpanID] = tc
+	}
+
+	top := byID["e1"]
+	assert.Equal(t, "bash", top.Name)
+	assert.Equal(t, "call_A", top.CallID)
+	assert.Empty(t, top.ParentSpanID, "top-level tool resolves to the chat span (empty here)")
+	assert.Equal(t, 500*time.Millisecond, top.End.Sub(top.Start), "real duration from native timestamps")
+	assert.False(t, top.Failed)
+
+	task := byID["e2"]
+	assert.Equal(t, "task", task.Name)
+	assert.Equal(t, "call_X", task.CallID)
+	assert.Empty(t, task.ParentSpanID)
+
+	sub := byID["e3"]
+	assert.Equal(t, "e2", sub.ParentSpanID, "sub-agent tool nests under its spawning task span (invoke_agent layer collapsed)")
+	assert.True(t, sub.Failed, "native status code 2 marks the tool failed")
+
+	// The cursor covers ALL consumed spans (tools included): after persisting it,
+	// a re-read finds nothing new.
+	SaveCursor(sessionDir, c)
+	again, _ := ReadTurn("conv-1", sessionDir)
+	assert.Nil(t, again, "re-run after SaveCursor must not re-emit tools or re-count usage")
 }
 
 func writeLines(t *testing.T, path string, lines ...string) {

@@ -2,40 +2,45 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package copilot normalizes GitHub Copilot CLI hook payloads into the
-// pipeline's canonical event vocabulary (the Cursor pattern), and recovers
-// per-turn token/cost/model usage from Copilot's native-OpenTelemetry file.
+// pipeline's canonical event vocabulary, and recovers each turn — token/cost/
+// model/response AND the turn's tool executions — from Copilot's
+// native-OpenTelemetry file.
 //
 // Copilot's per-turn hook (`agentStop`) fires only under camelCase
 // registration, and camelCase payloads carry no `hook_event_name` field — so
 // the entrypoint passes the event name as an argv and hands it to Normalize.
-// Tokens are NOT in the hook payloads (nor in `events.jsonl`, which has output
-// tokens only); they come from the native-OTel file via the reader in
-// otelfile.go, attached to the turn's Stop event before pipeline.Process.
+// Hooks drive only the session/turn lifecycle (SessionStart, UserPromptSubmit,
+// Stop, SessionEnd); everything quantitative comes from the native-OTel file
+// via the reader in otelfile.go: tokens are NOT in the hook payloads (nor in
+// `events.jsonl`), and tool spans are sourced from the file's execute_tool
+// spans — real durations and sub-agent nesting that hooks cannot provide.
 package copilot
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "strings"
 
 // Normalize transforms a Copilot hook payload (identified by eventName, which
 // the caller reads from argv since camelCase payloads omit the event name) into
 // the pipeline's canonical event shape. It returns nil for events the pipeline
 // does not consume, so the caller can exit cleanly.
 //
-// Deliberately dropped in v1:
-//   - preToolUse: Copilot's only fail-closed event and its payload carries no
-//     duration; we emit zero-duration tool spans from postToolUse instead, and
-//     avoid the fail-closed foot-gun by not registering it.
+// Deliberately dropped:
+//   - postToolUse/postToolUseFailure: hook tool events carry no duration (the
+//     spans they'd produce are zero-length instants) and never fire inside
+//     sub-agents. Tool spans come from the native-OTel file's execute_tool
+//     spans instead — real timings, failure status, and sub-agent tool calls
+//     nested under their spawning `task` span (see otelfile.go / the
+//     entrypoint's emitToolSpans).
+//   - preToolUse: Copilot's only fail-closed event; not registering it avoids
+//     the foot-gun of a broken hook blocking the user's tools.
 //   - subagentStart/subagentStop AND every sub-agent lifecycle event: a sub-agent
 //     runs under a synthetic "call_<toolCallId>" session id, not the parent
 //     conversation's UUID, and carries nothing that links back to it (verified
-//     against captured payloads) — so it cannot be nested under the parent. We
-//     drop these sessions wholesale (the call_ guard in Normalize) rather than
-//     mint a spurious, token-less trace per sub-agent. Their tokens still roll
-//     into the parent turn via the native-OTel reader (sub-agent chat spans share
-//     the parent's conversation.id), and the parent conversation still shows each
-//     spawn as a `task` tool span.
+//     against captured payloads) — so it cannot be nested under the parent from
+//     hook data. We drop these sessions wholesale (the call_ guard in Normalize)
+//     rather than mint a spurious, token-less trace per sub-agent. Their tokens
+//     still roll into the parent turn via the native-OTel reader (sub-agent chat
+//     spans share the parent's conversation.id), and their tool calls surface as
+//     OTel-sourced spans nested under the parent's `task` span.
 //   - notification/preCompact/permissionRequest/errorOccurred: no span consumer.
 func Normalize(eventName string, event map[string]any) map[string]any {
 	if event == nil {
@@ -59,11 +64,6 @@ func Normalize(eventName string, event map[string]any) map[string]any {
 		return nil
 	}
 
-	renameField(event, "toolName", "tool_name")
-	renameField(event, "toolArgs", "tool_input")
-	renameField(event, "toolResult", "tool_response")
-	liftTaskName(event)
-
 	// Never carry Copilot's transcriptPath through: it points at events.jsonl
 	// (not Claude-JSONL), so the pipeline's transcript reader must not run on it.
 	// Per-turn tokens come from the native-OTel file instead.
@@ -78,12 +78,12 @@ func Normalize(eventName string, event map[string]any) map[string]any {
 }
 
 // eventNameMap maps Copilot's camelCase hook names to the canonical PascalCase
-// vocabulary the pipeline consumes. Events absent from this map are dropped.
+// vocabulary the pipeline consumes. Events absent from this map are dropped —
+// notably postToolUse/postToolUseFailure: tool spans come from the native-OTel
+// file, not hooks (see the package doc).
 var eventNameMap = map[string]string{
 	"sessionStart":        "SessionStart",
 	"userPromptSubmitted": "UserPromptSubmit",
-	"postToolUse":         "PostToolUse",
-	"postToolUseFailure":  "PostToolUseFailure",
 	"agentStop":           "Stop",
 	"sessionEnd":          "SessionEnd",
 }
@@ -92,32 +92,5 @@ func renameField(event map[string]any, from, to string) {
 	if v, ok := event[from]; ok {
 		event[to] = v
 		delete(event, from)
-	}
-}
-
-// taskNameAttr is the span attribute carrying a sub-agent spawn's instance name;
-// it mirrors the dash0.gen_ai.tool.<tool>.<detail> shape of skill_name/command_family.
-const taskNameAttr = "dash0.gen_ai.tool.task.name"
-
-// liftTaskName surfaces the instance name of a sub-agent spawn (the `task` tool)
-// that Copilot buries inside the tool arguments, so the parent's task tool span
-// is identifiable — otherwise every task span reads as a generic "task". The name
-// (e.g. "echo-runner") is a non-content label; it is set directly under its wire
-// attribute key (the pipeline passes through unmapped keys verbatim), keeping this
-// Copilot-specific detail out of the shared attribute map. Copilot passes tool
-// arguments as a JSON string, so it is parsed (an object is accepted defensively).
-func liftTaskName(event map[string]any) {
-	if tn, _ := event["tool_name"].(string); tn != "task" {
-		return
-	}
-	var args map[string]any
-	switch t := event["tool_input"].(type) {
-	case map[string]any:
-		args = t
-	case string:
-		_ = json.Unmarshal([]byte(t), &args)
-	}
-	if name, _ := args["name"].(string); name != "" {
-		event[taskNameAttr] = name
 	}
 }

@@ -18,7 +18,7 @@ This repo ships one shared Go pipeline (`cmd/`, `internal/`, `scripts/`) and run
 |---|---|---|
 | `.claude-plugin/`, `claude/commands/`, `claude/skills/`, `hooks/hooks.json` | Claude Code | Manifest, slash commands, configure skill, hook registration |
 | `.cursor-plugin/`, `cursor/plugin-hooks.json`, `cursor/skills/` | Cursor | Manifest, hook registration, configure skill |
-| `.codex-plugin/`, `codex/hooks.json`, `install-codex.sh` | OpenAI Codex | Manifest, hook registration, installer. Installed via marketplace (`codex plugin add`) or the installer (hooks written to `~/.codex/config.toml`) |
+| `.codex-plugin/`, `codex/hooks.json`, `.agents/plugins/marketplace.json`, `install-codex.sh` | OpenAI Codex | Manifest, hook registration, self-hosted Codex marketplace, installer. Installed via marketplace (`codex plugin add`) or the installer (hooks written to `~/.codex/config.toml`). `.agents/plugins/` is Codex-only — Claude reads `.claude-plugin/`, Cursor its own dir |
 
 Runtime-specific assets live under `claude/` and `cursor/` so neither marketplace auto-discovers the other runtime's components. Shared hook binaries stay in `scripts/`.
 

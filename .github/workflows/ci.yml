@@ -87,8 +87,8 @@ jobs:
   # (each runtime README's "Installation" + "Configuration"). They pin the
   # behavior the docs depend on, so a CLI change or a wrong doc assumption fails
   # CI, not a rollout. Logic lives in test/contracts/{claude,cursor,codex}.sh
-  # (also runnable locally — see test/contracts/README.md), one script per agent:
-  #   Claude A–C · Cursor D–F · Codex G–I  (install, credential delivery, uninstall)
+  # (also runnable locally — see test/contracts/README.md), one script per agent.
+  # Each covers install, credential delivery, and uninstall for its runtime.
   # Marketplace installs are covered by the build-and-test job; the binary
   # reading *_PLUGIN_OPTION_AUTH_TOKEN by Go unit tests.
   install-config-contract:

@@ -7,9 +7,9 @@ installer) and in CI (the `install-config-contract` job just calls these).
 
 | Script | Contracts | Needs | Local? |
 |---|---|---|---|
-| `claude.sh` | A settings.json ≠ install · B `--config` credential storage · C creds → OTLP | `claude` CLI, network, go/jq/curl | A/C anywhere; **B is Linux-only** (see below) |
-| `cursor.sh` | D creds → OTLP · E install layout + hooks merge · F uninstall strip | network (E/F resolve the latest release), go/jq/curl | yes |
-| `codex.sh`  | G creds → OTLP · H install merge + pre-trust · I uninstall strip | go/jq/python3/curl | yes (no codex CLI) |
+| `claude.sh` | settings.json ≠ install · `--config` credential storage · creds → OTLP | `claude` CLI, network, go/jq/curl | mostly anywhere; the credential-storage contract is **Linux-only** (see below) |
+| `cursor.sh` | creds → OTLP · install layout + hooks merge · uninstall strip | network (install/uninstall resolve the latest release), go/jq/curl | yes |
+| `codex.sh`  | creds → OTLP · install merge + pre-trust · uninstall strip | go/jq/python3/curl | yes (no codex CLI) |
 
 ## Run
 
@@ -24,9 +24,11 @@ server on `:4319`, so it never touches your real `~/.claude` / `~/.cursor` /
 
 ## Notes
 
-- **Contract B is Linux-only.** It pins *where* `claude plugin install --config`
-  persists credentials (non-sensitive → `settings.json`, `AUTH_TOKEN` → the
-  secrets store, with a `.credentials.json` fallback on Linux). macOS uses the
-  Keychain and a different layout, so B **skips** off Linux; CI (Linux) validates it.
-- Contracts E/F download the latest published release's Cursor binary, so they
-  need network and an existing release; E/F skip if the release can't be resolved.
+- **The `claude.sh` credential-storage contract is Linux-only.** It pins *where*
+  `claude plugin install --config` persists credentials (non-sensitive →
+  `settings.json`, `AUTH_TOKEN` → the secrets store, with a `.credentials.json`
+  fallback on Linux). macOS uses the Keychain and a different layout, so it
+  **skips** off Linux; CI (Linux) validates it.
+- The `cursor.sh` install/uninstall contracts download the latest published
+  release's Cursor binary, so they need network and an existing release; they
+  skip if the release can't be resolved.

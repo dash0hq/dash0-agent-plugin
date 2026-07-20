@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Codex install/config contracts (runnable locally and in CI):
-#   G — credential delivery (config file + env vars) reaches a real OTLP request
-#   H — install-codex.sh merges hooks + pre-trust into config.toml, preserving user content
-#   I — uninstall-codex.sh strips the managed block, preserving user content
+#   - credential delivery (config file + env vars) reaches a real OTLP request
+#   - install-codex.sh merges hooks + pre-trust into config.toml, preserving user content
+#   - uninstall-codex.sh strips the managed block, preserving user content
 # Requires: go, make, jq, python3, curl, bash. No codex CLI needed.
 set -euo pipefail
 # shellcheck source=test/contracts/lib.sh
@@ -12,14 +12,14 @@ VERSION=$(grep '^VERSION=' "$REPO/scripts/codex-on-event.sh" | sed 's/VERSION="/
 BINNAME="codex-on-event-${VERSION}-$(os_arch)"
 start_mock_otlp   # http://localhost:4319
 
-echo "== Contract G — Codex credential delivery reaches a real OTLP request =="
+echo "== Codex credential delivery reaches a real OTLP request =="
 # Bootstrap is version-pinned; build the binary at that exact path so no release
 # download is needed.
 export DASH0_PLUGIN_DATA=/tmp/codex-pdata
 rm -rf "$DASH0_PLUGIN_DATA"; mkdir -p "$DASH0_PLUGIN_DATA/bin"
 make -C "$REPO" build-binary PKG=./cmd/codex-on-event OUT="$DASH0_PLUGIN_DATA/bin/$BINNAME"
 
-# G1 — credentials from ~/.codex/dash0-agent-plugin.local.md.
+# credentials from ~/.codex/dash0-agent-plugin.local.md.
 export HOME=/tmp/codex-home-cfg; rm -rf "$HOME"; mkdir -p "$HOME/.codex"
 cat > "$HOME/.codex/dash0-agent-plugin.local.md" <<'MD'
 ---
@@ -34,7 +34,7 @@ MD
   && echo '{"hook_event_name":"SessionStart","session_id":"contract-g1","model":"gpt-5.5","source":"startup"}' \
      | bash "$REPO/scripts/codex-on-event.sh" )
 
-# G2 — credentials from env vars only, no config file present.
+# credentials from env vars only, no config file present.
 export HOME=/tmp/codex-home-env; rm -rf "$HOME"; mkdir -p "$HOME/.codex"
 ( cd "$(mktemp -d)" \
   && echo '{"hook_event_name":"SessionStart","session_id":"contract-g2","model":"gpt-5.5","source":"startup"}' \
@@ -52,9 +52,9 @@ fail=0
 [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer codex-env-token")]|length')" -ge 1 ] \
   || { echo "ERROR: codex env-var token did not reach the OTLP request"; fail=1; }
 [ "$fail" -eq 0 ] || exit 1
-echo "PASS G: config-file and env-var credentials flow through codex-on-event.sh to real OTLP requests"
+echo "PASS: config-file and env-var credentials flow through codex-on-event.sh to real OTLP requests"
 
-echo "== Contract H — install-codex.sh merges hooks + pre-trust into config.toml, preserving user content =="
+echo "== install-codex.sh merges hooks + pre-trust into config.toml, preserving user content =="
 # Codex has no release yet, so pre-stage the version-pinned binary + bootstrap;
 # install-codex.sh skips the download when they're present.
 export HOME=/tmp/codex-installer-home XDG_STATE_HOME=/tmp/codex-installer-state
@@ -103,11 +103,11 @@ assert len(d["hooks"]["state"]) == 10, f"expected 10 trust keys, got {len(d['hoo
 print("TOML OK: user content preserved, dash0 hooks + trust present")
 PY
 [ "$fail" -eq 0 ] || exit 1
-echo "PASS H: install-codex.sh merged hooks + pre-trust and preserved user config"
+echo "PASS: install-codex.sh merged hooks + pre-trust and preserved user config"
 
-echo "== Contract I — uninstall-codex.sh strips the managed block, preserves user content =="
-# Depends on Contract H's merged config.toml above.
-[ -f "$CONFIG_TOML" ] || { echo "ERROR: Contract H did not produce a config.toml"; exit 1; }
+echo "== uninstall-codex.sh strips the managed block, preserves user content =="
+# Depends on the install step's merged config.toml above.
+[ -f "$CONFIG_TOML" ] || { echo "ERROR: the install step did not produce a config.toml"; exit 1; }
 bash "$REPO/uninstall-codex.sh" --yes 2>&1 | tail -20
 cat "$CONFIG_TOML"
 fail=0
@@ -128,6 +128,6 @@ assert "state" not in d.get("hooks", {}), "trust state survived uninstall"
 print("TOML OK: user content intact, dash0 fully removed")
 PY
 [ "$fail" -eq 0 ] || exit 1
-echo "PASS I: uninstall-codex.sh stripped the managed block and preserved user config"
+echo "PASS: uninstall-codex.sh stripped the managed block and preserved user config"
 
 echo "ALL CODEX CONTRACTS PASSED"

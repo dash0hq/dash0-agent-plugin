@@ -155,6 +155,52 @@ func TestProcess_MissingSessionID_FallsBackToRandom(t *testing.T) {
 	assert.Equal(t, "session_id was missing from hook payload", ev["dash0.warning"])
 }
 
+//  2b. A session_id containing path-traversal characters (e.g. "../etc") is
+//     rejected: Process substitutes a random safe ID, logs a warning, and no
+//     file is created outside dataDir. This guards MkdirAll, filelog writes,
+//     and RemoveAll which all use sessionID as a directory name under dataDir.
+func TestProcess_InvalidSessionID_FallsBackToRandom(t *testing.T) {
+	s := newSetup(t, "")
+
+	for _, badID := range []string{"../escape", "a/b", "a.b", "has space", "with\x00null"} {
+		s.feed(t, map[string]any{
+			"hook_event_name": "SessionStart",
+			"session_id":      badID,
+			"model":           "opus",
+		})
+	}
+
+	entries, err := os.ReadDir(s.dataDir)
+	require.NoError(t, err)
+
+	// Each rejected ID must have produced a safe replacement dir, and nothing
+	// must have been written at the raw unsafe path.
+	require.Len(t, entries, 5, "one session dir per call, all with safe names")
+	for _, e := range entries {
+		assert.Regexp(t, `^[A-Za-z0-9_-]+$`, e.Name(), "session dir name must be filename-safe")
+	}
+
+	// Confirm the warning attribute is set in the logged event.
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(s.dataDir, e.Name(), "events.jsonl"))
+		require.NoError(t, err)
+		var ev map[string]any
+		require.NoError(t, json.Unmarshal(bytes.TrimSpace(data), &ev))
+		assert.Equal(t, "session_id from hook payload was not a safe path segment", ev["dash0.warning"])
+	}
+
+	// The parent directory must contain exactly the dataDir itself — no file
+	// escaped above it via path traversal.
+	parentEntries, err := os.ReadDir(filepath.Dir(s.dataDir))
+	require.NoError(t, err)
+	names := make([]string, 0, len(parentEntries))
+	for _, e := range parentEntries {
+		names = append(names, e.Name())
+	}
+	assert.Contains(t, names, filepath.Base(s.dataDir), "dataDir itself must exist")
+	assert.Len(t, parentEntries, 1, "nothing written outside dataDir")
+}
+
 //  3. UserPromptSubmit creates a fresh trace_id and chat_span_id for the
 //     turn and preserves the model previously set at SessionStart.
 func TestProcess_UserPromptSubmit_GeneratesFreshTraceID(t *testing.T) {

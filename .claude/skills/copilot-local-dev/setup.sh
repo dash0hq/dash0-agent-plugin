@@ -30,6 +30,7 @@ OTEL_DIR="$HOME/.local/state/dash0-agent-plugin/copilot/otel"
 
 command -v copilot >/dev/null || { echo "error: copilot CLI not found — npm install -g @github/copilot" >&2; exit 1; }
 command -v go >/dev/null || { echo "error: go not found" >&2; exit 1; }
+command -v jq >/dev/null || { echo "error: jq not found (needed to derive the dev marketplace)" >&2; exit 1; }
 
 VERSION="$(grep '^VERSION=' "$REPO/copilot/copilot-on-event.sh" | cut -d'"' -f2)"
 OS="$(go env GOOS)"; ARCH="$(go env GOARCH)"
@@ -47,23 +48,16 @@ if [ "${1:-}" = "--rebuild" ]; then
   exit 0
 fi
 
-# 1. Stage a local marketplace: marketplace.json + a CLEAN copy of copilot/
-#    (excluding the dev-only capture harness and git-ignored captures, which
-#    must not ship inside the plugin).
+# 1. Stage a local marketplace from the REAL shipped files: the repo's
+#    .github/plugin/marketplace.json (only its `name` swapped to a dev name so it
+#    can't clash with the production `dash0` marketplace) + a copy of copilot/.
+#    Consuming the real file means a typo/schema drift there breaks local dev too.
 echo "→ staging local marketplace at $MP_DIR"
 rm -rf "$MP_DIR"
 mkdir -p "$MP_DIR/.github/plugin" "$MP_DIR/copilot"
-rsync -a --exclude 'capture' --exclude 'captured' "$REPO/copilot/" "$MP_DIR/copilot/"
-cat > "$MP_DIR/.github/plugin/marketplace.json" <<JSON
-{
-  "name": "$MP_NAME",
-  "owner": { "name": "Dash0 (local dev)" },
-  "metadata": { "description": "Local dev marketplace for the Dash0 Copilot plugin", "version": "0.0.0" },
-  "plugins": [
-    { "name": "$PLUGIN", "description": "Dash0 OpenTelemetry for GitHub Copilot CLI", "version": "$VERSION", "source": "copilot" }
-  ]
-}
-JSON
+rsync -a "$REPO/copilot/" "$MP_DIR/copilot/"
+jq --arg n "$MP_NAME" '.name = $n' \
+  "$REPO/.github/plugin/marketplace.json" > "$MP_DIR/.github/plugin/marketplace.json"
 
 # 2. (Re)register the marketplace and (re)install the plugin the real way.
 echo "→ registering marketplace + installing plugin"

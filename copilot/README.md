@@ -18,13 +18,16 @@ The hooks drive the session/turn lifecycle; the native-OTel file supplies everyt
 
 ## Install
 
+Add the Dash0 marketplace, then install the plugin from it:
+
 ```bash
-copilot plugin install dash0hq/dash0-agent-plugin:copilot
+copilot plugin marketplace add dash0hq/dash0-agent-plugin
+copilot plugin install dash0-agent-plugin@dash0
 ```
 
-> Use the `:copilot` subpath. A bare `copilot plugin install dash0hq/dash0-agent-plugin`
-> loads only the Claude Code skills/commands (the root manifest declares no
-> hooks) — no telemetry.
+The marketplace entry (`.github/plugin/marketplace.json`) points at this `copilot/`
+package, so `@dash0` installs exactly it — versioned, so `copilot plugin update
+dash0-agent-plugin` picks up new releases.
 
 Restart `copilot` after installing (hooks load at startup).
 

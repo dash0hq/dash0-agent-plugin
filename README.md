@@ -20,7 +20,7 @@ This repo ships one shared Go pipeline (`cmd/`, `internal/`, `scripts/`) and run
 | `.claude-plugin/`, `claude/commands/`, `claude/skills/`, `hooks/hooks.json` | Claude Code | Manifest, slash commands, configure skill, hook registration |
 | `.cursor-plugin/`, `cursor/plugin-hooks.json`, `cursor/skills/` | Cursor | Manifest, hook registration, configure skill |
 | `.codex-plugin/`, `codex/hooks.json`, `.agents/plugins/marketplace.json`, `install-codex.sh` | OpenAI Codex | Manifest, hook registration, self-hosted Codex marketplace, installer. Installed via marketplace (`codex plugin add`) or the installer (hooks written to `~/.codex/config.toml`). `.agents/plugins/` is Codex-only — Claude reads `.claude-plugin/`, Cursor its own dir |
-| `copilot/` (`plugin.json`, `hooks.json`, `skills/`, `copilot-on-event.sh`) | GitHub Copilot CLI | Self-contained subpath-install package: manifest, camelCase hooks, configure skill, vendored bootstrap |
+| `copilot/` (`plugin.json`, `hooks.json`, `skills/`, `copilot-on-event.sh`), `.github/plugin/marketplace.json` | GitHub Copilot CLI | Self-contained plugin package (manifest, camelCase hooks, configure skill, vendored bootstrap) + self-hosted Copilot marketplace listing it. Installed via marketplace (`copilot plugin install dash0-agent-plugin@dash0`) or the `:copilot` subpath. `.github/plugin/` is Copilot-only |
 
 Runtime-specific assets live under `claude/`, `cursor/`, and `copilot/` so neither marketplace auto-discovers the other runtime's components. Shared hook binaries stay in `scripts/`.
 

@@ -4,7 +4,7 @@ Scaffolding to record real GitHub Copilot CLI hook payloads so we can write the
 `internal/source/copilot` adapter and the `events.jsonl` token reader against
 ground-truth shapes rather than docs prose.
 
-Everything here is dev-only; captured output lands in `copilot/captured/`, which
+Everything here is dev-only; captured output lands in `test/capture/copilot/captured/`, which
 is git-ignored.
 
 ## What we need to learn (the Phase 0 questions)
@@ -28,13 +28,13 @@ is git-ignored.
    or `COPILOT_GITHUB_TOKEN`).
 2. Make the capture script executable:
    ```bash
-   chmod +x copilot/capture/capture.sh
+   chmod +x test/capture/copilot/capture.sh
    ```
 3. Install BOTH capture configs at user scope (they are additive):
    ```bash
    mkdir -p ~/.copilot/hooks
-   cp copilot/capture/hooks-camelcase.json  ~/.copilot/hooks/dash0-capture-camel.json
-   cp copilot/capture/hooks-pascalcase.json ~/.copilot/hooks/dash0-capture-pascal.json
+   cp test/capture/copilot/hooks-camelcase.json  ~/.copilot/hooks/dash0-capture-camel.json
+   cp test/capture/copilot/hooks-pascalcase.json ~/.copilot/hooks/dash0-capture-pascal.json
    ```
    > The `bash` commands use `$HOME/dash0/dash0-agent-plugin/...`. If your checkout
    > lives elsewhere, edit the paths (or set `DASH0_COPILOT_CAPTURE_DIR`). Hooks
@@ -51,12 +51,12 @@ Exercise as much as possible in one session (interactive first; then repeat with
 - an error (e.g. a command that fails),
 - `/compact` if the session is long enough.
 
-Each hook invocation writes `copilot/captured/<ts>_<label>_<event>.json`.
+Each hook invocation writes `test/capture/copilot/captured/<ts>_<label>_<event>.json`.
 
 Then grab the raw session event stream (for the token/model work, D3):
 
 ```bash
-cp -r ~/.copilot/session-state/<sessionId>/events.jsonl copilot/captured/events.jsonl.sample
+cp -r ~/.copilot/session-state/<sessionId>/events.jsonl test/capture/copilot/captured/events.jsonl.sample
 ```
 
 (Find `<sessionId>` from a captured payload, or `ls -t ~/.copilot/session-state/`.)
@@ -75,4 +75,4 @@ cp -r ~/.copilot/session-state/<sessionId>/events.jsonl copilot/captured/events.
 ```bash
 rm ~/.copilot/hooks/dash0-capture-camel.json ~/.copilot/hooks/dash0-capture-pascal.json
 ```
-Restart `copilot` to stop capturing. `copilot/captured/` is git-ignored.
+Restart `copilot` to stop capturing. `test/capture/copilot/captured/` is git-ignored.

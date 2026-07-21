@@ -577,6 +577,54 @@ exec %q "$@"
 		"expected a canonical chat span carrying per-turn gen_ai.usage.*_tokens sourced from the native-OTel file")
 }
 
+// TestE2ECopilotMarketplaceInstall validates the self-hosted Copilot marketplace:
+// `copilot plugin marketplace add <repo>` + `copilot plugin install
+// dash0-agent-plugin@dash0` must index and install the plugin declared in
+// .github/plugin/marketplace.json. The static consistency test proves the JSON is
+// well-formed and matches the manifest, but only the real copilot CLI proves it
+// actually resolves the `source` path and installs the package.
+//
+// No auth/LLM session is needed (marketplace add + install only fetch + copy), so
+// this needs no COPILOT_GITHUB_TOKEN. Gated behind the e2e build tag; FAILS (not
+// skips) if the copilot CLI is missing so a misconfigured CI is loud.
+func TestE2ECopilotMarketplaceInstall(t *testing.T) {
+	copilotBin, err := exec.LookPath("copilot")
+	require.NoError(t, err, "copilot CLI not found — install with: npm install -g @github/copilot")
+
+	repoRoot := findPluginDir(t) // holds .github/plugin/marketplace.json
+	copilotHome := t.TempDir()   // hermetic — never touches the developer's ~/.copilot
+	env := append(os.Environ(), "COPILOT_HOME="+copilotHome)
+
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command(copilotBin, args...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	// 1. Register the repo as a marketplace (its .github/plugin/marketplace.json
+	//    lists dash0-agent-plugin with source "./copilot").
+	out, err := run("plugin", "marketplace", "add", repoRoot)
+	require.NoError(t, err, "marketplace add failed:\n%s", out)
+
+	// 2. Install must succeed via <plugin>@<marketplace>.
+	out, err = run("plugin", "install", "dash0-agent-plugin@dash0")
+	require.NoError(t, err, "plugin install failed:\n%s", out)
+
+	// 3. The installed plugin must carry the manifest, camelCase hooks, and bootstrap.
+	matches, _ := filepath.Glob(filepath.Join(copilotHome, "installed-plugins", "*", "dash0-agent-plugin"))
+	require.NotEmpty(t, matches, "installed plugin dir not created under %s/installed-plugins", copilotHome)
+	root := matches[0]
+	for _, f := range []string{"plugin.json", "hooks.json", "copilot-on-event.sh"} {
+		_, statErr := os.Stat(filepath.Join(root, f))
+		require.NoError(t, statErr, "installed plugin missing %s", f)
+	}
+
+	// 4. The dev-only capture harness must NOT have shipped into the install.
+	_, statErr := os.Stat(filepath.Join(root, "capture"))
+	require.True(t, os.IsNotExist(statErr), "capture/ must not ship inside the installed plugin")
+}
+
 func copyExecutable(t *testing.T, src, dst string) {
 	t.Helper()
 	data, err := os.ReadFile(src)

@@ -5,11 +5,14 @@ description: Install and run the Dash0 GitHub Copilot CLI plugin (the copilot/ p
 
 # Run the Dash0 Copilot plugin locally
 
-The public install path (`copilot plugin install dash0hq/dash0-agent-plugin:copilot`)
-needs the branch pushed and a release carrying the `copilot-on-event` binary. For
-**local dev** we skip both by registering a throwaway **local marketplace** that
-points at this repo's `copilot/` package, installing it the real way, and dropping
-a **locally-built** binary where the bootstrap looks (so it skips the download).
+The public install path (`copilot plugin marketplace add dash0hq/dash0-agent-plugin`
++ `copilot plugin install dash0-agent-plugin@dash0`) needs the branch pushed and a
+release carrying the `copilot-on-event` binary. For **local dev** we skip both by
+registering a throwaway **local marketplace** (the repo's real
+`.github/plugin/marketplace.json`, renamed so it can't clash with the production
+`dash0` one) that points at this repo's `copilot/` package, installing it the real
+way, and dropping a **locally-built** binary where the bootstrap looks (so it skips
+the download).
 
 This exercises the actual packaging — manifest loading, camelCase `hooks.json`,
 `${PLUGIN_ROOT}` resolution, the `dash0-configure` skill, the bare-install guard —
@@ -61,6 +64,8 @@ profile if you added them.)
   The `plugin-data/…/bin` dir is created lazily on first hook run; setup.sh pre-creates it and drops the binary.
 - Native OTel is **not** something the plugin can enable itself (no plugin `env`/OTel hook);
   it needs the launch-time env, which is exactly what `/dash0-configure`'s launch function provides.
-- setup.sh copies `copilot/` **excluding `capture/` and `captured/`** (dev harness + git-ignored
-  raw captures). The real GitHub subpath install would still include the tracked `capture/` dir —
-  a packaging-cleanup item worth addressing before release (exclude `capture/` from the shipped plugin).
+- setup.sh copies `copilot/` wholesale — the shipped package is clean. The dev-only capture
+  harness lives outside it under `test/capture/copilot/`, so it never ships (guarded by
+  `TestCopilotShippedPackageExcludesDevOnlyDirs`).
+- setup.sh reuses the repo's real `.github/plugin/marketplace.json` (only its `name` swapped to
+  `dash0-local`), so this exercises the actual marketplace file that ships to users.

@@ -17,7 +17,7 @@
 set -u
 
 label="${1:-unknown}"
-capture_dir="${DASH0_COPILOT_CAPTURE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../captured}"
+capture_dir="${DASH0_COPILOT_CAPTURE_DIR:-$(dirname "${BASH_SOURCE[0]}")/captured}"
 mkdir -p "$capture_dir" 2>/dev/null || exit 0
 
 payload="$(cat)"

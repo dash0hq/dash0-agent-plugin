@@ -101,6 +101,58 @@ func TestCopilotManifestDeclaresHooksAndSkills(t *testing.T) {
 	assert.False(t, hasUserConfig, "userConfig is not a valid Copilot plugin.json field")
 }
 
+// TestCopilotMarketplaceConsistency guards the self-hosted Copilot marketplace
+// (.github/plugin/marketplace.json) against silent breakage. Copilot installs
+// `dash0-agent-plugin@dash0` by resolving the plugin entry's `source` path to a
+// directory carrying plugin.json; a mismatched name, a dangling source, or a
+// version drift surfaces only as an install failure. The real-CLI install is
+// covered by TestE2ECopilotMarketplaceInstall — this is the no-CLI guard that
+// runs everywhere in `go test ./...`.
+func TestCopilotMarketplaceConsistency(t *testing.T) {
+	root := repoRoot(t)
+	mp := readJSON(t, filepath.Join(root, ".github", "plugin", "marketplace.json"))
+
+	// The marketplace name is the `@dash0` install suffix.
+	assert.Equal(t, "dash0", mp["name"], "marketplace name is the `@<name>` install suffix")
+
+	plugins, ok := mp["plugins"].([]any)
+	require.True(t, ok, "marketplace.json must have a plugins array")
+	require.Len(t, plugins, 1, "expected exactly one plugin entry")
+	entry, ok := plugins[0].(map[string]any)
+	require.True(t, ok)
+
+	manifest := readJSON(t, filepath.Join(root, "copilot", "plugin.json"))
+	manifestName, _ := manifest["name"].(string)
+	manifestVersion, _ := manifest["version"].(string)
+
+	assert.Equal(t, manifestName, entry["name"],
+		"marketplace plugin name must match copilot/plugin.json name (the install id)")
+	assert.Equal(t, manifestVersion, entry["version"],
+		"marketplace plugin version must match copilot/plugin.json (release.sh keeps these in sync)")
+
+	meta, _ := mp["metadata"].(map[string]any)
+	assert.Equal(t, manifestVersion, meta["version"],
+		"marketplace metadata.version must match the released plugin version")
+
+	// source must be a relative path string resolving to the plugin manifest.
+	src, ok := entry["source"].(string)
+	require.True(t, ok, "source must be a relative path string (marketplace is co-located with the plugin)")
+	_, statErr := os.Stat(filepath.Join(root, src, "plugin.json"))
+	require.NoError(t, statErr, "source %q has no plugin.json", src)
+}
+
+// TestCopilotShippedPackageExcludesDevOnlyDirs locks in that the dev-only capture
+// harness lives OUTSIDE the shipped copilot/ package. A marketplace/subpath install
+// copies the whole copilot/ tree, so anything left here ships to every user.
+func TestCopilotShippedPackageExcludesDevOnlyDirs(t *testing.T) {
+	root := repoRoot(t)
+	for _, dir := range []string{"capture", "captured"} {
+		_, err := os.Stat(filepath.Join(root, "copilot", dir))
+		assert.True(t, os.IsNotExist(err),
+			"copilot/%s must not exist — dev-only assets live under test/capture/copilot/, not the shipped package", dir)
+	}
+}
+
 func TestCopilotBootstrapValidAndForwardsArgs(t *testing.T) {
 	root := repoRoot(t)
 	script := filepath.Join(root, "copilot", "copilot-on-event.sh")

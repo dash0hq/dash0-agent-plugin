@@ -16,7 +16,7 @@
   "userConfig": {
     "OTLP_URL": {
       "title": "OTLP Endpoint URL",
-      "description": "Dash0 OTLP endpoint URL (e.g. https://ingress.us1.dash0.com:4318)",
+      "description": "Dash0 OTLP endpoint URL (e.g. https://ingress.us1.dash0.com)",
       "type": "string",
       "sensitive": false
     },

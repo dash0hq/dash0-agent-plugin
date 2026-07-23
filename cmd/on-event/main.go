@@ -4,13 +4,9 @@
 package main
 
 import (
-	"bytes"
-	"compress/zlib"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -18,17 +14,15 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/dotenv"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
-	"github.com/dash0hq/dash0-agent-plugin/internal/version"
+	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "session-url" {
-		if err := printSessionURL(); err != nil {
-			fmt.Fprintf(os.Stderr, "on-event session-url: %v\n", err)
-			os.Exit(1)
-		}
+		printSessionURL()
 		return
 	}
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: %v\n", err)
 		os.Exit(1)
@@ -47,14 +41,9 @@ func run() error {
 		return fmt.Errorf("creating data directory: %w", err)
 	}
 
-	raw, err := io.ReadAll(os.Stdin)
+	event, err := parseEventFromStdin()
 	if err != nil {
-		return fmt.Errorf("reading stdin: %w", err)
-	}
-
-	var event map[string]any
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return fmt.Errorf("parsing JSON from stdin: %w", err)
+		return err
 	}
 
 	cfg := otlp.Config{
@@ -86,17 +75,9 @@ func run() error {
 
 	for _, msg := range result.Messages {
 		text := msg.UserText
-		// Annotate the SessionStart connectivity-success message with the
-		// running plugin version and session URL.
-		if hookEvent == "SessionStart" && text == "dash0: connected" {
-			text = fmt.Sprintf("dash0: connected (v%s)", version.Version)
-			if appURL := deriveAppURL(cfg.OTLPUrl); appURL != "" {
-				sessionURL := buildSessionURL(appURL, sessionID)
-				text += " → " + sessionURL
-			}
-		}
 		// SessionStart's "telemetry is not active" message gets a Claude-Code-specific
-		// instructions tail pointing at /plugin → Configure.
+		// instructions tail pointing at /plugin → Configure. The connectivity-success
+		// message (version + session link) is assembled by the shared pipeline.
 		if hookEvent == "SessionStart" && strings.HasPrefix(text, "dash0: telemetry is not active") {
 			text = "dash0: telemetry is not active — configure the plugin to start sending data. Run /plugin → Installed → dash0 → Configure, then /reload-plugins."
 		}
@@ -104,42 +85,63 @@ func run() error {
 	}
 
 	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" && pluginOptionBool("SHOW_SESSION_LINK") {
-		if appURL := deriveAppURL(cfg.OTLPUrl); appURL != "" {
-			sessionURL := buildSessionURL(appURL, sessionID)
-			printHookResponse(fmt.Sprintf("dash0: view session → %s", sessionURL), "")
+		if link := sessionurl.SessionURL(cfg.OTLPUrl, sessionID); link != "" {
+			printHookResponse(fmt.Sprintf("dash0: view session → %s", link), "")
 		}
 	}
 
 	return nil
 }
 
-func printSessionURL() error {
-	dotenv.Load(".env")
+// printSessionURL backs the `session-url` subcommand (invoked by the
+// /dash0-agent-plugin:open-session slash command): it prints the current
+// session's Dash0 link to stdout, or logs the error and exits non-zero.
+func printSessionURL() {
+	link, err := sessionURL()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "on-event session-url: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(link)
+}
 
+// sessionURL derives the Dash0 session link from the session_id on stdin and
+// the configured OTLP URL. It returns an error when telemetry is not configured,
+// the payload carries no session_id, or the OTLP host is not a recognized Dash0
+// host (see sessionurl.SessionURL).
+func sessionURL() (string, error) {
+	event, err := parseEventFromStdin()
+	if err != nil {
+		return "", err
+	}
+	dotenv.Load(".env")
 	otlpURL := pluginOption("OTLP_URL")
 	if otlpURL == "" {
-		return fmt.Errorf("OTLP_URL is not configured")
+		return "", fmt.Errorf("OTLP_URL is not configured")
 	}
-	appURL := deriveAppURL(otlpURL)
-	if appURL == "" {
-		return fmt.Errorf("cannot derive app URL from OTLP_URL %q", otlpURL)
+	sessionID, _ := event["session_id"].(string)
+	if sessionID == "" {
+		return "", fmt.Errorf("session_id not provided")
 	}
+	link := sessionurl.SessionURL(otlpURL, sessionID)
+	if link == "" {
+		return "", fmt.Errorf("cannot derive app URL from OTLP_URL %q", otlpURL)
+	}
+	return link, nil
+}
 
+// parseEventFromStdin reads the hook event payload from stdin and JSON-decodes
+// it into a generic map.
+func parseEventFromStdin() (map[string]any, error) {
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		return fmt.Errorf("reading stdin: %w", err)
+		return nil, fmt.Errorf("reading stdin: %w", err)
 	}
-	var input map[string]any
-	if err := json.Unmarshal(raw, &input); err != nil {
-		return fmt.Errorf("parsing JSON from stdin: %w", err)
+	var event map[string]any
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return nil, fmt.Errorf("parsing JSON from stdin: %w", err)
 	}
-	sessionID, _ := input["session_id"].(string)
-	if sessionID == "" {
-		return fmt.Errorf("session_id not provided")
-	}
-
-	fmt.Println(buildSessionURL(appURL, sessionID))
-	return nil
+	return event, nil
 }
 
 // printHookResponse outputs a JSON response that Claude Code renders as both
@@ -154,51 +156,6 @@ func printHookResponse(userMessage, modelContext string) {
 	}
 	out, _ := json.Marshal(resp)
 	fmt.Fprintln(os.Stdout, string(out))
-}
-
-// deriveAppURL maps an OTLP ingress URL to the corresponding Dash0 app URL.
-// Returns empty string if the URL doesn't match a known Dash0 pattern.
-func deriveAppURL(otlpURL string) string {
-	if otlpURL == "" {
-		return ""
-	}
-	u, err := url.Parse(otlpURL)
-	if err != nil {
-		return ""
-	}
-	host := u.Hostname()
-	switch {
-	case strings.HasSuffix(host, ".dash0.com"):
-		return "https://app.dash0.com"
-	case strings.HasSuffix(host, ".dash0-dev.com"):
-		return "https://app.dash0-dev.com"
-	default:
-		return ""
-	}
-}
-
-// buildSessionURL constructs a full Dash0 AI Coding URL with the encoded URL
-// state parameter that the Dash0 UI expects. It points at the sessions table
-// on the /coding-agents page and sets agentSession so the UI auto-opens the
-// session detail sidebar.
-func buildSessionURL(appURL, sessionID string) string {
-	const codingAgentsPath = "/coding-agents"
-	state := map[string]any{
-		codingAgentsPath: map[string]any{
-			"tab":          map[string]any{"pageTab": "sessions"},
-			"agentSession": sessionID,
-		},
-	}
-	stateJSON, err := json.Marshal(state)
-	if err != nil {
-		return appURL + codingAgentsPath
-	}
-	var buf bytes.Buffer
-	w := zlib.NewWriter(&buf)
-	_, _ = w.Write(stateJSON)
-	_ = w.Close()
-	encoded := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(buf.Bytes())
-	return appURL + codingAgentsPath + "?s=" + encoded
 }
 
 // envBool returns true when the environment variable is set to "true" or "1".

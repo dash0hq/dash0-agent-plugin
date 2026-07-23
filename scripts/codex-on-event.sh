@@ -75,10 +75,16 @@ load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
 
 # Where the downloaded binary lives. Mirrors the per-source scratch root layout
 # from cmd/codex-on-event/main.go so users can clean up the whole tree at once.
-BASE="${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/codex}"
+# Resolution order:
+#   1. DASH0_PLUGIN_DATA  — explicit override (dev / tests).
+#   2. PLUGIN_DATA        — Codex sets this to the plugin's data dir when this
+#                           script runs as an installed marketplace plugin, so
+#                           the cache stays inside the plugin's own state.
+#   3. ~/.local/state/…   — the installer (config.toml) path.
+BASE="${DASH0_PLUGIN_DATA:-${PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/codex}}"
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.0.0"
+VERSION="0.1.20"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)

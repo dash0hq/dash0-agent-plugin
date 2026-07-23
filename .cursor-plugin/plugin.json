@@ -1,6 +1,6 @@
 {
   "name": "dash0-agent-plugin",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "OpenTelemetry observability for Cursor sessions. Captures prompts, tool calls, MCP calls, and subagent activity as OTel traces.",
   "author": {
     "name": "Dash0"

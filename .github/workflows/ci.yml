@@ -83,14 +83,14 @@ jobs:
           claude plugin marketplace add anthropics/claude-plugins-official --scope user
           claude plugin install dash0@claude-plugins-official --scope user
 
-  # Contract tests mapping to the documented install/credential paths (README
-  # "Installation" + "Configuration"). They pin the behavior the docs depend on,
-  # so a Claude Code change or a wrong doc assumption fails CI, not a rollout:
-  #   A — settings.json alone does NOT install (the Fleet "not enough" callout)
-  #   B — `claude plugin install --config` (Fleet --config credential option)
-  #   C — credential delivery: config file AND DASH0_*/CLAUDE_PLUGIN_OPTION_* env vars
-  # Marketplace installs (official / Dash0 / local PR code) are covered by the
-  # build-and-test job; the binary reading CLAUDE_PLUGIN_OPTION_* by Go unit tests.
+  # Contract tests mapping to the documented install/credential/uninstall paths
+  # (each runtime README's "Installation" + "Configuration"). They pin the
+  # behavior the docs depend on, so a CLI change or a wrong doc assumption fails
+  # CI, not a rollout. Logic lives in test/contracts/{claude,cursor,codex}.sh
+  # (also runnable locally — see test/contracts/README.md), one script per agent.
+  # Each covers install, credential delivery, and uninstall for its runtime.
+  # Marketplace installs are covered by the build-and-test job; the binary
+  # reading *_PLUGIN_OPTION_AUTH_TOKEN by Go unit tests.
   install-config-contract:
     runs-on: ubuntu-latest
     steps:
@@ -105,441 +105,14 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Force HTTPS for marketplace clones (runner has no SSH key)
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+      - name: Claude install/config contracts
+        run: ./test/contracts/claude.sh
 
-      - name: "Contract A — settings.json alone does NOT install the plugin"
-        env:
-          HOME: /tmp/home-neg
-        run: |
-          mkdir -p "$HOME/.claude"
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          cat > "$HOME/.claude/settings.json" <<'JSON'
-          {
-            "extraKnownMarketplaces": {
-              "dash0": { "source": { "source": "github", "repo": "dash0hq/claude-marketplace" } }
-            },
-            "enabledPlugins": { "dash0-agent-plugin@dash0": true }
-          }
-          JSON
-          claude plugin list 2>&1 | tee /tmp/list-neg.txt || true
-          if [ -d "$HOME/.claude/plugins/cache" ] && ls "$HOME/.claude/plugins/cache" | grep -qi dash0; then
-            echo "::error::settings.json alone installed the plugin — fleet docs/assumptions must be revisited"
-            exit 1
-          fi
-          echo "PASS: settings.json (extraKnownMarketplaces + enabledPlugins) alone does NOT install; explicit install required"
+      - name: Cursor install/config contracts
+        run: ./test/contracts/cursor.sh
 
-      - name: "Contract B — claude plugin install --config persists creds where the plugin reads them"
-        env:
-          HOME: /tmp/home-pos
-        run: |
-          mkdir -p "$HOME/.claude"
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-          # Use the published Dash0 marketplace. `--config` is a Claude Code
-          # behavior independent of the plugin's own code (PR-code install is
-          # already covered by the "workspace, PR code" step above), and a
-          # published marketplace installs into ~/.claude/plugins/cache — the
-          # cleanest signal to assert "installed" on. (A local/directory
-          # marketplace serves the plugin in place and never populates the cache.)
-          claude plugin marketplace add dash0hq/claude-marketplace --scope user
-          claude plugin install dash0-agent-plugin@dash0 --scope user \
-            --config OTLP_URL=https://probe.example.test \
-            --config AUTH_TOKEN=contract-token-xyz \
-            --config DATASET=contract-ds
-
-          echo "::group::resulting settings.json"; cat "$HOME/.claude/settings.json"; echo "::endgroup::"
-          echo "::group::resulting credentials.json"; cat "$HOME/.claude/.credentials.json" 2>/dev/null || echo "(none)"; echo "::endgroup::"
-
-          fail=0
-
-          # 1) Plugin actually installed to cache.
-          if ! ls "$HOME/.claude/plugins/cache" 2>/dev/null | grep -qi dash0; then
-            echo "::error::plugin was not installed to cache"; fail=1
-          fi
-
-          # 2) Non-sensitive --config values land in settings.json (pluginConfigs).
-          if ! grep -q "https://probe.example.test" "$HOME/.claude/settings.json"; then
-            echo "::error::OTLP_URL not persisted to settings.json"; fail=1
-          fi
-          if ! grep -q "contract-ds" "$HOME/.claude/settings.json"; then
-            echo "::error::DATASET not persisted to settings.json"; fail=1
-          fi
-
-          # 3) The sensitive token must NOT be in settings.json...
-          if grep -q "contract-token-xyz" "$HOME/.claude/settings.json"; then
-            echo "::error::AUTH_TOKEN leaked into settings.json (should be in keychain/credentials)"; fail=1
-          fi
-          # ...and MUST be in the secrets store (keychain -> .credentials.json fallback on Linux).
-          if ! grep -q "contract-token-xyz" "$HOME/.claude/.credentials.json" 2>/dev/null; then
-            echo "::error::AUTH_TOKEN not stored in the secrets store (.credentials.json pluginSecrets)"; fail=1
-          fi
-
-          if [ "$fail" -ne 0 ]; then exit 1; fi
-          echo "PASS: --config installs + persists non-sensitive->settings.json, AUTH_TOKEN->secrets store"
-
-      - name: "Contract C — credential delivery reaches a real OTLP request (config file + env vars)"
-        env:
-          CLAUDE_PLUGIN_DATA: /tmp/pdata
-        run: |
-          # Build the hook binary where on-event.sh expects it (skip release download),
-          # and stand up the mock OTLP server (records requests + auth header on :4319).
-          VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//;s/"//')
-          mkdir -p "$CLAUDE_PLUGIN_DATA/bin"
-          make build-binary PKG=./cmd/on-event OUT="$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-linux-amd64"
-          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp
-          /tmp/mock-otlp &
-          sleep 1
-
-          # C1 — credentials from a user-level config file (~/.claude/dash0-agent-plugin.local.md).
-          # Run from a clean cwd so the repo's own .env / .claude can't interfere.
-          export HOME=/tmp/home-cfg
-          mkdir -p "$HOME/.claude"
-          cat > "$HOME/.claude/dash0-agent-plugin.local.md" <<'MD'
-          ---
-          otlp_url: "http://localhost:4319"
-          auth_token: "cfg-file-token"
-          dataset: "cfg-file-ds"
-          ---
-          MD
-          ( cd "$(mktemp -d)" \
-            && echo '{"hook_event_name":"SessionStart","session_id":"contract-c1","model":"opus"}' \
-               | bash "$GITHUB_WORKSPACE/scripts/on-event.sh" )
-
-          # C2 — credentials from env vars only (no config file present).
-          export HOME=/tmp/home-env
-          mkdir -p "$HOME/.claude"
-          ( cd "$(mktemp -d)" \
-            && echo '{"hook_event_name":"SessionStart","session_id":"contract-c2","model":"opus"}' \
-               | DASH0_OTLP_URL=http://localhost:4319 \
-                 CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=env-token \
-                 DASH0_DATASET=env-ds \
-                 bash "$GITHUB_WORKSPACE/scripts/on-event.sh" )
-
-          sleep 2
-          RESULT=$(curl -s http://localhost:4319/requests)
-          echo "::group::mock requests"; echo "$RESULT" | jq .; echo "::endgroup::"
-          fail=0
-          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer cfg-file-token")]|length')" -ge 1 ] \
-            || { echo "::error::config-file token did not reach the OTLP request"; fail=1; }
-          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer env-token")]|length')" -ge 1 ] \
-            || { echo "::error::env-var token did not reach the OTLP request"; fail=1; }
-          [ "$fail" -eq 0 ] || exit 1
-          echo "PASS: both config-file and env-var credentials flow through on-event.sh to real OTLP requests"
-
-      - name: "Contract D — Cursor credential delivery reaches a real OTLP request (config file + env vars)"
-        run: |
-          # Mirror of Contract C for the Cursor side. Contract C's mock-OTLP
-          # doesn't survive across step shells (GitHub Actions cleans up
-          # backgrounded processes on step exit), so we start a fresh one on
-          # the same port. Asserts that credentials supplied via config file
-          # or env vars both reach the wire via scripts/cursor-on-event.sh.
-          export DASH0_PLUGIN_DATA=/tmp/cursor-pdata
-          VERSION=$(grep '^VERSION=' scripts/cursor-on-event.sh | sed 's/VERSION="//;s/"//')
-          mkdir -p "$DASH0_PLUGIN_DATA/bin"
-          make build-binary PKG=./cmd/cursor-on-event OUT="$DASH0_PLUGIN_DATA/bin/cursor-on-event-${VERSION}-linux-amd64"
-          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp-cursor
-          /tmp/mock-otlp-cursor &
-          sleep 1
-
-          # D1 — credentials from ~/.cursor/dash0-agent-plugin.local.md.
-          export HOME=/tmp/cursor-home-cfg
-          mkdir -p "$HOME/.cursor"
-          cat > "$HOME/.cursor/dash0-agent-plugin.local.md" <<'MD'
-          ---
-          otlp_url: "http://localhost:4319"
-          auth_token: "cursor-cfg-token"
-          dataset: "cursor-cfg-ds"
-          ---
-          MD
-          # Run from a clean cwd so the repo's own .cursor/ can't shadow the
-          # global config file (cursor-on-event.sh checks project first).
-          ( cd "$(mktemp -d)" \
-            && echo '{"hook_event_name":"sessionStart","session_id":"contract-d1","conversation_id":"contract-d1","model":"default"}' \
-               | bash "$GITHUB_WORKSPACE/scripts/cursor-on-event.sh" )
-
-          # D2 — credentials from env vars only, no config file present.
-          export HOME=/tmp/cursor-home-env
-          mkdir -p "$HOME/.cursor"
-          ( cd "$(mktemp -d)" \
-            && echo '{"hook_event_name":"sessionStart","session_id":"contract-d2","conversation_id":"contract-d2","model":"default"}' \
-               | DASH0_OTLP_URL=http://localhost:4319 \
-                 CURSOR_PLUGIN_OPTION_AUTH_TOKEN=cursor-env-token \
-                 DASH0_DATASET=cursor-env-ds \
-                 bash "$GITHUB_WORKSPACE/scripts/cursor-on-event.sh" )
-
-          sleep 2
-          RESULT=$(curl -s http://localhost:4319/requests)
-          echo "::group::mock requests"; echo "$RESULT" | jq .; echo "::endgroup::"
-          fail=0
-          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer cursor-cfg-token")]|length')" -ge 1 ] \
-            || { echo "::error::cursor config-file token did not reach the OTLP request"; fail=1; }
-          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer cursor-env-token")]|length')" -ge 1 ] \
-            || { echo "::error::cursor env-var token did not reach the OTLP request"; fail=1; }
-          [ "$fail" -eq 0 ] || exit 1
-          echo "PASS: both config-file and env-var credentials flow through cursor-on-event.sh to real OTLP requests"
-
-      - name: "Contract E — install-cursor.sh lays out the plugin dir + merges into ~/.cursor/hooks.json (preserving user entries)"
-        run: |
-          # Cursor 3.9.x doesn't fire hooks from local-plugin manifests, so
-          # install-cursor.sh writes the plugin dir AND merges hook entries
-          # into ~/.cursor/hooks.json at the user scope (with commands pointing
-          # at $HOME/.cursor/plugins/local/...). This step verifies both
-          # sides and — importantly — that a preexisting non-Dash0 hook in
-          # ~/.cursor/hooks.json survives the merge.
-          DASH0_VERSION=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest \
-            | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
-          [ -n "$DASH0_VERSION" ] || { echo "::warning::could not resolve latest release, skipping Contract E"; exit 0; }
-          echo "testing installer against v$DASH0_VERSION artifacts"
-
-          export HOME=/tmp/cursor-installer-home
-          export XDG_STATE_HOME=/tmp/cursor-installer-state
-          rm -rf "$HOME" "$XDG_STATE_HOME"
-          mkdir -p "$HOME/.cursor"
-
-          # Seed a foreign hook the installer must preserve.
-          cat > "$HOME/.cursor/hooks.json" <<'JSON'
-          {
-            "version": 1,
-            "hooks": {
-              "beforeSubmitPrompt": [{"command": "/tmp/user-owned-hook.sh"}]
-            }
-          }
-          JSON
-
-          DASH0_VERSION="$DASH0_VERSION" \
-          DASH0_OTLP_URL=http://localhost:4319 \
-          DASH0_AUTH_TOKEN=e2e-token \
-            bash "$GITHUB_WORKSPACE/install-cursor.sh" 2>&1 | tail -25
-
-          fail=0
-          # Plugin dir + shared paths as before.
-          EXPECTED_PATHS=(
-            "$HOME/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json"
-            "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/plugin-hooks.json"
-            "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/skills/dash0-configure/SKILL.md"
-            "$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh"
-            "$HOME/.cursor/dash0-agent-plugin.local.md"
-            "$HOME/.cursor/hooks.json"
-          )
-          for p in "${EXPECTED_PATHS[@]}"; do
-            if [ ! -f "$p" ]; then
-              echo "::error::installer did not create expected file: $p"; fail=1
-            fi
-          done
-          if [ ! -x "$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh" ]; then
-            echo "::error::bootstrap script is not executable"; fail=1
-          fi
-
-          echo "::group::resulting hooks.json"; cat "$HOME/.cursor/hooks.json"; echo "::endgroup::"
-
-          # Dash0 entries land under 9 event keys with $HOME-based command paths.
-          EXPECTED_CMD='$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh'
-          for ev in sessionStart sessionEnd beforeSubmitPrompt afterAgentResponse preToolUse postToolUse postToolUseFailure subagentStart subagentStop; do
-            got=$(jq -r --arg ev "$ev" '.hooks[$ev] // [] | map(select(.command | contains("cursor-on-event.sh"))) | .[0].command // ""' "$HOME/.cursor/hooks.json")
-            if [ "$got" != "$EXPECTED_CMD" ]; then
-              echo "::error::hooks.json missing or wrong command for $ev (got: $got)"; fail=1
-            fi
-          done
-
-          # User-owned foreign entry must still be present under beforeSubmitPrompt.
-          user_hook=$(jq -r '.hooks.beforeSubmitPrompt[] | select(.command == "/tmp/user-owned-hook.sh") | .command' "$HOME/.cursor/hooks.json")
-          if [ "$user_hook" != "/tmp/user-owned-hook.sh" ]; then
-            echo "::error::installer removed user-authored beforeSubmitPrompt hook /tmp/user-owned-hook.sh"; fail=1
-          fi
-
-          [ "$fail" -eq 0 ] || exit 1
-          echo "PASS: installer produced expected plugin dir + merged hooks with foreign entry preserved"
-
-      - name: "Contract F — uninstall-cursor.sh strips Dash0 entries, preserves non-Dash0 hooks"
-        run: |
-          # Assumes Contract E ran and left a mixed hooks.json in place.
-          export HOME=/tmp/cursor-installer-home
-          export XDG_STATE_HOME=/tmp/cursor-installer-state
-          [ -f "$HOME/.cursor/hooks.json" ] || { echo "::error::Contract E did not produce a hooks.json"; exit 1; }
-
-          bash "$GITHUB_WORKSPACE/uninstall-cursor.sh" --yes 2>&1 | tail -20
-
-          fail=0
-          # Plugin dir + config + state should be gone entirely.
-          for p in \
-            "$HOME/.cursor/plugins/local/dash0-agent-plugin" \
-            "$HOME/.cursor/dash0-agent-plugin.local.md" \
-            "$XDG_STATE_HOME/dash0-agent-plugin/cursor" ; do
-            if [ -e "$p" ]; then
-              echo "::error::uninstaller left behind: $p"; fail=1
-            fi
-          done
-
-          # hooks.json must still exist because a non-Dash0 entry was present.
-          if [ ! -f "$HOME/.cursor/hooks.json" ]; then
-            echo "::error::uninstaller deleted ~/.cursor/hooks.json but a user-owned entry was present"; fail=1
-          else
-            echo "::group::hooks.json after uninstall"; cat "$HOME/.cursor/hooks.json"; echo "::endgroup::"
-            # No cursor-on-event.sh entries should remain.
-            dash0_left=$(jq -r '.hooks | to_entries[] | .value[]? | .command // empty' "$HOME/.cursor/hooks.json" | grep -c "cursor-on-event.sh" || true)
-            if [ "$dash0_left" -ne 0 ]; then
-              echo "::error::uninstaller left $dash0_left Dash0 hook entry/entries in $HOME/.cursor/hooks.json"; fail=1
-            fi
-            # The user's foreign entry must survive.
-            user_hook=$(jq -r '.hooks.beforeSubmitPrompt[]? | select(.command == "/tmp/user-owned-hook.sh") | .command' "$HOME/.cursor/hooks.json")
-            if [ "$user_hook" != "/tmp/user-owned-hook.sh" ]; then
-              echo "::error::uninstaller removed user-authored beforeSubmitPrompt hook"; fail=1
-            fi
-          fi
-
-          [ "$fail" -eq 0 ] || exit 1
-          echo "PASS: uninstaller stripped Dash0 entries and preserved the user-authored hook"
-
-      - name: "Contract G — Codex credential delivery reaches a real OTLP request (config file + env vars)"
-        run: |
-          # Mirror of Contract D for the Codex side. Asserts that credentials
-          # supplied via config file or env vars both reach the wire through
-          # scripts/codex-on-event.sh. The bootstrap is version-pinned; build the
-          # binary at that exact path so no release download is needed.
-          export DASH0_PLUGIN_DATA=/tmp/codex-pdata
-          VERSION=$(grep '^VERSION=' scripts/codex-on-event.sh | sed 's/VERSION="//;s/"//')
-          mkdir -p "$DASH0_PLUGIN_DATA/bin"
-          make build-binary PKG=./cmd/codex-on-event OUT="$DASH0_PLUGIN_DATA/bin/codex-on-event-${VERSION}-linux-amd64"
-          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp-codex
-          /tmp/mock-otlp-codex &
-          sleep 1
-
-          # G1 — credentials from ~/.codex/dash0-agent-plugin.local.md.
-          export HOME=/tmp/codex-home-cfg
-          mkdir -p "$HOME/.codex"
-          cat > "$HOME/.codex/dash0-agent-plugin.local.md" <<'MD'
-          ---
-          otlp_url: "http://localhost:4319"
-          auth_token: "codex-cfg-token"
-          dataset: "codex-cfg-ds"
-          ---
-          MD
-          # Clean cwd so the repo's own .codex/ can't shadow the global config
-          # (codex-on-event.sh checks the project file first).
-          ( cd "$(mktemp -d)" \
-            && echo '{"hook_event_name":"SessionStart","session_id":"contract-g1","model":"gpt-5.5","source":"startup"}' \
-               | bash "$GITHUB_WORKSPACE/scripts/codex-on-event.sh" )
-
-          # G2 — credentials from env vars only, no config file present.
-          export HOME=/tmp/codex-home-env
-          mkdir -p "$HOME/.codex"
-          ( cd "$(mktemp -d)" \
-            && echo '{"hook_event_name":"SessionStart","session_id":"contract-g2","model":"gpt-5.5","source":"startup"}' \
-               | DASH0_OTLP_URL=http://localhost:4319 \
-                 CODEX_PLUGIN_OPTION_AUTH_TOKEN=codex-env-token \
-                 DASH0_DATASET=codex-env-ds \
-                 bash "$GITHUB_WORKSPACE/scripts/codex-on-event.sh" )
-
-          sleep 2
-          RESULT=$(curl -s http://localhost:4319/requests)
-          echo "::group::mock requests"; echo "$RESULT" | jq .; echo "::endgroup::"
-          fail=0
-          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer codex-cfg-token")]|length')" -ge 1 ] \
-            || { echo "::error::codex config-file token did not reach the OTLP request"; fail=1; }
-          [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer codex-env-token")]|length')" -ge 1 ] \
-            || { echo "::error::codex env-var token did not reach the OTLP request"; fail=1; }
-          [ "$fail" -eq 0 ] || exit 1
-          echo "PASS: both config-file and env-var credentials flow through codex-on-event.sh to real OTLP requests"
-
-      - name: "Contract H — install-codex.sh merges hooks + pre-trust into config.toml, preserving user content"
-        run: |
-          # Codex has no release yet (M4), so pre-stage the version-pinned binary
-          # and bootstrap; install-codex.sh skips the download when they're
-          # present. This exercises the real merge: managed block appended,
-          # [hooks.state] trust entries written, and any user-authored hooks /
-          # settings preserved. DASH0_VERSION pins the path so no release lookup.
-          export HOME=/tmp/codex-installer-home
-          export XDG_STATE_HOME=/tmp/codex-installer-state
-          rm -rf "$HOME" "$XDG_STATE_HOME"
-          VERSION=$(grep '^VERSION=' scripts/codex-on-event.sh | sed 's/VERSION="//;s/"//')
-          STATE_BASE="$XDG_STATE_HOME/dash0-agent-plugin/codex"
-          mkdir -p "$STATE_BASE/bin" "$HOME/.codex"
-          make build-binary PKG=./cmd/codex-on-event OUT="$STATE_BASE/bin/codex-on-event-${VERSION}-linux-amd64"
-          cp scripts/codex-on-event.sh "$STATE_BASE/codex-on-event.sh"
-
-          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp-codex-h
-          /tmp/mock-otlp-codex-h &
-          sleep 1
-
-          # Seed config.toml with an unrelated setting AND a user-authored hook the
-          # installer must preserve.
-          cat > "$HOME/.codex/config.toml" <<'TOML'
-          model = "gpt-5.5"
-
-          [[hooks.PreToolUse]]
-          matcher = "*"
-          [[hooks.PreToolUse.hooks]]
-          type = "command"
-          command = 'echo user-hook'
-          TOML
-
-          DASH0_VERSION="$VERSION" \
-          DASH0_OTLP_URL=http://localhost:4319 \
-          DASH0_AUTH_TOKEN=codex-install-token \
-            bash "$GITHUB_WORKSPACE/install-codex.sh" 2>&1 | tail -25
-
-          CONFIG_TOML="$HOME/.codex/config.toml"
-          echo "::group::resulting config.toml"; cat "$CONFIG_TOML"; echo "::endgroup::"
-          fail=0
-          [ -f "$HOME/.codex/dash0-agent-plugin.local.md" ] \
-            || { echo "::error::installer did not write the config .local.md"; fail=1; }
-          grep -q ">>> dash0-agent-plugin (managed)" "$CONFIG_TOML" \
-            || { echo "::error::managed block not appended to config.toml"; fail=1; }
-          trust_n=$(grep -c 'trusted_hash = "sha256:' "$CONFIG_TOML" || true)
-          [ "$trust_n" -eq 10 ] \
-            || { echo "::error::expected 10 pre-trust entries, found $trust_n"; fail=1; }
-
-          # Structural assertions via a real TOML parser: valid TOML, user setting
-          # and user hook preserved, our hooks + 10 trust-state keys present.
-          python3 - "$CONFIG_TOML" <<'PY' || fail=1
-          import sys, tomllib
-          d = tomllib.load(open(sys.argv[1], "rb"))
-          assert d.get("model") == "gpt-5.5", "user setting lost"
-          pre = d["hooks"]["PreToolUse"]
-          cmds = [h["command"] for g in pre for h in g["hooks"]]
-          assert any(c == "echo user-hook" for c in cmds), "user hook lost"
-          assert any("codex-on-event.sh" in c for c in cmds), "dash0 PreToolUse hook missing"
-          assert len(d["hooks"]["state"]) == 10, f"expected 10 trust keys, got {len(d['hooks']['state'])}"
-          print("TOML OK: user content preserved, dash0 hooks + trust present")
-          PY
-
-          [ "$fail" -eq 0 ] || exit 1
-          echo "PASS: install-codex.sh merged hooks + pre-trust and preserved user config"
-
-      - name: "Contract I — uninstall-codex.sh strips the managed block, preserves user content"
-        run: |
-          # Assumes Contract H ran and left a merged config.toml in place.
-          export HOME=/tmp/codex-installer-home
-          export XDG_STATE_HOME=/tmp/codex-installer-state
-          CONFIG_TOML="$HOME/.codex/config.toml"
-          [ -f "$CONFIG_TOML" ] || { echo "::error::Contract H did not produce a config.toml"; exit 1; }
-
-          bash "$GITHUB_WORKSPACE/uninstall-codex.sh" --yes 2>&1 | tail -20
-
-          echo "::group::config.toml after uninstall"; cat "$CONFIG_TOML"; echo "::endgroup::"
-          fail=0
-          # config .local.md and state dir gone entirely.
-          for p in "$HOME/.codex/dash0-agent-plugin.local.md" "$XDG_STATE_HOME/dash0-agent-plugin/codex"; do
-            [ -e "$p" ] && { echo "::error::uninstaller left behind: $p"; fail=1; }
-          done
-          # config.toml still exists (user content), with NO managed block or trust.
-          grep -q ">>> dash0-agent-plugin (managed)" "$CONFIG_TOML" \
-            && { echo "::error::managed block survived uninstall"; fail=1; }
-          grep -q 'codex-on-event.sh' "$CONFIG_TOML" \
-            && { echo "::error::dash0 hook command survived uninstall"; fail=1; }
-          python3 - "$CONFIG_TOML" <<'PY' || fail=1
-          import sys, tomllib
-          d = tomllib.load(open(sys.argv[1], "rb"))
-          assert d.get("model") == "gpt-5.5", "user setting lost on uninstall"
-          cmds = [h["command"] for g in d["hooks"]["PreToolUse"] for h in g["hooks"]]
-          assert cmds == ["echo user-hook"], f"user hook not cleanly preserved: {cmds}"
-          assert "state" not in d.get("hooks", {}), "trust state survived uninstall"
-          print("TOML OK: user content intact, dash0 fully removed")
-          PY
-
-          [ "$fail" -eq 0 ] || exit 1
-          echo "PASS: uninstall-codex.sh stripped the managed block and preserved user config"
+      - name: Codex install/config contracts
+        run: ./test/contracts/codex.sh
 
   e2e:
     runs-on: ubuntu-latest
@@ -606,6 +179,29 @@ jobs:
           if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
             echo "::error::Version mismatch: .cursor-plugin/plugin.json=$PLUGIN_VERSION, cursor-on-event.sh=$SCRIPT_VERSION"
             exit 1
+          fi
+
+      - name: Codex marketplace consistency (marketplace.json ↔ plugin manifest)
+        run: |
+          # A Codex marketplace must CONTAIN the plugin via a local path (external
+          # github sources are not indexed). Guard against silent breakage: a
+          # mismatched name or a non-local/dangling source makes `codex plugin add`
+          # fail with a bare "plugin not found" and no other signal.
+          MP=.agents/plugins/marketplace.json
+          jq empty "$MP"
+          MP_NAME=$(jq -r '.plugins[0].name' "$MP")
+          MANIFEST_NAME=$(jq -r '.name' .codex-plugin/plugin.json)
+          SRC_TYPE=$(jq -r '.plugins[0].source.source' "$MP")
+          SRC_PATH=$(jq -r '.plugins[0].source.path' "$MP")
+          echo "marketplace: plugin=$MP_NAME source=$SRC_TYPE:$SRC_PATH ; manifest name=$MANIFEST_NAME"
+          if [ "$MP_NAME" != "$MANIFEST_NAME" ]; then
+            echo "::error::marketplace.json plugin name ($MP_NAME) != .codex-plugin/plugin.json name ($MANIFEST_NAME)"; exit 1
+          fi
+          if [ "$SRC_TYPE" != "local" ]; then
+            echo "::error::Codex plugin source must be 'local' (external sources are not indexed); got '$SRC_TYPE'"; exit 1
+          fi
+          if [ ! -f "$SRC_PATH/.codex-plugin/plugin.json" ]; then
+            echo "::error::source.path '$SRC_PATH' has no .codex-plugin/plugin.json"; exit 1
           fi
 
       - name: Release assets exist for configured version

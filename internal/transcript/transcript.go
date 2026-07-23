@@ -21,13 +21,15 @@ type Usage struct {
 type transcriptEntry struct {
 	Type      string           `json:"type"`
 	RequestID string           `json:"requestId"`
+	IsMeta    bool             `json:"isMeta"`
 	Message   *messageEnvelope `json:"message"`
 }
 
 type messageEnvelope struct {
-	Role  string     `json:"role"`
-	Model string     `json:"model"`
-	Usage *usageData `json:"usage"`
+	Role       string     `json:"role"`
+	Model      string     `json:"model"`
+	StopReason string     `json:"stop_reason"`
+	Usage      *usageData `json:"usage"`
 	// Content is either a plain string (typed user prompts) or an array of
 	// content blocks (tool results, assistant messages), so it is kept raw
 	// and inspected in isRealUserMessage.
@@ -141,6 +143,56 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	return &usage, nil
 }
 
+// terminalStopReasons are the stop_reason values that mark an assistant message
+// as the last one of its turn. "tool_use" is excluded: it is emitted mid-turn,
+// before the model sees the tool result and continues.
+var terminalStopReasons = map[string]bool{
+	"end_turn":      true,
+	"stop_sequence": true,
+	"max_tokens":    true,
+}
+
+// TurnComplete reports whether the most recent assistant message of the current
+// turn (the entries since the last real user message) is terminal — i.e. the
+// turn has been fully written to the transcript.
+//
+// Claude Code flushes the transcript asynchronously and may lag the in-memory
+// conversation, so when a Stop hook fires the file can still end at a mid-turn
+// tool_use entry, with the final (often largest, cache-heavy) API call's usage
+// not yet on disk. Callers poll this before reading usage so the last call is
+// not dropped. Returns false when the current turn has no assistant entry yet.
+func TurnComplete(transcriptPath string) (bool, error) {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return false, fmt.Errorf("opening transcript: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	dec := json.NewDecoder(f)
+	var lastReason string
+	var sawAssistant bool
+	for dec.More() {
+		var entry transcriptEntry
+		if err := dec.Decode(&entry); err != nil {
+			continue // skip malformed entries
+		}
+		if isRealUserMessage(entry) {
+			// New turn — only the current turn's terminal state matters.
+			lastReason = ""
+			sawAssistant = false
+			continue
+		}
+		if entry.Type == "assistant" && entry.Message != nil {
+			sawAssistant = true
+			lastReason = entry.Message.StopReason
+		}
+	}
+	if !sawAssistant {
+		return false, nil
+	}
+	return terminalStopReasons[lastReason], nil
+}
+
 // titleEntry captures the title fields from transcript JSONL entries. Claude
 // Code writes an auto-generated name as an "ai-title" entry (aiTitle) and, when
 // the user runs /rename, a "custom-title" entry (customTitle) that overrides it.
@@ -209,11 +261,16 @@ func ReadModel(transcriptPath string) string {
 }
 
 // isRealUserMessage returns true if the entry is a user message that is NOT
-// a tool_result relay. Typed prompts carry content as a plain string;
-// tool-result relays carry an array with content[0].type == "tool_result"
-// and should not reset the turn boundary.
+// a tool_result relay and NOT an injected meta message. Typed prompts carry
+// content as a plain string; tool-result relays carry an array with
+// content[0].type == "tool_result", and meta messages (isMeta, e.g. the
+// skill-loading relay injected mid-turn) both should not reset the turn
+// boundary — otherwise usage accumulated earlier in the turn is discarded.
 func isRealUserMessage(entry transcriptEntry) bool {
 	if entry.Type != "user" {
+		return false
+	}
+	if entry.IsMeta {
 		return false
 	}
 	if entry.Message == nil || entry.Message.Role != "user" {

@@ -234,6 +234,56 @@ func TestReadTurnUsageIgnoresToolResultUser(t *testing.T) {
 	assert.Equal(t, int64(130), usage.OutputTokens)
 }
 
+func TestReadTurnUsageIgnoresMetaUserMessage(t *testing.T) {
+	// The skill flow injects a meta user message (isMeta) mid-turn — e.g. the
+	// "Skill /x is already loaded above" relay between the tool_use call and the
+	// follow-up. It carries string content but is NOT a real prompt, so it must
+	// NOT reset the turn, otherwise the skill-invocation API call's usage (often
+	// the bulk of the turn) is discarded.
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"/endpoint-test"}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"endpoint-test"}}],"usage":{"input_tokens":2,"output_tokens":87,"cache_creation_input_tokens":10513,"cache_read_input_tokens":20977}}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Launching skill: endpoint-test"}]}}`,
+		// Meta relay with string content — must NOT reset the turn.
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"Skill /endpoint-test is already loaded above; instructions unchanged."}}`,
+		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":2,"output_tokens":75,"cache_creation_input_tokens":131,"cache_read_input_tokens":31490}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	// Both API calls of the turn are summed; the meta message did not reset.
+	assert.Equal(t, int64(4), usage.InputTokens)
+	assert.Equal(t, int64(162), usage.OutputTokens)
+	assert.Equal(t, int64(10644), usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(52467), usage.CacheReadInputTokens)
+}
+
+func TestReadTurnUsageSkillOnlyWithoutTrailingChat(t *testing.T) {
+	// A skill invoked with no follow-up assistant chat: the turn ends on the
+	// injected meta relay. If that meta message reset the turn, hasUsage would
+	// be false and usage would be lost entirely (the "no token usage" bug).
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"/endpoint-test"}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"endpoint-test"}}],"usage":{"input_tokens":2,"output_tokens":87,"cache_creation_input_tokens":10513,"cache_read_input_tokens":20977}}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Launching skill: endpoint-test"}]}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"Skill /endpoint-test is already loaded above; instructions unchanged."}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	// The skill-invocation call's usage is retained rather than lost to nil.
+	assert.Equal(t, int64(2), usage.InputTokens)
+	assert.Equal(t, int64(87), usage.OutputTokens)
+	assert.Equal(t, int64(10513), usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(20977), usage.CacheReadInputTokens)
+}
+
 func TestReadTurnUsageMissingFile(t *testing.T) {
 	usage, err := ReadTurnUsage(filepath.Join(t.TempDir(), "nonexistent.jsonl"))
 	assert.Error(t, err)

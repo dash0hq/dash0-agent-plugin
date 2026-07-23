@@ -62,6 +62,7 @@ func TestSaveAndLoadAgentTraceContext(t *testing.T) {
 		SpanID:    "1111222233334444",
 		SessionID: "sess-123",
 		Model:     "claude-fable-5",
+		StartTime: "2026-01-01T12:00:02.000000000Z",
 	}
 	require.NoError(t, SaveAgentTraceContext(ctx, dir, "ada80f24d6e56175a"))
 

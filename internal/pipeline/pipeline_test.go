@@ -54,6 +54,13 @@ func (s *setup) feed(t *testing.T, event map[string]any) Result {
 	return res
 }
 
+func (s *setup) feedAt(t *testing.T, event map[string]any, ts time.Time) Result {
+	t.Helper()
+	res, err := Process(event, s.cfg, s.dataDir, ts)
+	require.NoError(t, err)
+	return res
+}
+
 func (s *setup) sessionDir(sessionID string) string {
 	return filepath.Join(s.dataDir, sessionID)
 }
@@ -469,32 +476,38 @@ func writeAgentTranscript(t *testing.T, inputTokens, outputTokens int) string {
 // AFTER the turn's Stop has already cleared the session trace context.
 // The snapshot taken at SubagentStart must keep the subagent span — and its
 // token usage — attached to the spawning turn's trace instead of dropping it.
+// The span's start time must reflect the SubagentStart hook time, not the
+// SubagentStop time (which may be in a later turn).
 func TestProcess_SubagentStopAfterStop_UsesSnapshotContext(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
 	s := newSetup(t, url)
 	agentTranscript := writeAgentTranscript(t, 2393, 2172)
 
-	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
-	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	s.feedAt(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"}, base)
+	s.feedAt(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"}, base.Add(time.Second))
 
 	turnCtx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
 	require.NoError(t, err)
 	require.NotNil(t, turnCtx)
 
-	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	subagentStartTime := base.Add(2 * time.Second)
+	s.feedAt(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"}, subagentStartTime)
+	s.feedAt(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"}, base.Add(3*time.Second))
 
 	// Session context is gone — before the fix this dropped the span.
 	cleared, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
 	require.NoError(t, err)
 	require.Nil(t, cleared)
 
-	s.feed(t, map[string]any{
+	subagentStopTime := base.Add(4 * time.Second)
+	s.feedAt(t, map[string]any{
 		"hook_event_name":       "SubagentStop",
 		"session_id":            "sess-1",
 		"agent_id":              "agent1",
 		"agent_transcript_path": agentTranscript,
-	})
+	}, subagentStopTime)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -504,6 +517,9 @@ func TestProcess_SubagentStopAfterStop_UsesSnapshotContext(t *testing.T) {
 	assert.Equal(t, otlp.SpanIDFromAgentID("agent1"), sub.ParentSpanID, "parented under the Agent tool span")
 	assert.Equal(t, "2393", intAttr(sub.Attributes, "gen_ai.usage.input_tokens"))
 	assert.Equal(t, "2172", intAttr(sub.Attributes, "gen_ai.usage.output_tokens"), "subagent token usage must survive the Stop ordering")
+	// Start time must be anchored to SubagentStart, not SubagentStop.
+	assert.Equal(t, strconv.FormatInt(subagentStartTime.UnixNano(), 10), sub.StartTimeUnixNano, "subagent span start must reflect SubagentStart hook time")
+	assert.Equal(t, strconv.FormatInt(subagentStopTime.UnixNano(), 10), sub.EndTimeUnixNano, "subagent span end reflects SubagentStop hook time")
 }
 
 // 15. A SubagentStop that straggles past the NEXT turn's UserPromptSubmit must

@@ -156,10 +156,13 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		// Snapshot the current trace context for this agent so its
 		// SubagentStop still finds the spawning turn's trace even when it
 		// arrives after Stop (context cleared) or after the next prompt
-		// (context replaced).
+		// (context replaced). StartTime is recorded here so the subagent span
+		// is anchored to when the agent was launched, not when it stopped.
 		if agentID != "" {
 			if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
-				if err := otlp.SaveAgentTraceContext(*ctx, sessionDir, agentID); err != nil {
+				snap := *ctx
+				snap.StartTime = now.Format(time.RFC3339Nano)
+				if err := otlp.SaveAgentTraceContext(snap, sessionDir, agentID); err != nil {
 					fmt.Fprintf(os.Stderr, "on-event: saving agent trace context: %v\n", err)
 				}
 			}
@@ -310,19 +313,29 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	}
 
 	startTime := ts
-	promptEvent, _ := filelog.FindEvent(dataDir, func(e map[string]any) bool {
-		name, _ := e["hook_event_name"].(string)
-		return name == "UserPromptSubmit"
-	})
-	if promptEvent != nil {
-		if raw, ok := promptEvent["timestamp"].(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
-				startTime = parsed
-			}
+	if ctx.StartTime != "" {
+		// Agent snapshot carries the SubagentStart hook timestamp: use it so the
+		// span is anchored to when the agent was launched, not when it stopped.
+		if parsed, parseErr := time.Parse(time.RFC3339Nano, ctx.StartTime); parseErr == nil {
+			startTime = parsed
 		}
-		if prompt, ok := promptEvent["prompt"]; ok {
-			if _, hasPrompt := event["prompt"]; !hasPrompt {
-				event["prompt"] = prompt
+	} else {
+		// For session-level spans, the span starts when the user submitted the
+		// prompt, not when Stop fires.
+		promptEvent, _ := filelog.FindEvent(dataDir, func(e map[string]any) bool {
+			name, _ := e["hook_event_name"].(string)
+			return name == "UserPromptSubmit"
+		})
+		if promptEvent != nil {
+			if raw, ok := promptEvent["timestamp"].(string); ok {
+				if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
+					startTime = parsed
+				}
+			}
+			if prompt, ok := promptEvent["prompt"]; ok {
+				if _, hasPrompt := event["prompt"]; !hasPrompt {
+					event["prompt"] = prompt
+				}
 			}
 		}
 	}

@@ -18,6 +18,11 @@ type TraceContext struct {
 	SpanID    string `json:"span_id"`
 	SessionID string `json:"session_id"`
 	Model     string `json:"model,omitempty"`
+	// StartTime is set only in per-agent snapshots (written at SubagentStart)
+	// and records the RFC3339Nano timestamp of the hook fire. It anchors the
+	// subagent span's start so a late-arriving SubagentStop does not inherit
+	// the next turn's UserPromptSubmit timestamp.
+	StartTime string `json:"start_time,omitempty"`
 }
 
 const traceContextFile = "trace_context.json"

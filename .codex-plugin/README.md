@@ -1,4 +1,4 @@
-# Dash0 Agent Plugin — OpenAI Codex
+# Dash0 Agent Plugin
 
 Emit OpenAI Codex agent activity as OpenTelemetry spans to your Dash0 endpoint — prompts and responses, tool calls, MCP calls, and sub-agent activity, with shared trace context across each turn.
 
@@ -66,6 +66,13 @@ It fetches the latest release (or the release pinned by `DASH0_VERSION`) and lea
 
 ## Configuration
 
+After installing, you'll need:
+
+- **Auth token** — create one from your organization's [Auth Tokens settings page](https://app.dash0.com/settings/auth-tokens). Use an ingest-only token with permissions limited to the dataset you want to send data to.
+- **OTLP endpoint URL** — find it in the [Endpoints settings page](https://app.dash0.com/settings/endpoints) under the OTLP via HTTP tab (e.g. `https://ingress.<region>.aws.dash0.com`).
+
+### Config file
+
 The config file lives at `~/.codex/dash0-agent-plugin.local.md` (chmod 600 — it holds your token in cleartext). YAML frontmatter:
 
 ```yaml
@@ -75,27 +82,14 @@ auth_token: "<your-dash0-auth-token>"
 dataset: "default"            # optional
 agent_name: "codex"           # optional — used as service.name
 team_name: "<your-team>"      # optional — tagged as dash0.team.name on every span
-omit_io: false                # set true to redact prompts and tool input/output
-omit_user_info: false         # set true to hash user.name and omit user.email
 ---
 ```
 
-To reconfigure later, edit the file directly. Changes take effect on the next hook fire — no restart needed.
+The installer writes this file for you. To reconfigure later, edit the file directly — see [Options](#options) for every key. Changes take effect on the next hook fire — no restart needed.
 
 Per-project overrides work: drop a `.codex/dash0-agent-plugin.local.md` inside your repo and it takes precedence over the global file (the bootstrap script checks the workspace CWD first, then `$HOME/.codex/`).
 
-## Privacy defaults
-
-| Setting | Default | Behavior |
-|---|---|---|
-| `omit_user_info` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
-| `omit_io` | `false` | When `true`, prompt content and tool call inputs/outputs are stripped from spans. |
-
-**Always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, VCS repository/branch info.
-
-For the full list of telemetry attributes emitted, see the [Claude Code plugin README](../.claude-plugin/README.md#telemetry-attributes).
-
-## Verify
+### Verify
 
 Send a prompt that uses a tool. In Dash0 you should see one trace per turn with:
 
@@ -104,6 +98,61 @@ Send a prompt that uses a tool. In Dash0 you should see one trace per turn with:
 - the same `traceId` on every span in the turn
 
 Sub-agents appear as `invoke_agent` spans parenting their own tool calls, and MCP calls carry `dash0.gen_ai.tool.mcp_server`.
+
+### Options
+
+| Option | Description | Default | Sensitive |
+|---|---|---|---|
+| `otlp_url` | Dash0 OTLP endpoint URL (e.g. `https://ingress.<region>.aws.dash0.com`) | — | No |
+| `auth_token` | Dash0 authentication token | — | Yes (config file, chmod 600) |
+| `dataset` | Dash0 dataset name | — | No |
+| `agent_name` | Agent name (used as `service.name`) | `codex` | No |
+| `team_name` | Team name — all spans are tagged with `dash0.team.name` | — | No |
+| `omit_io` | Omit prompt content and tool I/O | `true` | No |
+| `omit_user_info` | Anonymize user identity | `false` | No |
+| `debug` | Print OTel payloads to stderr (and `debug_file` if set) | `false` | No |
+| `debug_file` | Write debug output to this file path | — | No |
+
+Set `enabled: false` in the config file to disable the plugin for that scope without uninstalling it.
+
+### Precedence
+
+When a value is set in more than one source, highest wins:
+
+1. Project-level config file (`.codex/dash0-agent-plugin.local.md`)
+2. User-level config file (`~/.codex/dash0-agent-plugin.local.md`)
+3. `DASH0_*` environment variables
+
+The two config files do **not** merge: if a project-level file exists, it is used and the global file is ignored entirely.
+
+### Environment variable fallback
+
+The plugin falls back to `DASH0_*` environment variables when the config file doesn't set a value. Useful for CI or development.
+
+| Variable | Description |
+|---|---|
+| `DASH0_OTLP_URL` | OTLP endpoint URL |
+| `DASH0_DATASET` | Dataset name |
+| `DASH0_AGENT_NAME` | Agent name |
+| `DASH0_TEAM_NAME` | Team name |
+| `DASH0_OMIT_USER_INFO` | Anonymize user identity (`true`/`false`) |
+| `DASH0_OMIT_IO` | Omit prompts and tool I/O (`true`/`false`) |
+| `DASH0_DEBUG` | Print OTel payloads to stderr (`true`/`false`) |
+| `DASH0_DEBUG_FILE` | Write debug output to this file path |
+
+> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field (the bootstrap passes it to the hook as `CODEX_PLUGIN_OPTION_AUTH_TOKEN`).
+
+## Privacy defaults
+
+| Setting | Default | Behavior |
+|---|---|---|
+| `omit_user_info` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
+| `omit_io` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
+
+## Telemetry attributes
+
+Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/).
+The OTLP pipeline is shared across runtimes, so the attribute set matches Claude Code apart from the per-runtime differences noted in [FEATURE_MATRIX.md](../FEATURE_MATRIX.md).
 
 ## Troubleshooting
 
@@ -128,3 +177,8 @@ curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/uni
 Pass `-s -- --yes` to skip the confirmation prompt. The uninstaller removes Dash0's entries from `~/.codex/config.toml` — preserving any hooks and config you added yourself — along with the credential config and the cached binary under `~/.local/state/dash0-agent-plugin/codex/`.
 
 Start a new Codex session afterward.
+
+## Development
+
+See [`codex/README.md`](../codex/README.md) for building and running local changes,
+and [DEVELOPMENT.md](../DEVELOPMENT.md) for releasing and cross-runtime reference.

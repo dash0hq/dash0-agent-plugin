@@ -24,6 +24,10 @@ load_settings() {
   [[ -n "$val" ]] && export DASH0_OTLP_URL="$val"
   val=$(echo "$frontmatter" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$val"
+  val=$(echo "$frontmatter" | grep '^auth_token_keychain_service:' | sed 's/auth_token_keychain_service: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_AUTH_TOKEN_KEYCHAIN_SERVICE="$val"
+  val=$(echo "$frontmatter" | grep '^auth_token_keychain_account:' | sed 's/auth_token_keychain_account: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_AUTH_TOKEN_KEYCHAIN_ACCOUNT="$val"
   val=$(echo "$frontmatter" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_DATASET="$val"
   val=$(echo "$frontmatter" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
@@ -43,6 +47,22 @@ PROJECT_SETTINGS=".claude/dash0-agent-plugin.local.md"
 GLOBAL_SETTINGS="$HOME/.claude/dash0-agent-plugin.local.md"
 
 load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
+
+# Resolve the auth token from the macOS keychain when a keychain reference is
+# configured. This lets managed/MDM rollouts ship only a pointer (safe to place
+# in managed-settings.json) while the secret is provisioned separately via
+# `security add-generic-password`. A successful lookup takes precedence over an
+# inline AUTH_TOKEN. Silently no-ops on non-macOS or when `security` is absent.
+KEYCHAIN_SERVICE="${CLAUDE_PLUGIN_OPTION_AUTH_TOKEN_KEYCHAIN_SERVICE:-${DASH0_AUTH_TOKEN_KEYCHAIN_SERVICE:-}}"
+KEYCHAIN_ACCOUNT="${CLAUDE_PLUGIN_OPTION_AUTH_TOKEN_KEYCHAIN_ACCOUNT:-${DASH0_AUTH_TOKEN_KEYCHAIN_ACCOUNT:-}}"
+if [[ -n "$KEYCHAIN_SERVICE" ]] && command -v security &>/dev/null; then
+  if [[ -n "$KEYCHAIN_ACCOUNT" ]]; then
+    keychain_token=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$KEYCHAIN_ACCOUNT" -w 2>/dev/null || true)
+  else
+    keychain_token=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)
+  fi
+  [[ -n "$keychain_token" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$keychain_token"
+fi
 
 PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 BIN_DIR="$PLUGIN_DATA/bin"

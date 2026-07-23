@@ -61,6 +61,45 @@ Both `enabledPlugins` and `pluginConfigs` are committed to git. Each developer t
 
 > **Worktree / multi-clone caveat:** Project-scoped installs are keyed to the repository's absolute path. If you use git worktrees or multiple clones, the plugin fails to load in the second checkout. Use `--scope user` instead (`claude plugin install dash0@claude-plugins-official --scope user`).
 
+## Organization rollout (Team / Enterprise admins)
+
+Admins can install and configure the plugin for every member with no per-developer steps, using [Claude Code managed settings](https://code.claude.com/docs/en/server-managed-settings). There are two parts, configured in different places:
+
+**1. Auto-install.** In the claude.ai **Organization plugins** admin page, set the plugin to **Required** (auto-installed, can't be removed) or **Installed by default**. This is what downloads the plugin onto members' machines; it takes effect on their next session. Enabling the plugin in managed settings alone does not install it.
+
+**2. Push configuration.** In claude.ai → **Admin Settings → Claude Code → Managed settings** (`https://claude.ai/admin-settings/claude-code`), add the config. Managed settings take top precedence and can't be overridden by user or project settings:
+
+```json
+{
+  "enabledPlugins": { "dash0@claude-plugins-official": true },
+  "pluginConfigs": {
+    "dash0@claude-plugins-official": {
+      "options": {
+        "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
+        "DATASET": "default",
+        "TEAM_NAME": "platform"
+      }
+    }
+  }
+}
+```
+
+Clients fetch these at startup and re-poll hourly; the payload is cached at `~/.claude/remote-settings.json` and applied in-memory (not written to an on-disk `managed-settings.json`). Requires Claude for Teams/Enterprise and the Owner or Primary Owner role. Server-managed settings are not delivered on Amazon Bedrock, Google Vertex, or Microsoft Foundry.
+
+**The auth token.** Push only the non-secret keys via managed settings, and have each developer add the token once via `/plugin → Configure`. `AUTH_TOKEN` is declared `sensitive`, so Claude Code stores it encrypted in the OS keychain — never in `settings.json`. Avoid inlining it into managed `pluginConfigs.options` or the `env` block, which are stored in plaintext.
+
+**MDM / on-disk alternative.** If you manage devices with MDM (Jamf, Intune, Kandji) or prefer a file on disk, deploy the same JSON as `managed-settings.json` instead of using the console:
+
+| OS | Path |
+|---|---|
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
+| Linux / WSL | `/etc/claude-code/managed-settings.json` |
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+
+> Server-managed (console) and endpoint-managed (file) settings do **not** merge — if the console delivers any keys, the on-disk file is ignored. Pick one channel per org.
+
+**Verify.** A developer runs `/status` → **Setting sources** shows `Enterprise managed settings`; the session banner reads `dash0: connected`; and the session appears in Dash0 under the configured dataset.
+
 ## Configuration
 
 After installing, you'll need:

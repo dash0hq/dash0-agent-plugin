@@ -68,6 +68,57 @@ func TestReadTurnUsageScopesToLastTurn(t *testing.T) {
 	assert.Equal(t, int64(15), u.OutputTokens)
 }
 
+// Tool activity within a turn is recorded as response_item (function_call /
+// function_call_output) records interleaved between token_count events. These
+// are not turn boundaries and must NOT reset the accumulator, otherwise the
+// tool round-trips' usage is discarded (the Codex analog of the Claude
+// skill/tool_result reset bug). Only a real user_message starts a new turn.
+func TestReadTurnUsageToolCallsDoNotResetTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := "" +
+		`{"type":"event_msg","payload":{"type":"user_message","message":"run the tool"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":40}}}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call_1","arguments":"{}"}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"ok"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300,"cached_input_tokens":50,"output_tokens":10}}}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"assistant"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":250,"cached_input_tokens":25,"output_tokens":5}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	u, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	// All three round-trips of the single turn are summed; the tool records did
+	// not reset. input 500+300+250=1050, cache 100+50+25=175, output 40+10+5=55.
+	assert.Equal(t, int64(1050), u.InputTokens)
+	assert.Equal(t, int64(175), u.CacheReadInputTokens)
+	assert.Equal(t, int64(55), u.OutputTokens)
+}
+
+// A turn that ends on a tool round-trip with no trailing assistant message must
+// still report usage (the Codex analog of a skill invoked without follow-up
+// chat). The final token_count is retained rather than lost.
+func TestReadTurnUsageToolEndedTurnRetainsUsage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := "" +
+		`{"type":"event_msg","payload":{"type":"user_message","message":"run the tool"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":400,"cached_input_tokens":80,"output_tokens":30}}}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call_1","arguments":"{}"}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"ok"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"cached_input_tokens":40,"output_tokens":12}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	u, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	// Both round-trips summed: input 600, cache 120, output 42.
+	assert.Equal(t, int64(600), u.InputTokens)
+	assert.Equal(t, int64(120), u.CacheReadInputTokens)
+	assert.Equal(t, int64(42), u.OutputTokens)
+}
+
 // A rollout with no token_count events yields (nil, nil) so the caller emits the
 // span without token attributes.
 func TestReadTurnUsageNoTokenCounts(t *testing.T) {

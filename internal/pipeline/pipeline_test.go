@@ -155,10 +155,11 @@ func TestProcess_MissingSessionID_FallsBackToRandom(t *testing.T) {
 	assert.Equal(t, "session_id was missing from hook payload", ev["dash0.warning"])
 }
 
-//  2b. A session_id containing path-traversal characters (e.g. "../etc") is
-//     rejected: Process substitutes a random safe ID, logs a warning, and no
-//     file is created outside dataDir. This guards MkdirAll, filelog writes,
-//     and RemoveAll which all use sessionID as a directory name under dataDir.
+// 2b. A session_id containing path-traversal characters (e.g. "../etc") is
+//
+//	rejected: Process substitutes a random safe ID, logs a warning, and no
+//	file is created outside dataDir. This guards MkdirAll, filelog writes,
+//	and RemoveAll which all use sessionID as a directory name under dataDir.
 func TestProcess_InvalidSessionID_FallsBackToRandom(t *testing.T) {
 	s := newSetup(t, "")
 

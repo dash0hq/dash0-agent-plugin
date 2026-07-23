@@ -179,49 +179,7 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 ## Telemetry attributes
 
 Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/).
-
-**Resource attributes**:
-
-| Attribute | Description |
-|---|---|
-| `service.name` | Agent name (defaults to `claude-code`) |
-
-**Span attributes (all spans)**:
-
-| Attribute | Description |
-|---|---|
-| `gen_ai.provider.name` | LLM provider |
-| `gen_ai.agent.name` | Agent name (sub-agent type on sub-agent spans) |
-| `gen_ai.harness.name` | Coding agent platform (e.g. `claude-code`, `cursor`) |
-| `dash0.gen_ai.vcs.repository.name` | Git repository name |
-| `dash0.gen_ai.vcs.ref.head.name` | Git branch |
-| `dash0.gen_ai.vcs.repository.url.full` | Full repository URL |
-| `dash0.team.name` | Team name (when configured) |
-| `user.name` | Real name or SHA-256 hash |
-
-**LLM / chat spans**:
-
-| Attribute | Description |
-|---|---|
-| `gen_ai.conversation.id` | Session identifier |
-| `gen_ai.conversation.name` | Session title |
-| `gen_ai.request.model` | Model used |
-| `gen_ai.usage.input_tokens` | Input tokens consumed |
-| `gen_ai.usage.output_tokens` | Output tokens produced |
-| `gen_ai.usage.cache_read.input_tokens` | Tokens read from prompt cache |
-| `gen_ai.usage.cache_creation.input_tokens` | Tokens written to prompt cache |
-
-**Tool spans**:
-
-| Attribute | Description |
-|---|---|
-| `gen_ai.tool.name` | Tool name (e.g. `Bash`, `Read`, `mcp__server__tool`) |
-| `gen_ai.tool.type` | Always `function` |
-| `gen_ai.tool.call.arguments` | Tool input (omitted when `OMIT_IO=true`, truncated to 16KB) |
-| `gen_ai.tool.call.result` | Tool output (omitted when `OMIT_IO=true`, truncated to 16KB) |
-| `dash0.gen_ai.vcs.pull_request.url` | PR/MR URL (survives `OMIT_IO=true`) |
-| `dash0.gen_ai.vcs.issue.url` | Issue URL (survives `OMIT_IO=true`) |
-| `dash0.gen_ai.vcs.commit.sha` | Commit SHA (survives `OMIT_IO=true`) |
+The OTLP pipeline is shared across runtimes, so the attribute set matches Claude Code apart from the per-runtime differences noted in [FEATURE_MATRIX.md](../FEATURE_MATRIX.md).
 
 ## Commands
 
@@ -258,4 +216,5 @@ Output is prefixed with `[dash0:trace]` or `[dash0:log]` for filtering.
 
 ## Development
 
-See [DEVELOPMENT.md](../DEVELOPMENT.md) for local development, building, and releasing.
+See [claude/README.md](../claude/README.md) for local development and building,
+and [DEVELOPMENT.md](../DEVELOPMENT.md) for releasing and cross-runtime reference.

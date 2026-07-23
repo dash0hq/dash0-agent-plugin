@@ -5,7 +5,7 @@ for the Cursor → Dash0 integration. It is the developer reference: how to
 build, sideload local changes, cut releases, and collect fixture payloads.
 
 End-user install / configure / uninstall docs live in
-[`.cursor-plugin/README.md`](../.cursor-plugin/README.md).
+[.cursor-plugin/README.md](../.cursor-plugin/README.md).
 
 ## Contents
 
@@ -23,6 +23,28 @@ The code that consumes Cursor hooks lives elsewhere:
 - `scripts/cursor-on-event.sh` — bootstrap wrapper that downloads + execs the binary
 - `.cursor-plugin/plugin.json` — native plugin manifest Cursor reads from `~/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json` (declares `skills`; hooks are wired via `~/.cursor/hooks.json` at install time, not via the manifest)
 - `cursor/skills/dash0-configure/SKILL.md` — agent skill that walks the user through writing the config file
+
+## Install layout (hybrid)
+
+The `install-cursor.sh` script lays the plugin down at `~/.cursor/plugins/local/dash0-agent-plugin/`, which Cursor scans on startup:
+
+```
+~/.cursor/plugins/local/dash0-agent-plugin/
+├── .cursor-plugin/plugin.json          (manifest — declares skills, no hooks)
+├── cursor/plugin-hooks.json            (installer template — see below)
+├── cursor/skills/dash0-configure/…     (shipped skills)
+└── scripts/cursor-on-event.sh          (bootstrap wrapper Cursor invokes)
+```
+
+**Hooks are registered in `~/.cursor/hooks.json`, not in the plugin manifest.** Cursor 3.9.x loads the local plugin (making the name + skills surface in the UI with a "local plugin" label) but silently ignores any `hooks` field in the manifest — verified with a probe plugin whose only hook was a `printf … >> /tmp/probe.log` script; no invocation was ever recorded despite `[pluginsSubsystem] loadUserLocalPlugin` log lines confirming the manifest loaded. Hooks fire only from `~/.cursor/hooks.json` (user scope) and `<project>/.cursor/hooks.json` (project scope).
+
+`install-cursor.sh` therefore reads `cursor/plugin-hooks.json` (source of truth for which events the plugin listens to), translates each `./scripts/cursor-on-event.sh` command to `$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh` (Cursor expands `$HOME` at invocation time), and merges the entries into `~/.cursor/hooks.json` — preserving any non-Dash0 hooks already there. `uninstall-cursor.sh` uses the reverse strip: remove entries whose `command` contains `cursor-on-event.sh`, delete the file if it ends up with no hooks, else write the reduced JSON back.
+
+Both scripts require `jq` for reliable JSON manipulation.
+
+Two other Cursor-3.9 quirks worth remembering:
+- The `~/.cursor/plugins/local/` sub-directory is required. A plugin dropped one level higher at `~/.cursor/plugins/<name>/` is silently ignored (that path is reserved for Cursor's own Marketplace-managed installs).
+- No trust/enable dialog is required on first load — headless / `curl | bash` install stays fully non-interactive.
 
 ## Build
 

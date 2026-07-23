@@ -19,7 +19,9 @@ import (
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
+	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
 	"github.com/dash0hq/dash0-agent-plugin/internal/transcript"
+	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
 
 // Result is the structured output of Process. Source-specific entrypoints render
@@ -128,8 +130,12 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 					UserText: fmt.Sprintf("dash0: connectivity check failed — %v", err),
 				})
 			} else {
+				text := fmt.Sprintf("dash0: connected (v%s)", version.Version)
+				if link := sessionurl.SessionURL(cfg.OTLPUrl, sessionID); link != "" {
+					text += " → " + link
+				}
 				res.Messages = append(res.Messages, Message{
-					UserText: "dash0: connected",
+					UserText: text,
 				})
 			}
 		}

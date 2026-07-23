@@ -383,7 +383,11 @@ func TestProcess_SessionStart_ConnectivityMessages(t *testing.T) {
 		s := newSetup(t, url)
 		res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess", "model": "opus"})
 		require.Len(t, res.Messages, 1)
-		assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
+		// The pipeline (not the source entrypoint) annotates the success message
+		// with the plugin version so every coding agent surfaces it. A session
+		// link is appended only for recognized Dash0 hosts (see sessionurl); the
+		// mock server host isn't one, so no link is expected here.
+		assert.Contains(t, res.Messages[0].UserText, "dash0: connected (v")
 	})
 }
 
@@ -395,7 +399,7 @@ func TestProcess_SessionStart_SubsequentFireIsNoOp(t *testing.T) {
 
 	res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
 	require.Len(t, res.Messages, 1)
-	assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
+	assert.Contains(t, res.Messages[0].UserText, "dash0: connected")
 
 	ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
 	require.NoError(t, err)
@@ -433,7 +437,7 @@ func TestProcess_SessionStart_ReInitializesAfterSessionEnd(t *testing.T) {
 
 	res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "sonnet"})
 	require.Len(t, res.Messages, 1)
-	assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
+	assert.Contains(t, res.Messages[0].UserText, "dash0: connected")
 
 	ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
 	require.NoError(t, err)

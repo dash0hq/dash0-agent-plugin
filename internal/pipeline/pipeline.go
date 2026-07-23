@@ -403,6 +403,7 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 // session IDs as UUIDs; the random fallback IDs are 16 hex characters — both
 // are covered by this allowlist.
 var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
 // turnCompleteWaitBudget caps how long sendLLMTrace waits for the turn's final
 // assistant entry to finish flushing to the transcript. The flush normally wins
 // within tens of milliseconds; on timeout we read best-effort.

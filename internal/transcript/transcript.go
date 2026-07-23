@@ -21,6 +21,7 @@ type Usage struct {
 type transcriptEntry struct {
 	Type      string           `json:"type"`
 	RequestID string           `json:"requestId"`
+	IsMeta    bool             `json:"isMeta"`
 	Message   *messageEnvelope `json:"message"`
 }
 
@@ -209,11 +210,16 @@ func ReadModel(transcriptPath string) string {
 }
 
 // isRealUserMessage returns true if the entry is a user message that is NOT
-// a tool_result relay. Typed prompts carry content as a plain string;
-// tool-result relays carry an array with content[0].type == "tool_result"
-// and should not reset the turn boundary.
+// a tool_result relay and NOT an injected meta message. Typed prompts carry
+// content as a plain string; tool-result relays carry an array with
+// content[0].type == "tool_result", and meta messages (isMeta, e.g. the
+// skill-loading relay injected mid-turn) both should not reset the turn
+// boundary — otherwise usage accumulated earlier in the turn is discarded.
 func isRealUserMessage(entry transcriptEntry) bool {
 	if entry.Type != "user" {
+		return false
+	}
+	if entry.IsMeta {
 		return false
 	}
 	if entry.Message == nil || entry.Message.Role != "user" {

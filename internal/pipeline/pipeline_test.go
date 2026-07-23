@@ -495,16 +495,6 @@ func TestProcess_SessionStart_ReInitializesAfterSessionEnd(t *testing.T) {
 	assert.Equal(t, "sonnet", ctx.Model)
 }
 
-// intAttr returns the stringified int value of an attribute, or "" if absent.
-func intAttr(attrs []otlp.Attribute, key string) string {
-	for _, a := range attrs {
-		if a.Key == key && a.Value.IntValue != nil {
-			return *a.Value.IntValue
-		}
-	}
-	return ""
-}
-
 // writeAgentTranscript creates a minimal subagent transcript (prompt + one
 // assistant call with usage) and returns its path.
 func writeAgentTranscript(t *testing.T, inputTokens, outputTokens int) string {
@@ -562,8 +552,8 @@ func TestProcess_SubagentStopAfterStop_UsesSnapshotContext(t *testing.T) {
 	sub := (*spans)[1]
 	assert.Equal(t, turnCtx.TraceID, sub.TraceID, "subagent span must join the spawning turn's trace")
 	assert.Equal(t, otlp.SpanIDFromAgentID("agent1"), sub.ParentSpanID, "parented under the Agent tool span")
-	assert.Equal(t, "2393", intAttr(sub.Attributes, "gen_ai.usage.input_tokens"))
-	assert.Equal(t, "2172", intAttr(sub.Attributes, "gen_ai.usage.output_tokens"), "subagent token usage must survive the Stop ordering")
+	assert.Equal(t, "2393", intAttr(t, sub, "gen_ai.usage.input_tokens"))
+	assert.Equal(t, "2172", intAttr(t, sub, "gen_ai.usage.output_tokens"), "subagent token usage must survive the Stop ordering")
 	// Start time must be anchored to SubagentStart, not SubagentStop.
 	assert.Equal(t, strconv.FormatInt(subagentStartTime.UnixNano(), 10), sub.StartTimeUnixNano, "subagent span start must reflect SubagentStart hook time")
 	assert.Equal(t, strconv.FormatInt(subagentStopTime.UnixNano(), 10), sub.EndTimeUnixNano, "subagent span end reflects SubagentStop hook time")

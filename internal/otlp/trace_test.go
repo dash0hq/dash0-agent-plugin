@@ -333,6 +333,44 @@ func TestNewLLMSpanOmitIO(t *testing.T) {
 	assertAttrContains(t, span.Attributes, "gen_ai.output.messages", `REDACTED`)
 }
 
+// prompt_role overrides the input message's role (default "user"), so an
+// agent-injected turn (e.g. Copilot's <system_notification>) renders as an
+// assistant-role input message rather than user input — and the override key
+// itself is never emitted as an attribute.
+func TestNewLLMSpanPromptRole(t *testing.T) {
+	start := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	end := time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC)
+
+	event := map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "sess-1",
+		"prompt":          `<system_notification> agent finished`,
+		"prompt_role":     "assistant",
+	}
+	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "", start, end, event, false, Config{})
+	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", `"role":"assistant"`)
+	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", "agent finished")
+	for _, a := range span.Attributes {
+		assert.NotEqual(t, "prompt_role", a.Key, "prompt_role must not be emitted as an attribute")
+	}
+
+	// Redaction path keeps the overridden role.
+	redacted := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "", start, end, map[string]any{
+		"session_id":  "sess-1",
+		"prompt":      `<system_notification> secret`,
+		"prompt_role": "assistant",
+	}, false, Config{OmitIO: true})
+	assertAttrContains(t, redacted.Attributes, "gen_ai.input.messages", `"role":"assistant"`)
+	assertAttrContains(t, redacted.Attributes, "gen_ai.input.messages", "REDACTED")
+
+	// Default (no prompt_role) is still user.
+	plain := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "", start, end, map[string]any{
+		"session_id": "sess-1",
+		"prompt":     "hello",
+	}, false, Config{})
+	assertAttrContains(t, plain.Attributes, "gen_ai.input.messages", `"role":"user"`)
+}
+
 func TestNewSessionSpanOmitUserInfoRedactsCwd(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)

@@ -6,6 +6,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,14 +28,7 @@ import (
 // and verifies the mock OTLP server receives the connectivity check.
 func TestE2EHookInvocation(t *testing.T) {
 	pluginDir := findPluginDir(t)
-
-	// Build the binary fresh.
-	binDir := t.TempDir()
-	binary := filepath.Join(binDir, "on-event-test-linux-amd64")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/on-event")
-	build.Dir = pluginDir
-	out, err := build.CombinedOutput()
-	require.NoError(t, err, "build failed: %s", string(out))
+	binary := buildClaudeBinary(t, pluginDir)
 
 	var (
 		mu       sync.Mutex
@@ -134,13 +129,7 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	}
 
 	pluginDir := findPluginDir(t)
-
-	// Build the binary.
-	binary := filepath.Join(t.TempDir(), "on-event")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/on-event")
-	build.Dir = pluginDir
-	out, err := build.CombinedOutput()
-	require.NoError(t, err, "build failed: %s", string(out))
+	binary := buildClaudeBinary(t, pluginDir)
 
 	var (
 		mu       sync.Mutex
@@ -161,29 +150,36 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Create a staging copy of the plugin with a simplified on-event.sh
-	// that invokes the pre-built binary directly (no GitHub download).
+	// Stage the plugin with the REAL scripts/on-event.sh (not a stub), then place
+	// the freshly built binary where that script resolves it so it skips the
+	// GitHub download and execs our binary. For a --plugin-dir load, Claude computes
+	// CLAUDE_PLUGIN_DATA=$HOME/.claude/plugins/data/<plugin-name>-inline (it
+	// ignores any preset value), so the binary must land under that path.
 	stageDir := t.TempDir()
 	copyDir(t, filepath.Join(pluginDir, ".claude-plugin"), filepath.Join(stageDir, ".claude-plugin"))
 	copyDir(t, filepath.Join(pluginDir, "hooks"), filepath.Join(stageDir, "hooks"))
 	copyDir(t, filepath.Join(pluginDir, "claude"), filepath.Join(stageDir, "claude"))
-	require.NoError(t, os.MkdirAll(filepath.Join(stageDir, "scripts"), 0o755))
+	copyDir(t, filepath.Join(pluginDir, "scripts"), filepath.Join(stageDir, "scripts"))
 
-	// Write a hook script that sets env vars and execs the pre-built binary.
-	// We export CLAUDE_PLUGIN_OPTION_* so the binary sees the OTLP config
-	// without needing the download/config-file logic from the real on-event.sh.
-	hookScript := fmt.Sprintf(`#!/usr/bin/env bash
-export CLAUDE_PLUGIN_OPTION_OTLP_URL="${CLAUDE_PLUGIN_OPTION_OTLP_URL:-%s}"
-export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="${CLAUDE_PLUGIN_OPTION_AUTH_TOKEN:-e2e-test-token}"
-exec %q "$@"
-`, srv.URL, binary)
-	require.NoError(t, os.WriteFile(filepath.Join(stageDir, "scripts", "on-event.sh"), []byte(hookScript), 0o755))
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	ver := claudePluginVersion(t, pluginDir)
+	goos, arch := unameOSArch(t)
+	binDir := filepath.Join(home, ".claude", "plugins", "data", claudePluginName(t, pluginDir)+"-inline", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	staged := filepath.Join(binDir, fmt.Sprintf("on-event-%s-%s-%s", ver, goos, arch))
+	copyExecutable(t, binary, staged)
+	t.Cleanup(func() { os.Remove(staged) })
 
 	workDir := t.TempDir()
 
-	// Also place a .env as fallback (binary reads CWD/.env via dotenv.Load).
-	envContent := fmt.Sprintf("DASH0_OTLP_URL=%s\nDASH0_AUTH_TOKEN=e2e-test-token\n", srv.URL)
-	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".env"), []byte(envContent), 0o644))
+	// Deliver the mock OTLP config via the settings file the real script loads.
+	// A project-level file (resolved against the hook's cwd) takes precedence over
+	// any global ~/.claude/dash0-agent-plugin.local.md a dev may have, so the test
+	// can never leak spans to a real endpoint.
+	require.NoError(t, os.MkdirAll(filepath.Join(workDir, ".claude"), 0o755))
+	settings := fmt.Sprintf("---\notlp_url: %q\nauth_token: \"e2e-test-token\"\n---\n", srv.URL)
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".claude", "dash0-agent-plugin.local.md"), []byte(settings), 0o644))
 
 	cmd := exec.Command(claudeBin,
 		"--print",
@@ -219,6 +215,46 @@ exec %q "$@"
 		}
 	}
 	assert.NotEmpty(t, traceReqs, "expected at least one /v1/traces request (connectivity check on SessionStart)")
+}
+
+// buildClaudeBinary compiles cmd/on-event into a temp dir and returns its path.
+func buildClaudeBinary(t *testing.T, pluginDir string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "on-event")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/on-event")
+	build.Dir = pluginDir
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "build failed: %s", string(out))
+	return bin
+}
+
+// claudePluginVersion reads the pinned VERSION from scripts/on-event.sh so the
+// pre-staged binary path matches what the shipped script derives.
+func claudePluginVersion(t *testing.T, pluginDir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(pluginDir, "scripts", "on-event.sh"))
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VERSION=") {
+			return strings.Trim(strings.TrimPrefix(line, "VERSION="), `"`)
+		}
+	}
+	t.Fatal("VERSION= not found in scripts/on-event.sh")
+	return ""
+}
+
+// claudePluginName reads the plugin name from .claude-plugin/plugin.json. Claude
+// derives the --plugin-dir data dir as "<name>-inline".
+func claudePluginName(t *testing.T, pluginDir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(pluginDir, ".claude-plugin", "plugin.json"))
+	require.NoError(t, err)
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	require.NoError(t, json.Unmarshal(data, &manifest))
+	require.NotEmpty(t, manifest.Name, "plugin.json name is empty")
+	return manifest.Name
 }
 
 // copyDir recursively copies src to dst.

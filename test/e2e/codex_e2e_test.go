@@ -325,7 +325,12 @@ func logSpanTree(t *testing.T, spans []otlp.Span) {
 	walk = func(parent, indent string) {
 		for _, s := range children[parent] {
 			b.WriteString(fmt.Sprintf("%s- %s%s\n", indent, s.Name, spanTag(s)))
-			walk(s.SpanID, indent+"    ")
+			// Guard against self-parenting: a span with an empty (or self-equal)
+			// SpanID lands under the "" root and would recurse into itself,
+			// growing the builder unbounded → OOM. Don't recurse in that case.
+			if s.SpanID != "" && s.SpanID != parent {
+				walk(s.SpanID, indent+"    ")
+			}
 		}
 	}
 	walk("", "  ")

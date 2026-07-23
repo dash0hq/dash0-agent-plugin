@@ -53,15 +53,22 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 	agentID, _ := event["agent_id"].(string)
 
 	sessionID, _ := event["session_id"].(string)
-	if sessionID == "" {
-		fmt.Fprintf(os.Stderr, "on-event: session_id missing in %s event, using random ID\n", hookEvent)
+	if !sessionIDPattern.MatchString(sessionID) {
+		// sessionID names the per-session directory under dataDir, so anything
+		// that is not filename-safe (path separators, dots) must not reach
+		// filepath.Join — fall back to a random ID just like a missing one.
+		warning := "session_id was missing from hook payload"
+		if sessionID != "" {
+			warning = "session_id from hook payload was not a safe path segment"
+		}
+		fmt.Fprintf(os.Stderr, "on-event: session_id missing or invalid in %s event, using random ID\n", hookEvent)
 		randID, err := otlp.GenerateTraceID()
 		if err != nil {
 			return res, err
 		}
 		event["session_id"] = randID[:16]
 		sessionID = event["session_id"].(string)
-		event["dash0.warning"] = "session_id was missing from hook payload"
+		event["dash0.warning"] = warning
 	}
 
 	sessionDir := filepath.Join(dataDir, sessionID)
@@ -145,9 +152,27 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
 		otlp.ClearTraceContext(sessionDir)
+	case "SubagentStart":
+		// Snapshot the current trace context for this agent so its
+		// SubagentStop still finds the spawning turn's trace even when it
+		// arrives after Stop (context cleared) or after the next prompt
+		// (context replaced). StartTime is recorded here so the subagent span
+		// is anchored to when the agent was launched, not when it stopped.
+		if agentID != "" {
+			if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
+				snap := *ctx
+				snap.StartTime = now.Format(time.RFC3339Nano)
+				if err := otlp.SaveAgentTraceContext(snap, sessionDir, agentID); err != nil {
+					fmt.Fprintf(os.Stderr, "on-event: saving agent trace context: %v\n", err)
+				}
+			}
+		}
 	case "SubagentStop":
 		if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
+		}
+		if agentID != "" {
+			otlp.ClearAgentTraceContext(sessionDir, agentID)
 		}
 	case "SessionEnd":
 		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
@@ -263,9 +288,21 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 }
 
 func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir string, failed bool) error {
-	ctx, err := otlp.LoadTraceContext(dataDir)
-	if err != nil || ctx == nil {
-		return fmt.Errorf("no trace context available for LLM span")
+	agentID, _ := event["agent_id"].(string)
+
+	// For subagent spans, prefer the snapshot taken at SubagentStart: by the
+	// time a SubagentStop arrives the session context may already be cleared
+	// (Stop) or belong to the next turn (UserPromptSubmit).
+	var ctx *otlp.TraceContext
+	if agentID != "" {
+		ctx, _ = otlp.LoadAgentTraceContext(dataDir, agentID)
+	}
+	if ctx == nil {
+		var err error
+		ctx, err = otlp.LoadTraceContext(dataDir)
+		if err != nil || ctx == nil {
+			return fmt.Errorf("no trace context available for LLM span")
+		}
 	}
 
 	traceID := ctx.TraceID
@@ -276,24 +313,33 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	}
 
 	startTime := ts
-	promptEvent, _ := filelog.FindEvent(dataDir, func(e map[string]any) bool {
-		name, _ := e["hook_event_name"].(string)
-		return name == "UserPromptSubmit"
-	})
-	if promptEvent != nil {
-		if raw, ok := promptEvent["timestamp"].(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
-				startTime = parsed
-			}
+	if ctx.StartTime != "" {
+		// Agent snapshot carries the SubagentStart hook timestamp: use it so the
+		// span is anchored to when the agent was launched, not when it stopped.
+		if parsed, parseErr := time.Parse(time.RFC3339Nano, ctx.StartTime); parseErr == nil {
+			startTime = parsed
 		}
-		if prompt, ok := promptEvent["prompt"]; ok {
-			if _, hasPrompt := event["prompt"]; !hasPrompt {
-				event["prompt"] = prompt
+	} else {
+		// For session-level spans, the span starts when the user submitted the
+		// prompt, not when Stop fires.
+		promptEvent, _ := filelog.FindEvent(dataDir, func(e map[string]any) bool {
+			name, _ := e["hook_event_name"].(string)
+			return name == "UserPromptSubmit"
+		})
+		if promptEvent != nil {
+			if raw, ok := promptEvent["timestamp"].(string); ok {
+				if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
+					startTime = parsed
+				}
+			}
+			if prompt, ok := promptEvent["prompt"]; ok {
+				if _, hasPrompt := event["prompt"]; !hasPrompt {
+					event["prompt"] = prompt
+				}
 			}
 		}
 	}
 
-	agentID, _ := event["agent_id"].(string)
 	parentSpanID := ""
 	if agentID != "" {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
@@ -350,6 +396,13 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
 }
+
+// sessionIDPattern restricts session IDs to filename-safe characters. Session
+// IDs come from hook input and are used as directory names under dataDir, so
+// path separators or dots must not reach filepath.Join. Claude Code generates
+// session IDs as UUIDs; the random fallback IDs are 16 hex characters — both
+// are covered by this allowlist.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // turnCompleteWaitBudget caps how long sendLLMTrace waits for the turn's final
 // assistant entry to finish flushing to the transcript. The flush normally wins

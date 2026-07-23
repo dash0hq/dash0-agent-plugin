@@ -20,6 +20,25 @@ These are plain project-level command hooks, **not** plugin-managed hooks — th
 In this case `CLAUDE_PLUGIN_DATA` is the filesystem root for per-session state, written to `<CLAUDE_PLUGIN_DATA>/<session_id>/` (`started`, `trace_context.json`, `events.jsonl`).
 It is deliberately pointed at `/tmp/dash0-dev` to not pollute the repository.
 
+## Notification capabilities across coding agents
+
+The pipeline produces status messages (e.g. the `dash0: connected → <session
+link>` welcome banner) uniformly, but only **Claude Code** can show them to the
+user at session start. The others expose only a model-context field there, or a
+diagnostic log the user doesn't normally see — so the banner renders on Claude
+Code alone.
+
+| Agent | User-visible message | Model-context injection | Notes |
+|-------|----------------------|-------------------------|-------|
+| Claude Code | `systemMessage` (any hook) | `additionalContext` | Full support. |
+| Cursor | `user_message` — only when a hook **denies** an action | `additional_context` (sessionStart) | No unblocked startup banner. [docs](https://cursor.com/docs/hooks.md) |
+| Codex | none (hook stderr not surfaced; `notify` is OS-only) | none | Nothing user-visible. [docs](https://learn.chatgpt.com/docs/config-file/config-reference) |
+| Copilot CLI | none at sessionStart (stderr only on exit 2) | `additionalContext` (sessionStart) | Open bug [copilot-cli#1352](https://github.com/github/copilot-cli/issues/1352). [docs](https://docs.github.com/en/copilot/reference/hooks-reference) |
+
+For the three non-Claude agents, injecting the session link as model context is
+the only portable fallback — it lets the agent surface the link if asked, but
+does not display it directly.
+
 ## Releasing
 
 Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release, update the version in:

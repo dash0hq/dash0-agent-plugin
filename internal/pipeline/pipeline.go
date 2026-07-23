@@ -311,15 +311,29 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		}
 	}
 	if transcriptPath != "" {
-		usage, err := transcript.ReadTurnUsage(transcriptPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "on-event: reading transcript: %v\n", err)
-		}
-		if usage != nil {
-			event["gen_ai.usage.input_tokens"] = usage.InputTokens
-			event["gen_ai.usage.output_tokens"] = usage.OutputTokens
-			event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
-			event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+		// Token usage is sourced two ways across agents. Some (Codex, Cursor)
+		// inject gen_ai.usage.* upstream in their normalizer, before Process runs;
+		// others (Claude Code) leave usage on the transcript for us to read here.
+		// Only take the transcript path when usage isn't already present — this
+		// also keeps Codex/Cursor out of the Claude-format read and its wait below.
+		if _, usagePresent := event["gen_ai.usage.input_tokens"]; !usagePresent {
+			// The transcript (Claude Code format) is flushed asynchronously, so a
+			// completed turn (failed==false) may still end at a mid-turn tool_use
+			// entry when this hook fires — dropping the final, often cache-heavy,
+			// API call's usage. Wait briefly for the terminal entry to land.
+			if !failed {
+				waitForTurnComplete(transcriptPath)
+			}
+			usage, err := transcript.ReadTurnUsage(transcriptPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "on-event: reading transcript: %v\n", err)
+			}
+			if usage != nil {
+				event["gen_ai.usage.input_tokens"] = usage.InputTokens
+				event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+				event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
+				event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+			}
 		}
 
 		if title := transcript.ReadSessionTitle(transcriptPath); title != "" {
@@ -335,6 +349,31 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
+}
+
+// turnCompleteWaitBudget caps how long sendLLMTrace waits for the turn's final
+// assistant entry to finish flushing to the transcript. The flush normally wins
+// within tens of milliseconds; on timeout we read best-effort.
+const turnCompleteWaitBudget = 500 * time.Millisecond
+
+// turnCompletePollInterval is the gap between transcript readiness checks.
+const turnCompletePollInterval = 50 * time.Millisecond
+
+// waitForTurnComplete blocks until the transcript's current turn shows a
+// terminal assistant entry or the budget elapses. It returns immediately once
+// the turn is complete, so the common case adds no measurable latency.
+func waitForTurnComplete(transcriptPath string) {
+	deadline := time.Now().Add(turnCompleteWaitBudget)
+	for {
+		complete, err := transcript.TurnComplete(transcriptPath)
+		if err != nil || complete {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(turnCompletePollInterval)
+	}
 }
 
 var prURLPattern = regexp.MustCompile(`https?://[^\s"'<>\x60\])]+/(?:pull/\d+|pull-requests/\d+|-/merge_requests/\d+)`)

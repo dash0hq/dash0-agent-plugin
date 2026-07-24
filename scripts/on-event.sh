@@ -50,7 +50,15 @@ REPO="dash0hq/dash0-agent-plugin"
 VERSION="0.1.21"
 
 # Detect OS and architecture.
+# uname -s reports the platform-specific kernel name, which differs from the
+# GOOS strings used in release asset names. On Windows shells (Git Bash, MSYS2,
+# Cygwin) it is e.g. "MINGW64_NT-10.0-22631", so normalize those to "windows".
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$OS" in
+  linux*)                 OS="linux" ;;
+  darwin*)                OS="darwin" ;;
+  mingw*|msys*|cygwin*|windows*) OS="windows" ;;
+esac
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  ARCH="amd64" ;;
@@ -58,13 +66,17 @@ case "$ARCH" in
   arm64)   ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}"
+# Windows release assets carry a .exe suffix.
+EXT=""
+[ "$OS" = "windows" ] && EXT=".exe"
+
+BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}${EXT}"
 
 # Download the binary on first run.
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR"
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
-  ASSET="on-event-${OS}-${ARCH}"
+  ASSET="on-event-${OS}-${ARCH}${EXT}"
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 

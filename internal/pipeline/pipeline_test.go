@@ -611,6 +611,39 @@ func TestProcess_SubagentStopAfterStop_UsesSnapshotContext(t *testing.T) {
 	assert.Equal(t, strconv.FormatInt(subagentStopTime.UnixNano(), 10), sub.EndTimeUnixNano, "subagent span end reflects SubagentStop hook time")
 }
 
+// The cache-creation TTL split has no OTel semconv attribute, so it is emitted
+// under dash0.gen_ai.usage.* — but only when the transcript actually carried the
+// breakdown. This locks the exact attribute keys and the gating.
+func TestProcess_EmitsCacheCreationTTLBreakdown(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	path := filepath.Join(t.TempDir(), "agent-transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"agent prompt"}}`,
+		`{"type":"assistant","requestId":"req_agent_1","message":{"role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":300,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":50,"ephemeral_1h_input_tokens":250}}}}`,
+	}
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": path,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	sub := (*spans)[0]
+	assert.Equal(t, "300", intAttr(t, sub, "gen_ai.usage.cache_creation.input_tokens"))
+	assert.Equal(t, "50", intAttr(t, sub, "dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens"))
+	assert.Equal(t, "250", intAttr(t, sub, "dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"))
+}
+
 // 15. A SubagentStop that straggles past the NEXT turn's UserPromptSubmit must
 // still attach to the turn that spawned it, not to the new turn's trace.
 func TestProcess_SubagentStopAfterNextPrompt_KeepsSpawningTrace(t *testing.T) {

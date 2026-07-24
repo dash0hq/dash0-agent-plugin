@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart":        [{"type": "command", "bash": "${PLUGIN_ROOT}/copilot-on-event.sh sessionStart", "timeoutSec": 10}],
+    "userPromptSubmitted": [{"type": "command", "bash": "${PLUGIN_ROOT}/copilot-on-event.sh userPromptSubmitted", "timeoutSec": 10}],
+    "agentStop":           [{"type": "command", "bash": "${PLUGIN_ROOT}/copilot-on-event.sh agentStop", "timeoutSec": 10}],
+    "sessionEnd":          [{"type": "command", "bash": "${PLUGIN_ROOT}/copilot-on-event.sh sessionEnd", "timeoutSec": 10}]
+  }
+}

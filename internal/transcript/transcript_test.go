@@ -96,6 +96,49 @@ func TestReadTurnUsageSumsFallbackIterations(t *testing.T) {
 	assert.Equal(t, int64(700), usage.OutputTokens)
 	assert.Equal(t, int64(150), usage.CacheCreationInputTokens)
 	assert.Equal(t, int64(3000), usage.CacheReadInputTokens)
+
+	// The TTL breakdown is top-level only (Anthropic doesn't split it per
+	// iteration), so it reflects the final iteration and best-effort under-sums
+	// the flat total (100 of 150) — the flat total stays authoritative.
+	assert.Equal(t, int64(0), usage.CacheCreation5mInputTokens)
+	assert.Equal(t, int64(100), usage.CacheCreation1hInputTokens)
+}
+
+func TestReadTurnUsageCacheCreationTTLBreakdown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		// Two API calls in the turn, each carrying the TTL split; both are summed.
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":50,"ephemeral_1h_input_tokens":150}}}}`,
+		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":100}}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(50), usage.CacheCreation5mInputTokens)
+	assert.Equal(t, int64(250), usage.CacheCreation1hInputTokens)
+	// The split decomposes the flat total exactly when every call carries it.
+	assert.Equal(t, usage.CacheCreationInputTokens,
+		usage.CacheCreation5mInputTokens+usage.CacheCreation1hInputTokens)
+}
+
+func TestReadTurnUsageNoCacheCreationTTL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		// No cache_creation object (older CLI): the breakdown defaults to 0/0
+		// even though cache_creation_input_tokens is non-zero.
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":300}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(0), usage.CacheCreation5mInputTokens)
+	assert.Equal(t, int64(0), usage.CacheCreation1hInputTokens)
 }
 
 func TestReadTurnUsageSingleIterationMatchesTopLevel(t *testing.T) {

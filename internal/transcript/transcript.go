@@ -15,6 +15,27 @@ type Usage struct {
 	OutputTokens             int64
 	CacheCreationInputTokens int64
 	CacheReadInputTokens     int64
+	// CacheCreation5mInputTokens and CacheCreation1hInputTokens decompose
+	// CacheCreationInputTokens by cache TTL. Anthropic prices 1h cache writes
+	// higher than 5m writes, so the split is needed for accurate cost; there is
+	// no OpenTelemetry semantic-convention attribute for it (the semconv
+	// standardizes only input/output tokens), so it is emitted under dash0.gen_ai.usage.
+	// A source that omits the breakdown leaves both at 0, which costs nothing.
+	CacheCreation5mInputTokens int64
+	CacheCreation1hInputTokens int64
+}
+
+// add folds one API call's effective usage into the aggregate. A nil
+// CacheCreation (source gave no TTL split) leaves the breakdown totals at 0.
+func (u *Usage) add(eff usageData) {
+	u.InputTokens += eff.InputTokens
+	u.OutputTokens += eff.OutputTokens
+	u.CacheCreationInputTokens += eff.CacheCreationInputTokens
+	u.CacheReadInputTokens += eff.CacheReadInputTokens
+	if eff.CacheCreation != nil {
+		u.CacheCreation5mInputTokens += eff.CacheCreation.Ephemeral5mInputTokens
+		u.CacheCreation1hInputTokens += eff.CacheCreation.Ephemeral1hInputTokens
+	}
 }
 
 // transcriptEntry captures only the fields we need from transcript JSONL entries.
@@ -41,11 +62,18 @@ type messageEnvelope struct {
 }
 
 type usageData struct {
-	InputTokens              int64       `json:"input_tokens"`
-	OutputTokens             int64       `json:"output_tokens"`
-	CacheCreationInputTokens int64       `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64       `json:"cache_read_input_tokens"`
-	Iterations               []usageData `json:"iterations"`
+	InputTokens              int64          `json:"input_tokens"`
+	OutputTokens             int64          `json:"output_tokens"`
+	CacheCreationInputTokens int64          `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64          `json:"cache_read_input_tokens"`
+	CacheCreation            *cacheCreation `json:"cache_creation"`
+	Iterations               []usageData    `json:"iterations"`
+}
+
+// cacheCreation splits cache-creation tokens by TTL.
+type cacheCreation struct {
+	Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
 }
 
 // effective returns the token counts to attribute to this API call. When a
@@ -64,6 +92,12 @@ func (u *usageData) effective() usageData {
 		sum.CacheCreationInputTokens += it.CacheCreationInputTokens
 		sum.CacheReadInputTokens += it.CacheReadInputTokens
 	}
+	// CacheCreation lives only on the top-level usage object, not on
+	// individual iterations, so carry it through unchanged. On a fallback turn it
+	// reflects the final iteration only, so the split may under-sum the
+	// iteration-summed CacheCreationInputTokens total — the flat total stays
+	// authoritative; the split is best-effort.
+	sum.CacheCreation = u.CacheCreation
 	return sum
 }
 
@@ -172,18 +206,15 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 		perCall[key] = entry.Message.Usage
 	}
 
+	if !hasUsage {
+		return nil, nil
+	}
+
 	// Sum final usage across all API calls in the turn.
 	var usage Usage
 	for _, key := range callOrder {
 		eff := perCall[key].effective()
-		usage.InputTokens += eff.InputTokens
-		usage.OutputTokens += eff.OutputTokens
-		usage.CacheCreationInputTokens += eff.CacheCreationInputTokens
-		usage.CacheReadInputTokens += eff.CacheReadInputTokens
-	}
-
-	if !hasUsage {
-		return nil, nil
+		usage.add(eff)
 	}
 	return &usage, nil
 }

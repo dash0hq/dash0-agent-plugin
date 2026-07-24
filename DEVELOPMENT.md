@@ -15,14 +15,17 @@ Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Act
 - `scripts/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
 - `copilot/copilot-on-event.sh` — `VERSION=` line (Copilot binary downloader; vendored inside the `copilot/` subpath-install package)
 
-Then tag the commit in main:
+`main` is protected, so the script commits the version bump on a `release/v<version>` branch and pushes it — it does **not** push a tag. Open a PR from that branch and merge it.
+
+After the PR is merged, tag the merged commit on `main` manually:
 
 ```bash
+git checkout main && git pull
 git tag v<version>
-git push --tags
+git push origin v<version>
 ```
 
-This triggers the release workflow which cross-compiles binaries for `darwin/linux × amd64/arm64` and publishes them to [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases).
+The tag push triggers the release workflow which cross-compiles binaries for `darwin/linux × amd64/arm64` and publishes them to [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases).
 The `on-event-<agent>.sh` scripts download the matching binaries on first run.
 
 ## Feature support matrix

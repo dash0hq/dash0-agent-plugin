@@ -12,6 +12,7 @@ fi
 
 VERSION="$1"
 TAG="v${VERSION}"
+BRANCH="release/${TAG}"
 
 if git rev-parse "$TAG" >/dev/null 2>&1; then
   echo "Error: tag $TAG already exists"
@@ -24,6 +25,8 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 echo "Releasing $TAG..."
+
+git checkout -b "$BRANCH"
 
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .claude-plugin/plugin.json
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .cursor-plugin/plugin.json
@@ -48,8 +51,14 @@ grep 'VERSION=' copilot/copilot-on-event.sh
 
 git add .claude-plugin/plugin.json .cursor-plugin/plugin.json .codex-plugin/plugin.json copilot/plugin.json .github/plugin/marketplace.json scripts/on-event.sh scripts/cursor-on-event.sh scripts/codex-on-event.sh copilot/copilot-on-event.sh
 git commit -m "release: ${TAG}"
-git tag "$TAG"
-git push
-git push --tags
+git push -u origin "$BRANCH"
 
-echo "Done. GoReleaser will build and publish binaries."
+echo "Done. Pushed branch $BRANCH."
+echo
+echo "Next steps (main is protected):"
+echo "  1. Open a PR from $BRANCH and merge it."
+echo "  2. Tag the merged commit on main manually:"
+echo "       git checkout main && git pull"
+echo "       git tag $TAG && git push origin $TAG"
+echo
+echo "The tag push triggers GoReleaser, which builds and publishes binaries."

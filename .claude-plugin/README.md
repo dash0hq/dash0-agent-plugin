@@ -139,7 +139,7 @@ Add `extraKnownMarketplaces` to make the marketplace resolvable, and key everyth
 }
 ```
 
-> Pick one. Enabling both identities registers the hooks twice and exports every span twice — see [Every span appears twice](#troubleshooting).
+> Pick one. The two identities ship the same hooks, so enabling both registers every hook twice and exports every span twice.
 
 #### What each key does
 
@@ -179,7 +179,7 @@ claude plugin list
 
 The plugin (`dash0@claude-plugins-official` or `dash0-agent-plugin@dash0`, matching your payload) should appear with `Status: ✔ enabled` and `Scope: managed` — `managed` confirms the enablement came from managed settings rather than a local install. Exactly one identity should be listed. Then start a session and look for `dash0: connected (v0.1.22)`.
 
-> **Do not let developers self-install as well.** If someone has already installed the other identity at user scope, both are enabled and every span is exported twice, with two independent configurations. See [Every span appears twice](#troubleshooting).
+> **Do not let developers self-install as well.** If someone has already installed the other identity at user scope, both are enabled and every span is exported twice, under two independent configurations. Remove the user-scoped one (`claude plugin uninstall dash0@claude-plugins-official --scope user`) and let managed settings be the single source of truth.
 
 ## Configuration
 
@@ -320,24 +320,6 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 - `dash0: telemetry is not active` — OTLP URL is not configured.
 - `dash0: connectivity check failed` — URL is set but connection failed (e.g. invalid auth token).
 - No message at all — run `/reload-plugins`, or restart Claude Code.
-
-**`Plugin "dash0-agent-plugin" not cached at (not recorded)`.** Enabling a plugin is not the same as installing it. When `enabledPlugins` names the plugin — typically from enterprise-managed settings or a project's `.claude/settings.json` — but the plugin has never been fetched on that machine, Claude Code has no install path to load from, and `(not recorded)` is the missing path being printed. Claude Code installs the plugin on session startup; restart Claude Code, and if the message persists run `/plugin` to refresh the cache.
-
-To confirm the install landed:
-
-```bash
-claude plugin list
-```
-
-You should see `dash0-agent-plugin@dash0` (or `dash0@claude-plugins-official`) with a version and `Status: ✔ enabled`. The `Scope:` column tells you where the enablement came from — `managed` means enterprise-managed settings, which users cannot override.
-
-**Every span appears twice.** The plugin is published under two identities — `dash0@claude-plugins-official` and `dash0-agent-plugin@dash0` — and both ship the same hooks. Enabling both registers every hook twice, so each event is exported twice. This happens easily when a developer installs the plugin themselves and their organization later pushes the other identity via managed settings. Check with `claude plugin list`; if both appear, disable one:
-
-```bash
-claude plugin uninstall dash0@claude-plugins-official --scope user
-```
-
-A managed-scope entry cannot be removed this way — remove the user-scoped one instead and let managed settings be the single source of truth. Note that the two identities keep separate configuration, so they can also be sending to different datasets or with different privacy settings.
 
 **Debug mode.** Set `DASH0_DEBUG=true` to print all OTel payloads to stderr:
 

@@ -59,7 +59,7 @@ Add to `<repo-root>/.claude/settings.json`:
 
 To roll the plugin out to a whole organization without asking each developer to install and configure it, deliver the marketplace, the plugin enablement, and the plugin options together through Claude Code's **managed settings**. Managed settings take precedence over every other settings source and cannot be overridden by users.
 
-*Verified on Claude Code 2.1.220 with plugin 0.1.22.*
+*Verified on Claude Code 2.1.220 with plugin 0.1.22, deployed via the Dash0 marketplace through server-managed settings.*
 
 ### Two delivery channels
 
@@ -79,7 +79,37 @@ Claude Code reads managed settings from one of two places, and **they do not mer
 
 ### Managed settings payload
 
-The same JSON works in either channel. This registers the Dash0 marketplace, enables the plugin, and sets every option:
+The same JSON works in either channel. Which payload you use depends on the marketplace you install from — the plugin identity differs, and the two identities do not share configuration.
+
+#### From the official Claude Code marketplace
+
+The official marketplace is known to Claude Code already, so no `extraKnownMarketplaces` entry is needed:
+
+```json
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "enabledPlugins": {
+    "dash0@claude-plugins-official": true
+  },
+  "pluginConfigs": {
+    "dash0@claude-plugins-official": {
+      "options": {
+        "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
+        "AUTH_TOKEN": "auth_...",
+        "DATASET": "default",
+        "AGENT_NAME": "claude-code",
+        "OMIT_IO": "true",
+        "OMIT_USER_INFO": "false",
+        "SHOW_SESSION_LINK": "false"
+      }
+    }
+  }
+}
+```
+
+#### From the Dash0 marketplace
+
+Add `extraKnownMarketplaces` to make the marketplace resolvable, and key everything on `dash0-agent-plugin@dash0`:
 
 ```json
 {
@@ -109,15 +139,15 @@ The same JSON works in either channel. This registers the Dash0 marketplace, ena
 }
 ```
 
-Three pieces are all required, and each does something different:
+> Pick one. Enabling both identities registers the hooks twice and exports every span twice — see [Every span appears twice](#troubleshooting).
 
-- **`extraKnownMarketplaces`** makes the marketplace resolvable. On its own it installs nothing.
+#### What each key does
+
+- **`extraKnownMarketplaces`** (Dash0 marketplace only) makes the marketplace resolvable. On its own it installs nothing.
 - **`enabledPlugins`** activates the plugin. **Without this key nothing happens** — a registered marketplace and staged options produce no telemetry, silently.
-- **`pluginConfigs`** supplies the options. Keys must match the plugin identity used in `enabledPlugins` exactly; config is not shared between the two published identities.
+- **`pluginConfigs`** supplies the options. The key must match the identity used in `enabledPlugins` exactly; config is not shared between the two identities, so a typo here leaves the plugin enabled and unconfigured.
 
 `AUTH_TOKEN` delivered in managed `pluginConfigs.options` is honored, so credentials ship with the rollout and developers never handle a token. Note that this writes the token in plaintext into the managed settings payload — use an ingest-only token scoped to the target dataset, as [described below](#configuration).
-
-If you use the official marketplace instead, drop `extraKnownMarketplaces` and key both `enabledPlugins` and `pluginConfigs` on `dash0@claude-plugins-official`.
 
 ### Locking the configuration down
 
@@ -147,7 +177,7 @@ For containers and CI images, pre-bake the marketplace and plugin cache with `CL
 claude plugin list
 ```
 
-`dash0-agent-plugin@dash0` should appear with `Status: ✔ enabled` and `Scope: managed` — `managed` confirms the enablement came from managed settings rather than a local install. Then start a session and look for `dash0: connected (v0.1.22)`.
+The plugin (`dash0@claude-plugins-official` or `dash0-agent-plugin@dash0`, matching your payload) should appear with `Status: ✔ enabled` and `Scope: managed` — `managed` confirms the enablement came from managed settings rather than a local install. Exactly one identity should be listed. Then start a session and look for `dash0: connected (v0.1.22)`.
 
 > **Do not let developers self-install as well.** If someone has already installed the other identity at user scope, both are enabled and every span is exported twice, with two independent configurations. See [Every span appears twice](#troubleshooting).
 

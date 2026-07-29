@@ -46,7 +46,7 @@ Add to `<repo-root>/.claude/settings.json`:
 
 > If using the Dash0 marketplace instead, add `extraKnownMarketplaces` and enable `dash0-agent-plugin@dash0` — see [From the Dash0 marketplace](#from-the-dash0-marketplace) above.
 
-> **`pluginConfigs` does not work in project settings.** As of Claude Code v2.1.207, `pluginConfigs` is read only from user settings (`~/.claude/settings.json`), the `--settings` flag, and managed settings — entries in `.claude/settings.json` or `.claude/settings.local.json` are ignored, because a cloned repository could otherwise supply values that flow into plugin hook commands. Commit `enabledPlugins` only, and have each developer configure their options locally.
+> **`pluginConfigs` does not work in project settings.** As of Claude Code v2.1.207, `pluginConfigs` is read only from user settings (`~/.claude/settings.json`), the `--settings` flag, and managed settings — entries in `.claude/settings.json` or `.claude/settings.local.json` are ignored, because a cloned repository could otherwise supply values that flow into plugin hook commands. They are ignored **silently, with no warning** — the plugin loads and appears configured but exports nothing. Commit `enabledPlugins` only (still honored at project scope), and have each developer configure their options locally.
 
 `enabledPlugins` is committed to git. Each developer then:
 

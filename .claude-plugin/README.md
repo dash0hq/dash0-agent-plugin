@@ -119,10 +119,6 @@ Three pieces are all required, and each does something different:
 
 If you use the official marketplace instead, drop `extraKnownMarketplaces` and key both `enabledPlugins` and `pluginConfigs` on `dash0@claude-plugins-official`.
 
-### Distributing via the org-level Plugins channel
-
-Team and Enterprise organizations can alternatively publish plugins from **claude.ai → Admin Settings → Plugins**. Claude Code then packages the plugin for members, so they do not need access to the marketplace repository itself. The marketplace repository must be private/internal and the Claude GitHub App must be installed on it. npm-sourced plugins are not supported through this channel.
-
 ### Locking the configuration down
 
 Optional managed-only keys that prevent developers from working around the rollout:

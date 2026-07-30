@@ -15,15 +15,17 @@ import (
 )
 
 // SessionURL builds the Dash0 app URL that opens the given coding-agent session,
-// mapping the OTLP ingress URL to its app host. It returns "" when the OTLP URL
+// mapping the OTLP ingress URL to its app host. The dataset (empty means the
+// Dash0 default) is encoded into the URL state so the UI opens the session in
+// the dataset the telemetry was sent to. It returns "" when the OTLP URL
 // doesn't match a known Dash0 host (self-hosted / custom endpoints), which
 // callers treat as "no link available".
-func SessionURL(otlpURL, sessionID string) string {
+func SessionURL(otlpURL, sessionID, dataset string) string {
 	appURL := deriveAppURL(otlpURL)
 	if appURL == "" {
 		return ""
 	}
-	return buildSessionURL(appURL, sessionID)
+	return buildSessionURL(appURL, sessionID, dataset)
 }
 
 // deriveAppURL maps an OTLP ingress URL to the corresponding Dash0 app URL.
@@ -50,14 +52,19 @@ func deriveAppURL(otlpURL string) string {
 // buildSessionURL constructs a full Dash0 AI Coding URL with the encoded URL
 // state parameter that the Dash0 UI expects. It points at the sessions table
 // on the /coding-agents page and sets agentSession so the UI auto-opens the
-// session detail sidebar.
-func buildSessionURL(appURL, sessionID string) string {
+// session detail sidebar. A non-empty dataset is stored under the "/" pathname,
+// matching the UI's global dataset URL binding; when empty the UI falls back
+// to its default dataset.
+func buildSessionURL(appURL, sessionID, dataset string) string {
 	const codingAgentsPath = "/coding-agents"
 	state := map[string]any{
 		codingAgentsPath: map[string]any{
 			"tab":          map[string]any{"pageTab": "sessions"},
 			"agentSession": sessionID,
 		},
+	}
+	if dataset != "" {
+		state["/"] = map[string]any{"dataset": dataset}
 	}
 	stateJSON, err := json.Marshal(state)
 	if err != nil {

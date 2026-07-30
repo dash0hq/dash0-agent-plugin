@@ -37,17 +37,13 @@ func TestDeriveAppURL(t *testing.T) {
 }
 
 func TestSessionURL_UnknownHostIsEmpty(t *testing.T) {
-	assert.Empty(t, SessionURL("https://otel.example.com:4318", "sess-abc123"))
-	assert.Empty(t, SessionURL("", "sess-abc123"))
+	assert.Empty(t, SessionURL("https://otel.example.com:4318", "sess-abc123", ""))
+	assert.Empty(t, SessionURL("", "sess-abc123", ""))
 }
 
-func TestSessionURL(t *testing.T) {
-	u := SessionURL("https://ingress.us1.dash0.com:4318", "sess-abc123")
-	assert.Contains(t, u, "https://app.dash0.com/coding-agents?s=")
-	assert.NotContains(t, u, "agent-monitoring")
-
-	// Round-trip: decode the ?s= param and verify the state structure matches
-	// what the Dash0 UI url-state library expects.
+// decodeURLState decodes the ?s= param the way the Dash0 UI url-state library does.
+func decodeURLState(t *testing.T, u string) map[string]any {
+	t.Helper()
 	parts := strings.SplitN(u, "?s=", 2)
 	require.Len(t, parts, 2)
 	compressed, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(parts[1])
@@ -59,6 +55,17 @@ func TestSessionURL(t *testing.T) {
 
 	var state map[string]any
 	require.NoError(t, json.Unmarshal(decoded, &state))
+	return state
+}
+
+func TestSessionURL(t *testing.T) {
+	u := SessionURL("https://ingress.us1.dash0.com:4318", "sess-abc123", "")
+	assert.Contains(t, u, "https://app.dash0.com/coding-agents?s=")
+	assert.NotContains(t, u, "agent-monitoring")
+
+	// Round-trip: decode the ?s= param and verify the state structure matches
+	// what the Dash0 UI url-state library expects.
+	state := decodeURLState(t, u)
 	page, ok := state["/coding-agents"].(map[string]any)
 	require.True(t, ok, "state must be keyed by pathname")
 	// agentSession drives the detail sidebar; the sessions tab must be selected.
@@ -66,4 +73,21 @@ func TestSessionURL(t *testing.T) {
 	tab, ok := page["tab"].(map[string]any)
 	require.True(t, ok, "coding-agents state must carry a tab selection")
 	assert.Equal(t, "sessions", tab["pageTab"])
+	// No dataset configured → no "/" entry, so the UI falls back to its default.
+	_, hasRoot := state["/"]
+	assert.False(t, hasRoot, "empty dataset must not add a \"/\" state entry")
+}
+
+func TestSessionURL_Dataset(t *testing.T) {
+	u := SessionURL("https://ingress.us1.dash0.com:4318", "sess-abc123", "staging")
+	state := decodeURLState(t, u)
+	// The dataset lives under the "/" pathname, matching the UI's global
+	// dataset URL binding.
+	root, ok := state["/"].(map[string]any)
+	require.True(t, ok, "dataset state must be keyed by the \"/\" pathname")
+	assert.Equal(t, "staging", root["dataset"])
+	// The coding-agents page state must be unaffected.
+	page, ok := state["/coding-agents"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "sess-abc123", page["agentSession"])
 }

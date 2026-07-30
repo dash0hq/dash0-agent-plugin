@@ -147,7 +147,7 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 				})
 			} else {
 				text := fmt.Sprintf("dash0: connected (v%s)", version.Version)
-				if link := sessionurl.SessionURL(cfg.OTLPUrl, sessionID); link != "" {
+				if link := sessionurl.SessionURL(cfg.OTLPUrl, sessionID, cfg.Dataset); link != "" {
 					text += " → " + link
 				}
 				res.Messages = append(res.Messages, Message{

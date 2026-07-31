@@ -85,7 +85,7 @@ func run() error {
 	}
 
 	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" && pluginOptionBool("SHOW_SESSION_LINK") {
-		if link := sessionurl.SessionURL(cfg.OTLPUrl, sessionID); link != "" {
+		if link := sessionurl.SessionURL(cfg.OTLPUrl, sessionID, cfg.Dataset); link != "" {
 			printHookResponse(fmt.Sprintf("dash0: view session → %s", link), "")
 		}
 	}
@@ -123,7 +123,7 @@ func sessionURL() (string, error) {
 	if sessionID == "" {
 		return "", fmt.Errorf("session_id not provided")
 	}
-	link := sessionurl.SessionURL(otlpURL, sessionID)
+	link := sessionurl.SessionURL(otlpURL, sessionID, pluginOption("DATASET"))
 	if link == "" {
 		return "", fmt.Errorf("cannot derive app URL from OTLP_URL %q", otlpURL)
 	}

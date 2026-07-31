@@ -58,8 +58,6 @@ Start a new Codex session. The `curl … install-codex.sh` flow above does both 
 
 Codex is the only runtime this plugin supports where an administrator can declare its hooks as policy-trusted, skipping the per-user `/hooks` step. It also has the sharpest failure mode: the flag a locked-down fleet is most likely to set disables every way this plugin currently installs.
 
-*Researched against OpenAI's Codex documentation on 2026-07-31. Not executed against a live managed deployment — treat the payloads as documentation-derived and re-verify against the [configuration reference](https://developers.openai.com/codex/config-reference) before a rollout.*
-
 ### The two policy files
 
 Administrators deliver [managed configuration](https://developers.openai.com/codex/enterprise/managed-configuration) through two files. `requirements.toml` holds hard constraints and composes across four layers, from a system path up through the cloud config bundle to macOS MDM. `managed_config.toml` holds soft defaults that merge onto the user's `config.toml` and override CLI `--config` flags. Take the paths, the MDM preference domain, and the key list from OpenAI's docs rather than from here. Cloud-managed requirements are assignable **per user group** with a default fallback, which is the cheapest way to stage a rollout.

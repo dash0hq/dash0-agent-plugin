@@ -56,19 +56,43 @@ Start a new Codex session. The `curl … install-codex.sh` flow above does both 
 
 ## Organization-wide deployment
 
-Codex is the only runtime this plugin supports where an administrator can declare its hooks as policy-trusted, skipping the per-user `/hooks` step. It also has the sharpest failure mode: the flag a locked-down fleet is most likely to set disables every way this plugin currently installs.
+Two ways to deploy this fleet-wide. Pick by whether your policy sets `allow_managed_hooks_only`.
 
-### The two policy files
+| Path | Use when | Effort |
+|---|---|---|
+| **Installer from MDM** | your fleet does not set `allow_managed_hooks_only` | one unattended command |
+| **Managed hook** | it does, or might | a policy file plus two files per machine |
 
-Administrators deliver [managed configuration](https://developers.openai.com/codex/enterprise/managed-configuration) through two files. `requirements.toml` holds hard constraints and composes across four layers, from a system path up through the cloud config bundle to macOS MDM. `managed_config.toml` holds soft defaults that merge onto the user's `config.toml` and override CLI `--config` flags. Take the paths, the MDM preference domain, and the key list from OpenAI's docs rather than from here. Cloud-managed requirements are assignable **per user group** with a default fallback, which is the cheapest way to stage a rollout.
+> `allow_managed_hooks_only = true` skips hooks from user, project, session, and plugin sources — every install path except `requirements.toml`. The installer writes to `~/.codex/config.toml`, a user source, and the marketplace contributes plugin hooks, so neither survives. If your fleet sets this flag, only the managed hook works.
 
-### The flag that turns this plugin off
+### Installer from MDM
 
-`allow_managed_hooks_only = true` skips hooks from user, project, session, and plugin sources. **Both installation paths above are affected** — the installer registers hooks in `~/.codex/config.toml`, a user source, and the marketplace contributes plugin hooks. Only hooks declared in `requirements.toml` still load, so a fleet setting this flag has to adopt the plugin as a managed hook or it will not run at all. Separately, `features.plugins = false` disables the marketplace path, and `restrict_to_allowed_sources` with `marketplaces.allowed_sources` can allowlist `dash0hq/dash0-agent-plugin`.
+Run the [headless installer](#headless--non-interactive-ci-containers-fleet-rollout) unattended with `--endpoint`, `--token`, and `--dataset`. It registers the hooks, downloads the binary, and writes credentials in one step. No policy work needed.
 
-### Deploying as a managed hook
+### Managed hook
 
-Managed hooks are trusted by policy, cannot be disabled from the user hook browser, and survive `allow_managed_hooks_only`:
+**1. Create an ingest-only Dash0 token** scoped to your dataset, and note your OTLP endpoint. See [Configuration](#configuration).
+
+**2. Have MDM place two files on every machine.** The bootstrap script, fetched at the tag you intend to run:
+
+```bash
+mkdir -p /enterprise/hooks
+curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/v0.1.22/scripts/codex-on-event.sh \
+  -o /enterprise/hooks/codex-on-event.sh
+chmod 0755 /enterprise/hooks/codex-on-event.sh
+```
+
+…and the credentials, at `~/.codex/dash0-agent-plugin.local.md` with mode 600 (see [Config file](#config-file) for every key):
+
+```yaml
+---
+otlp_url: "https://ingress.<region>.aws.dash0.com"
+auth_token: "<your-dash0-auth-token>"
+dataset: "default"
+---
+```
+
+**3. Create `requirements.toml`:**
 
 ```toml
 [features]
@@ -88,27 +112,25 @@ command = "/enterprise/hooks/codex-on-event.sh"
 # declared in codex/hooks.json.
 ```
 
-Codex enforces this configuration but does **not** distribute the scripts, so MDM has to deliver two files: `codex-on-event.sh` into `managed_dir`, and `~/.codex/dash0-agent-plugin.local.md` for the credentials. Hook handlers accept no `env` field, and OpenAI advises against embedding secrets in MDM payloads, so the config file is the credential channel. The bootstrap only overwrites a value when the file supplies one, so anything injected through the environment still passes through.
+Deliver it by whichever channel you already use:
 
-### Or run the installer from your MDM
-
-Where the lockdown flag is not in play, the [headless installer](#headless--non-interactive-ci-containers-fleet-rollout) is simpler and needs no policy work — run it unattended with `--endpoint`, `--token`, and `--dataset`. It leaves hooks in a user source, so it stops working the day the fleet adopts `allow_managed_hooks_only`.
-
-### Codex's own OpenTelemetry is complementary
-
-An administrator can pin an `[otel]` table from `managed_config.toml`, but unlike the equivalent on GitHub Copilot it does not substitute for this plugin. Codex emits a flat set of `codex.*` **log records** — `conversation_starts`, `api_request`, `sse_event`, `user_prompt`, `tool_decision`, `tool_result` — correlated only by a shared `conversation.id`, plus counters and histograms. There is no agent span tree: users pointing the gRPC exporter at a collector report receiving low-level HTTP/2 transport spans instead of `codex.*` events ([openai/codex#17687](https://github.com/openai/codex/discussions/17687), unanswered).
-
-The two signals therefore do not overlap. Native export gives log events and metrics this plugin does not emit; the plugin gives the canonical span tree, shared with the Claude Code, Cursor, and Copilot runtimes, that native export cannot produce. Running both is additive rather than duplicative. See the [configuration reference](https://developers.openai.com/codex/config-reference) for the exporter's endpoint, `headers`, and TLS keys.
-
-### References
-
-| Topic | Source |
+| Channel | Where it goes |
 |---|---|
-| `requirements.toml`, `managed_config.toml`, MDM, precedence | [Managed configuration](https://developers.openai.com/codex/enterprise/managed-configuration) |
-| Managed hooks, trust model, plugin-bundled hooks | [Hooks](https://developers.openai.com/codex/hooks) |
-| Full key list, including `otel.*` and exporter TLS | [Configuration reference](https://developers.openai.com/codex/config-reference) |
-| Assigning cloud policies per user group | [Managed configs console](https://chatgpt.com/codex/settings/managed-configs) |
-| No agent span tree in native export | [openai/codex#17687](https://github.com/openai/codex/discussions/17687) (open) |
+| File on disk | `/etc/codex/requirements.toml` (Linux, macOS), `%ProgramData%\OpenAI\Codex\requirements.toml` (Windows) |
+| macOS MDM | `com.openai.codex` domain, key `requirements_toml_base64`, value base64-encoded TOML |
+| Cloud, per user group | [Managed configs console](https://chatgpt.com/codex/settings/managed-configs) |
+
+**4. Open egress** to `github.com` and to your Dash0 ingress. The script fetches its binary from GitHub Releases on first run and checksum-verifies it. Without that egress the hook **fails open silently** — exit 0, no stderr surfaced, sessions look normal, nothing exported.
+
+**5. Verify one machine first.** Start a session, run `/hooks`, and confirm the Dash0 hooks show as managed rather than awaiting trust. Then check traces under [Verify](#verify). Stage the wider rollout with a per-user-group cloud policy.
+
+To upgrade, re-deliver the script at a newer tag — the version is pinned inside it, so the policy file never changes. Credentials go in the file rather than the hook command because hook handlers accept no `env` field.
+
+### Don't swap this for Codex's own OpenTelemetry
+
+Codex can export `codex.*` log records and metrics, but there is no agent span tree ([openai/codex#17687](https://github.com/openai/codex/discussions/17687)), so unlike GitHub Copilot's native export it does not replace this plugin. The two are complementary: running both is additive, not duplicative.
+
+Reference: [managed configuration](https://developers.openai.com/codex/enterprise/managed-configuration), [hooks](https://developers.openai.com/codex/hooks), [configuration reference](https://developers.openai.com/codex/config-reference).
 
 ## Upgrading
 

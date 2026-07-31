@@ -122,7 +122,7 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 
 Copilot CLI has an enterprise policy layer that mirrors Claude Code's managed settings, down to the filename. It can install and enable this plugin across a fleet without any user action. It cannot deliver the plugin's configuration, so a Copilot rollout is a two-channel operation — policy for the install, device provisioning for the credentials — where the equivalent Claude Code rollout is a single JSON payload.
 
-*Researched against GitHub documentation and the `github/copilot-cli` issue tracker on 2026-07-30. Unlike the Claude Code guide, none of this has been executed against a live enterprise account — treat the payloads as documentation-derived.*
+*Researched against GitHub documentation and the `github/copilot-cli` issue tracker on 2026-07-31; bug reports below were filed against Copilot CLI v1.0.75. Unlike the Claude Code guide, none of this has been executed against a live enterprise account — treat the payloads as documentation-derived, and re-verify the schema against the [managed settings reference](https://docs.github.com/en/copilot/reference/enterprise-managed-settings-reference) before a customer rollout.*
 
 ### How Copilot resolves managed settings
 
@@ -142,7 +142,9 @@ flowchart TD
 
 The server-managed channel reads `copilot/managed-settings.json` from a repository named `.github-private` on the enterprise's default branch, refreshing roughly hourly and on restart or re-authentication, with the last fetch cached for offline starts. The file-based channel reads a platform path: `/etc/github-copilot/managed-settings.json` on Linux, `/Library/Application Support/GitHubCopilot/managed-settings.json` or the `com.github.copilot` plist domain on macOS, and `%ProgramFiles%\GitHubCopilot\managed-settings.json` or `HKLM\SOFTWARE\Policies\GitHubCopilot` on Windows.
 
-Two scoping limits matter when qualifying a customer. Managed settings apply **enterprise-wide with no organization-level override**, so a single organization inside a larger enterprise cannot deploy this for itself — a real constraint that has no Claude Code equivalent, where Team plans can. And content exclusion, which enterprises often assume covers everything, [does not apply to Copilot CLI](https://docs.github.com/en/copilot/how-tos/configure-content-exclusion/exclude-content-from-copilot) at all.
+> **GitHub's own documentation contradicts itself on whether managed settings are enforcement or merely a default.** The enterprise reference states that the `managed-settings.json` value takes precedence over any file-based configuration a user sets, and orders the sources MDM → server → file → user, as diagrammed above. The CLI config reference orders them the other way for most keys, applying MDM "as a policy baseline" that "user settings can override," and names `permissions.disableBypassPermissionsMode` as the one key where a managed value always wins. Naming a single exception implies the rest are overridable. The two pages cannot both be right. For `telemetry` specifically the question is settled in favor of enforcement — see [Routing Copilot's native telemetry instead](#routing-copilots-native-telemetry-instead) — but for `enabledPlugins` it is unresolved, and [#4283](https://github.com/github/copilot-cli/issues/4283) is a case of the user-settings side winning in practice. Treat any key other than `telemetry` as a strong default rather than a guarantee until tested.
+
+Three scoping limits matter when qualifying a customer. Managed settings apply **enterprise-wide with no organization-level override**, so a single organization inside a larger enterprise cannot deploy this for itself — a real constraint that has no Claude Code equivalent, where Team plans can. Content exclusion, which enterprises often assume covers everything, [does not apply to Copilot CLI](https://docs.github.com/en/copilot/how-tos/configure-content-exclusion/exclude-content-from-copilot) at all. And an enterprise dedicated to Copilot Business (sometimes called Copilot Standalone) has no organization to hold `.github-private`, so using the server-managed channel at all requires giving one user a GitHub Enterprise license to create the organization and repository, then designating it as the source of governance. MDM and file-based delivery need neither.
 
 ### Installing the plugin fleet-wide
 
@@ -152,7 +154,7 @@ Two keys do the work. `extraKnownMarketplaces` makes the Dash0 marketplace resol
 {
   "extraKnownMarketplaces": {
     "dash0": {
-      "source": { "type": "github", "repo": "dash0hq/dash0-agent-plugin" }
+      "source": { "source": "github", "repo": "dash0hq/dash0-agent-plugin" }
     }
   },
   "enabledPlugins": {
@@ -161,13 +163,27 @@ Two keys do the work. `extraKnownMarketplaces` makes the Dash0 marketplace resol
 }
 ```
 
-Adding `"strictKnownMarketplaces": true` confines plugin installation to the marketplaces listed here, which is worth pairing with the above so the approved Dash0 marketplace is the only one developers can install from.
+> The inner key is `source`, not `type` — the marketplace object wraps a `source` property whose own discriminator is also called `source`. The `github` type additionally accepts `ref` (branch, tag, or SHA) and `path` (subdirectory). Because the marketplace manifest lives at [`.github/plugin/marketplace.json`](marketplace.json), which is one of the paths Copilot checks by default, no `path` is needed here.
+
+`strictKnownMarketplaces` confines plugin installation to marketplaces the enterprise has approved, and is worth pairing with the above so Dash0 is the only marketplace developers can install from. It is an **array of marketplace objects**, not a boolean — an empty array is a complete lockdown:
+
+```json
+{
+  "strictKnownMarketplaces": [
+    { "source": "github", "repo": "dash0hq/dash0-agent-plugin" }
+  ]
+}
+```
+
+One caveat in GitHub's guidance does not bite here. `enabledPlugins` makes each client install the plugin on behalf of its user, so that user needs read access to wherever the plugin is hosted — a plugin in a private repository can fail to install for exactly the developers the policy was meant to cover, and may require a license to fix. The Dash0 marketplace is a public repository, so authorization is never the failure mode.
 
 Verify the install half before relying on it. [github/copilot-cli#4283](https://github.com/github/copilot-cli/issues/4283) is open against v1.0.75: server-managed `enabledPlugins` installs the plugin but persists `enabled: false`, because an empty `enabledPlugins: {}` in the user's local `settings.json` is treated as authoritative. Hooks never load, and the documented workaround — adding the same entry to each user's local settings — defeats the point. A closely related bug, [#4039](https://github.com/github/copilot-cli/issues/4039), was fixed in v1.0.68 after marking plugins installed against a `cache_path` that was never populated.
 
 ### What policy cannot deliver
 
-The documented managed-settings key set is `permissions.disableBypassPermissionsMode`, `permissions.model`, `enabledPlugins`, `extraKnownMarketplaces`, `strictKnownMarketplaces`, and `telemetry`. There is no `env` key, and `enabledPlugins` entries take a boolean — enable or disable, with no configuration payload. Copilot's plugin manifest format compounds this: it defines `name`, `description`, `version`, `author`, `license`, `keywords`, `agents`, `skills`, `hooks`, and `mcpServers`, but nothing equivalent to Claude Code's `userConfig`. This plugin's [`copilot/plugin.json`](../../copilot/plugin.json) therefore declares no options at all, and every value is read from the config file that [`copilot-on-event.sh`](../../copilot/copilot-on-event.sh) parses at hook time.
+The managed-settings key set documented for all clients is `permissions.disableBypassPermissionsMode`, `model`, `enabledPlugins`, `extraKnownMarketplaces`, `strictKnownMarketplaces`, `telemetry`, and `remoteControl`. The MDM tier accepts three more that the enterprise reference table omits: `allowedMcpServers`, `deniedMcpServers`, and `shellShortcut`. Write `model` at the top level; the older nested `permissions.model` still resolves as a fallback but should not be used in new payloads.
+
+There is no `env` key anywhere in that set, and `enabledPlugins` entries take a boolean — enable or disable, with no configuration payload. Copilot's plugin manifest format compounds this: it defines `name`, `description`, `version`, `author`, `license`, `keywords`, `agents`, `skills`, `hooks`, and `mcpServers`, but nothing equivalent to Claude Code's `userConfig`. This plugin's [`copilot/plugin.json`](../../copilot/plugin.json) therefore declares no options at all, and every value is read from the config file that [`copilot-on-event.sh`](../../copilot/copilot-on-event.sh) parses at hook time.
 
 A fleet-wide `enabledPlugins` push consequently produces an installed plugin that starts up configured with nothing. Two of the three things this plugin needs have to arrive by device provisioning:
 
@@ -204,13 +220,54 @@ The launch wrapper cannot be reduced to static environment variables, which is t
 
 ### Routing Copilot's native telemetry instead
 
-The `telemetry` managed key is the one place GitHub already ships an endpoint and credentials centrally, accepting `enabled`, `endpoint`, `protocol`, `headers`, `serviceName`, `resourceAttributes`, `captureContent`, and `lockCaptureContent`. Pointing `endpoint` at a Dash0 ingress and carrying the auth token in `headers` is fully server-delivered and genuinely zero-touch, with no plugin, no config file, and no launch wrapper — and `lockCaptureContent` lets an enterprise pin the prompt-capture decision so developers cannot change it.
+The `telemetry` managed key is the one place GitHub already ships an endpoint and credentials centrally. It went [generally available on 2026-07-08](https://github.blog/changelog/2026-07-08-enterprise-managed-opentelemetry-export-for-vs-code-and-cli/) and accepts `enabled`, `endpoint`, `protocol`, `headers`, `serviceName`, `resourceAttributes`, `captureContent`, and `lockCaptureContent`. Because Dash0's OTLP contract is a base URL plus `Authorization` and `Dash0-Dataset` headers, it maps onto that schema directly:
 
-What it gives up is everything the plugin adds on top: the canonical span shape shared with the Claude Code, Cursor, and Codex runtimes, VCS and code enrichment, dataset routing, and the sub-agent parenting described in [`copilot/README.md`](../../copilot/README.md). Since this plugin already consumes Copilot's native OTel output as its own upstream, the two are not competing data sources so much as the same data with and without enrichment, which makes the comparison cheap to run rather than theoretical.
+```json
+{
+  "telemetry": {
+    "enabled": true,
+    "endpoint": "https://ingress.<region>.aws.dash0.com",
+    "protocol": "http/json",
+    "serviceName": "github-copilot",
+    "captureContent": false,
+    "lockCaptureContent": true,
+    "resourceAttributes": { "deployment.environment": "production" },
+    "headers": {
+      "Authorization": "Bearer <DASH0_AUTH_TOKEN>",
+      "Dash0-Dataset": "default"
+    }
+  }
+}
+```
+
+This is the only part of a Copilot rollout that is genuinely zero-touch: no plugin, no config file, no launch wrapper, and it reaches the VS Code extension as well as the CLI. It is also the only key whose enforcement is documented rather than ambiguous — the changelog states that "a managed value always wins, taking precedence over environment variables and user settings," which closes the precedence question raised above and means a developer cannot redirect the export with `OTEL_EXPORTER_OTLP_ENDPOINT`. `lockCaptureContent` pins the prompt-capture decision the same way. The changelog also notes that managed exporter headers "are never passed through environment variables, so a value such as an authentication token can't leak into the tool subprocesses that the agent host spawns," which is a stronger guarantee than the config file offers.
+
+The payload above specifies `http/json` deliberately. The reference documents `http/protobuf` as an accepted value, but [#2934](https://github.com/github/copilot-cli/issues/2934) is still open against protobuf support, so the two sources disagree and JSON is the value known to work. Dash0 accepts OTLP/HTTP JSON — it is what this plugin's own exporter posts — so nothing is lost by choosing it. Endpoints that reject JSON, such as Azure Monitor, are the reason #2934 remains a blocker for other backends.
+
+Two further caveats before recommending it. Managed headers are **static and never refreshed** ([#3477](https://github.com/github/copilot-cli/issues/3477)), so rotating the Dash0 token means re-pushing managed settings and waiting out the hourly refresh. That is tolerable for Dash0 because ingest tokens are long-lived; it is what makes this path unusable for backends issuing short-lived credentials, and the reason the issue is still open. And a token in `headers` under the server-managed channel is committed in plaintext to `.github-private`, readable by anyone with access to that repository and preserved in its history. Prefer a narrowly scoped ingest-only token limited to the target dataset, and prefer MDM delivery where repository read access is broad.
+
+#### Choosing between the two
+
+The plugin path remains the default recommendation, because it is the one that produces the span shape the rest of this plugin's runtimes produce. Native export is the right answer when zero-touch matters more than enrichment, or as a first step while device provisioning is still being built. The two are not competing data sources so much as the same data with and without enrichment, since the plugin already consumes Copilot's native OTel output as its own upstream — which makes running both briefly a cheap way to compare, provided only one of them targets a given dataset at a time.
+
+| | Plugin (policy install + provisioning) | Managed `telemetry` |
+|---|---|---|
+| Clients covered | Copilot CLI | Copilot CLI and VS Code |
+| Developer action required | Credentials and launch wrapper per machine | None |
+| Enforceable against a determined user | Unresolved, see [#4283](https://github.com/github/copilot-cli/issues/4283) | Yes, documented to beat env vars and user settings |
+| Span shape | Canonical, shared with Claude Code, Cursor, and Codex | GitHub's GenAI semantic-convention shape |
+| VCS and code enrichment (repo, branch, PR, issue, commit) | Yes | No |
+| Signals | Traces only | Traces and metrics |
+| Dataset routing | Per user or per project | Enterprise-wide, one `Dash0-Dataset` header |
+| Token rotation | Re-provision the config file or policy hook | Re-push managed settings, static until then |
+| Token exposure | Config file on disk, mode 600 | Plaintext in `.github-private`, or MDM payload |
+| Sub-agent parenting | As described in [`copilot/README.md`](../../copilot/README.md) | Native `invoke_agent` spans, no plugin-side re-parenting |
 
 ### Where this leaves a Copilot rollout
 
-Install is solved and centrally governable; configuration is not, and the launch wrapper makes device provisioning unavoidable for complete telemetry. An honest description to an enterprise is policy-managed installation plus MDM-delivered credentials and shell profile, with the caveat that #4283 currently undermines even the install half. The comparison to state plainly is that Claude Code reaches the same outcome with one payload and no device management, and that Copilot's gap is a tracked feature request rather than a design decision — so this section should be revisited when #3909 closes.
+Install is solved and centrally governable; configuration is not, and the launch wrapper makes device provisioning unavoidable for complete telemetry. An honest description to an enterprise is policy-managed installation plus MDM-delivered credentials and shell profile, with the caveat that #4283 currently undermines even the install half. Where that provisioning does not exist yet, managed `telemetry` is a working zero-touch fallback that gives up enrichment rather than correctness, and it covers VS Code as a bonus.
+
+The comparison to state plainly is that Claude Code reaches the full-enrichment outcome with one payload and no device management, and that Copilot's gap is a tracked feature request rather than a design decision. Dash0's requirements are on record in [#3909](https://github.com/github/copilot-cli/issues/3909), including why a scoped per-plugin config map is preferable to a general `env` block. Revisit this section when that issue closes, and re-test the install half whenever #4283 moves.
 
 ### References
 
@@ -223,8 +280,12 @@ Install is solved and centrally governable; configuration is not, and the launch
 | Auto-install semantics | [About enterprise plugin standards](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-enterprise-plugin-standards) |
 | Plugin manifest fields | [CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference) |
 | Content exclusion scope | [Exclude content from Copilot](https://docs.github.com/en/copilot/how-tos/configure-content-exclusion/exclude-content-from-copilot) |
+| Native OTel span, metric, and event schema | [CLI command reference, OpenTelemetry monitoring](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#opentelemetry-monitoring) |
+| Managed `telemetry` GA, precedence over env vars | [Enterprise-managed OpenTelemetry export changelog](https://github.blog/changelog/2026-07-08-enterprise-managed-opentelemetry-export-for-vs-code-and-cli/) (2026-07-08) |
 | Central config gap | [copilot-cli#3909](https://github.com/github/copilot-cli/issues/3909) (open) |
 | `enabledPlugins` enablement bug | [copilot-cli#4283](https://github.com/github/copilot-cli/issues/4283) (open) |
+| Static exporter headers, no refresh | [copilot-cli#3477](https://github.com/github/copilot-cli/issues/3477) (open) |
+| `http/protobuf` export support | [copilot-cli#2934](https://github.com/github/copilot-cli/issues/2934) (open, contradicts the reference) |
 | Plugin cache sync bug | [copilot-cli#4039](https://github.com/github/copilot-cli/issues/4039) (fixed, v1.0.68) |
 
 ## Privacy defaults

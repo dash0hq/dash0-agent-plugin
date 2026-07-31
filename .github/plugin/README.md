@@ -173,13 +173,7 @@ So this plugin's [`copilot/plugin.json`](../../copilot/plugin.json) declares no 
 
 The gap is tracked as [#3909](https://github.com/github/copilot-cli/issues/3909), which names Claude Code's server-managed settings as its parity target and where Dash0's requirements are on record. It remains open.
 
-### Provisioning credentials and the launch wrapper
-
-The most tamper-resistant machine-local channel is Copilot's [policy hooks](https://docs.github.com/en/copilot/reference/hooks-reference#policy-hooks) tier, which is separate from managed settings: root-owned files in a platform policy directory, loaded ahead of all other hooks, immune to `disableAllHooks`, and unmodifiable by end users. Because a hook entry accepts an `env` block, an administrator can inject `COPILOT_PLUGIN_OPTION_AUTH_TOKEN` and `DASH0_OTLP_URL` there. The bootstrap only overwrites those from a config file when one supplies a value, so injected variables pass through untouched.
-
-Provisioning the config file directly is simpler: write `~/.copilot/dash0-agent-plugin.local.md` with mode 600 through whatever tooling already seeds dotfiles. No hook plumbing, at the cost of being user-editable.
-
-The launch wrapper cannot be reduced to static environment variables, which is the part most likely to be got wrong. Copilot's native OTel is the source of per-turn token, cost, and model usage, the agent response, and every tool span, and it is enabled by variables read from `copilot`'s own process environment — not the hook's. `COPILOT_OTEL_ENABLED=true` could be exported system-wide from `/etc/profile.d`, but `COPILOT_OTEL_FILE_EXPORTER_PATH` must be unique per session; a fixed value makes concurrent sessions interleave their writes into one file. Provisioning therefore has to install the shell function itself — the same one [`/dash0-configure`](../../copilot/skills/dash0-configure/SKILL.md) writes, which derives the path from `$$` and `$RANDOM` — into a system-wide shell profile such as `/etc/profile.d/dash0-copilot.sh`. Skipping it is not fatal: hooks still emit one `chat` span per turn, without usage, response, or tool detail.
+Credentials are the easy half: place `~/.copilot/dash0-agent-plugin.local.md` with mode 600 using whatever tooling already seeds dotfiles. The launch wrapper is the trap, because it cannot be reduced to exported variables. Copilot reads `COPILOT_OTEL_ENABLED` and `COPILOT_OTEL_FILE_EXPORTER_PATH` from its own process environment rather than the hook's, and the exporter path must be unique per session or concurrent sessions interleave their writes into one file. Provisioning therefore has to install the shell function that [`/dash0-configure`](../../copilot/skills/dash0-configure/SKILL.md) writes, into a system-wide profile such as `/etc/profile.d/dash0-copilot.sh`. Omitting it degrades gracefully rather than failing — see [`copilot/README.md`](../../copilot/README.md).
 
 ### Routing Copilot's native telemetry instead
 
@@ -241,7 +235,6 @@ Claude Code reaches the full-enrichment outcome with one payload and no device m
 | Managed settings keys and precedence | [Enterprise managed settings reference](https://docs.github.com/en/copilot/reference/enterprise-managed-settings-reference) |
 | Delivery channels and `.github-private` setup | [Configure enterprise managed settings](https://docs.github.com/en/copilot/how-tos/administer-copilot/manage-for-enterprise/manage-agents/configure-enterprise-managed-settings) |
 | Config directory and managed paths | [CLI config dir reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference) |
-| Policy hooks tier and hook `env` | [Hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference) |
 | Auto-install semantics | [About enterprise plugin standards](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-enterprise-plugin-standards) |
 | Plugin manifest fields | [CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference) |
 | Content exclusion scope | [Exclude content from Copilot](https://docs.github.com/en/copilot/how-tos/configure-content-exclusion/exclude-content-from-copilot) |

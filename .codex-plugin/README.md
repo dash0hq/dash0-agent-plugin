@@ -67,7 +67,11 @@ Two ways to deploy this fleet-wide. Pick by whether your policy sets `allow_mana
 
 ### Installer from MDM
 
-Run the [headless installer](#headless--non-interactive-ci-containers-fleet-rollout) unattended with `--endpoint`, `--token`, and `--dataset`. It registers the hooks, downloads the binary, and writes credentials in one step. No policy work needed.
+Run the [headless installer](#headless--non-interactive-ci-containers-fleet-rollout) unattended with `--endpoint`, `--token`, and `--dataset`. It registers the hooks, pre-trusts them by writing a `trusted_hash` into `~/.codex/config.toml`, fetches the binary, and writes credentials in one step. No policy work needed.
+
+Run it **as the logged-in user** — everything it writes lives under `~/.codex/`.
+
+> Don't substitute `codex plugin add` in an MDM script. That installs the plugin but leaves its hooks untrusted, and there is no non-interactive way to trust them: only the interactive `/hooks` browser, per developer, and again after every upgrade because trust is keyed to the hook's hash. Pre-trusting is the whole reason the installer works unattended.
 
 ### Managed hook
 
@@ -82,7 +86,7 @@ curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/v0.1.22/
 chmod 0755 /enterprise/hooks/codex-on-event.sh
 ```
 
-…and the credentials, at `~/.codex/dash0-agent-plugin.local.md` with mode 600 (see [Config file](#config-file) for every key):
+…and the credentials, at `~/.codex/dash0-agent-plugin.local.md` with mode 600. That is a per-user path, so place it in each user's home, not once per machine (see [Config file](#config-file) for every key):
 
 ```yaml
 ---

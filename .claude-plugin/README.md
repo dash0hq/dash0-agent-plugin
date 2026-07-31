@@ -57,67 +57,19 @@ Add to `<repo-root>/.claude/settings.json`:
 
 ## Organization-wide deployment
 
-To roll the plugin out to a whole organization without asking each developer to install and configure it, deliver the marketplace, the plugin enablement, and the plugin options together through Claude Code's **managed settings**. Managed settings take precedence over every other settings source and cannot be overridden by users.
+Admins can install and configure the plugin for every member with no per-developer steps, using [Claude Code managed settings](https://code.claude.com/docs/en/server-managed-settings). Managed settings take top precedence and cannot be overridden by user or project settings.
 
-*Verified on Claude Code 2.1.220 with plugin 0.1.22, deployed via the Dash0 marketplace through server-managed settings.*
+*Verified on Claude Code 2.1.220 with plugin 0.1.22, via the Dash0 marketplace and server-managed settings.*
 
-### Two delivery channels
+### 1. Install the plugin on members' machines
 
-Claude Code reads managed settings from one of two places, and **they do not merge**:
+In the claude.ai **Organization plugins** admin page, set the plugin to **Required** (auto-installed, not removable) or **Installed by default**. That is what downloads the plugin; it takes effect on the member's next session.
 
-| | Server-managed | Endpoint-managed |
-|---|---|---|
-| Delivered by | claude.ai → **Admin Settings** → **Claude Code** → **Managed settings** | MDM/config management, as a file on each machine |
-| Requires | Team or Enterprise plan; Owner or Primary Owner role | Root/admin write access to the managed path |
-| Location on disk | Cached at `~/.claude/remote-settings.json`, applied in memory | macOS `/Library/Application Support/ClaudeCode/managed-settings.json`, Linux and WSL `/etc/claude-code/managed-settings.json`, Windows `C:\Program Files\ClaudeCode\managed-settings.json` |
-| Refresh | Polled automatically | On next session start |
-| Zero-touch | Yes — nothing to pre-install on the machine | Requires an MDM push |
+Managed settings only enable and configure a plugin. Skipping this step is the most likely reason a rollout produces no telemetry: `enabledPlugins` names a plugin that was never fetched, so there is nothing to load.
 
-> **If server-managed settings deliver any key at all, they replace endpoint-managed settings entirely** — the two are not combined. Pick one channel and put everything in it.
+### 2. Push the configuration
 
-> The legacy Windows path `C:\ProgramData\ClaudeCode\managed-settings.json` is no longer supported as of Claude Code v2.1.75.
-
-> Server-managed settings are not available when Claude Code runs against Bedrock, Vertex, Foundry, or a custom `ANTHROPIC_BASE_URL`. Use the endpoint-managed file in those environments.
-
-### Installing the plugin on members' machines
-
-Managed settings enable and configure the plugin. Installing it is a separate step: in the claude.ai **Organization plugins** admin page, set the plugin to **Required** (auto-installed and not removable) or **Installed by default**. That is what downloads the plugin onto members' machines, and it takes effect on their next session.
-
-Skipping this step is the most likely reason a rollout produces no telemetry: `enabledPlugins` names a plugin that was never fetched, so there is nothing to load.
-
-### Managed settings payload
-
-The same JSON works in either channel. Which payload you use depends on the marketplace you install from — the plugin identity differs, and the two identities do not share configuration.
-
-#### From the official Claude Code marketplace
-
-The official marketplace is known to Claude Code already, so no `extraKnownMarketplaces` entry is needed:
-
-```json
-{
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "enabledPlugins": {
-    "dash0@claude-plugins-official": true
-  },
-  "pluginConfigs": {
-    "dash0@claude-plugins-official": {
-      "options": {
-        "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
-        "AUTH_TOKEN": "auth_...",
-        "DATASET": "default",
-        "AGENT_NAME": "claude-code",
-        "OMIT_IO": "true",
-        "OMIT_USER_INFO": "false",
-        "SHOW_SESSION_LINK": "false"
-      }
-    }
-  }
-}
-```
-
-#### From the Dash0 marketplace
-
-Add `extraKnownMarketplaces` to make the marketplace resolvable, and key everything on `dash0-agent-plugin@dash0`:
+Add the payload in claude.ai → **Admin Settings** → **Claude Code** → **Managed settings**. Requires a Team or Enterprise plan and the Owner or Primary Owner role. Clients fetch it at startup and re-poll hourly, caching it at `~/.claude/remote-settings.json` and applying it in memory.
 
 ```json
 {
@@ -128,92 +80,58 @@ Add `extraKnownMarketplaces` to make the marketplace resolvable, and key everyth
       "autoUpdate": true
     }
   },
-  "enabledPlugins": {
-    "dash0-agent-plugin@dash0": true
-  },
+  "enabledPlugins": { "dash0-agent-plugin@dash0": true },
   "pluginConfigs": {
     "dash0-agent-plugin@dash0": {
       "options": {
         "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
         "AUTH_TOKEN": "auth_...",
-        "DATASET": "default",
-        "AGENT_NAME": "claude-code",
-        "OMIT_IO": "true",
-        "OMIT_USER_INFO": "false",
-        "SHOW_SESSION_LINK": "false"
+        "DATASET": "default"
       }
     }
   }
 }
 ```
 
-> Pick one. The two identities ship the same hooks, so enabling both registers every hook twice and exports every span twice.
+Installing from the official marketplace instead? Drop `extraKnownMarketplaces` and key both `enabledPlugins` and `pluginConfigs` on `dash0@claude-plugins-official`. Enable one identity, never both: they ship the same hooks, so both enabled means every span is exported twice. Any option from [Options](#options) can go in `options`; the keys must match the identity in `enabledPlugins` exactly, or the plugin loads unconfigured.
 
-#### What each key does
+### MDM alternative
 
-- **`extraKnownMarketplaces`** (Dash0 marketplace only) makes the marketplace resolvable. On its own it installs nothing.
-- **`enabledPlugins`** activates the plugin. **Without this key nothing happens** — a registered marketplace and staged options produce no telemetry, silently.
-- **`pluginConfigs`** supplies the options. The key must match the identity used in `enabledPlugins` exactly; config is not shared between the two identities, so a typo here leaves the plugin enabled and unconfigured.
+If you manage devices with MDM, deploy the same JSON as an on-disk `managed-settings.json` instead of using the console. The path differs per OS and has changed between versions, so take it from [the settings reference](https://code.claude.com/docs/en/settings) rather than copying it from here.
 
-### The auth token, and its known limitation
+> Server-managed and endpoint-managed settings do **not** merge. If the console delivers any keys, the on-disk file is ignored entirely. Pick one channel per organization.
 
-`AUTH_TOKEN` delivered in managed `pluginConfigs.options` is honored, so credentials ship with the rollout and developers never handle a token. This is the only path that is genuinely zero-touch, and it comes with a tradeoff worth stating plainly before you choose it.
+> Server-managed settings are not delivered on Bedrock, Vertex, Foundry, or a custom `ANTHROPIC_BASE_URL`. Use the on-disk file there.
 
-**The token is stored in plaintext on every machine in the fleet.** Managed settings are cached at `~/.claude/remote-settings.json`, and the token sits there in the clear, readable by any process running as that user. It is also plaintext at rest in the admin console. This is a known limitation of delivering credentials through managed settings, not something the plugin can encrypt around.
+### The auth token: a known limitation
 
-Two things make it defensible. Use an ingest-only token scoped to the single dataset you send to, so a leaked token can write telemetry to that dataset and nothing else, and cannot read anything. And rotation is centralized: change the value once in the console and the whole fleet picks it up on the next poll, which is easier than rotating a per-user secret across hundreds of machines.
+`AUTH_TOKEN` in managed `pluginConfigs.options` is honored, which makes this the only genuinely zero-touch path. The cost is that the token is stored in plaintext on every machine in the fleet, in `~/.claude/remote-settings.json`, readable by any process running as that user. It is plaintext at rest in the console too. Nothing the plugin does can encrypt around this.
 
-The alternative is to omit `AUTH_TOKEN` from the payload and have each developer add it once via `/plugin` → **Configure**, which stores it encrypted in the OS keychain and never writes it to `settings.json`. That is the right choice when a security policy forbids credentials at rest in plaintext. It is no longer zero-touch: every developer has a manual step, and anyone who skips it sends nothing.
+Two things make it defensible: use an ingest-only token scoped to the one dataset you send to, so a leak can write telemetry there and read nothing; and rotation is centralized, since changing the console value updates the fleet on the next poll.
 
-Managed settings cannot write to the keychain, so there is no option that is both zero-touch and keychain-backed. Pick based on the token's scope and the customer's policy.
-
-### Locking the configuration down
-
-Optional managed-only keys that prevent developers from working around the rollout:
-
-| Key | Effect |
-|---|---|
-| `strictKnownMarketplaces` | Only marketplaces listed in managed settings may be used |
-| `blockedMarketplaces` | Denies specific marketplaces |
-| `disableSideloadFlags` | Blocks `--plugin-dir` and similar local-override flags |
-| `allowManagedPermissionRulesOnly` | Ignores user and project permission rules |
-| `pluginSuggestionMarketplaces` | Restricts which marketplaces can suggest plugins |
-| `forceRemoteSettingsRefresh` | Requires a successful managed-settings fetch before starting |
-
-### Network prerequisites
-
-Each machine needs egress to:
-
-- **`github.com`** — the plugin downloads its release binary from GitHub Releases on first run, and verifies it against `checksums.txt`. Without this the plugin installs but never exports.
-- **Your Dash0 OTLP ingress** (`https://ingress.<region>.aws.dash0.com`) over HTTPS.
-
-For containers and CI images, pre-bake the marketplace and plugin cache with `CLAUDE_CODE_PLUGIN_SEED_DIR` so images do not clone or download at runtime.
+The alternative is to omit `AUTH_TOKEN` and have each developer add it once via `/plugin` → **Configure**, which stores it encrypted in the OS keychain. Choose that when policy forbids plaintext credentials at rest, and accept that it is no longer zero-touch. Managed settings cannot write to the keychain, so no option is both.
 
 ### Per-team attribution
 
-Keep `TEAM_NAME` out of the managed payload. Managed settings deliver one payload to the entire fleet and users cannot override them, so a centrally set `TEAM_NAME` tags every developer with the same team and leaves nobody able to correct it.
+Keep `TEAM_NAME` out of the payload. Managed values cannot be overridden, so setting it centrally tags every developer with the same team and leaves nobody able to correct it. Omitting it is safe: `pluginConfigs` merges per key, so the payload above still lets each developer's own `TEAM_NAME` through.
 
-Leaving it unset is safe. `pluginConfigs` merges per key, so a payload that sets `OTLP_URL`, `AUTH_TOKEN`, and `DATASET` without `TEAM_NAME` still lets each developer's own value through.
+Per-developer values come from `team_name:` in `~/.claude/dash0-agent-plugin.local.md` or the `DASH0_TEAM_NAME` environment variable. The environment variable is the portable one, being the only form the Cursor, Codex, and Copilot runtimes read; the config file works even where no shell environment is inherited, as with Claude Desktop.
 
-Each developer's team comes from a per-user source: `team_name:` in `~/.claude/dash0-agent-plugin.local.md`, or the `DASH0_TEAM_NAME` environment variable. The environment variable is the portable choice, because it is the only form the Cursor, Codex, and Copilot runtimes read. The config file works even when the process does not inherit a shell environment, which is the case for Claude Desktop.
+Distributing those per-user values is an enterprise concern the plugin cannot solve. Whichever system already tracks team membership has to write the file or export the variable, and run again when someone moves teams. One trap: the project-level and user-level config files do not merge, so a repository containing `.claude/dash0-agent-plugin.local.md` makes a provisioned team name disappear for anyone working in that repo.
 
-Getting those per-user values onto every developer's machine is not something the plugin can do. Whichever system already tracks team membership, such as MDM, dotfile provisioning, or an IdP group, has to write the file or export the variable, and run again when someone moves teams.
+### Locking it down
 
-Watch one trap when provisioning the file. The project-level and user-level config files do not merge. If a repository contains `.claude/dash0-agent-plugin.local.md`, the user-level file is ignored completely, and the provisioned team name disappears for anyone working in that repository.
+Managed settings can also restrict which marketplaces are usable, block sideload flags, and require a successful settings fetch before startup. The available keys change between releases, so see [the settings reference](https://code.claude.com/docs/en/settings) for the current set.
 
-### Verifying a rollout on one machine
+### Network prerequisites
 
-Have a developer run `/status` and check **Setting sources** for `Enterprise managed settings`. That confirms the payload reached the machine and is being applied.
+Each machine needs HTTPS egress to `github.com`, where the plugin fetches its release binary on first run and verifies it against `checksums.txt`, and to your Dash0 OTLP ingress. Without GitHub access the plugin installs but never exports. For container images, pre-bake the marketplace and plugin cache with `CLAUDE_CODE_PLUGIN_SEED_DIR` so nothing is downloaded at runtime.
 
-Then confirm the plugin itself:
+### Verify the rollout
 
-```bash
-claude plugin list
-```
+A developer runs `/status` → **Setting sources**, which should list `Enterprise managed settings`. `claude plugin list` should show exactly one Dash0 identity with `Status: ✔ enabled` and `Scope: managed`, confirming the enablement came from managed settings rather than a local install. The session banner reads `dash0: connected`, and the session appears in Dash0 under the configured dataset.
 
-The plugin (`dash0@claude-plugins-official` or `dash0-agent-plugin@dash0`, matching your payload) should appear with `Status: ✔ enabled` and `Scope: managed` — `managed` confirms the enablement came from managed settings rather than a local install. Exactly one identity should be listed. Finally, start a session and look for `dash0: connected (v0.1.22)`, then check that the session appears in Dash0 under the configured dataset.
-
-> **Do not let developers self-install as well.** If someone has already installed the other identity at user scope, both are enabled and every span is exported twice, under two independent configurations. Remove the user-scoped one (`claude plugin uninstall dash0@claude-plugins-official --scope user`) and let managed settings be the single source of truth.
+> **Do not let developers self-install as well.** If someone already installed the other identity at user scope, both are enabled and every span is exported twice under two independent configurations. Remove the user-scoped one with `claude plugin uninstall dash0@claude-plugins-official --scope user` and let managed settings be the single source of truth.
 
 ## Configuration
 

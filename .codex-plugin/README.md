@@ -56,27 +56,21 @@ Start a new Codex session. The `curl … install-codex.sh` flow above does both 
 
 ## Organization-wide deployment
 
-Codex has the most capable policy layer of the runtimes this plugin supports, and it is the only one where an administrator can declare the plugin's hooks as policy-trusted, skipping the per-user `/hooks` step entirely. It also has the sharpest failure mode: the flag a locked-down fleet is most likely to set disables every way this plugin currently installs.
+Codex is the only runtime this plugin supports where an administrator can declare its hooks as policy-trusted, skipping the per-user `/hooks` step. It also has the sharpest failure mode: the flag a locked-down fleet is most likely to set disables every way this plugin currently installs.
 
 *Researched against OpenAI's Codex documentation on 2026-07-31. Not executed against a live managed deployment — treat the payloads as documentation-derived and re-verify against the [configuration reference](https://developers.openai.com/codex/config-reference) before a rollout.*
 
 ### The two policy files
 
-Administrators deliver [managed configuration](https://developers.openai.com/codex/enterprise/managed-configuration) through two files. `requirements.toml` holds hard constraints and composes across four layers, from a system path up through the cloud config bundle to macOS MDM. `managed_config.toml` holds soft defaults that merge onto the user's `config.toml` and override CLI `--config` flags. Take the paths, the MDM preference domain, and the current key list from OpenAI's docs rather than from here.
-
-Two properties are worth knowing when qualifying a customer. Cloud-managed requirements are assignable **per user group** with a default fallback, so a staged rollout is possible without touching MDM. And the cloud bundle **fails closed**: if the fetch fails and no valid cache exists, the client errors rather than starting without the policy layer.
+Administrators deliver [managed configuration](https://developers.openai.com/codex/enterprise/managed-configuration) through two files. `requirements.toml` holds hard constraints and composes across four layers, from a system path up through the cloud config bundle to macOS MDM. `managed_config.toml` holds soft defaults that merge onto the user's `config.toml` and override CLI `--config` flags. Take the paths, the MDM preference domain, and the key list from OpenAI's docs rather than from here. Cloud-managed requirements are assignable **per user group** with a default fallback, which is the cheapest way to stage a rollout.
 
 ### The flag that turns this plugin off
 
-`allow_managed_hooks_only = true` skips hooks from user, project, session, and plugin sources. **Both installation paths above are affected** — the installer registers hooks in `~/.codex/config.toml`, which is a user source, and the marketplace contributes plugin hooks. Neither survives. Only hooks declared in `requirements.toml` still load.
-
-`features.plugins = false` separately disables the marketplace path, and `marketplaces.allowed_sources` with `restrict_to_allowed_sources` can allowlist `dash0hq/dash0-agent-plugin` if plugins stay enabled.
-
-An enterprise that sets the lockdown flag therefore has to adopt the plugin as a managed hook, or it will not run at all.
+`allow_managed_hooks_only = true` skips hooks from user, project, session, and plugin sources. **Both installation paths above are affected** — the installer registers hooks in `~/.codex/config.toml`, a user source, and the marketplace contributes plugin hooks. Only hooks declared in `requirements.toml` still load, so a fleet setting this flag has to adopt the plugin as a managed hook or it will not run at all. Separately, `features.plugins = false` disables the marketplace path, and `restrict_to_allowed_sources` with `marketplaces.allowed_sources` can allowlist `dash0hq/dash0-agent-plugin`.
 
 ### Deploying as a managed hook
 
-Declare the hooks in `requirements.toml` and let your MDM place the script. Managed hooks are trusted by policy, cannot be disabled from the user hook browser, and survive `allow_managed_hooks_only`:
+Managed hooks are trusted by policy, cannot be disabled from the user hook browser, and survive `allow_managed_hooks_only`:
 
 ```toml
 [features]
@@ -96,26 +90,17 @@ command = "/enterprise/hooks/codex-on-event.sh"
 # declared in codex/hooks.json.
 ```
 
-Codex enforces the hook configuration but does **not** distribute the scripts, so your MDM has to deliver two files: `codex-on-event.sh` into `managed_dir`, and `~/.codex/dash0-agent-plugin.local.md` for the credentials. Hook handlers accept no `env` field, so the credentials file is the delivery mechanism; the bootstrap only overwrites a value when the file supplies one, so anything you inject through the environment still passes through. OpenAI advises against embedding secrets in MDM payloads, which is a further reason to ship the file rather than inline the token in the hook command.
+Codex enforces this configuration but does **not** distribute the scripts, so MDM has to deliver two files: `codex-on-event.sh` into `managed_dir`, and `~/.codex/dash0-agent-plugin.local.md` for the credentials. Hook handlers accept no `env` field, and OpenAI advises against embedding secrets in MDM payloads, so the config file is the credential channel. The bootstrap only overwrites a value when the file supplies one, so anything injected through the environment still passes through.
 
 ### Or run the installer from your MDM
 
-Where the lockdown flag is not in play, the [headless installer](#headless--non-interactive-ci-containers-fleet-rollout) is the simpler fleet path and needs no policy work: run it unattended with `--endpoint`, `--token`, and `--dataset`, or their environment-variable equivalents. It handles hook registration, binary download, and credentials in one step. It leaves the hooks in a user source, so it stops working the day the fleet adopts `allow_managed_hooks_only`.
+Where the lockdown flag is not in play, the [headless installer](#headless--non-interactive-ci-containers-fleet-rollout) is simpler and needs no policy work — run it unattended with `--endpoint`, `--token`, and `--dataset`. It leaves hooks in a user source, so it stops working the day the fleet adopts `allow_managed_hooks_only`.
 
-### Codex's own OpenTelemetry is complementary, not an alternative
+### Codex's own OpenTelemetry is complementary
 
-Codex can export its own telemetry, and an administrator can pin it from `managed_config.toml`:
+An administrator can pin an `[otel]` table from `managed_config.toml`, but unlike the equivalent on GitHub Copilot it does not substitute for this plugin. Codex emits a flat set of `codex.*` **log records** — `conversation_starts`, `api_request`, `sse_event`, `user_prompt`, `tool_decision`, `tool_result` — correlated only by a shared `conversation.id`, plus counters and histograms. There is no agent span tree: users pointing the gRPC exporter at a collector report receiving low-level HTTP/2 transport spans instead of `codex.*` events ([openai/codex#17687](https://github.com/openai/codex/discussions/17687), unanswered).
 
-```toml
-[otel]
-environment = "prod"
-exporter = "otlp-http"
-log_user_prompt = false
-```
-
-Unlike the equivalent on GitHub Copilot, this is not a substitute for the plugin. What Codex emits is a flat set of `codex.*` **log records** — `conversation_starts`, `api_request`, `sse_event`, `user_prompt`, `tool_decision`, `tool_result` — correlated only by a shared `conversation.id`, plus counters and histograms. There is no agent span tree: users pointing the gRPC exporter at a collector report receiving low-level HTTP/2 transport spans instead of `codex.*` events ([openai/codex#17687](https://github.com/openai/codex/discussions/17687), unanswered).
-
-So the two signals do not overlap the way they do on other runtimes. Native export gives log events and metrics this plugin does not emit; the plugin gives the canonical span tree, shared with the Claude Code, Cursor, and Copilot runtimes, that native export cannot produce. Running both is additive rather than duplicative. The exporter supports static `headers` and mTLS, so pointing it at a Dash0 ingress alongside the plugin is a supported configuration.
+The two signals therefore do not overlap. Native export gives log events and metrics this plugin does not emit; the plugin gives the canonical span tree, shared with the Claude Code, Cursor, and Copilot runtimes, that native export cannot produce. Running both is additive rather than duplicative. See the [configuration reference](https://developers.openai.com/codex/config-reference) for the exporter's endpoint, `headers`, and TLS keys.
 
 ### References
 

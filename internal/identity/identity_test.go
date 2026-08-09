@@ -146,6 +146,13 @@ func TestResolveFallsBackWithoutGitIdentity(t *testing.T) {
 	for _, key := range ciEnvVars {
 		t.Setenv(key, "")
 	}
+	// A CI runner's own OS account is named "runner", which the generic-account
+	// guard correctly rejects — so on that host the chain would reach its end
+	// with nothing. Supplying an environment identity gives every host at least
+	// one usable OS-level signal, without faking the mechanism under test: the
+	// git suppression and the fallback are still the real ones.
+	t.Setenv("USER", "e2e-developer")
+
 	// Point git at empty config files at every level it would search.
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")

@@ -126,11 +126,13 @@ def parse_usage(raw):
     return usage
 
 
-def read_transcript(path):
+def read_transcript(path, counts=None, is_main=False):
     """Per-model Usage for one transcript file.
 
     Streaming writes several entries per API call, so entries are deduplicated
-    by request id and only the last one per request is counted.
+    by request id and only the last one per request is counted. When `counts` is
+    given, it is populated with the span counts the plugin should have emitted
+    for this transcript (see count_spans).
     """
     per_request = {}
     try:
@@ -148,6 +150,8 @@ def read_transcript(path):
                 entry = json.loads(line)
             except ValueError:
                 continue  # skip partially written or malformed lines
+            if counts is not None:
+                count_spans(entry, counts, is_main)
             if entry.get("type") != "assistant":
                 continue
             message = entry.get("message") or {}
@@ -161,6 +165,47 @@ def read_transcript(path):
     for model, raw_usage in per_request.values():
         totals.setdefault(model, Usage()).add(parse_usage(raw_usage))
     return totals
+
+
+# Tool names that spawn a sub-agent. Each such call yields both an
+# execute_tool span for the call and an invoke_agent span for the sub-agent
+# itself; the name in the transcript has varied across Claude Code versions.
+SUBAGENT_TOOL_NAMES = {"agent", "task"}
+
+
+def count_spans(entry, counts, is_main):
+    """Tally the spans the plugin should emit for one transcript entry.
+
+    The plugin emits one `chat` span per user turn (on the Stop hook), one
+    `execute_tool` span per tool call, and one `invoke_agent` span per sub-agent
+    (on SubagentStop). Counting those triggers across the main transcript and the
+    sub-agent transcripts gives the number of spans Dash0 should hold.
+
+    `is_main` distinguishes the session transcript from a sub-agent's: a
+    sub-agent's kickoff prompt also looks like a user message, but it produces an
+    invoke_agent span, not a chat span, so only the main transcript adds turns.
+    """
+    if entry.get("type") == "user":
+        if not is_main or entry.get("isMeta"):
+            return
+        content = (entry.get("message") or {}).get("content")
+        # Tool results come back as user messages; only real prompts end a turn.
+        if isinstance(content, str):
+            counts["chat"] += 1
+        elif isinstance(content, list):
+            first = content[0] if content else {}
+            if not (isinstance(first, dict) and first.get("type") == "tool_result"):
+                counts["chat"] += 1
+        return
+
+    if entry.get("type") != "assistant":
+        return
+    for block in (entry.get("message") or {}).get("content") or []:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        if (block.get("name") or "").lower() in SUBAGENT_TOOL_NAMES:
+            counts["invoke_agent"] += 1
+        counts["execute_tool"] += 1
 
 
 def find_main_transcript(session_id):
@@ -216,18 +261,20 @@ def total_cost(totals):
 
 
 def audit(session_id):
-    """Collect (main_path, subagent_paths, main_totals, subagent_totals)."""
+    """Collect (main_path, subagent_paths, main_totals, subagent_totals, counts)."""
     main_path = find_main_transcript(session_id)
     if main_path is None:
         return None
     subagent_paths = find_subagent_transcripts(main_path, session_id)
-    main_totals = read_transcript(main_path)
-    subagent_totals = [(path, read_transcript(path)) for path in subagent_paths]
-    return main_path, subagent_paths, main_totals, subagent_totals
+    counts = {"chat": 0, "execute_tool": 0, "invoke_agent": 0}
+    main_totals = read_transcript(main_path, counts, is_main=True)
+    # A sub-agent's own tool calls are spans too, and they live in its transcript.
+    subagent_totals = [(path, read_transcript(path, counts)) for path in subagent_paths]
+    return main_path, subagent_paths, main_totals, subagent_totals, counts
 
 
 def report_text(session_id, result):
-    main_path, subagent_paths, main_totals, subagent_totals = result
+    main_path, subagent_paths, main_totals, subagent_totals, counts = result
 
     print(f"session   : {session_id}")
     print(f"transcript: {main_path}")
@@ -266,16 +313,24 @@ def report_text(session_id, result):
     if unknown:
         print(f"  note: no price on file for {', '.join(unknown)} — excluded from the estimate")
 
+    total_spans = sum(counts.values())
+    print("\nSpans Dash0 should hold for this session")
+    print(f"  chat          {counts['chat']:>5}   (one per user turn)")
+    print(f"  execute_tool  {counts['execute_tool']:>5}   (one per tool call, incl. sub-agents')")
+    print(f"  invoke_agent  {counts['invoke_agent']:>5}   (one per sub-agent)")
+    print(f"  TOTAL         {total_spans:>5}")
+
     print("\nCompare with:")
     print("  - Claude Code's own numbers: run /usage in that session")
-    print("  - Dash0: sum the chat and invoke_agent spans whose")
+    print("  - Dash0: the spans whose")
     print(f"    gen_ai.conversation.id = {session_id}")
-    print("  Usage that appears above but not in Dash0 is telemetry that never")
-    print("  arrived; sub-agent rows correspond to invoke_agent spans.")
+    print("  Fewer spans in Dash0 than above, or usage that appears above but not")
+    print("  in Dash0, means telemetry never arrived. Sub-agent rows correspond to")
+    print("  the invoke_agent spans.")
 
 
 def report_json(session_id, result):
-    main_path, subagent_paths, main_totals, subagent_totals = result
+    main_path, subagent_paths, main_totals, subagent_totals, counts = result
 
     def encode(totals):
         return {
@@ -299,6 +354,7 @@ def report_json(session_id, result):
         ],
         "total": encode(grand),
         "estimated_cost_usd": total_cost(grand),
+        "expected_spans": dict(counts, total=sum(counts.values())),
     }, indent=2))
 
 

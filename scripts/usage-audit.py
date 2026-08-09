@@ -53,7 +53,8 @@ CACHE_WRITE_1H_MULTIPLIER = 2.0
 class Usage:
     """Token counts for one or more API calls, with cache writes split by TTL."""
 
-    FIELDS = ("input", "output", "cache_write_5m", "cache_write_1h", "cache_read")
+    FIELDS = ("input", "output", "cache_write_5m", "cache_write_1h", "cache_read",
+              "calls")
 
     def __init__(self):
         for field in self.FIELDS:
@@ -126,13 +127,31 @@ def parse_usage(raw):
     return usage
 
 
-def read_transcript(path, counts=None, is_main=False):
+def note_meta(entry, meta):
+    """Track the session's time window and the Claude Code version that wrote it."""
+    stamp = entry.get("timestamp")
+    if isinstance(stamp, str) and stamp:
+        if meta["first"] is None or stamp < meta["first"]:
+            meta["first"] = stamp
+        if meta["last"] is None or stamp > meta["last"]:
+            meta["last"] = stamp
+    version = entry.get("version")
+    if isinstance(version, str) and version:
+        meta["versions"].add(version)
+
+
+def read_transcript(path, counts=None, is_main=False, meta=None):
     """Per-model Usage for one transcript file.
 
-    Streaming writes several entries per API call, so entries are deduplicated
-    by request id and only the last one per request is counted. When `counts` is
-    given, it is populated with the span counts the plugin should have emitted
-    for this transcript (see count_spans).
+    One API call can be written as several entries — streaming splits a response
+    across blocks, and each entry repeats that call's usage — so entries are
+    deduplicated and only one usage object per call is counted. `message.id` is
+    the reliable key: `requestId` is absent in some Claude Code versions, and the
+    per-entry `uuid` differs between entries of the same call, so keying on
+    either would count that call's tokens several times over.
+
+    When `counts` is given, it is populated with the span counts the plugin
+    should have emitted for this transcript (see count_spans).
     """
     per_request = {}
     try:
@@ -152,18 +171,23 @@ def read_transcript(path, counts=None, is_main=False):
                 continue  # skip partially written or malformed lines
             if counts is not None:
                 count_spans(entry, counts, is_main)
+            if meta is not None:
+                note_meta(entry, meta)
             if entry.get("type") != "assistant":
                 continue
             message = entry.get("message") or {}
             raw_usage = message.get("usage")
             if not isinstance(raw_usage, dict):
                 continue
-            key = entry.get("requestId") or entry.get("uuid") or len(per_request)
+            key = message.get("id") or entry.get("requestId") or entry.get("uuid") \
+                or len(per_request)
             per_request[key] = (message.get("model") or "unknown", raw_usage)
 
     totals = {}
     for model, raw_usage in per_request.values():
-        totals.setdefault(model, Usage()).add(parse_usage(raw_usage))
+        entry_totals = totals.setdefault(model, Usage())
+        entry_totals.add(parse_usage(raw_usage))
+        entry_totals.calls += 1
     return totals
 
 
@@ -248,6 +272,7 @@ def print_rows(label, totals):
     for model, usage in sorted(totals.items()):
         print(
             f"  {label:<14} {model:<22}"
+            f" calls={usage.calls:>4}"
             f" in={usage.input:>8}"
             f" out={usage.output:>8}"
             f" cache_write={usage.cache_write:>9}"
@@ -267,18 +292,24 @@ def audit(session_id):
         return None
     subagent_paths = find_subagent_transcripts(main_path, session_id)
     counts = {"chat": 0, "execute_tool": 0, "invoke_agent": 0}
-    main_totals = read_transcript(main_path, counts, is_main=True)
+    meta = {"first": None, "last": None, "versions": set()}
+    main_totals = read_transcript(main_path, counts, is_main=True, meta=meta)
     # A sub-agent's own tool calls are spans too, and they live in its transcript.
-    subagent_totals = [(path, read_transcript(path, counts)) for path in subagent_paths]
-    return main_path, subagent_paths, main_totals, subagent_totals, counts
+    subagent_totals = [(path, read_transcript(path, counts, meta=meta))
+                       for path in subagent_paths]
+    return main_path, subagent_paths, main_totals, subagent_totals, counts, meta
 
 
 def report_text(session_id, result):
-    main_path, subagent_paths, main_totals, subagent_totals, counts = result
+    main_path, subagent_paths, main_totals, subagent_totals, counts, meta = result
 
     print(f"session   : {session_id}")
     print(f"transcript: {main_path}")
     print(f"sub-agents: {len(subagent_paths)}")
+    if meta["first"] and meta["last"]:
+        print(f"window    : {meta['first']} .. {meta['last']}  (UTC)")
+    if meta["versions"]:
+        print(f"claude code: {', '.join(sorted(meta['versions']))}")
 
     print("\nMain session")
     print_rows("main", main_totals)
@@ -330,7 +361,7 @@ def report_text(session_id, result):
 
 
 def report_json(session_id, result):
-    main_path, subagent_paths, main_totals, subagent_totals, counts = result
+    main_path, subagent_paths, main_totals, subagent_totals, counts, meta = result
 
     def encode(totals):
         return {
@@ -355,6 +386,9 @@ def report_json(session_id, result):
         "total": encode(grand),
         "estimated_cost_usd": total_cost(grand),
         "expected_spans": dict(counts, total=sum(counts.values())),
+        "first_event": meta["first"],
+        "last_event": meta["last"],
+        "claude_code_versions": sorted(meta["versions"]),
     }, indent=2))
 
 

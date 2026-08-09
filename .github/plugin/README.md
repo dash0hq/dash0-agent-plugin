@@ -125,6 +125,12 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 | `omit_user_info` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
 | `omit_io` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
 
+### User identity
+
+`user.name` comes from `git config user.name`. When that is unset, the plugin falls back to the OS account (display name, then username) so the session is still attributable instead of arriving anonymous. `user.email` has no fallback — it is only ever the git value.
+
+Every span carrying a name also carries `dash0.gen_ai.user.identity.source`, either `git` or `os`, so a fallback is never mistaken for a configured identity. The fallback is skipped in CI and for shared accounts (`root`, `runner`, ...), where the OS account names a machine rather than a person; those sessions report no name at all.
+
 ## Telemetry attributes
 
 Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/).

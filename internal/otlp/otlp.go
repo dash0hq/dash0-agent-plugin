@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/identity"
 	"github.com/dash0hq/dash0-agent-plugin/internal/vcs"
 	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
@@ -518,8 +519,12 @@ func teamSpanAttributes(cfg Config) []Attribute {
 	return []Attribute{{Key: "dash0.team.name", Value: StringVal(cfg.TeamName)}}
 }
 
-// vcsSpanAttributes returns dash0.gen_ai.vcs.* and user.* span attributes derived from the
+// vcsSpanAttributes returns dash0.gen_ai.vcs.* span attributes derived from the
 // current git state. Returns nil if not inside a git repository.
+//
+// User identity is NOT here: it is emitted by identitySpanAttributes, which
+// must run even outside a repository (Cursor spawns hooks with a CWD that isn't
+// always a working tree, and the user is still the user).
 func vcsSpanAttributes(cfg Config) []Attribute {
 	info := vcs.Detect()
 	if info == nil {
@@ -552,15 +557,42 @@ func vcsSpanAttributes(cfg Config) []Attribute {
 	if info.RefHeadType != "" {
 		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.type", info.RefHeadType))
 	}
-	if info.UserName != "" {
-		if cfg.OmitUserInfo {
-			attrs = append(attrs, attr("user.name", hashIdentity(info.UserName)))
-		} else {
-			attrs = append(attrs, attr("user.name", info.UserName))
-		}
+	return attrs
+}
+
+// resolveIdentity is indirected so tests can pin a resolution result instead of
+// depending on the host's git config and OS account.
+var resolveIdentity = identity.Resolve
+
+// identitySpanAttributes returns the user.* span attributes plus the provenance
+// of the name. It runs independently of git repository state — a developer with
+// no git identity, or working outside a repository, still gets attributed.
+//
+// dash0.gen_ai.user.identity.source is always emitted alongside a name, never
+// only on fallback: an absent attribute meaning "git" is exactly the
+// absent-means-something ambiguity that made missing identities invisible in
+// the first place. It is not itself identifying, so it is never hashed.
+func identitySpanAttributes(cfg Config) []Attribute {
+	info := resolveIdentity()
+	if info.Name == "" && info.Email == "" {
+		return nil
 	}
-	if info.UserEmail != "" && !cfg.OmitUserInfo {
-		attrs = append(attrs, attr("user.email", info.UserEmail))
+
+	attr := func(key, val string) Attribute {
+		return Attribute{Key: key, Value: StringVal(val)}
+	}
+
+	var attrs []Attribute
+	if info.Name != "" {
+		if cfg.OmitUserInfo {
+			attrs = append(attrs, attr("user.name", hashIdentity(info.Name)))
+		} else {
+			attrs = append(attrs, attr("user.name", info.Name))
+		}
+		attrs = append(attrs, attr("dash0.gen_ai.user.identity.source", info.Source))
+	}
+	if info.Email != "" && !cfg.OmitUserInfo {
+		attrs = append(attrs, attr("user.email", info.Email))
 	}
 
 	return attrs

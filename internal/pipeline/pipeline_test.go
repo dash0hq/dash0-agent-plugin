@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -49,6 +50,13 @@ func newSetup(t *testing.T, otlpURL string) *setup {
 func (s *setup) feed(t *testing.T, event map[string]any) Result {
 	t.Helper()
 	res, err := Process(event, s.cfg, s.dataDir, time.Now().UTC())
+	require.NoError(t, err)
+	return res
+}
+
+func (s *setup) feedAt(t *testing.T, event map[string]any, ts time.Time) Result {
+	t.Helper()
+	res, err := Process(event, s.cfg, s.dataDir, ts)
 	require.NoError(t, err)
 	return res
 }
@@ -105,8 +113,8 @@ func hasStringAttr(attrs []otlp.Attribute, key, value string) bool {
 	return false
 }
 
-//  1. SessionStart records the model into the per-session trace context so
-//     later turns can pick it up. No span is emitted yet.
+// SessionStart records the model into the per-session trace context so
+// later turns can pick it up. No span is emitted yet.
 func TestProcess_SessionStart_SavesModelToContext(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
 	s := newSetup(t, url)
@@ -130,9 +138,9 @@ func TestProcess_SessionStart_SavesModelToContext(t *testing.T) {
 	mu.Unlock()
 }
 
-//  2. A missing session_id must not crash: Process generates a random ID,
-//     creates a session directory under that name, and stamps a
-//     dash0.warning attribute on the event in events.jsonl.
+// A missing session_id must not crash: Process generates a random ID,
+// creates a session directory under that name, and stamps a
+// dash0.warning attribute on the event in events.jsonl.
 func TestProcess_MissingSessionID_FallsBackToRandom(t *testing.T) {
 	s := newSetup(t, "")
 
@@ -154,6 +162,53 @@ func TestProcess_MissingSessionID_FallsBackToRandom(t *testing.T) {
 	assert.Equal(t, "session_id was missing from hook payload", ev["dash0.warning"])
 }
 
+// 2b. A session_id containing path-traversal characters (e.g. "../etc") is
+//
+//	rejected: Process substitutes a random safe ID, logs a warning, and no
+//	file is created outside dataDir. This guards MkdirAll, filelog writes,
+//	and RemoveAll which all use sessionID as a directory name under dataDir.
+func TestProcess_InvalidSessionID_FallsBackToRandom(t *testing.T) {
+	s := newSetup(t, "")
+
+	for _, badID := range []string{"../escape", "a/b", "a.b", "has space", "with\x00null"} {
+		s.feed(t, map[string]any{
+			"hook_event_name": "SessionStart",
+			"session_id":      badID,
+			"model":           "opus",
+		})
+	}
+
+	entries, err := os.ReadDir(s.dataDir)
+	require.NoError(t, err)
+
+	// Each rejected ID must have produced a safe replacement dir, and nothing
+	// must have been written at the raw unsafe path.
+	require.Len(t, entries, 5, "one session dir per call, all with safe names")
+	for _, e := range entries {
+		assert.Regexp(t, `^[A-Za-z0-9_-]+$`, e.Name(), "session dir name must be filename-safe")
+	}
+
+	// Confirm the warning attribute is set in the logged event.
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(s.dataDir, e.Name(), "events.jsonl"))
+		require.NoError(t, err)
+		var ev map[string]any
+		require.NoError(t, json.Unmarshal(bytes.TrimSpace(data), &ev))
+		assert.Equal(t, "session_id from hook payload was not a safe path segment", ev["dash0.warning"])
+	}
+
+	// The parent directory must contain exactly the dataDir itself — no file
+	// escaped above it via path traversal.
+	parentEntries, err := os.ReadDir(filepath.Dir(s.dataDir))
+	require.NoError(t, err)
+	names := make([]string, 0, len(parentEntries))
+	for _, e := range parentEntries {
+		names = append(names, e.Name())
+	}
+	assert.Contains(t, names, filepath.Base(s.dataDir), "dataDir itself must exist")
+	assert.Len(t, parentEntries, 1, "nothing written outside dataDir")
+}
+
 //  3. UserPromptSubmit creates a fresh trace_id and chat_span_id for the
 //     turn and preserves the model previously set at SessionStart.
 func TestProcess_UserPromptSubmit_GeneratesFreshTraceID(t *testing.T) {
@@ -170,9 +225,57 @@ func TestProcess_UserPromptSubmit_GeneratesFreshTraceID(t *testing.T) {
 	assert.Equal(t, "opus", ctx.Model, "model from SessionStart should carry forward")
 }
 
-//  4. A UserPromptSubmit whose agent_id is set belongs to a sub-agent and
-//     must NOT clobber the main turn's trace context — sub-agent activity
-//     needs to nest under the in-flight main turn.
+// Reordered startup: some runtimes (e.g. Copilot) deliver UserPromptSubmit
+// BEFORE SessionStart. SessionStart must merge into the existing context, not
+// blank the trace_id/chat_span_id the prompt already established.
+func TestProcess_SessionStartAfterUserPromptSubmit_PreservesTurnContext(t *testing.T) {
+	s := newSetup(t, "")
+
+	// UserPromptSubmit arrives first and mints the turn's IDs.
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	before, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotEmpty(t, before.TraceID)
+	require.NotEmpty(t, before.SpanID)
+
+	// SessionStart arrives late — it must preserve those IDs and only fill in
+	// the fields it owns (SessionID, Model).
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	after, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, before.TraceID, after.TraceID, "late SessionStart must not blank the turn's trace_id")
+	assert.Equal(t, before.SpanID, after.SpanID, "late SessionStart must not blank the chat span")
+	assert.Equal(t, "opus", after.Model, "SessionStart's model should merge into the existing context")
+	assert.Equal(t, "sess-1", after.SessionID)
+}
+
+// A Stop whose loaded trace context has a blank TraceID (a context that somehow
+// lost its IDs) must NOT emit a chat span with an empty trace id — sendLLMTrace
+// refuses it, the same way the SessionEnd fallback guards on ctx.TraceID != "".
+// This is what lets the Copilot entrypoint defer such a turn rather than drop it.
+func TestProcess_Stop_BlankTraceIDEmitsNoSpan(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	sessionDir := s.sessionDir("sess-1")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, otlp.SaveTraceContext(otlp.TraceContext{SessionID: "sess-1"}, sessionDir))
+
+	s.feed(t, map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "sess-1",
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Empty(t, *spans, "a Stop with a blank-TraceID context must emit no span")
+}
+
+// A UserPromptSubmit whose agent_id is set belongs to a sub-agent and
+// must NOT clobber the main turn's trace context — sub-agent activity
+// needs to nest under the in-flight main turn.
 func TestProcess_UserPromptSubmitWithAgentID_PreservesContext(t *testing.T) {
 	s := newSetup(t, "")
 
@@ -197,8 +300,8 @@ func TestProcess_UserPromptSubmitWithAgentID_PreservesContext(t *testing.T) {
 	assert.Equal(t, before.SpanID, after.SpanID, "subagent prompt must not overwrite the chat span")
 }
 
-//  5. PostToolUse emits a tool span parented under the chat span, with
-//     GenAI conventional attributes populated from the event payload.
+// PostToolUse emits a tool span parented under the chat span, with
+// GenAI conventional attributes populated from the event payload.
 func TestProcess_PostToolUse_EmitsToolSpan(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
 	s := newSetup(t, url)
@@ -233,9 +336,9 @@ func TestProcess_PostToolUse_EmitsToolSpan(t *testing.T) {
 	assert.True(t, hasStringAttr(span.Attributes, "gen_ai.conversation.id", "sess-1"))
 }
 
-//  6. PostToolUseFailure emits a span with status.code = Error and the
-//     error message surfaced as both status.message and the exception.message
-//     semantic attribute.
+// PostToolUseFailure emits a span with status.code = Error and the
+// error message surfaced as both status.message and the exception.message
+// semantic attribute.
 func TestProcess_PostToolUseFailure_EmitsErrorStatus(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
 	s := newSetup(t, url)
@@ -259,8 +362,8 @@ func TestProcess_PostToolUseFailure_EmitsErrorStatus(t *testing.T) {
 	assert.True(t, hasStringAttr(span.Attributes, "exception.message", "command not found"))
 }
 
-//  7. Stop emits the chat span and clears the trace context so a later
-//     SessionEnd does not emit a duplicate fallback.
+// Stop emits the chat span and clears the trace context so a later
+// SessionEnd does not emit a duplicate fallback.
 func TestProcess_Stop_EmitsChatSpanAndClearsContext(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
 	s := newSetup(t, url)
@@ -281,9 +384,56 @@ func TestProcess_Stop_EmitsChatSpanAndClearsContext(t *testing.T) {
 	assert.Nil(t, ctx, "Stop must clear trace context so SessionEnd does not duplicate")
 }
 
-//  8. If the user interrupts (Ctrl+C) so Stop never fires, SessionEnd must
-//     emit a fallback chat span with error status so any orphan tool
-//     spans still have a parent in the trace.
+// Agents that inject gen_ai.usage.* upstream (Codex, Cursor) must not go through
+// the Claude-format transcript read at Stop — it would clobber their counts and
+// burn the flush-wait budget parsing a non-Claude rollout. When usage is already
+// present, the transcript is left untouched.
+func TestProcess_Stop_PreservesUpstreamInjectedUsage(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	// A readable Claude-format transcript carrying DIFFERENT usage; it must be
+	// ignored because the event already has usage from the upstream normalizer.
+	tp := filepath.Join(t.TempDir(), "transcript.jsonl")
+	require.NoError(t, os.WriteFile(tp, []byte(
+		`{"type":"user","message":{"role":"user","content":"hi"}}`+"\n"+
+			`{"type":"assistant","requestId":"r1","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":5,"output_tokens":6}}}`+"\n"), 0o644))
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	s.feed(t, map[string]any{
+		"hook_event_name":            "Stop",
+		"session_id":                 "sess-1",
+		"transcript_path":            tp,
+		"gen_ai.usage.input_tokens":  int64(999),
+		"gen_ai.usage.output_tokens": int64(111),
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	assert.Equal(t, "999", intAttr(t, (*spans)[0], "gen_ai.usage.input_tokens"),
+		"upstream-injected usage preserved; Claude transcript not read")
+	assert.Equal(t, "111", intAttr(t, (*spans)[0], "gen_ai.usage.output_tokens"))
+}
+
+// intAttr returns the intValue of the named span attribute, failing the test if
+// it is absent or not an integer attribute.
+func intAttr(t *testing.T, span otlp.Span, key string) string {
+	t.Helper()
+	for _, a := range span.Attributes {
+		if a.Key == key {
+			require.NotNil(t, a.Value.IntValue, "attribute %s is not an int", key)
+			return *a.Value.IntValue
+		}
+	}
+	t.Fatalf("attribute %s not found on span", key)
+	return ""
+}
+
+// If the user interrupts (Ctrl+C) so Stop never fires, SessionEnd must
+// emit a fallback chat span with error status so any orphan tool
+// spans still have a parent in the trace.
 func TestProcess_SessionEnd_EmitsFallbackWhenContextLingers(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
 	s := newSetup(t, url)
@@ -300,8 +450,8 @@ func TestProcess_SessionEnd_EmitsFallbackWhenContextLingers(t *testing.T) {
 	assert.Equal(t, "session ended before completion", span.Status.Message)
 }
 
-//  9. SessionEnd removes the per-session scratch directory so events.jsonl,
-//     trace_context.json, and any source-specific stash files don't leak.
+// SessionEnd removes the per-session scratch directory so events.jsonl,
+// trace_context.json, and any source-specific stash files don't leak.
 func TestProcess_SessionEnd_CleansUpSessionDir(t *testing.T) {
 	s := newSetup(t, "")
 
@@ -313,9 +463,9 @@ func TestProcess_SessionEnd_CleansUpSessionDir(t *testing.T) {
 	assert.NoDirExists(t, sessionDir)
 }
 
-//  10. SessionStart surfaces one of three user-visible status messages
-//     depending on OTLP URL state and connectivity result. This is the
-//     plugin's main observability into its own health.
+// SessionStart surfaces one of three user-visible status messages
+// depending on OTLP URL state and connectivity result. This is the
+// plugin's main observability into its own health.
 func TestProcess_SessionStart_ConnectivityMessages(t *testing.T) {
 	t.Run("not active when OTLP URL is empty", func(t *testing.T) {
 		s := newSetup(t, "")
@@ -336,19 +486,23 @@ func TestProcess_SessionStart_ConnectivityMessages(t *testing.T) {
 		s := newSetup(t, url)
 		res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess", "model": "opus"})
 		require.Len(t, res.Messages, 1)
-		assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
+		// The pipeline (not the source entrypoint) annotates the success message
+		// with the plugin version so every coding agent surfaces it. A session
+		// link is appended only for recognized Dash0 hosts (see sessionurl); the
+		// mock server host isn't one, so no link is expected here.
+		assert.Contains(t, res.Messages[0].UserText, "dash0: connected (v")
 	})
 }
 
-//  11. Subsequent SessionStart fires (resume, compact, clear) within the same
-//     session are no-ops: no connectivity check, no messages, no trace context overwrite.
+// Subsequent SessionStart fires (resume, compact, clear) within the same
+// session are no-ops: no connectivity check, no messages, no trace context overwrite.
 func TestProcess_SessionStart_SubsequentFireIsNoOp(t *testing.T) {
 	url, _, _ := mockOTLPServer(t)
 	s := newSetup(t, url)
 
 	res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
 	require.Len(t, res.Messages, 1)
-	assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
+	assert.Contains(t, res.Messages[0].UserText, "dash0: connected")
 
 	ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
 	require.NoError(t, err)
@@ -362,7 +516,7 @@ func TestProcess_SessionStart_SubsequentFireIsNoOp(t *testing.T) {
 	assert.Equal(t, "opus", ctx.Model, "trace context model must not be overwritten by re-fire")
 }
 
-// 12. A re-fired SessionStart still logs the event to filelog.
+// A re-fired SessionStart still logs the event to filelog.
 func TestProcess_SessionStart_ReFireStillLogsEvent(t *testing.T) {
 	url, _, _ := mockOTLPServer(t)
 	s := newSetup(t, url)
@@ -376,7 +530,7 @@ func TestProcess_SessionStart_ReFireStillLogsEvent(t *testing.T) {
 	assert.Len(t, lines, 2, "both SessionStart events should be logged")
 }
 
-// 13. After SessionEnd cleans up sessionDir, a new SessionStart re-initializes.
+// After SessionEnd cleans up sessionDir, a new SessionStart re-initializes.
 func TestProcess_SessionStart_ReInitializesAfterSessionEnd(t *testing.T) {
 	url, _, _ := mockOTLPServer(t)
 	s := newSetup(t, url)
@@ -386,9 +540,159 @@ func TestProcess_SessionStart_ReInitializesAfterSessionEnd(t *testing.T) {
 
 	res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "sonnet"})
 	require.Len(t, res.Messages, 1)
-	assert.Equal(t, "dash0: connected", res.Messages[0].UserText)
+	assert.Contains(t, res.Messages[0].UserText, "dash0: connected")
 
 	ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
 	require.NoError(t, err)
 	assert.Equal(t, "sonnet", ctx.Model)
+}
+
+// writeAgentTranscript creates a minimal subagent transcript (prompt + one
+// assistant call with usage) and returns its path.
+func writeAgentTranscript(t *testing.T, inputTokens, outputTokens int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "agent-transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"agent prompt"}}`,
+		`{"type":"assistant","requestId":"req_agent_1","message":{"role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":` +
+			strconv.Itoa(inputTokens) + `,"output_tokens":` + strconv.Itoa(outputTokens) + `,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+	}
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
+	return path
+}
+
+// 14. The observed real-world ordering: a subagent's SubagentStop arrives
+// AFTER the turn's Stop has already cleared the session trace context.
+// The snapshot taken at SubagentStart must keep the subagent span — and its
+// token usage — attached to the spawning turn's trace instead of dropping it.
+// The span's start time must reflect the SubagentStart hook time, not the
+// SubagentStop time (which may be in a later turn).
+func TestProcess_SubagentStopAfterStop_UsesSnapshotContext(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	agentTranscript := writeAgentTranscript(t, 2393, 2172)
+
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	s.feedAt(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"}, base)
+	s.feedAt(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"}, base.Add(time.Second))
+
+	turnCtx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, turnCtx)
+
+	subagentStartTime := base.Add(2 * time.Second)
+	s.feedAt(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"}, subagentStartTime)
+	s.feedAt(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"}, base.Add(3*time.Second))
+
+	// Session context is gone — before the fix this dropped the span.
+	cleared, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.Nil(t, cleared)
+
+	subagentStopTime := base.Add(4 * time.Second)
+	s.feedAt(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": agentTranscript,
+	}, subagentStopTime)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 2, "chat span from Stop AND subagent span from SubagentStop")
+	sub := (*spans)[1]
+	assert.Equal(t, turnCtx.TraceID, sub.TraceID, "subagent span must join the spawning turn's trace")
+	assert.Equal(t, otlp.SpanIDFromAgentID("agent1"), sub.ParentSpanID, "parented under the Agent tool span")
+	assert.Equal(t, "2393", intAttr(t, sub, "gen_ai.usage.input_tokens"))
+	assert.Equal(t, "2172", intAttr(t, sub, "gen_ai.usage.output_tokens"), "subagent token usage must survive the Stop ordering")
+	// Start time must be anchored to SubagentStart, not SubagentStop.
+	assert.Equal(t, strconv.FormatInt(subagentStartTime.UnixNano(), 10), sub.StartTimeUnixNano, "subagent span start must reflect SubagentStart hook time")
+	assert.Equal(t, strconv.FormatInt(subagentStopTime.UnixNano(), 10), sub.EndTimeUnixNano, "subagent span end reflects SubagentStop hook time")
+}
+
+// 15. A SubagentStop that straggles past the NEXT turn's UserPromptSubmit must
+// still attach to the turn that spawned it, not to the new turn's trace.
+func TestProcess_SubagentStopAfterNextPrompt_KeepsSpawningTrace(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	agentTranscript := writeAgentTranscript(t, 100, 50)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "turn 1"})
+
+	turn1Ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, turn1Ctx)
+
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "turn 2"})
+
+	turn2Ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, turn2Ctx)
+	require.NotEqual(t, turn1Ctx.TraceID, turn2Ctx.TraceID)
+
+	s.feed(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": agentTranscript,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 2)
+	sub := (*spans)[1]
+	assert.Equal(t, turn1Ctx.TraceID, sub.TraceID, "late subagent span belongs to turn 1, not turn 2")
+}
+
+// 16. Without a SubagentStart snapshot (e.g. plugin installed mid-session),
+// SubagentStop falls back to the live session context as before.
+func TestProcess_SubagentStopWithoutSnapshot_FallsBackToSessionContext(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	agentTranscript := writeAgentTranscript(t, 100, 50)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+
+	turnCtx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, turnCtx)
+
+	// No SubagentStart — straight to SubagentStop while the turn is live.
+	s.feed(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": agentTranscript,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	assert.Equal(t, turnCtx.TraceID, (*spans)[0].TraceID)
+}
+
+// 17. SubagentStop consumes its snapshot: the per-agent file is removed so a
+// long-lived session does not accumulate stale agent contexts.
+func TestProcess_SubagentStop_CleansUpSnapshot(t *testing.T) {
+	url, _, _ := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+
+	snap, err := otlp.LoadAgentTraceContext(s.sessionDir("sess-1"), "agent1")
+	require.NoError(t, err)
+	require.NotNil(t, snap, "SubagentStart must persist a snapshot")
+
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": "agent1"})
+
+	snap, err = otlp.LoadAgentTraceContext(s.sessionDir("sess-1"), "agent1")
+	require.NoError(t, err)
+	assert.Nil(t, snap, "snapshot must be removed after SubagentStop")
 }

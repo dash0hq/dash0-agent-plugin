@@ -1,6 +1,6 @@
 {
   "name": "dash0-agent-plugin",
-  "version": "0.1.19",
+  "version": "0.1.22",
   "description": "OpenTelemetry observability for Claude Code sessions. Captures tool calls, LLM invocations, token usage, and errors as OTel traces.",
   "author": {
     "name": "Dash0"
@@ -16,7 +16,7 @@
   "userConfig": {
     "OTLP_URL": {
       "title": "OTLP Endpoint URL",
-      "description": "Dash0 OTLP endpoint URL (e.g. https://ingress.us1.dash0.com:4318)",
+      "description": "Dash0 OTLP endpoint URL (e.g. https://ingress.us1.dash0.com)",
       "type": "string",
       "sensitive": false
     },

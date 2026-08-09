@@ -16,7 +16,11 @@ Both spans share a trace; the tool span's parent is the chat span.
 Randomized per turn from closed lists in [`data.go`](./data.go):
 
 - **repository** — one of 6
-- **user** — one of 40 (each hard-coded to one of 6 **teams**, emitted as `dash0.team.name`)
+- **user** — one of 40 (each hard-coded to one of 6 **teams**, emitted as `dash0.team.name`), or,
+  with probability 15%, the **daily rotating newcomer** on team `Newcomers` — a realistic name
+  drawn from a closed pool of 60 keyed by UTC day, so the name is stable within a UTC day, rolls
+  over at the day boundary, and repeats only after ~60 days. Gives the billing views a fresh
+  unique user daily without looking like an obvious artifact.
 - **branch** — `ENG-<random>-<title>` from a list of titles
 - **model**, **effort**, and the **prompt/response pair** (one of 20)
 - **token usage** — random input/output/cache counts

@@ -19,7 +19,9 @@ import (
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
+	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
 	"github.com/dash0hq/dash0-agent-plugin/internal/transcript"
+	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
 
 // Result is the structured output of Process. Source-specific entrypoints render
@@ -53,15 +55,22 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 	agentID, _ := event["agent_id"].(string)
 
 	sessionID, _ := event["session_id"].(string)
-	if sessionID == "" {
-		fmt.Fprintf(os.Stderr, "on-event: session_id missing in %s event, using random ID\n", hookEvent)
+	if !sessionIDPattern.MatchString(sessionID) {
+		// sessionID names the per-session directory under dataDir, so anything
+		// that is not filename-safe (path separators, dots) must not reach
+		// filepath.Join — fall back to a random ID just like a missing one.
+		warning := "session_id was missing from hook payload"
+		if sessionID != "" {
+			warning = "session_id from hook payload was not a safe path segment"
+		}
+		fmt.Fprintf(os.Stderr, "on-event: session_id missing or invalid in %s event, using random ID\n", hookEvent)
 		randID, err := otlp.GenerateTraceID()
 		if err != nil {
 			return res, err
 		}
 		event["session_id"] = randID[:16]
 		sessionID = event["session_id"].(string)
-		event["dash0.warning"] = "session_id was missing from hook payload"
+		event["dash0.warning"] = warning
 	}
 
 	sessionDir := filepath.Join(dataDir, sessionID)
@@ -75,11 +84,20 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		if _, err := os.Stat(startedFile); err == nil {
 			sessionAlreadyStarted = true
 		} else {
-			model, _ := event["model"].(string)
-			if err := otlp.SaveTraceContext(otlp.TraceContext{
-				SessionID: sessionID,
-				Model:     model,
-			}, sessionDir); err != nil {
+			// Merge, don't overwrite. Most runtimes deliver SessionStart first, so
+			// there is no context yet and this builds a fresh one. But an agent may
+			// deliver UserPromptSubmit before SessionStart (e.g. Copilot's
+			// nondeterministic startup ordering), which has already established this
+			// turn's TraceID/SpanID — preserve them rather than blanking the context.
+			ctx, _ := otlp.LoadTraceContext(sessionDir)
+			if ctx == nil {
+				ctx = &otlp.TraceContext{}
+			}
+			ctx.SessionID = sessionID
+			if model, _ := event["model"].(string); model != "" {
+				ctx.Model = model
+			}
+			if err := otlp.SaveTraceContext(*ctx, sessionDir); err != nil {
 				return res, err
 			}
 			_ = os.WriteFile(startedFile, nil, 0o644)
@@ -128,8 +146,12 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 					UserText: fmt.Sprintf("dash0: connectivity check failed — %v", err),
 				})
 			} else {
+				text := fmt.Sprintf("dash0: connected (v%s)", version.Version)
+				if link := sessionurl.SessionURL(cfg.OTLPUrl, sessionID, cfg.Dataset); link != "" {
+					text += " → " + link
+				}
 				res.Messages = append(res.Messages, Message{
-					UserText: "dash0: connected",
+					UserText: text,
 				})
 			}
 		}
@@ -145,9 +167,27 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
 		otlp.ClearTraceContext(sessionDir)
+	case "SubagentStart":
+		// Snapshot the current trace context for this agent so its
+		// SubagentStop still finds the spawning turn's trace even when it
+		// arrives after Stop (context cleared) or after the next prompt
+		// (context replaced). StartTime is recorded here so the subagent span
+		// is anchored to when the agent was launched, not when it stopped.
+		if agentID != "" {
+			if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
+				snap := *ctx
+				snap.StartTime = now.Format(time.RFC3339Nano)
+				if err := otlp.SaveAgentTraceContext(snap, sessionDir, agentID); err != nil {
+					fmt.Fprintf(os.Stderr, "on-event: saving agent trace context: %v\n", err)
+				}
+			}
+		}
 	case "SubagentStop":
 		if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
+		}
+		if agentID != "" {
+			otlp.ClearAgentTraceContext(sessionDir, agentID)
 		}
 	case "SessionEnd":
 		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
@@ -202,7 +242,7 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	agentID, _ := event["agent_id"].(string)
 
 	var spanID string
-	if toolName == "Agent" {
+	if strings.EqualFold(toolName, "Agent") {
 		resultAgentID := extractAgentIDFromResponse(event["tool_response"])
 		if resultAgentID != "" {
 			spanID = otlp.SpanIDFromAgentID(resultAgentID)
@@ -220,10 +260,23 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		}
 	}
 
-	if toolName != "Agent" && agentID != "" {
+	if !strings.EqualFold(toolName, "Agent") && agentID != "" {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
 	}
 
+	EnrichToolEvent(event)
+
+	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
+	return otlp.SendTrace(span, event, cfg)
+}
+
+// EnrichToolEvent applies the source-agnostic extractor rules to a tool event
+// whose tool_name/tool_input/tool_response are already populated in the
+// pipeline's canonical shape. It derives the semantic attributes (PR/issue/commit
+// URLs, line counts, bash command family, skill name, MCP server) and normalizes
+// the MCP tool name in place. Tool-name matching is case-insensitive so every
+// runtime shares one rule set (Claude emits "Bash"/"Skill", Copilot "bash"/"skill").
+func EnrichToolEvent(event map[string]any) {
 	resp := event["tool_response"]
 	if prURL := ExtractPRURL(resp); prURL != "" {
 		event["pr_url"] = prURL
@@ -234,19 +287,19 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	if sha := ExtractCommitSHA(resp); sha != "" {
 		event["commit_sha"] = sha
 	}
-
 	if added, removed := ExtractLinesCounts(resp); added > 0 || removed > 0 {
 		event["lines_added"] = int64(added)
 		event["lines_removed"] = int64(removed)
 	}
 
+	toolName, _ := event["tool_name"].(string)
 	toolInput := event["tool_input"]
-	if toolName == "Bash" {
+	if strings.EqualFold(toolName, "Bash") {
 		if family := ExtractBashCommandFamily(toolInput); family != "" {
 			event["bash_command_family"] = family
 		}
 	}
-	if toolName == "Skill" {
+	if strings.EqualFold(toolName, "Skill") {
 		if skill := ExtractSkillName(toolInput); skill != "" {
 			event["skill_name"] = skill
 		}
@@ -257,15 +310,24 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	if normalized := NormalizeMCPToolName(toolName); normalized != toolName {
 		event["tool_name"] = normalized
 	}
-
-	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
-	return otlp.SendTrace(span, event, cfg)
 }
 
 func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir string, failed bool) error {
-	ctx, err := otlp.LoadTraceContext(dataDir)
-	if err != nil || ctx == nil {
-		return fmt.Errorf("no trace context available for LLM span")
+	agentID, _ := event["agent_id"].(string)
+
+	// For subagent spans, prefer the snapshot taken at SubagentStart: by the
+	// time a SubagentStop arrives the session context may already be cleared
+	// (Stop) or belong to the next turn (UserPromptSubmit).
+	var ctx *otlp.TraceContext
+	if agentID != "" {
+		ctx, _ = otlp.LoadAgentTraceContext(dataDir, agentID)
+	}
+	if ctx == nil {
+		var err error
+		ctx, err = otlp.LoadTraceContext(dataDir)
+		if err != nil || ctx == nil || ctx.TraceID == "" {
+			return fmt.Errorf("no trace context available for LLM span")
+		}
 	}
 
 	traceID := ctx.TraceID
@@ -276,24 +338,41 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	}
 
 	startTime := ts
-	promptEvent, _ := filelog.FindEvent(dataDir, func(e map[string]any) bool {
-		name, _ := e["hook_event_name"].(string)
-		return name == "UserPromptSubmit"
-	})
-	if promptEvent != nil {
-		if raw, ok := promptEvent["timestamp"].(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
-				startTime = parsed
+	if ctx.StartTime != "" {
+		// Agent snapshot carries the SubagentStart hook timestamp: use it so the
+		// span is anchored to when the agent was launched, not when it stopped.
+		if parsed, parseErr := time.Parse(time.RFC3339Nano, ctx.StartTime); parseErr == nil {
+			startTime = parsed
+		}
+	} else {
+		// For session-level spans, the span starts when the user submitted the
+		// prompt, not when Stop fires.
+		promptEvent, _ := filelog.FindEvent(dataDir, func(e map[string]any) bool {
+			name, _ := e["hook_event_name"].(string)
+			return name == "UserPromptSubmit"
+		})
+		if promptEvent != nil {
+			if raw, ok := promptEvent["timestamp"].(string); ok {
+				if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
+					startTime = parsed
+				}
+			}
+			if prompt, ok := promptEvent["prompt"]; ok {
+				if _, hasPrompt := event["prompt"]; !hasPrompt {
+					event["prompt"] = prompt
+				}
 			}
 		}
-		if prompt, ok := promptEvent["prompt"]; ok {
-			if _, hasPrompt := event["prompt"]; !hasPrompt {
-				event["prompt"] = prompt
+		// A source may mark the prompt's role (e.g. an agent-injected turn that is
+		// not user input); carry it to the chat span so the input message renders
+		// with that role instead of the default "user".
+		if role, ok := promptEvent["prompt_role"].(string); ok && role != "" {
+			if _, has := event["prompt_role"]; !has {
+				event["prompt_role"] = role
 			}
 		}
 	}
 
-	agentID, _ := event["agent_id"].(string)
 	parentSpanID := ""
 	if agentID != "" {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
@@ -311,15 +390,29 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		}
 	}
 	if transcriptPath != "" {
-		usage, err := transcript.ReadTurnUsage(transcriptPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "on-event: reading transcript: %v\n", err)
-		}
-		if usage != nil {
-			event["gen_ai.usage.input_tokens"] = usage.InputTokens
-			event["gen_ai.usage.output_tokens"] = usage.OutputTokens
-			event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
-			event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+		// Token usage is sourced two ways across agents. Some (Codex, Cursor)
+		// inject gen_ai.usage.* upstream in their normalizer, before Process runs;
+		// others (Claude Code) leave usage on the transcript for us to read here.
+		// Only take the transcript path when usage isn't already present — this
+		// also keeps Codex/Cursor out of the Claude-format read and its wait below.
+		if _, usagePresent := event["gen_ai.usage.input_tokens"]; !usagePresent {
+			// The transcript (Claude Code format) is flushed asynchronously, so a
+			// completed turn (failed==false) may still end at a mid-turn tool_use
+			// entry when this hook fires — dropping the final, often cache-heavy,
+			// API call's usage. Wait briefly for the terminal entry to land.
+			if !failed {
+				waitForTurnComplete(transcriptPath)
+			}
+			usage, err := transcript.ReadTurnUsage(transcriptPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "on-event: reading transcript: %v\n", err)
+			}
+			if usage != nil {
+				event["gen_ai.usage.input_tokens"] = usage.InputTokens
+				event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+				event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
+				event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+			}
 		}
 
 		if title := transcript.ReadSessionTitle(transcriptPath); title != "" {
@@ -335,6 +428,38 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
+}
+
+// sessionIDPattern restricts session IDs to filename-safe characters. Session
+// IDs come from hook input and are used as directory names under dataDir, so
+// path separators or dots must not reach filepath.Join. Claude Code generates
+// session IDs as UUIDs; the random fallback IDs are 16 hex characters — both
+// are covered by this allowlist.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// turnCompleteWaitBudget caps how long sendLLMTrace waits for the turn's final
+// assistant entry to finish flushing to the transcript. The flush normally wins
+// within tens of milliseconds; on timeout we read best-effort.
+const turnCompleteWaitBudget = 500 * time.Millisecond
+
+// turnCompletePollInterval is the gap between transcript readiness checks.
+const turnCompletePollInterval = 50 * time.Millisecond
+
+// waitForTurnComplete blocks until the transcript's current turn shows a
+// terminal assistant entry or the budget elapses. It returns immediately once
+// the turn is complete, so the common case adds no measurable latency.
+func waitForTurnComplete(transcriptPath string) {
+	deadline := time.Now().Add(turnCompleteWaitBudget)
+	for {
+		complete, err := transcript.TurnComplete(transcriptPath)
+		if err != nil || complete {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(turnCompletePollInterval)
+	}
 }
 
 var prURLPattern = regexp.MustCompile(`https?://[^\s"'<>\x60\])]+/(?:pull/\d+|pull-requests/\d+|-/merge_requests/\d+)`)

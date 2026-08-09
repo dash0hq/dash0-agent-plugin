@@ -26,6 +26,10 @@ type transcriptEntry struct {
 }
 
 type messageEnvelope struct {
+	// ID is the API call's message id. Streaming writes one transcript entry per
+	// content block, all sharing this id and each repeating the call's usage, so
+	// it is the key that identifies a single billed call.
+	ID         string     `json:"id"`
 	Role       string     `json:"role"`
 	Model      string     `json:"model"`
 	StopReason string     `json:"stop_reason"`
@@ -86,15 +90,19 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 
 	dec := json.NewDecoder(f)
 
-	// perReq tracks per-requestId usage, keeping only the last entry for
-	// each requestId. Streaming splits a single API call into multiple
-	// transcript entries (thinking block, then text block); the last entry
-	// carries the final output_tokens count.
-	perReq := make(map[string]*usageData)
-	// noReq collects entries without a requestId (shouldn't happen in
-	// practice but handled for safety).
-	var noReqUsage Usage
+	// perCall tracks usage per API call, keeping only the last entry for each.
+	// Streaming splits a single call into multiple transcript entries (thinking
+	// block, then text block), each repeating that call's usage; the last entry
+	// carries the final output_tokens count, and the input and cache counts are
+	// identical across a call's entries.
+	perCall := make(map[string]*usageData)
+	// callOrder preserves first-seen order so the result does not depend on map
+	// iteration order.
+	var callOrder []string
 	var hasUsage bool
+	// entryCount seeds a synthetic key for entries carrying neither id, so
+	// distinct calls are still counted separately rather than merged.
+	entryCount := 0
 
 	for dec.More() {
 		var entry transcriptEntry
@@ -104,8 +112,8 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 
 		if isRealUserMessage(entry) {
 			// New turn — reset accumulator.
-			perReq = make(map[string]*usageData)
-			noReqUsage = Usage{}
+			perCall = make(map[string]*usageData)
+			callOrder = nil
 			hasUsage = false
 			continue
 		}
@@ -115,22 +123,27 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 		}
 
 		hasUsage = true
-		u := entry.Message.Usage
-		if entry.RequestID != "" {
-			perReq[entry.RequestID] = u
-		} else {
-			eff := u.effective()
-			noReqUsage.InputTokens += eff.InputTokens
-			noReqUsage.OutputTokens += eff.OutputTokens
-			noReqUsage.CacheCreationInputTokens += eff.CacheCreationInputTokens
-			noReqUsage.CacheReadInputTokens += eff.CacheReadInputTokens
+		entryCount++
+		// Prefer the message id: some sessions write no requestId at all, and
+		// without a per-call key each streamed entry's usage would be counted
+		// again. Falling back to a per-entry key keeps distinct calls separate.
+		key := entry.Message.ID
+		if key == "" {
+			key = entry.RequestID
 		}
+		if key == "" {
+			key = fmt.Sprintf("entry-%d", entryCount)
+		}
+		if _, seen := perCall[key]; !seen {
+			callOrder = append(callOrder, key)
+		}
+		perCall[key] = entry.Message.Usage
 	}
 
 	// Sum final usage across all API calls in the turn.
-	usage := noReqUsage
-	for _, u := range perReq {
-		eff := u.effective()
+	var usage Usage
+	for _, key := range callOrder {
+		eff := perCall[key].effective()
 		usage.InputTokens += eff.InputTokens
 		usage.OutputTokens += eff.OutputTokens
 		usage.CacheCreationInputTokens += eff.CacheCreationInputTokens

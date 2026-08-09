@@ -49,6 +49,10 @@ CACHE_READ_MULTIPLIER = 0.1
 CACHE_WRITE_5M_MULTIPLIER = 1.25
 CACHE_WRITE_1H_MULTIPLIER = 2.0
 
+# Model reported on messages Claude Code generates locally rather than by calling
+# the API (for example a cancellation notice). Not billed.
+SYNTHETIC_MODEL = "<synthetic>"
+
 
 class Usage:
     """Token counts for one or more API calls, with cache writes split by TTL."""
@@ -179,9 +183,15 @@ def read_transcript(path, counts=None, is_main=False, meta=None):
             raw_usage = message.get("usage")
             if not isinstance(raw_usage, dict):
                 continue
+            model = message.get("model") or "unknown"
+            # Claude Code writes locally generated messages with model
+            # "<synthetic>". They are not API calls, carry no real usage, and are
+            # not billed, so they would only add an empty row.
+            if model == SYNTHETIC_MODEL:
+                continue
             key = message.get("id") or entry.get("requestId") or entry.get("uuid") \
                 or len(per_request)
-            per_request[key] = (message.get("model") or "unknown", raw_usage)
+            per_request[key] = (model, raw_usage)
 
     totals = {}
     for model, raw_usage in per_request.values():
@@ -334,11 +344,13 @@ def report_text(session_id, result):
         merge(subagent_only, totals)
 
     grand_cost = total_cost(grand)
-    print(f"\nEstimated cost: ${grand_cost:,.4f}")
+    print(f"\nEstimated cost: ${grand_cost:,.4f}  (list prices, cache writes at their recorded TTL)")
     if subagent_only:
         sub_cost = total_cost(subagent_only)
         share = (sub_cost / grand_cost * 100) if grand_cost else 0.0
-        print(f"  of which sub-agents: ${sub_cost:,.4f} ({share:.0f}%)")
+        # Keep a decimal below 10% so a small-but-nonzero share is not shown as 0%.
+        formatted = f"{share:.0f}%" if share >= 10 else f"{share:.1f}%"
+        print(f"  of which sub-agents: ${sub_cost:,.4f} ({formatted})")
 
     unknown = sorted(model for model, usage in grand.items() if usage.cost(model) is None)
     if unknown:

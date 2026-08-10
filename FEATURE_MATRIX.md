@@ -18,6 +18,8 @@ span properties can be populated.
 | Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `~/.local/state/dash0-agent-plugin/cursor` | `~/.local/state/dash0-agent-plugin/codex` | `~/.local/state/dash0-agent-plugin/copilot` |
 | Hooks registered in | plugin manifest `hooks/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |
 | Wired hook events | 24 | 9 | 10 | 4 |
+| Supported OS/arch | `darwin`,`linux` × `amd64`,`arm64` | same | same | same |
+| Unsupported platform | hook fails | hook fails | hook fails | fails open (untraced) |
 
 ## Configuration options
 
@@ -97,7 +99,7 @@ demo generator uses them).
 | Local dev | `claude --plugin-dir …` ([guide](claude/README.md)) | symlink into `~/.cursor/plugins/local/` ([guide](cursor/README.md)) | `emit-codex-hooks` ([guide](codex/README.md#build--run-locally)) | `copilot-local-dev` skill ([guide](copilot/README.md#build--run-locally)) |
 | Binary delivery | download + checksum (`on-event.sh`) | download + checksum (`cursor-on-event.sh`) | download + checksum (`codex-on-event.sh`) | download + checksum (`copilot-on-event.sh`) |
 | Hook trust step | None | None | Yes — reproduced trust-hash in `config.toml` (installer) or manual `/hooks` (marketplace path) | None (restart `copilot`) |
-| Extra requirement | — | `jq` | `jq` | launch function (native OTel) via `dash0-configure` |
+| Extra requirement | — | `jq` | — | launch function (native OTel) via `dash0-configure` |
 
 ## Debugging
 

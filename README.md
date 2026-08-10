@@ -11,6 +11,8 @@ Trace through a session, see what each turn cost, find where the agent got stuck
 - **OpenAI Codex** — installation, configuration, and usage in [`.codex-plugin/README.md`](./.codex-plugin/README.md).
 - **GitHub Copilot CLI** — installation, configuration, and usage in [`.github/plugin/README.md`](./.github/plugin/README.md).
 
+All runtimes require macOS or Linux on `amd64` or `arm64`. Windows is not supported.
+
 ## Repository layout
 
 This repo ships one shared Go pipeline (`cmd/`, `internal/`, `scripts/`) and runtime-specific plugin surfaces:

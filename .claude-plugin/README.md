@@ -103,13 +103,16 @@ If you manage devices with MDM, deploy the same JSON as an on-disk `managed-sett
 
 > Server-managed settings are not delivered on Bedrock, Vertex, Foundry, or a custom `ANTHROPIC_BASE_URL`. Use the on-disk file there.
 
-### The auth token: a known limitation
+### The auth token: three options
 
-`AUTH_TOKEN` in managed `pluginConfigs.options` is honored, which makes this the only genuinely zero-touch path. The cost is that the token is stored in plaintext on every machine in the fleet, in `~/.claude/remote-settings.json`, readable by any process running as that user. It is plaintext at rest in the console too. Nothing the plugin does can encrypt around this.
+`AUTH_TOKEN` in managed `pluginConfigs.options` is honored, and is the simplest zero-touch path. The cost is that the token is stored in plaintext on every machine in the fleet, in `~/.claude/remote-settings.json`, readable by any process running as that user. It is plaintext at rest in the console too. Nothing the plugin does can encrypt around this.
 
 Two things make it defensible: use an ingest-only token scoped to the one dataset you send to, so a leak can write telemetry there and read nothing; and rotation is centralized, since changing the console value updates the fleet on the next poll.
 
-The alternative is to omit `AUTH_TOKEN` and have each developer add it once via `/plugin` → **Configure**, which stores it encrypted in the OS keychain. Choose that when policy forbids plaintext credentials at rest, and accept that it is no longer zero-touch. Managed settings cannot write to the keychain, so no option is both.
+If policy forbids plaintext credentials at rest, there are two alternatives:
+
+- **Keychain reference** (macOS) — ship `AUTH_TOKEN_KEYCHAIN_SERVICE` in the managed payload instead of `AUTH_TOKEN` and provision the secret per machine from your MDM. Managed config then carries only a pointer, so the rollout stays zero-touch *and* nothing sensitive lands on disk. See [Managed / MDM rollout](#managed--mdm-rollout-macos-keychain).
+- **Per-developer setup** — omit the token entirely and have each developer add it once via `/plugin` → **Configure**, which stores it encrypted in the OS keychain. No plaintext, but no longer zero-touch.
 
 ### Per-team attribution
 
@@ -246,27 +249,45 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 
 ### Managed / MDM rollout (macOS keychain)
 
-For fleet rollouts where plugin config is pushed via enterprise [managed settings](https://docs.anthropic.com/en/docs/claude-code/settings) (`managed-settings.json`, distributed by MDM), you can avoid placing the token in that file. Instead, provision the token once per machine in the macOS keychain and point the plugin at it — the managed config only carries a reference, not the secret.
+For fleet rollouts where plugin config is pushed via enterprise [managed settings](https://docs.anthropic.com/en/docs/claude-code/settings) (`managed-settings.json`, distributed by MDM), you can avoid placing the token in that file. Instead, provision the token once per machine in the macOS keychain and point the plugin at it — the managed config only carries a reference, not the secret. This is the only way to get a rollout that is both zero-touch and free of plaintext credentials at rest.
 
-1. Provision the keychain item (via your MDM/onboarding script):
+**How the lookup works.** A macOS keychain password item is addressed by two labels you choose when creating it: a **service** and an **account**. They are arbitrary strings — not your Dash0 account, not your macOS username unless you make it so. You pick them when you store the token, then repeat the same strings in the plugin config so it can find the item again. **The values must match exactly in both places**; if they don't, the lookup silently fails and the plugin falls back to whatever `AUTH_TOKEN` is otherwise configured.
+
+1. **Store the token** on each machine (via your MDM or onboarding script). Here `dash0-auth-token` is the *service* and `dash0` is the *account* — both are names you invent:
 
    ```bash
-   security add-generic-password -s "dash0-auth-token" -a "$USER" -w "<your-dash0-auth-token>" -U
+   security add-generic-password \
+     -s "dash0-auth-token" \
+     -a "dash0" \
+     -w "auth_abc123…" \
+     -U
    ```
 
-2. Configure the plugin with the reference instead of `AUTH_TOKEN` (e.g. in `pluginConfigs`):
+   `-w` is the Dash0 auth token itself, `-U` updates the item if it already exists (so the script is safe to re-run).
+
+2. **Point the plugin at it** — the same two strings, and no `AUTH_TOKEN`:
 
    ```json
    "options": {
      "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
      "AUTH_TOKEN_KEYCHAIN_SERVICE": "dash0-auth-token",
-     "AUTH_TOKEN_KEYCHAIN_ACCOUNT": "your-account"
+     "AUTH_TOKEN_KEYCHAIN_ACCOUNT": "dash0"
    }
    ```
 
-   `AUTH_TOKEN_KEYCHAIN_ACCOUNT` is optional; omit it to match by service name alone.
+   `AUTH_TOKEN_KEYCHAIN_ACCOUNT` is optional. Omit it and the item is matched by service name alone — fine when only one item uses that service, which is the usual case. Keeping it is safer on machines where the service name might be reused.
 
-At session start the plugin reads the token from the keychain and uses it exactly as if it had been configured directly. A successful lookup takes precedence over an inline `AUTH_TOKEN`; if the item is missing, the plugin falls back to whatever `AUTH_TOKEN` is otherwise set. This is macOS-only — on other platforms the reference is ignored.
+3. **Verify on one machine** before rolling out. This prints the stored token, and is exactly the lookup the plugin performs:
+
+   ```bash
+   security find-generic-password -s "dash0-auth-token" -a "dash0" -w
+   ```
+
+   If that prints your token, the plugin will find it too. If it errors with `SecKeychainSearchCopyNext`, the item does not exist under those two labels — re-check step 1 for typos.
+
+At session start the plugin reads the token from the keychain and uses it exactly as if it had been configured directly. A successful lookup takes precedence over an inline `AUTH_TOKEN`, so the reference is authoritative where both are present.
+
+Two limitations: this is **macOS-only** — on Linux and Windows the reference is ignored and you need `AUTH_TOKEN` — and it applies to **Claude Code only**. The Cursor, Codex, and Copilot integrations read the token from `dash0-agent-plugin.local.md` in plaintext and have no keychain path.
 
 ## Privacy defaults
 

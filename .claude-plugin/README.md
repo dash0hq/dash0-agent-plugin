@@ -2,6 +2,14 @@
 
 Claude Code plugin that captures agent activity as OpenTelemetry traces — tool calls, LLM invocations, token usage, and errors.
 
+## Requirements
+
+- **Agent:** the Claude Code CLI.
+- **Operating system:** macOS or Linux (Windows is not supported).
+- **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
+- **Shell tooling:** `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
+  bootstrap downloads and checksum-verifies the hook binary on first run.
+
 ## Installation
 
 ### From the official Claude Code marketplace (recommended)
@@ -277,12 +285,24 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 
 ## Troubleshooting
 
-**No spans in Dash0 after install.** Check the `dash0:` message on session start:
+### Every hook fails with a 404
+
+The hook is trying to download a binary for an unsupported platform. Run
+`uname -s -m` — anything other than `Darwin` or `Linux` on
+`x86_64`/`arm64`/`aarch64` is unsupported, in particular `MINGW64_NT-…` or
+`MSYS_NT-…`, which is Windows under Git Bash. See [Requirements](#requirements).
+
+### No spans in Dash0 after install
+
+Check the `dash0:` message on session start:
+
 - `dash0: telemetry is not active` — OTLP URL is not configured.
 - `dash0: connectivity check failed` — URL is set but connection failed (e.g. invalid auth token).
 - No message at all — run `/reload-plugins`, or restart Claude Code.
 
-**Debug mode.** Set `DASH0_DEBUG=true` to print all OTel payloads to stderr:
+### Debug mode
+
+Set `DASH0_DEBUG=true` to print all OTel payloads to stderr:
 
 ```bash
 DASH0_DEBUG=true claude

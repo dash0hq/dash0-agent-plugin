@@ -2,7 +2,13 @@
 
 Emit GitHub Copilot CLI agent activity as OpenTelemetry spans to your Dash0 endpoint — prompts and responses, tool calls, MCP calls, and sub-agent activity, with shared trace context across each turn.
 
-**Requirements:** the GitHub Copilot CLI, on macOS or Linux.
+## Requirements
+
+- **Agent:** the GitHub Copilot CLI.
+- **Operating system:** macOS or Linux (Windows is not supported).
+- **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
+- **Shell tooling:** `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
+  bootstrap downloads and checksum-verifies the hook binary on first run.
 
 ## Installation
 
@@ -139,7 +145,15 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 
 ## Troubleshooting
 
-If no traces arrive:
+### No telemetry, and the debug log shows a failed binary download
+
+The hook is trying to download a binary for an unsupported platform (the plugin
+fails open, so `copilot` itself keeps working). Run `uname -s -m` — anything
+other than `Darwin` or `Linux` on `x86_64`/`arm64`/`aarch64` is unsupported, in
+particular `MINGW64_NT-…` or `MSYS_NT-…`, which is Windows under Git Bash. See
+[Requirements](#requirements).
+
+### No traces arrive
 
 - Confirm you **restarted `copilot`** after installing (hooks load at startup).
 - Confirm you opened a **new shell** after `/dash0-configure` so the launch function is active — without it, `chat` spans emit but carry no usage or tool spans.

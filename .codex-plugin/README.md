@@ -2,7 +2,13 @@
 
 Emit OpenAI Codex agent activity as OpenTelemetry spans to your Dash0 endpoint — prompts and responses, tool calls, MCP calls, and sub-agent activity, with shared trace context across each turn.
 
-**Requirements:** the OpenAI Codex CLI, on macOS or Linux.
+## Requirements
+
+- **Agent:** the OpenAI Codex CLI.
+- **Operating system:** macOS or Linux (Windows is not supported).
+- **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
+- **Shell tooling:** `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
+  bootstrap downloads and checksum-verifies the hook binary on first run.
 
 ## Installation
 
@@ -163,7 +169,14 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 
 ## Troubleshooting
 
-If no traces arrive:
+### Every hook fails with a 404
+
+The hook is trying to download a binary for an unsupported platform. Run
+`uname -s -m` — anything other than `Darwin` or `Linux` on
+`x86_64`/`arm64`/`aarch64` is unsupported, in particular `MINGW64_NT-…` or
+`MSYS_NT-…`, which is Windows under Git Bash. See [Requirements](#requirements).
+
+### No traces arrive
 
 - Confirm you started a **new** Codex session after installing.
 - In Codex, run `/hooks` and check that the Dash0 hooks are listed and **Active**.

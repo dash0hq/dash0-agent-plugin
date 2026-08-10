@@ -30,6 +30,7 @@ variable instead.
 |---|---|---|---|---|---|
 | `otlp_url` | Yes | Yes | Yes | Yes | Dash0 OTLP ingress. Empty ⇒ telemetry off. |
 | `auth_token` | Yes | Yes | Yes | Yes | Secure var only, no `DASH0_*` fallback: `{CLAUDE,CURSOR,CODEX,COPILOT}_PLUGIN_OPTION_AUTH_TOKEN`. |
+| `auth_token_keychain_service` (+ `_account`) | Yes | No | No | No | macOS only. Reads the token from a named keychain item instead of storing it, so managed rollouts ship a pointer rather than the secret. Does not restrict same-user process access. Other runtimes read `auth_token` in plaintext ([SIG-261](https://linear.app/dash0/issue/SIG-261)). |
 | `dataset` | Yes | Yes | Yes | Yes | `Dash0-Dataset` header. |
 | `agent_name` | Yes | Yes | Yes | Yes | → `service.name` / `gen_ai.agent.name`. |
 | `team_name` | Yes | Yes | Yes | Yes | → `dash0.team.name`. |

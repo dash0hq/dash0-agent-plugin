@@ -83,7 +83,7 @@ else
 fi
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.22"
+VERSION="0.1.23"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)

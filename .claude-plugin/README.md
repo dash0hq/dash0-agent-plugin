@@ -202,8 +202,8 @@ If credentials are missing: `dash0: telemetry is not active — configure the pl
 |---|---|---|---|
 | `OTLP_URL` | Dash0 OTLP endpoint URL (e.g. `https://ingress.<region>.aws.dash0.com`) | — | No |
 | `AUTH_TOKEN` | Dash0 authentication token | — | Yes (stored in keychain) |
-| `AUTH_TOKEN_KEYCHAIN_SERVICE` | macOS keychain item to read the token from at runtime, instead of storing it (see [Managed rollout](#managed--mdm-rollout-macos-keychain)) | — | No |
-| `AUTH_TOKEN_KEYCHAIN_ACCOUNT` | Optional account for the keychain item above | — | No |
+| `AUTH_TOKEN_KEYCHAIN_SERVICE` | macOS keychain service holding the token, read at runtime instead of storing it ([managed rollout](#managed--mdm-rollout-macos-keychain)) | — | No |
+| `AUTH_TOKEN_KEYCHAIN_ACCOUNT` | Optional account for that keychain item | — | No |
 | `DATASET` | Dash0 dataset name | — | No |
 | `AGENT_NAME` | Agent name (used as `service.name`) | `claude-code` | No |
 | `TEAM_NAME` | Team name — all spans are tagged with `dash0.team.name` | — | No |
@@ -238,6 +238,8 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 | `DASH0_DATASET` | Dataset name |
 | `DASH0_AGENT_NAME` | Agent name |
 | `DASH0_TEAM_NAME` | Team name |
+| `DASH0_AUTH_TOKEN_KEYCHAIN_SERVICE` | macOS keychain service to read the token from |
+| `DASH0_AUTH_TOKEN_KEYCHAIN_ACCOUNT` | Optional account for that keychain item |
 | `DASH0_OMIT_USER_INFO` | Anonymize user identity (`true`/`false`) |
 | `DASH0_OMIT_IDENTITY_FALLBACK` | Require a real git identity (`true`/`false`) |
 | `DASH0_OMIT_IO` | Omit prompts and tool I/O (`true`/`false`) |
@@ -245,7 +247,7 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 | `DASH0_DEBUG` | Print OTel payloads to stderr (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Write debug output to this file path |
 
-> `AUTH_TOKEN` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Use `/plugin → Configure` (OS keychain) or the config file's `auth_token:` field.
+> `AUTH_TOKEN` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Use `/plugin → Configure` (OS keychain) or the config file's `auth_token:` field. The two `*_KEYCHAIN_*` variables above are exempt: they name an item rather than carrying the secret.
 
 ### Managed / MDM rollout (macOS keychain)
 

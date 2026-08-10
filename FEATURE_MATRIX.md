@@ -35,6 +35,7 @@ variable instead.
 | `team_name` | Yes | Yes | Yes | Yes | → `dash0.team.name`. |
 | `omit_io` | Yes | Yes | Yes | Yes | Binary default `true` (redact prompts + tool I/O).¹ |
 | `omit_user_info` | Yes | Yes | Yes | Yes | Default `false`. |
+| `omit_identity_fallback` | Yes | Yes | Yes | Yes | Default `false`. When `true`, only a real `git config user.name` is reported; the OS-account fallback is dropped. |
 | `enabled` | Yes | Yes | Yes | Yes | `false` ⇒ wrapper exits, plugin off for that scope. |
 | `debug` | No (env only) | Yes | Yes | Yes | Claude: use `DASH0_DEBUG`. |
 | `debug_file` | No (env only) | Yes | Yes | Yes | Claude: use `DASH0_DEBUG_FILE`. |
@@ -83,6 +84,7 @@ demo generator uses them).
 | Session title (`gen_ai.conversation.name`) | Yes | No | No | No | Only Claude has a transcript reader. |
 | Prompt / response content (`gen_ai.input/output.messages`) | Yes | Yes | Yes | Yes | Gated by `omit_io`, truncated at 16 KB. Copilot response text comes from the native-OTel file. |
 | VCS + code enrichment (repo / branch / PR / issue / commit / lines / bash-family / skill) | Yes | Yes | Yes | Yes | Shared pipeline extractors. Copilot has no per-edit line counts (`apply_patch` carries no `structuredPatch`). |
+| User identity (`user.name` / `user.email` / `dash0.gen_ai.user.identity.source`) | Yes | Yes | Yes | Yes | `git config user.name`, falling back to the OS account (`identity.source=os`). Emitted outside a git repo too. |
 | Usage source | Claude JSONL transcript | `afterAgentResponse` hook | Codex rollout file | Native-OTel file (per turn) | |
 
 ## Installation options

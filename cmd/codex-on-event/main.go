@@ -137,17 +137,18 @@ func run() error {
 	// resolves provider per-event from the model name (e.g. gpt-*/o*/codex-* →
 	// openai) and only falls back to this value when a model is absent.
 	cfg := otlp.Config{
-		OTLPUrl:      dash0Env("OTLP_URL"),
-		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
-		Dataset:      dash0Env("DATASET"),
-		AgentName:    agentName(),
-		HarnessName:  "codex",
-		Provider:     "openai",
-		TeamName:     dash0Env("TEAM_NAME"),
-		OmitUserInfo: dash0EnvBool("OMIT_USER_INFO", false),
-		OmitIO:       dash0EnvBool("OMIT_IO", true),
-		Debug:        dash0EnvBool("DEBUG", false),
-		DebugFile:    dash0Env("DEBUG_FILE"),
+		OTLPUrl:              dash0Env("OTLP_URL"),
+		AuthToken:            pluginOptionSecure("AUTH_TOKEN"),
+		Dataset:              dash0Env("DATASET"),
+		AgentName:            agentName(),
+		HarnessName:          "codex",
+		Provider:             "openai",
+		TeamName:             dash0Env("TEAM_NAME"),
+		OmitUserInfo:         dash0EnvBool("OMIT_USER_INFO", false),
+		OmitIdentityFallback: dash0EnvBool("OMIT_IDENTITY_FALLBACK", false),
+		OmitIO:               dash0EnvBool("OMIT_IO", true),
+		Debug:                dash0EnvBool("DEBUG", false),
+		DebugFile:            dash0Env("DEBUG_FILE"),
 	}
 	pipeline.ValidateOTLPURL(&cfg)
 

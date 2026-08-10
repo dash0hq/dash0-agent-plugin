@@ -115,6 +115,47 @@ func TestIdentitySpanAttributesOmitUserInfo(t *testing.T) {
 	})
 }
 
+func TestIdentitySpanAttributesOmitIdentityFallback(t *testing.T) {
+	cfg := Config{OmitIdentityFallback: true}
+
+	t.Run("drops an OS-derived name", func(t *testing.T) {
+		pinIdentity(t, identity.Info{Name: "guymoses", Source: identity.SourceOS})
+
+		attrs := identitySpanAttributes(cfg)
+
+		assert.Empty(t, attrs, "an approximate name must be dropped, not reported")
+	})
+
+	t.Run("keeps a real git identity", func(t *testing.T) {
+		pinIdentity(t, identity.Info{Name: "Guy Moses", Email: "guy@dash0.com", Source: identity.SourceGit})
+
+		got := attrMap(identitySpanAttributes(cfg))
+
+		assert.Equal(t, "Guy Moses", got["user.name"])
+		assert.Equal(t, "git", got["dash0.gen_ai.user.identity.source"])
+	})
+
+	t.Run("keeps the git email when only the name fell back", func(t *testing.T) {
+		// user.email is git-only, so it stays trustworthy even when the name
+		// came from the OS and gets dropped.
+		pinIdentity(t, identity.Info{Name: "guymoses", Email: "guy@dash0.com", Source: identity.SourceOS})
+
+		got := attrMap(identitySpanAttributes(cfg))
+
+		assert.NotContains(t, got, "user.name")
+		assert.NotContains(t, got, "dash0.gen_ai.user.identity.source")
+		assert.Equal(t, "guy@dash0.com", got["user.email"])
+	})
+
+	t.Run("is off by default", func(t *testing.T) {
+		pinIdentity(t, identity.Info{Name: "guymoses", Source: identity.SourceOS})
+
+		got := attrMap(identitySpanAttributes(Config{}))
+
+		assert.Equal(t, "guymoses", got["user.name"], "the fallback is the default behavior")
+	})
+}
+
 // TestIdentityEmittedOutsideGitRepository guards the behavior that used to be
 // implicit in vcs.Detect returning user fields: identity must survive when
 // there is no repository at all. Cursor spawns hooks with a CWD that isn't

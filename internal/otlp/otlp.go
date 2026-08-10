@@ -85,6 +85,11 @@ func StringVal(s string) AttrValue {
 	return AttrValue{StringValue: &s}
 }
 
+// strAttr builds a string-valued attribute.
+func strAttr(key, val string) Attribute {
+	return Attribute{Key: key, Value: StringVal(val)}
+}
+
 func IntVal(n int64) AttrValue {
 	s := strconv.FormatInt(n, 10)
 	return AttrValue{IntValue: &s}
@@ -103,6 +108,11 @@ type Config struct {
 	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to
+
+	// OmitIdentityFallback requires a real git identity: when true, an
+	// OS-derived user.name is dropped instead of reported. For orgs that would
+	// rather have no attribution than an approximate one.
+	OmitIdentityFallback bool
 }
 
 // SendLog sends the event as an OTLP log record to the configured endpoint.
@@ -531,31 +541,27 @@ func vcsSpanAttributes(cfg Config) []Attribute {
 		return nil
 	}
 
-	attr := func(key, val string) Attribute {
-		return Attribute{Key: key, Value: StringVal(val)}
-	}
-
 	var attrs []Attribute
 	if info.RepositoryURLFull != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.repository.url.full", info.RepositoryURLFull))
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.repository.url.full", info.RepositoryURLFull))
 	}
 	if info.RepositoryName != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.repository.name", info.RepositoryName))
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.repository.name", info.RepositoryName))
 	}
 	if info.OwnerName != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.owner.name", info.OwnerName))
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.owner.name", info.OwnerName))
 	}
 	if info.ProviderName != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.provider.name", info.ProviderName))
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.provider.name", info.ProviderName))
 	}
 	if info.RefHeadName != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.name", info.RefHeadName))
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.ref.head.name", info.RefHeadName))
 	}
 	if info.RefHeadRevision != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.revision", info.RefHeadRevision))
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.ref.head.revision", info.RefHeadRevision))
 	}
 	if info.RefHeadType != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.type", info.RefHeadType))
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.ref.head.type", info.RefHeadType))
 	}
 	return attrs
 }
@@ -574,25 +580,28 @@ var resolveIdentity = identity.Resolve
 // the first place. It is not itself identifying, so it is never hashed.
 func identitySpanAttributes(cfg Config) []Attribute {
 	info := resolveIdentity()
-	if info.Name == "" && info.Email == "" {
-		return nil
+
+	// An org that considers OS-derived names untrustworthy can require a real
+	// git identity: the fallback name is dropped rather than approximated.
+	if cfg.OmitIdentityFallback && info.Source == identity.SourceOS {
+		info.Name, info.Source = "", ""
 	}
 
-	attr := func(key, val string) Attribute {
-		return Attribute{Key: key, Value: StringVal(val)}
+	if info.Name == "" && info.Email == "" {
+		return nil
 	}
 
 	var attrs []Attribute
 	if info.Name != "" {
 		if cfg.OmitUserInfo {
-			attrs = append(attrs, attr("user.name", hashIdentity(info.Name)))
+			attrs = append(attrs, strAttr("user.name", hashIdentity(info.Name)))
 		} else {
-			attrs = append(attrs, attr("user.name", info.Name))
+			attrs = append(attrs, strAttr("user.name", info.Name))
 		}
-		attrs = append(attrs, attr("dash0.gen_ai.user.identity.source", info.Source))
+		attrs = append(attrs, strAttr("dash0.gen_ai.user.identity.source", info.Source))
 	}
 	if info.Email != "" && !cfg.OmitUserInfo {
-		attrs = append(attrs, attr("user.email", info.Email))
+		attrs = append(attrs, strAttr("user.email", info.Email))
 	}
 
 	return attrs

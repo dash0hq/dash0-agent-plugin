@@ -204,6 +204,7 @@ If credentials are missing: `dash0: telemetry is not active — configure the pl
 | `TEAM_NAME` | Team name — all spans are tagged with `dash0.team.name` | — | No |
 | `OMIT_IO` | Omit prompt content and tool I/O | `true` | No |
 | `OMIT_USER_INFO` | Anonymize user identity | `false` | No |
+| `OMIT_IDENTITY_FALLBACK` | Require a real git identity | `false` | No |
 | `SHOW_SESSION_LINK` | Print the session URL after every turn | `false` | No |
 
 The config file uses lowercase equivalents (`otlp_url`, `auth_token`, `dataset`, etc.) plus an additional `enabled` option to disable the plugin per-project without uninstalling it.
@@ -233,6 +234,7 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 | `DASH0_AGENT_NAME` | Agent name |
 | `DASH0_TEAM_NAME` | Team name |
 | `DASH0_OMIT_USER_INFO` | Anonymize user identity (`true`/`false`) |
+| `DASH0_OMIT_IDENTITY_FALLBACK` | Require a real git identity (`true`/`false`) |
 | `DASH0_OMIT_IO` | Omit prompts and tool I/O (`true`/`false`) |
 | `DASH0_SHOW_SESSION_LINK` | Print session URL after every turn (`true`/`false`) |
 | `DASH0_DEBUG` | Print OTel payloads to stderr (`true`/`false`) |
@@ -245,6 +247,7 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 | Setting | Default | Behavior |
 |---|---|---|
 | `OMIT_USER_INFO` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
+| `OMIT_IDENTITY_FALLBACK` | `false` | The OS account is used when `git config user.name` is unset. When `true`, only a git identity is reported and the fallback is dropped. |
 | `OMIT_IO` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
 
 **Always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
@@ -253,7 +256,7 @@ The plugin falls back to `DASH0_*` environment variables when `userConfig` value
 
 `user.name` comes from `git config user.name`. When that is unset, the plugin falls back to the OS account (display name, then username) so the session is still attributable instead of arriving anonymous. `user.email` has no fallback — it is only ever the git value.
 
-Every span carrying a name also carries `dash0.gen_ai.user.identity.source`, either `git` or `os`, so a fallback is never mistaken for a configured identity. The fallback is skipped in CI and for shared accounts (`root`, `runner`, ...), where the OS account names a machine rather than a person; those sessions report no name at all.
+Every span carrying a name also carries `dash0.gen_ai.user.identity.source`, either `git` or `os`, so a fallback is never mistaken for a configured identity. The fallback is skipped in CI and for shared accounts (`root`, `runner`, ...), where the OS account names a machine rather than a person; those sessions report no name at all. Set `OMIT_IDENTITY_FALLBACK` to require a real git identity and drop the fallback entirely.
 
 ## Telemetry attributes
 

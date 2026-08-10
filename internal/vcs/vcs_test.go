@@ -70,6 +70,11 @@ func TestDetect(t *testing.T) {
 	assert.NotEmpty(t, info.RepositoryURLFull)
 	assert.NotEmpty(t, info.RepositoryName)
 	assert.NotEmpty(t, info.OwnerName)
-	// UserName and UserEmail depend on local git config — may be empty in CI.
-	t.Logf("UserName=%q UserEmail=%q", info.UserName, info.UserEmail)
+}
+
+// TestDetectOutsideRepository pins the contract identitySpanAttributes relies
+// on: Detect reports repository state only, and says nothing outside a repo.
+func TestDetectOutsideRepository(t *testing.T) {
+	t.Chdir(t.TempDir())
+	assert.Nil(t, Detect(), "expected nil outside a git working tree")
 }

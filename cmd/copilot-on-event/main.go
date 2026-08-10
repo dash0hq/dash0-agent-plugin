@@ -80,16 +80,17 @@ func run() error {
 	}
 
 	cfg := otlp.Config{
-		OTLPUrl:      dash0Env("OTLP_URL"),
-		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
-		Dataset:      dash0Env("DATASET"),
-		AgentName:    agentName(),
-		HarnessName:  "github-copilot-cli",
-		TeamName:     dash0Env("TEAM_NAME"),
-		OmitUserInfo: dash0EnvBool("OMIT_USER_INFO", false),
-		OmitIO:       dash0EnvBool("OMIT_IO", true),
-		Debug:        dash0EnvBool("DEBUG", false),
-		DebugFile:    dash0Env("DEBUG_FILE"),
+		OTLPUrl:              dash0Env("OTLP_URL"),
+		AuthToken:            pluginOptionSecure("AUTH_TOKEN"),
+		Dataset:              dash0Env("DATASET"),
+		AgentName:            agentName(),
+		HarnessName:          "github-copilot-cli",
+		TeamName:             dash0Env("TEAM_NAME"),
+		OmitUserInfo:         dash0EnvBool("OMIT_USER_INFO", false),
+		OmitIdentityFallback: dash0EnvBool("OMIT_IDENTITY_FALLBACK", false),
+		OmitIO:               dash0EnvBool("OMIT_IO", true),
+		Debug:                dash0EnvBool("DEBUG", false),
+		DebugFile:            dash0Env("DEBUG_FILE"),
 	}
 	pipeline.ValidateOTLPURL(&cfg)
 

@@ -123,9 +123,16 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 | Setting | Default | Behavior |
 |---|---|---|
 | `omit_user_info` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
+| `omit_identity_fallback` | `false` | The OS account is used when `git config user.name` is unset. When `true`, only a git identity is reported and the fallback is dropped. |
 | `omit_io` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
 
 **Always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
+
+### User identity
+
+`user.name` comes from `git config user.name`. When that is unset, the plugin falls back to the OS account (display name, then username) so the session is still attributable instead of arriving anonymous. `user.email` has no fallback — it is only ever the git value.
+
+Every span carrying a name also carries `dash0.gen_ai.user.identity.source`, either `git` or `os`, so a fallback is never mistaken for a configured identity. The fallback is skipped in CI and for shared accounts (`root`, `runner`, ...), where the OS account names a machine rather than a person; those sessions report no name at all. Set `OMIT_IDENTITY_FALLBACK` to require a real git identity and drop the fallback entirely.
 
 ## Telemetry attributes
 

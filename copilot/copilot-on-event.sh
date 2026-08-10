@@ -59,6 +59,8 @@ load_settings() {
   [[ -n "$val" ]] && export DASH0_OMIT_IO="$val"
   val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
+  val=$(echo "$frontmatter" | grep '^omit_identity_fallback:' | sed 's/omit_identity_fallback: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_OMIT_IDENTITY_FALLBACK="$val"
   val=$(echo "$frontmatter" | grep '^debug:' | sed 's/debug: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_DEBUG="$val"
   val=$(echo "$frontmatter" | grep '^debug_file:' | sed 's/debug_file: *//' | sed 's/^"\(.*\)"$/\1/' || true)

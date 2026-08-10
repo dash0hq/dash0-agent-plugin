@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/identity"
 	"github.com/dash0hq/dash0-agent-plugin/internal/vcs"
 	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
@@ -84,6 +85,11 @@ func StringVal(s string) AttrValue {
 	return AttrValue{StringValue: &s}
 }
 
+// strAttr builds a string-valued attribute.
+func strAttr(key, val string) Attribute {
+	return Attribute{Key: key, Value: StringVal(val)}
+}
+
 func IntVal(n int64) AttrValue {
 	s := strconv.FormatInt(n, 10)
 	return AttrValue{IntValue: &s}
@@ -102,6 +108,11 @@ type Config struct {
 	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to
+
+	// OmitIdentityFallback requires a real git identity: when true, an
+	// OS-derived user.name is dropped instead of reported. For orgs that would
+	// rather have no attribution than an approximate one.
+	OmitIdentityFallback bool
 }
 
 // SendLog sends the event as an OTLP log record to the configured endpoint.
@@ -518,49 +529,79 @@ func teamSpanAttributes(cfg Config) []Attribute {
 	return []Attribute{{Key: "dash0.team.name", Value: StringVal(cfg.TeamName)}}
 }
 
-// vcsSpanAttributes returns dash0.gen_ai.vcs.* and user.* span attributes derived from the
+// vcsSpanAttributes returns dash0.gen_ai.vcs.* span attributes derived from the
 // current git state. Returns nil if not inside a git repository.
+//
+// User identity is NOT here: it is emitted by identitySpanAttributes, which
+// must run even outside a repository (Cursor spawns hooks with a CWD that isn't
+// always a working tree, and the user is still the user).
 func vcsSpanAttributes(cfg Config) []Attribute {
 	info := vcs.Detect()
 	if info == nil {
 		return nil
 	}
 
-	attr := func(key, val string) Attribute {
-		return Attribute{Key: key, Value: StringVal(val)}
+	var attrs []Attribute
+	if info.RepositoryURLFull != "" {
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.repository.url.full", info.RepositoryURLFull))
+	}
+	if info.RepositoryName != "" {
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.repository.name", info.RepositoryName))
+	}
+	if info.OwnerName != "" {
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.owner.name", info.OwnerName))
+	}
+	if info.ProviderName != "" {
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.provider.name", info.ProviderName))
+	}
+	if info.RefHeadName != "" {
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.ref.head.name", info.RefHeadName))
+	}
+	if info.RefHeadRevision != "" {
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.ref.head.revision", info.RefHeadRevision))
+	}
+	if info.RefHeadType != "" {
+		attrs = append(attrs, strAttr("dash0.gen_ai.vcs.ref.head.type", info.RefHeadType))
+	}
+	return attrs
+}
+
+// resolveIdentity is indirected so tests can pin a resolution result instead of
+// depending on the host's git config and OS account.
+var resolveIdentity = identity.Resolve
+
+// identitySpanAttributes returns the user.* span attributes plus the provenance
+// of the name. It runs independently of git repository state — a developer with
+// no git identity, or working outside a repository, still gets attributed.
+//
+// dash0.gen_ai.user.identity.source is always emitted alongside a name, never
+// only on fallback: an absent attribute meaning "git" is exactly the
+// absent-means-something ambiguity that made missing identities invisible in
+// the first place. It is not itself identifying, so it is never hashed.
+func identitySpanAttributes(cfg Config) []Attribute {
+	info := resolveIdentity()
+
+	// An org that considers OS-derived names untrustworthy can require a real
+	// git identity: the fallback name is dropped rather than approximated.
+	if cfg.OmitIdentityFallback && info.Source == identity.SourceOS {
+		info.Name, info.Source = "", ""
+	}
+
+	if info.Name == "" && info.Email == "" {
+		return nil
 	}
 
 	var attrs []Attribute
-	if info.RepositoryURLFull != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.repository.url.full", info.RepositoryURLFull))
-	}
-	if info.RepositoryName != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.repository.name", info.RepositoryName))
-	}
-	if info.OwnerName != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.owner.name", info.OwnerName))
-	}
-	if info.ProviderName != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.provider.name", info.ProviderName))
-	}
-	if info.RefHeadName != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.name", info.RefHeadName))
-	}
-	if info.RefHeadRevision != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.revision", info.RefHeadRevision))
-	}
-	if info.RefHeadType != "" {
-		attrs = append(attrs, attr("dash0.gen_ai.vcs.ref.head.type", info.RefHeadType))
-	}
-	if info.UserName != "" {
+	if info.Name != "" {
 		if cfg.OmitUserInfo {
-			attrs = append(attrs, attr("user.name", hashIdentity(info.UserName)))
+			attrs = append(attrs, strAttr("user.name", hashIdentity(info.Name)))
 		} else {
-			attrs = append(attrs, attr("user.name", info.UserName))
+			attrs = append(attrs, strAttr("user.name", info.Name))
 		}
+		attrs = append(attrs, strAttr("dash0.gen_ai.user.identity.source", info.Source))
 	}
-	if info.UserEmail != "" && !cfg.OmitUserInfo {
-		attrs = append(attrs, attr("user.email", info.UserEmail))
+	if info.Email != "" && !cfg.OmitUserInfo {
+		attrs = append(attrs, strAttr("user.email", info.Email))
 	}
 
 	return attrs

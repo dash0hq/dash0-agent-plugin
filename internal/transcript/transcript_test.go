@@ -169,6 +169,92 @@ func TestReadTurnUsageIgnoresPreviousTurns(t *testing.T) {
 	assert.Equal(t, int64(50), usage.OutputTokens)
 }
 
+func TestReadTurnUsageSkipsReplayedHistory(t *testing.T) {
+	// Modeled on a real multi-day session: after the current turn, Claude Code
+	// re-appends entries of an earlier turn — same message id, original
+	// timestamps, original usage — fronted by a tool_result relay that does not
+	// close the turn. That history was already billed on the earlier turn's
+	// span and must not be counted again.
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first prompt"},"timestamp":"2026-07-14T11:00:00.000Z"}`,
+		`{"type":"assistant","message":{"id":"msg_old","role":"assistant","content":[{"type":"text","text":"old"}],"usage":{"input_tokens":2,"output_tokens":1000,"cache_creation_input_tokens":5000,"cache_read_input_tokens":900000}},"timestamp":"2026-07-14T11:00:05.000Z"}`,
+		`{"type":"user","message":{"role":"user","content":"second prompt"},"timestamp":"2026-07-17T12:12:53.246Z"}`,
+		`{"type":"assistant","message":{"id":"msg_new","role":"assistant","content":[{"type":"text","text":"new"}],"usage":{"input_tokens":1,"output_tokens":20,"cache_creation_input_tokens":100,"cache_read_input_tokens":200}},"timestamp":"2026-07-17T12:13:44.905Z"}`,
+		// Replayed history, appended after the current turn.
+		`{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_old","type":"tool_result","content":"old output"}]},"timestamp":"2026-07-14T11:00:03.000Z"}`,
+		`{"type":"assistant","message":{"id":"msg_old","role":"assistant","content":[{"type":"text","text":"old"}],"usage":{"input_tokens":2,"output_tokens":1000,"cache_creation_input_tokens":5000,"cache_read_input_tokens":900000}},"timestamp":"2026-07-14T11:00:05.000Z"}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(1), usage.InputTokens)
+	assert.Equal(t, int64(20), usage.OutputTokens)
+	assert.Equal(t, int64(100), usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(200), usage.CacheReadInputTokens)
+}
+
+func TestReadTurnUsageReplayOnlyTurnReportsNoUsage(t *testing.T) {
+	// A turn whose only usage entries are replayed history made no new API
+	// call, so there is nothing to report — better than claiming zero tokens.
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first prompt"}}`,
+		`{"type":"assistant","message":{"id":"msg_old","role":"assistant","content":[{"type":"text","text":"old"}],"usage":{"input_tokens":2,"output_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":900000}}}`,
+		`{"type":"user","message":{"role":"user","content":"second prompt"}}`,
+		`{"type":"assistant","message":{"id":"msg_old","role":"assistant","content":[{"type":"text","text":"old"}],"usage":{"input_tokens":2,"output_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":900000}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	assert.Nil(t, usage)
+}
+
+func TestReadTurnUsageKeepsLateFlushedTailOfPreviousTurn(t *testing.T) {
+	// The tail of a turn whose transcript flush lost the race with the next
+	// prompt: older timestamp, but never counted before (no earlier occurrence
+	// of msg_late in the file). It stays attributed to the current turn so the
+	// session total remains whole.
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first prompt"},"timestamp":"2026-07-17T12:00:00.000Z"}`,
+		`{"type":"assistant","message":{"id":"msg_first","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":1,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-07-17T12:00:05.000Z"}`,
+		`{"type":"user","message":{"role":"user","content":"second prompt"},"timestamp":"2026-07-17T12:01:00.000Z"}`,
+		// Flushed after the new prompt, but belongs to (and was never counted
+		// for) the first turn.
+		`{"type":"assistant","message":{"id":"msg_late","role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":3,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-07-17T12:00:59.000Z"}`,
+		`{"type":"assistant","message":{"id":"msg_second","role":"assistant","content":[{"type":"text","text":"c"}],"usage":{"input_tokens":5,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-07-17T12:01:05.000Z"}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(8), usage.InputTokens)
+	assert.Equal(t, int64(80), usage.OutputTokens)
+}
+
+func TestReadTurnUsageCountsRepeatedCallInSameTurnOnce(t *testing.T) {
+	// Guard the dedup scope: a call replayed WITHIN the turn that first made it
+	// must still be counted (once), not skipped as spent history.
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"only prompt"}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"thinking","thinking":"..."}],"usage":{"input_tokens":7,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+		`{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"out"}]}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":7,"output_tokens":70,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(7), usage.InputTokens)
+	assert.Equal(t, int64(70), usage.OutputTokens)
+}
+
 func TestReadTurnUsageResetsOnStringContentUserMessage(t *testing.T) {
 	// Real Claude Code transcripts store typed prompts as a plain string in
 	// message.content (not an array of blocks). These must reset the turn,

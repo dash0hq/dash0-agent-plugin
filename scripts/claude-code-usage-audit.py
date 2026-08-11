@@ -4,11 +4,12 @@
 """Audit a Claude Code session's token usage from the local transcripts.
 
 Reconstructs per-model token counts for the main session and for each sub-agent
-it spawned, then estimates cost. Reads only Claude Code's own transcript files
-under ~/.claude/projects, so it works on any already-finished session with no
-telemetry, debug flag, or plugin involvement required.
+it spawned. Reads only Claude Code's own transcript files under
+~/.claude/projects, so it works on any already-finished session with no
+telemetry, debug flag, or plugin involvement required. Claude Code only — the
+other supported agents record their usage elsewhere.
 
-Use it to compare three numbers that should agree:
+Use it to compare three sets of token counts that should agree:
 
   1. what Claude Code itself reports  (the /usage command)
   2. what this script reconstructs    (ground truth, from the transcripts)
@@ -17,10 +18,15 @@ Use it to compare three numbers that should agree:
 A gap between 2 and 3 localizes missing telemetry — in particular, whether the
 usage sits in sub-agent transcripts whose spans never arrived.
 
+Cost is deliberately not computed: prices and cache-write tiers change, and a
+pricing table here would drift from the one the backend applies. Compare the
+token counts the cost is derived from instead. Cache writes are reported split by
+the TTL recorded in the transcript, since the two tiers are billed differently.
+
 Usage:
-  python3 scripts/usage-audit.py                 # list recent sessions
-  python3 scripts/usage-audit.py <SESSION_ID>    # audit one session
-  python3 scripts/usage-audit.py <SESSION_ID> --json
+  python3 scripts/claude-code-usage-audit.py                 # list recent sessions
+  python3 scripts/claude-code-usage-audit.py <SESSION_ID>    # audit one session
+  python3 scripts/claude-code-usage-audit.py <SESSION_ID> --json
 
 The session id is the `gen_ai.conversation.id` on the spans in Dash0, and the
 transcript filename on disk.
@@ -33,21 +39,6 @@ import os
 import sys
 
 PROJECTS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "projects")
-
-# List prices in USD per million tokens, keyed by a substring of the model id.
-# Cache reads bill at 0.1x the input rate; cache writes at 1.25x (5-minute TTL)
-# or 2x (1-hour TTL) — the transcript records which, so both are priced exactly.
-# https://platform.claude.com/docs/en/build-with-claude/prompt-caching
-PRICES_PER_MTOK = {
-    "claude-fable": (10.0, 50.0),
-    "claude-opus": (5.0, 25.0),
-    "claude-sonnet": (3.0, 15.0),
-    "claude-haiku": (1.0, 5.0),
-}
-
-CACHE_READ_MULTIPLIER = 0.1
-CACHE_WRITE_5M_MULTIPLIER = 1.25
-CACHE_WRITE_1H_MULTIPLIER = 2.0
 
 # Model reported on messages Claude Code generates locally rather than by calling
 # the API (for example a cancellation notice). Not billed.
@@ -72,23 +63,10 @@ class Usage:
         for field in self.FIELDS:
             setattr(self, field, getattr(self, field) + getattr(other, field))
 
-    def cost(self, model):
-        """Estimated USD cost, or None when the model has no known price."""
-        price = None
-        for prefix, value in PRICES_PER_MTOK.items():
-            if prefix in model:
-                price = value
-                break
-        if price is None:
-            return None
-        input_rate, output_rate = price
-        return (
-            self.input * input_rate
-            + self.output * output_rate
-            + self.cache_write_5m * input_rate * CACHE_WRITE_5M_MULTIPLIER
-            + self.cache_write_1h * input_rate * CACHE_WRITE_1H_MULTIPLIER
-            + self.cache_read * input_rate * CACHE_READ_MULTIPLIER
-        ) / 1_000_000
+    @property
+    def total_tokens(self):
+        return (self.input + self.output + self.cache_write_5m
+                + self.cache_write_1h + self.cache_read)
 
     def as_dict(self):
         out = {field: getattr(self, field) for field in self.FIELDS}
@@ -115,9 +93,9 @@ def parse_usage(raw):
     usage.output = raw.get("output_tokens") or 0
     usage.cache_read = raw.get("cache_read_input_tokens") or 0
 
-    # Prefer the TTL split so cache writes are priced at the right tier; fall
-    # back to the aggregate (attributed to the 1-hour tier, which is what Claude
-    # Code uses) when a transcript lacks the breakdown.
+    # Report cache writes per TTL, since the tiers are billed differently. When a
+    # transcript lacks the breakdown, attribute the aggregate to the 1-hour tier,
+    # which is the one Claude Code has been observed to use.
     total_write = raw.get("cache_creation_input_tokens") or 0
     split = raw.get("cache_creation")
     if isinstance(split, dict):
@@ -270,11 +248,6 @@ def merge(into, totals):
         into.setdefault(model, Usage()).add(usage)
 
 
-def format_cost(usage, model):
-    cost = usage.cost(model)
-    return "  n/a" if cost is None else f"${cost:,.4f}"
-
-
 def print_rows(label, totals):
     if not totals:
         print(f"  {label:<14} (no usage recorded)")
@@ -286,13 +259,13 @@ def print_rows(label, totals):
             f" in={usage.input:>8}"
             f" out={usage.output:>8}"
             f" cache_write={usage.cache_write:>9}"
+            f" (5m={usage.cache_write_5m:>8} 1h={usage.cache_write_1h:>8})"
             f" cache_read={usage.cache_read:>11}"
-            f"  {format_cost(usage, model)}"
         )
 
 
-def total_cost(totals):
-    return sum(usage.cost(model) or 0.0 for model, usage in totals.items())
+def total_tokens(totals):
+    return sum(usage.total_tokens for usage in totals.values())
 
 
 def audit(session_id):
@@ -343,18 +316,13 @@ def report_text(session_id, result):
     for _, totals in subagent_totals:
         merge(subagent_only, totals)
 
-    grand_cost = total_cost(grand)
-    print(f"\nEstimated cost: ${grand_cost:,.4f}  (list prices, cache writes at their recorded TTL)")
     if subagent_only:
-        sub_cost = total_cost(subagent_only)
-        share = (sub_cost / grand_cost * 100) if grand_cost else 0.0
+        grand_tokens = total_tokens(grand)
+        sub_tokens = total_tokens(subagent_only)
+        share = (sub_tokens / grand_tokens * 100) if grand_tokens else 0.0
         # Keep a decimal below 10% so a small-but-nonzero share is not shown as 0%.
         formatted = f"{share:.0f}%" if share >= 10 else f"{share:.1f}%"
-        print(f"  of which sub-agents: ${sub_cost:,.4f} ({formatted})")
-
-    unknown = sorted(model for model, usage in grand.items() if usage.cost(model) is None)
-    if unknown:
-        print(f"  note: no price on file for {', '.join(unknown)} — excluded from the estimate")
+        print(f"\nSub-agents account for {sub_tokens:,} of {grand_tokens:,} tokens ({formatted})")
 
     total_spans = sum(counts.values())
     print("\nSpans Dash0 should hold for this session")
@@ -376,10 +344,7 @@ def report_json(session_id, result):
     main_path, subagent_paths, main_totals, subagent_totals, counts, meta = result
 
     def encode(totals):
-        return {
-            model: dict(usage.as_dict(), estimated_cost_usd=usage.cost(model))
-            for model, usage in sorted(totals.items())
-        }
+        return {model: usage.as_dict() for model, usage in sorted(totals.items())}
 
     grand = {}
     merge(grand, main_totals)
@@ -396,7 +361,7 @@ def report_json(session_id, result):
             for path, totals in subagent_totals
         ],
         "total": encode(grand),
-        "estimated_cost_usd": total_cost(grand),
+        "total_tokens": total_tokens(grand),
         "expected_spans": dict(counts, total=sum(counts.values())),
         "first_event": meta["first"],
         "last_event": meta["last"],

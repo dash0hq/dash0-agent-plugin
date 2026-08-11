@@ -82,14 +82,20 @@ type contentType struct {
 // retried on a fallback model, all billed iterations are summed (see
 // usageData.effective).
 //
-// A call already counted in an EARLIER turn of the same file is skipped. Claude
-// Code re-appends conversation history it has re-materialized — byte-identical
-// entries, original timestamps, original usage — after the current turn's
-// prompt (observed on continuation/compaction, reported for revived and forked
-// sessions). Since the replayed user entries are tool_result relays, they do
-// not close the turn, so a purely position-based scan would bill that history a
-// second time: in production this reported a session's cumulative usage on
-// single turns, turning a ~$14 turn into a ~$700 one.
+// A call already counted in an EARLIER turn of the same file is skipped. On
+// continuation/compaction, Claude Code re-appends conversation history it has
+// re-materialized — byte-identical entries, original timestamps, original
+// usage — after the current turn's prompt. The replayed user entries are
+// tool_result relays, which do not close the turn, so a purely position-based
+// scan counts that history a second time and reports a session's cumulative
+// usage on a single turn.
+//
+// The rule only matches a replay whose original occurs earlier in the same
+// file, which covers the layouts Claude Code writes: resuming appends to the
+// same transcript without replaying anything, and forking copies the parent
+// history AHEAD of the fork's first prompt, so the turn boundary already
+// excludes it. A replay whose original never appeared earlier in the file is
+// out of scope here.
 //
 // Entries that predate the current turn but were never counted before are still
 // attributed to it. They are the tail of a turn whose flush lost the race with

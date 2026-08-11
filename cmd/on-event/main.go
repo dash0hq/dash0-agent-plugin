@@ -47,17 +47,18 @@ func run() error {
 	}
 
 	cfg := otlp.Config{
-		OTLPUrl:      pluginOption("OTLP_URL"),
-		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
-		Dataset:      pluginOption("DATASET"),
-		AgentName:    pluginOption("AGENT_NAME"),
-		HarnessName:  "claude-code",
-		TeamName:     pluginOption("TEAM_NAME"),
-		Provider:     "anthropic",
-		OmitUserInfo: pluginOptionBoolDefault("OMIT_USER_INFO", false),
-		OmitIO:       pluginOptionBoolDefault("OMIT_IO", true),
-		Debug:        pluginOptionBool("DEBUG"),
-		DebugFile:    pluginOption("DEBUG_FILE"),
+		OTLPUrl:              pluginOption("OTLP_URL"),
+		AuthToken:            pluginOptionSecure("AUTH_TOKEN"),
+		Dataset:              pluginOption("DATASET"),
+		AgentName:            pluginOption("AGENT_NAME"),
+		HarnessName:          "claude-code",
+		TeamName:             pluginOption("TEAM_NAME"),
+		Provider:             "anthropic",
+		OmitUserInfo:         pluginOptionBoolDefault("OMIT_USER_INFO", false),
+		OmitIdentityFallback: pluginOptionBoolDefault("OMIT_IDENTITY_FALLBACK", false),
+		OmitIO:               pluginOptionBoolDefault("OMIT_IO", true),
+		Debug:                pluginOptionBool("DEBUG"),
+		DebugFile:            pluginOption("DEBUG_FILE"),
 	}
 	if cfg.AgentName == "" {
 		cfg.AgentName = "claude-code"

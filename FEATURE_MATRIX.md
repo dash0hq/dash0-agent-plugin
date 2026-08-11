@@ -18,6 +18,8 @@ span properties can be populated.
 | Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `~/.local/state/dash0-agent-plugin/cursor` | `~/.local/state/dash0-agent-plugin/codex` | `~/.local/state/dash0-agent-plugin/copilot` |
 | Hooks registered in | plugin manifest `hooks/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |
 | Wired hook events | 24 | 9 | 10 | 4 |
+| Supported OS/arch | `darwin`,`linux` × `amd64`,`arm64` | same | same | same |
+| Unsupported platform | hook fails | hook fails | hook fails | fails open (untraced) |
 
 ## Configuration options
 
@@ -30,11 +32,13 @@ variable instead.
 |---|---|---|---|---|---|
 | `otlp_url` | Yes | Yes | Yes | Yes | Dash0 OTLP ingress. Empty ⇒ telemetry off. |
 | `auth_token` | Yes | Yes | Yes | Yes | Secure var only, no `DASH0_*` fallback: `{CLAUDE,CURSOR,CODEX,COPILOT}_PLUGIN_OPTION_AUTH_TOKEN`. |
+| `auth_token_keychain_service` (+ `_account`) | Yes | No | No | No | macOS only. Reads the token from a named keychain item instead of storing it, so managed rollouts ship a pointer rather than the secret. Does not restrict same-user process access. Other runtimes read `auth_token` in plaintext ([SIG-261](https://linear.app/dash0/issue/SIG-261)). |
 | `dataset` | Yes | Yes | Yes | Yes | `Dash0-Dataset` header. |
 | `agent_name` | Yes | Yes | Yes | Yes | → `service.name` / `gen_ai.agent.name`. |
 | `team_name` | Yes | Yes | Yes | Yes | → `dash0.team.name`. |
 | `omit_io` | Yes | Yes | Yes | Yes | Binary default `true` (redact prompts + tool I/O).¹ |
 | `omit_user_info` | Yes | Yes | Yes | Yes | Default `false`. |
+| `omit_identity_fallback` | Yes | Yes | Yes | Yes | Default `false`. When `true`, only a real `git config user.name` is reported; the OS-account fallback is dropped. |
 | `enabled` | Yes | Yes | Yes | Yes | `false` ⇒ wrapper exits, plugin off for that scope. |
 | `debug` | No (env only) | Yes | Yes | Yes | Claude: use `DASH0_DEBUG`. |
 | `debug_file` | No (env only) | Yes | Yes | Yes | Claude: use `DASH0_DEBUG_FILE`. |
@@ -83,6 +87,7 @@ demo generator uses them).
 | Session title (`gen_ai.conversation.name`) | Yes | No | No | No | Only Claude has a transcript reader. |
 | Prompt / response content (`gen_ai.input/output.messages`) | Yes | Yes | Yes | Yes | Gated by `omit_io`, truncated at 16 KB. Copilot response text comes from the native-OTel file. |
 | VCS + code enrichment (repo / branch / PR / issue / commit / lines / bash-family / skill) | Yes | Yes | Yes | Yes | Shared pipeline extractors. Copilot has no per-edit line counts (`apply_patch` carries no `structuredPatch`). |
+| User identity (`user.name` / `user.email` / `dash0.gen_ai.user.identity.source`) | Yes | Yes | Yes | Yes | `git config user.name`, falling back to the OS account (`identity.source=os`). Emitted outside a git repo too. |
 | Usage source | Claude JSONL transcript | `afterAgentResponse` hook | Codex rollout file | Native-OTel file (per turn) | |
 
 ## Installation options
@@ -95,7 +100,7 @@ demo generator uses them).
 | Local dev | `claude --plugin-dir …` ([guide](claude/README.md)) | symlink into `~/.cursor/plugins/local/` ([guide](cursor/README.md)) | `emit-codex-hooks` ([guide](codex/README.md#build--run-locally)) | `copilot-local-dev` skill ([guide](copilot/README.md#build--run-locally)) |
 | Binary delivery | download + checksum (`on-event.sh`) | download + checksum (`cursor-on-event.sh`) | download + checksum (`codex-on-event.sh`) | download + checksum (`copilot-on-event.sh`) |
 | Hook trust step | None | None | Yes — reproduced trust-hash in `config.toml` (installer) or manual `/hooks` (marketplace path) | None (restart `copilot`) |
-| Extra requirement | — | `jq` | `jq` | launch function (native OTel) via `dash0-configure` |
+| Extra requirement | — | `jq` | — | launch function (native OTel) via `dash0-configure` |
 
 ## Debugging
 

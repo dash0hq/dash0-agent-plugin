@@ -523,3 +523,55 @@ func TestReadModelMissing(t *testing.T) {
 func TestReadModelMissingFile(t *testing.T) {
 	assert.Empty(t, ReadModel("/nonexistent/path.jsonl"))
 }
+
+// Claude Code writes no requestId when it reaches Claude through Amazon Bedrock:
+// across the local transcripts, all 6011 first-party (msg_*) entries carry one
+// and all 171 Bedrock (msg_bdrk_*) entries do not. The streaming entries of one
+// API call each repeat that call's full usage, so without a per-call key the same
+// tokens get counted once per entry — inflating every Bedrock-backed turn whose
+// response spans more than one content block. message.id identifies the call and
+// is present either way.
+//
+// The fixture mirrors a captured Bedrock sub-agent transcript: three entries, no
+// requestId, the first two being one call (same message.id) that restates
+// cache_creation 15643, and a third call adding 5762.
+func TestReadTurnUsageDeduplicatesMessageIDWithoutRequestID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"count the files"}]}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"text","text":"..."}],"usage":{"input_tokens":2,"output_tokens":1,"cache_creation_input_tokens":15643,"cache_read_input_tokens":0}}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":2,"output_tokens":133,"cache_creation_input_tokens":15643,"cache_read_input_tokens":0}}}`,
+		`{"type":"assistant","message":{"id":"msg_b","role":"assistant","content":[{"type":"text","text":"2 files"}],"usage":{"input_tokens":2,"output_tokens":139,"cache_creation_input_tokens":5762,"cache_read_input_tokens":15643}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	// Two API calls: msg_a counted once (last entry wins) plus msg_b.
+	assert.Equal(t, int64(4), usage.InputTokens)
+	assert.Equal(t, int64(272), usage.OutputTokens)
+	assert.Equal(t, int64(21405), usage.CacheCreationInputTokens,
+		"msg_a's cache_creation must be counted once, not once per streamed entry")
+	assert.Equal(t, int64(15643), usage.CacheReadInputTokens)
+}
+
+// Distinct calls must still accumulate when neither key is present, so a turn
+// with several single-entry calls is not collapsed into one.
+func TestReadTurnUsageSumsDistinctMessageIDsWithoutRequestID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000}}}`,
+		`{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":20,"output_tokens":7,"cache_creation_input_tokens":200,"cache_read_input_tokens":2000}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(30), usage.InputTokens)
+	assert.Equal(t, int64(12), usage.OutputTokens)
+	assert.Equal(t, int64(300), usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(3000), usage.CacheReadInputTokens)
+}

@@ -56,6 +56,11 @@ Values are strings unless noted as integers.
 > The three user-identity attributes behave according to `omit_user_info` (off by default):
 > `user.name` becomes a 16-hex-char SHA-256 hash, `user.email` is
 dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
+> `dash0.gen_ai.user.identity.source` is not identifying and is never hashed.
+
+> `user.name` falls back to the OS account when `git config user.name` is unset, so a
+> developer with no git identity is still attributable. Set `omit_identity_fallback` to
+> require a real git identity and drop the fallback instead.
 
 ### Span shape
 
@@ -90,10 +95,14 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 | `dash0.gen_ai.vcs.ref.head.name` | e.g. `main`                                                                    | Branch or tag name. |
 | `dash0.gen_ai.vcs.ref.head.revision` | commit SHA                                                                     | |
 | `dash0.gen_ai.vcs.ref.head.type` | `branch` or `tag`                                                              | |
-| `user.name` | Real name, or a 16-hex-char SHA-256 hash when `omit_user_info`                 | |
-| `user.email` | git email                                                                      | Omitted when `omit_user_info`. |
+| `user.name` | Real name, or a 16-hex-char SHA-256 hash when `omit_user_info`                 | From `git config user.name`, else the OS account. |
+| `user.email` | git email                                                                      | git-only, never inferred. Omitted when `omit_user_info`. |
+| `dash0.gen_ai.user.identity.source` | `git` or `os`                                                                  | Which source `user.name` came from. Emitted whenever a name is. |
 
-The VCS and `user.*` keys are only present inside a git repository; any individual key is omitted when its value is empty.
+The `dash0.gen_ai.vcs.*` keys are only present inside a git repository. The identity keys
+(`user.*`, `dash0.gen_ai.user.identity.source`) are independent of it — they are emitted
+outside a working tree too, since the user is still the user. Any individual key is
+omitted when its value is empty.
 
 ### LLM / chat spans (`chat` and `invoke_agent`)
 

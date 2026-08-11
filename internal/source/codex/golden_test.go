@@ -204,9 +204,10 @@ type goldenSpan struct {
 // volatileDrop lists span attributes that vary by machine/checkout and must not
 // enter the snapshot (git/VCS context, user identity, absolute workspace path).
 var volatileDrop = map[string]bool{
-	"user.name":                 true,
-	"user.email":                true,
-	"process.working_directory": true,
+	"user.name":                         true,
+	"user.email":                        true,
+	"dash0.gen_ai.user.identity.source": true,
+	"process.working_directory":         true,
 }
 
 func isVolatile(key string) bool {

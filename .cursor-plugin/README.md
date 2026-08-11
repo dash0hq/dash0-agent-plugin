@@ -2,6 +2,16 @@
 
 Cursor plugin that emits agent activity as OpenTelemetry spans to your Dash0 endpoint — prompts and responses, tool calls, MCP calls, and sub-agent activity, with shared trace context across each turn.
 
+## Requirements
+
+- **Agent:** Cursor.
+- **Operating system:** macOS or Linux (Windows is not supported).
+- **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
+- **Shell tooling:** `bash`, `curl` or `wget`, `sha256sum` or `shasum`, and `jq`
+  (`brew install jq` on macOS; your distro's package manager on Linux) — the
+  installer needs `jq` to merge safely into your `~/.cursor/hooks.json`, and the
+  bootstrap downloads and checksum-verifies the hook binary on first run.
+
 ## Installation
 
 ```bash
@@ -9,8 +19,6 @@ curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/ins
 ```
 
 The installer lays the plugin down under `~/.cursor/plugins/local/dash0-agent-plugin/` — Cursor scans that directory on startup and picks up the plugin manifest and shipped skills. Hook registrations are merged into `~/.cursor/hooks.json` at the user scope (Cursor doesn't fire hooks from local-plugin manifests, only from `~/.cursor/hooks.json` and project-scope `.cursor/hooks.json`). Any hooks you already had in that file are preserved; only entries whose `command` references `cursor-on-event.sh` are managed by this installer. Credentials go to `~/.cursor/dash0-agent-plugin.local.md`, and the binary is fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) (verifying the checksum) into `~/.local/state/dash0-agent-plugin/cursor/bin/`.
-
-Requires `jq` (`brew install jq` on macOS; your distro's package manager on Linux) so the installer can safely merge into your `~/.cursor/hooks.json`.
 
 After install, **quit and relaunch Cursor.**
 
@@ -123,9 +131,16 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 | Setting | Default | Behavior |
 |---|---|---|
 | `omit_user_info` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
+| `omit_identity_fallback` | `false` | The OS account is used when `git config user.name` is unset. When `true`, only a git identity is reported and the fallback is dropped. |
 | `omit_io` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
 
 **Always collected** (regardless of settings): tool names, token counts, durations, model names, session structure, error status, VCS repository/branch info.
+
+### User identity
+
+`user.name` comes from `git config user.name`. When that is unset, the plugin falls back to the OS account (display name, then username) so the session is still attributable instead of arriving anonymous. `user.email` has no fallback — it is only ever the git value.
+
+Every span carrying a name also carries `dash0.gen_ai.user.identity.source`, either `git` or `os`, so a fallback is never mistaken for a configured identity. The fallback is skipped in CI and for shared accounts (`root`, `runner`, ...), where the OS account names a machine rather than a person; those sessions report no name at all. Set `OMIT_IDENTITY_FALLBACK` to require a real git identity and drop the fallback entirely.
 
 ## Telemetry attributes
 
@@ -140,7 +155,14 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 
 ## Troubleshooting
 
-If no spans arrive:
+### Every hook fails with a 404
+
+The hook is trying to download a binary for an unsupported platform. Run
+`uname -s -m` — anything other than `Darwin` or `Linux` on
+`x86_64`/`arm64`/`aarch64` is unsupported, in particular `MINGW64_NT-…` or
+`MSYS_NT-…`, which is Windows under Git Bash. See [Requirements](#requirements).
+
+### No spans arrive
 
 - Confirm you **quit and relaunched** Cursor after installing (Cursor reads `~/.cursor/hooks.json` at startup).
 - Enable the debug log — set `debug: true` and `debug_file: /tmp/dash0-cursor-debug.log` in the config, then watch it:

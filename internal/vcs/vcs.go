@@ -18,46 +18,36 @@ type Info struct {
 	RefHeadName       string // vcs.ref.head.name
 	RefHeadRevision   string // vcs.ref.head.revision
 	RefHeadType       string // vcs.ref.head.type
-	UserName          string // user.name
-	UserEmail         string // user.email
 }
 
-// Detect reads the current git state and returns VCS info. User identity
-// (UserName / UserEmail) is collected regardless of CWD — `git config user.*`
-// walks system → global → local, so global config still works outside a
-// working tree. This matters for Cursor: it spawns hooks with a CWD that
-// isn't always a git working directory, but the user's global git identity
-// is still the right answer.
+// Detect reads the current git state and returns VCS info, or nil when the CWD
+// is not inside a git working tree.
 //
-// Returns nil only when neither repository info nor user identity is
-// available — i.e. git is not installed or has no usable config at all.
+// User identity is deliberately not part of this: it is not repository state
+// and must be reported even outside a working tree. See internal/identity.
 func Detect() *Info {
-	info := &Info{
-		UserName:  gitOutput("config", "user.name"),
-		UserEmail: gitOutput("config", "user.email"),
-	}
-
-	if err := git("rev-parse", "--git-dir"); err == nil {
-		if remote := gitOutput("remote", "get-url", "origin"); remote != "" {
-			info.RepositoryURLFull = normalizeRemoteURL(remote)
-			info.OwnerName, info.RepositoryName = parseOwnerRepo(info.RepositoryURLFull)
-			info.ProviderName = parseProvider(info.RepositoryURLFull)
-		}
-
-		if branch := gitOutput("rev-parse", "--abbrev-ref", "HEAD"); branch != "" && branch != "HEAD" {
-			info.RefHeadName = branch
-			info.RefHeadType = "branch"
-		} else if tag := gitOutput("describe", "--tags", "--exact-match", "HEAD"); tag != "" {
-			info.RefHeadName = tag
-			info.RefHeadType = "tag"
-		}
-
-		info.RefHeadRevision = gitOutput("rev-parse", "HEAD")
-	}
-
-	if *info == (Info{}) {
+	if err := git("rev-parse", "--git-dir"); err != nil {
 		return nil
 	}
+
+	info := &Info{}
+
+	if remote := gitOutput("remote", "get-url", "origin"); remote != "" {
+		info.RepositoryURLFull = normalizeRemoteURL(remote)
+		info.OwnerName, info.RepositoryName = parseOwnerRepo(info.RepositoryURLFull)
+		info.ProviderName = parseProvider(info.RepositoryURLFull)
+	}
+
+	if branch := gitOutput("rev-parse", "--abbrev-ref", "HEAD"); branch != "" && branch != "HEAD" {
+		info.RefHeadName = branch
+		info.RefHeadType = "branch"
+	} else if tag := gitOutput("describe", "--tags", "--exact-match", "HEAD"); tag != "" {
+		info.RefHeadName = tag
+		info.RefHeadType = "tag"
+	}
+
+	info.RefHeadRevision = gitOutput("rev-parse", "HEAD")
+
 	return info
 }
 

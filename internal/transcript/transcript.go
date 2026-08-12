@@ -15,6 +15,27 @@ type Usage struct {
 	OutputTokens             int64
 	CacheCreationInputTokens int64
 	CacheReadInputTokens     int64
+	// CacheCreation5mInputTokens and CacheCreation1hInputTokens decompose
+	// CacheCreationInputTokens by cache TTL. Anthropic prices 1h cache writes
+	// higher than 5m writes, so the split is needed for accurate cost; there is
+	// no OpenTelemetry semantic-convention attribute for it (the semconv
+	// standardizes only input/output tokens), so it is emitted under dash0.gen_ai.usage.
+	// A source that omits the breakdown leaves both at 0, which costs nothing.
+	CacheCreation5mInputTokens int64
+	CacheCreation1hInputTokens int64
+}
+
+// add folds one API call's effective usage into the aggregate. A nil
+// CacheCreation (source gave no TTL split) leaves the breakdown totals at 0.
+func (u *Usage) add(eff usageData) {
+	u.InputTokens += eff.InputTokens
+	u.OutputTokens += eff.OutputTokens
+	u.CacheCreationInputTokens += eff.CacheCreationInputTokens
+	u.CacheReadInputTokens += eff.CacheReadInputTokens
+	if eff.CacheCreation != nil {
+		u.CacheCreation5mInputTokens += eff.CacheCreation.Ephemeral5mInputTokens
+		u.CacheCreation1hInputTokens += eff.CacheCreation.Ephemeral1hInputTokens
+	}
 }
 
 // transcriptEntry captures only the fields we need from transcript JSONL entries.
@@ -41,11 +62,18 @@ type messageEnvelope struct {
 }
 
 type usageData struct {
-	InputTokens              int64       `json:"input_tokens"`
-	OutputTokens             int64       `json:"output_tokens"`
-	CacheCreationInputTokens int64       `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64       `json:"cache_read_input_tokens"`
-	Iterations               []usageData `json:"iterations"`
+	InputTokens              int64          `json:"input_tokens"`
+	OutputTokens             int64          `json:"output_tokens"`
+	CacheCreationInputTokens int64          `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64          `json:"cache_read_input_tokens"`
+	CacheCreation            *cacheCreation `json:"cache_creation"`
+	Iterations               []usageData    `json:"iterations"`
+}
+
+// cacheCreation splits cache-creation tokens by TTL.
+type cacheCreation struct {
+	Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
 }
 
 // effective returns the token counts to attribute to this API call. When a
@@ -64,6 +92,12 @@ func (u *usageData) effective() usageData {
 		sum.CacheCreationInputTokens += it.CacheCreationInputTokens
 		sum.CacheReadInputTokens += it.CacheReadInputTokens
 	}
+	// CacheCreation lives only on the top-level usage object, not on
+	// individual iterations, so carry it through unchanged. On a fallback turn it
+	// reflects the final iteration only, so the split may under-sum the
+	// iteration-summed CacheCreationInputTokens total — the flat total stays
+	// authoritative; the split is best-effort.
+	sum.CacheCreation = u.CacheCreation
 	return sum
 }
 
@@ -81,6 +115,26 @@ type contentType struct {
 // deduplicated so usage is counted only once per API call. When a call was
 // retried on a fallback model, all billed iterations are summed (see
 // usageData.effective).
+//
+// A call already counted in an EARLIER turn of the same file is skipped. On
+// continuation/compaction, Claude Code re-appends conversation history it has
+// re-materialized — byte-identical entries, original timestamps, original
+// usage — after the current turn's prompt. The replayed user entries are
+// tool_result relays, which do not close the turn, so a purely position-based
+// scan counts that history a second time and reports a session's cumulative
+// usage on a single turn.
+//
+// The rule only matches a replay whose original occurs earlier in the same
+// file, which covers the layouts Claude Code writes: resuming appends to the
+// same transcript without replaying anything, and forking copies the parent
+// history AHEAD of the fork's first prompt, so the turn boundary already
+// excludes it. A replay whose original never appeared earlier in the file is
+// out of scope here.
+//
+// Entries that predate the current turn but were never counted before are still
+// attributed to it. They are the tail of a turn whose flush lost the race with
+// the next prompt (see TurnComplete), and billing them one turn late keeps the
+// session total whole — the lesser error for a cost view than dropping them.
 func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	f, err := os.Open(transcriptPath)
 	if err != nil {
@@ -99,6 +153,9 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	// callOrder preserves first-seen order so the result does not depend on map
 	// iteration order.
 	var callOrder []string
+	// counted holds the call keys of every earlier turn in this file, so
+	// replayed history is not counted again.
+	counted := make(map[string]bool)
 	var hasUsage bool
 	// entryCount seeds a synthetic key for entries carrying neither id, so
 	// distinct calls are still counted separately rather than merged.
@@ -111,7 +168,11 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 		}
 
 		if isRealUserMessage(entry) {
-			// New turn — reset accumulator.
+			// New turn — the calls counted so far belong to the turn that just
+			// ended, so a replay of them later in the file must not count again.
+			for _, key := range callOrder {
+				counted[key] = true
+			}
 			perCall = make(map[string]*usageData)
 			callOrder = nil
 			hasUsage = false
@@ -122,7 +183,6 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 			continue
 		}
 
-		hasUsage = true
 		entryCount++
 		// Prefer the message id: some sessions write no requestId at all, and
 		// without a per-call key each streamed entry's usage would be counted
@@ -134,24 +194,27 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 		if key == "" {
 			key = fmt.Sprintf("entry-%d", entryCount)
 		}
+		if counted[key] {
+			// Replayed history: this call was already reported on an earlier
+			// turn's span.
+			continue
+		}
+		hasUsage = true
 		if _, seen := perCall[key]; !seen {
 			callOrder = append(callOrder, key)
 		}
 		perCall[key] = entry.Message.Usage
 	}
 
+	if !hasUsage {
+		return nil, nil
+	}
+
 	// Sum final usage across all API calls in the turn.
 	var usage Usage
 	for _, key := range callOrder {
 		eff := perCall[key].effective()
-		usage.InputTokens += eff.InputTokens
-		usage.OutputTokens += eff.OutputTokens
-		usage.CacheCreationInputTokens += eff.CacheCreationInputTokens
-		usage.CacheReadInputTokens += eff.CacheReadInputTokens
-	}
-
-	if !hasUsage {
-		return nil, nil
+		usage.add(eff)
 	}
 	return &usage, nil
 }

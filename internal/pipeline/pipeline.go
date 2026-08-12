@@ -412,6 +412,8 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 				event["gen_ai.usage.output_tokens"] = usage.OutputTokens
 				event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
 				event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+				event["dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens"] = usage.CacheCreation5mInputTokens
+				event["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"] = usage.CacheCreation1hInputTokens
 			}
 		}
 

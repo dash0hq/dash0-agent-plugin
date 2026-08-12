@@ -30,5 +30,6 @@ server on `:4319`, so it never touches your real `~/.claude` / `~/.cursor` /
   fallback on Linux). macOS uses the Keychain and a different layout, so it
   **skips** off Linux; CI (Linux) validates it.
 - The `cursor.sh` install/uninstall contracts download the latest published
-  release's Cursor binary, so they need network and an existing release; they
-  skip if the release can't be resolved.
+  release's Cursor binary, so they need network and an existing release. If the
+  release can't be resolved they **skip locally but fail in CI** (`$CI` set) —
+  a silently skipped contract would report green while testing nothing.

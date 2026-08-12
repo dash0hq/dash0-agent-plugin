@@ -54,9 +54,11 @@ echo "PASS: config-file and env-var credentials flow through cursor-on-event.sh 
 echo "== install-cursor.sh lays out the plugin dir + merges into ~/.cursor/hooks.json =="
 # Capture curl output first, then parse — piping directly into `grep -m1` closes
 # the pipe early and makes curl exit 23 (write error) under `set -o pipefail`.
-latest_json=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest) || true
+latest_json=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest) \
+  || skip_or_fail "could not reach the GitHub releases API (network or rate limit)"
 DASH0_VERSION=$(printf '%s' "$latest_json" | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//' || true)
-[ -n "$DASH0_VERSION" ] || { echo "WARNING: could not resolve latest release, skipping the install/uninstall contracts"; exit 0; }
+[ -n "$DASH0_VERSION" ] \
+  || skip_or_fail "the releases API returned no tag_name — no published release to test the installer against"
 echo "testing installer against v$DASH0_VERSION artifacts"
 
 export HOME=/tmp/cursor-installer-home XDG_STATE_HOME=/tmp/cursor-installer-state

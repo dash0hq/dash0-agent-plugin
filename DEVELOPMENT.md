@@ -115,6 +115,8 @@ omitted when its value is empty.
 | `gen_ai.usage.output_tokens` | integer                                                              |                                |
 | `gen_ai.usage.cache_read.input_tokens` | integer                                                              |                                |
 | `gen_ai.usage.cache_creation.input_tokens` | integer                                                              | Not emitted by Codex.          |
+| `dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens` | integer                                                              | Claude only. |
+| `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On`invoke_agent` spans.        |

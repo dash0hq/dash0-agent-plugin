@@ -37,8 +37,12 @@ vet: ## Run go vet.
 	go vet ./...
 
 .PHONY: test
-test: ## Run Go unit + integration tests with the race detector.
+test: test-scripts ## Run Go unit + integration tests with the race detector.
 	go test -race -coverprofile=cover.out ./...
+
+.PHONY: test-scripts
+test-scripts: ## Run the unit tests for the Python diagnostic scripts.
+	python3 -m unittest discover -s scripts -p '*_test.py'
 
 .PHONY: test-e2e
 test-e2e: ## Run the build-tagged end-to-end tests.

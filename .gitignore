@@ -9,3 +9,4 @@ bin/
 cursor/captured/
 test/capture/copilot/captured/
 cover.out
+__pycache__/

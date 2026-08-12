@@ -319,6 +319,7 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 | Command | Description |
 |---|---|
 | `/open-session` | Print and open the Dash0 session details URL for the current session |
+| `/audit-usage` | Reconstruct a session's per-model token counts and expected span counts from the local transcripts, to compare against `/usage` and against the spans in Dash0. Takes an optional session id, defaulting to the current session |
 
 ## Skills
 
@@ -342,6 +343,13 @@ Check the `dash0:` message on session start:
 - `dash0: telemetry is not active` — OTLP URL is not configured.
 - `dash0: connectivity check failed` — URL is set but connection failed (e.g. invalid auth token).
 - No message at all — run `/reload-plugins`, or restart Claude Code.
+
+### Token or cost numbers look wrong
+
+Run `/audit-usage` to reconstruct the session's token counts from the transcripts
+on disk, then compare them with `/usage` and with the spans in Dash0. It also
+reports how many spans of each kind Dash0 should hold, so missing telemetry shows
+up as a gap rather than a guess.
 
 ### Debug mode
 

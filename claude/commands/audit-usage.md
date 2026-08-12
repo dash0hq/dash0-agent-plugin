@@ -24,8 +24,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/claude-code-usage-audit.py" <session-id>
    script reports no transcript for the session, run it with no argument to list
    the sessions on disk and ask the user which one they meant.
 
-3. Print the output verbatim. It is meant to be read side by side with the other
-   two numbers, or pasted into a bug report.
+3. Leave the script's output as it was printed — do not reformat or summarize the
+   numbers. Repeat it verbatim if it is not already visible to the user, as in a
+   non-interactive run. It is meant to be read side by side with the other two
+   numbers, or pasted into a bug report.
 
 4. Then say what to compare it against:
    - Claude Code's own numbers: run `/usage` in that session.

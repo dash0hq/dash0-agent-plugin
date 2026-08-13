@@ -40,8 +40,8 @@ variable instead.
 | `omit_user_info` | Yes | Yes | Yes | Yes | Default `false`. |
 | `omit_identity_fallback` | Yes | Yes | Yes | Yes | Default `false`. When `true`, only a real `git config user.name` is reported; the OS-account fallback is dropped. |
 | `enabled` | Yes | Yes | Yes | Yes | `false` ⇒ wrapper exits, plugin off for that scope. |
-| `debug` | No (env only) | Yes | Yes | Yes | Claude: use `DASH0_DEBUG`. |
-| `debug_file` | No (env only) | Yes | Yes | Yes | Claude: use `DASH0_DEBUG_FILE`. |
+| `debug` | Yes | Yes | Yes | Yes | |
+| `debug_file` | Yes | Yes | Yes | Yes | |
 | `show_session_link` | Yes (plugin option / env) | No | No | No | Claude-only feature; not parsed from `.local.md` — set via `/plugin → Configure` or `DASH0_SHOW_SESSION_LINK`. Cursor/Codex/Copilot binaries don't consume it. |
 
 ¹ The Cursor and Codex README example configs show `omit_io: false`, but the installers
@@ -106,11 +106,12 @@ demo generator uses them).
 
 | | Claude Code | Cursor | Codex | Copilot CLI |
 |---|---|---|---|---|
-| Enable via config file | No | `debug` / `debug_file` | `debug` / `debug_file` | `debug` / `debug_file` |
+| Enable via config file | `debug` / `debug_file` | same | same | same |
 | Enable via env | `DASH0_DEBUG` / `DASH0_DEBUG_FILE` | same | same | same |
 | Output | `[dash0:trace\|log\|metric]` to stderr and/or file | same | same | same |
+| stderr actually visible | No — hooks exit 0 and Claude Code only surfaces hook stderr under `claude --debug`, so `debug_file` is required to see anything | Yes | Yes | Yes |
 | Runs pipeline without a backend (empty `otlp_url`) | Yes (when debug on) | Yes | Yes | Yes |
-| Primary path | env vars | config file | config file | config file |
+| Primary path | config file | config file | config file | config file |
 
 ## Error handling
 

@@ -414,6 +414,19 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 				event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
 				event["dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens"] = usage.CacheCreation5mInputTokens
 				event["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"] = usage.CacheCreation1hInputTokens
+				// A turn whose calls did not all bill at the default rate — fast
+				// mode, or a non-standard service tier — cannot be priced from the
+				// counters above alone. The breakdown partitions them by billing
+				// mode, one entry per mode, always summing back to the totals.
+				// Absent means the whole turn ran at default rates.
+				if len(usage.Breakdown) > 0 {
+					breakdown, err := json.Marshal(usage.Breakdown)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "on-event: encoding usage breakdown: %v\n", err)
+					} else {
+						event["dash0.gen_ai.usage.breakdown"] = string(breakdown)
+					}
+				}
 			}
 		}
 

@@ -704,3 +704,138 @@ func TestReadTurnUsageSumsDistinctMessageIDsWithoutRequestID(t *testing.T) {
 	assert.Equal(t, int64(300), usage.CacheCreationInputTokens)
 	assert.Equal(t, int64(3000), usage.CacheReadInputTokens)
 }
+
+// A turn can mix billing modes — /fast toggles mid-session, and fast mode falls
+// back to standard while rate-limited — so the breakdown must partition the
+// turn by mode while the totals stay whole.
+func TestReadTurnUsageBreaksDownMixedModes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":200,"cache_read_input_tokens":1000,"cache_creation":{"ephemeral_5m_input_tokens":50,"ephemeral_1h_input_tokens":150},"service_tier":"standard","speed":"fast"}}}`,
+		// Same turn, back on standard speed after a fast-mode cooldown.
+		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":20,"output_tokens":7,"cache_creation_input_tokens":100,"cache_read_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":0},"service_tier":"standard","speed":"standard"}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	// Totals cover both calls, unchanged by the breakdown.
+	assert.Equal(t, int64(30), usage.InputTokens)
+	assert.Equal(t, int64(12), usage.OutputTokens)
+	assert.Equal(t, int64(300), usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(3000), usage.CacheReadInputTokens)
+	assert.Equal(t, int64(150), usage.CacheCreation5mInputTokens)
+	assert.Equal(t, int64(150), usage.CacheCreation1hInputTokens)
+
+	require.Len(t, usage.Breakdown, 2)
+	assert.Equal(t, Mode{Speed: "fast"}, usage.Breakdown[0].Mode)
+	assert.Equal(t, TokenCounts{
+		InputTokens:                10,
+		OutputTokens:               5,
+		CacheCreationInputTokens:   200,
+		CacheReadInputTokens:       1000,
+		CacheCreation5mInputTokens: 50,
+		CacheCreation1hInputTokens: 150,
+	}, usage.Breakdown[0].TokenCounts)
+	// The default-rate calls get an entry of their own, with an empty Mode, so
+	// the entries account for every token of the turn.
+	assert.Equal(t, Mode{}, usage.Breakdown[1].Mode)
+	assert.Equal(t, int64(20), usage.Breakdown[1].InputTokens)
+
+	assertBreakdownSumsToTotals(t, usage)
+}
+
+// A non-default service tier is the other billing dimension, and combines with
+// speed rather than replacing it — the reason a breakdown entry carries the
+// dimensions as data instead of one mode name.
+func TestReadTurnUsageBreaksDownServiceTier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"service_tier":"batch","speed":"standard"}}}`,
+		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":20,"output_tokens":7,"service_tier":"priority","speed":"fast"}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	require.Len(t, usage.Breakdown, 2)
+	assert.Equal(t, Mode{ServiceTier: "batch"}, usage.Breakdown[0].Mode)
+	assert.Equal(t, Mode{Speed: "fast", ServiceTier: "priority"}, usage.Breakdown[1].Mode)
+	assertBreakdownSumsToTotals(t, usage)
+}
+
+// An unknown future mode must travel as data rather than need a code change,
+// which is the whole point of the shape.
+func TestReadTurnUsageCarriesUnknownModeValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"service_tier":"some-future-tier","speed":"turbo"}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	require.Len(t, usage.Breakdown, 1)
+	assert.Equal(t, Mode{Speed: "turbo", ServiceTier: "some-future-tier"}, usage.Breakdown[0].Mode)
+}
+
+// An all-default turn — and any transcript written before Claude Code recorded
+// the mode fields — carries no breakdown at all: the totals already say it.
+func TestReadTurnUsageOmitsBreakdownAtDefaultRates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"service_tier":"standard","speed":"standard"}}}`,
+		// No mode fields at all (older transcript format).
+		`{"type":"assistant","requestId":"req_002","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":20,"output_tokens":7}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, int64(30), usage.InputTokens)
+	assert.Nil(t, usage.Breakdown)
+}
+
+// The mode, like the TTL split, is top-level only, so a fallback call's summed
+// iterations all land in the entry for the final attempt's mode — best-effort,
+// and locked here so the behaviour is deliberate rather than accidental.
+func TestReadTurnUsageModeAcrossFallbackIterations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	fastFallbackUsage := fallbackUsage[:len(fallbackUsage)-1] + `,"speed":"fast"}`
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":` + fastFallbackUsage + `}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	require.Len(t, usage.Breakdown, 1)
+	assert.Equal(t, Mode{Speed: "fast"}, usage.Breakdown[0].Mode)
+	assert.Equal(t, usage.TokenCounts, usage.Breakdown[0].TokenCounts,
+		"the whole summed call is attributed to the final iteration's mode")
+}
+
+// The breakdown is only priceable if it accounts for every token of the turn.
+func assertBreakdownSumsToTotals(t *testing.T, usage *Usage) {
+	t.Helper()
+	var sum TokenCounts
+	for _, entry := range usage.Breakdown {
+		sum.InputTokens += entry.InputTokens
+		sum.OutputTokens += entry.OutputTokens
+		sum.CacheCreationInputTokens += entry.CacheCreationInputTokens
+		sum.CacheReadInputTokens += entry.CacheReadInputTokens
+		sum.CacheCreation5mInputTokens += entry.CacheCreation5mInputTokens
+		sum.CacheCreation1hInputTokens += entry.CacheCreation1hInputTokens
+	}
+	assert.Equal(t, usage.TokenCounts, sum, "breakdown entries must sum back to the turn totals")
+}

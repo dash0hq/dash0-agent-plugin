@@ -117,10 +117,41 @@ omitted when its value is empty.
 | `gen_ai.usage.cache_creation.input_tokens` | integer                                                              | Not emitted by Codex.          |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens` | integer                                                              | Claude only. |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
+| `dash0.gen_ai.usage.breakdown` | JSON: `[{"speed":"fast","input_tokens":2,…},{…}]`                     | Claude only. Only on a turn that did not bill entirely at default rates. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On`invoke_agent` spans.        |
 | `exception.message` | Error text                                                           | On `StopFailure`.              |
+
+#### Usage breakdown
+
+The token counters above cover a whole turn, which is many API calls — and those calls do
+not all bill at the same rate. Anthropic prices fast mode (`speed`) off a higher rate table
+and non-standard service tiers (`service_tier`: `batch`, `priority`) off their own, and a
+single turn can mix them, since `/fast` toggles mid-session and fast mode falls back to
+standard while it is rate-limited. `dash0.gen_ai.usage.breakdown` therefore partitions the
+turn by billing mode:
+
+```json
+[
+  {"speed":"fast","input_tokens":2,"output_tokens":14,
+   "cache_creation_input_tokens":14079,"cache_read_input_tokens":22468,
+   "cache_creation_5m_input_tokens":0,"cache_creation_1h_input_tokens":14079},
+  {"input_tokens":8,"output_tokens":26,
+   "cache_creation_input_tokens":1000,"cache_read_input_tokens":500,
+   "cache_creation_5m_input_tokens":1000,"cache_creation_1h_input_tokens":0}
+]
+```
+
+- Every call lands in exactly one entry, so **the entries always sum back to the flat
+  counters** — they are a partition of the totals, not extra tokens.
+- A dimension is **omitted from an entry when it holds the default**, so the second entry
+  above is the default-rate one. An entry's rate table is chosen by the dimensions present.
+- The attribute is **absent when the whole turn billed at default rates**, which is the
+  common case: absent means "price the flat counters as standard".
+- A new mode arrives as a new field or value **inside** the entries — never as a new
+  attribute key. This mirrors how the GenAI semantic conventions carry structured payloads
+  (`gen_ai.input.messages` and friends) rather than growing the key space.
 
 ### Tool-call spans (`execute_tool`)
 

@@ -9,33 +9,111 @@ import (
 	"os"
 )
 
-// Usage holds aggregated token usage for a turn.
-type Usage struct {
-	InputTokens              int64
-	OutputTokens             int64
-	CacheCreationInputTokens int64
-	CacheReadInputTokens     int64
+// TokenCounts holds the token counts of a set of API calls. The JSON field
+// names mirror the source transcript's usage object, and are what a Breakdown
+// entry serializes to.
+type TokenCounts struct {
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 	// CacheCreation5mInputTokens and CacheCreation1hInputTokens decompose
 	// CacheCreationInputTokens by cache TTL. Anthropic prices 1h cache writes
 	// higher than 5m writes, so the split is needed for accurate cost; there is
 	// no OpenTelemetry semantic-convention attribute for it (the semconv
 	// standardizes only input/output tokens), so it is emitted under dash0.gen_ai.usage.
 	// A source that omits the breakdown leaves both at 0, which costs nothing.
-	CacheCreation5mInputTokens int64
-	CacheCreation1hInputTokens int64
+	CacheCreation5mInputTokens int64 `json:"cache_creation_5m_input_tokens"`
+	CacheCreation1hInputTokens int64 `json:"cache_creation_1h_input_tokens"`
 }
 
-// add folds one API call's effective usage into the aggregate. A nil
-// CacheCreation (source gave no TTL split) leaves the breakdown totals at 0.
+// Mode is the set of billing dimensions the API served a call under. A zero
+// Mode means the call was priced at the default rate, so each field is omitted
+// from JSON when it holds the default. Adding a dimension means adding a
+// field, never a new attribute key.
+type Mode struct {
+	// Speed is Anthropic's fast mode ("fast"), which bills off a higher rate
+	// table than standard speed.
+	Speed string `json:"speed,omitempty"`
+	// ServiceTier is the request's service tier ("priority", "batch", …), which
+	// prices differently — batch at a discount, priority at a premium.
+	ServiceTier string `json:"service_tier,omitempty"`
+}
+
+// ModeUsage is the share of a turn's tokens that one billing mode accounts for.
+type ModeUsage struct {
+	Mode
+	TokenCounts
+}
+
+// Usage holds aggregated token usage for a turn.
+type Usage struct {
+	// TokenCounts totals every API call of the turn, whatever mode it ran in.
+	TokenCounts
+	// Breakdown partitions those totals by billing mode, and is nil when every
+	// call ran at the default rate — the common turn, which then needs no
+	// breakdown at all. It is populated as soon as one call did not: a turn can
+	// mix modes (/fast toggles mid-session, and fast mode falls back to standard
+	// while it is rate-limited), so pricing needs the split rather than one mode
+	// label for the whole turn. Every call lands in exactly one entry, so the
+	// entries always sum back to the totals above.
+	Breakdown []ModeUsage
+}
+
+// add folds one API call's effective usage into the totals and into the entry
+// for the mode that call was served under, appending that entry on first sight.
 func (u *Usage) add(eff usageData) {
-	u.InputTokens += eff.InputTokens
-	u.OutputTokens += eff.OutputTokens
-	u.CacheCreationInputTokens += eff.CacheCreationInputTokens
-	u.CacheReadInputTokens += eff.CacheReadInputTokens
-	if eff.CacheCreation != nil {
-		u.CacheCreation5mInputTokens += eff.CacheCreation.Ephemeral5mInputTokens
-		u.CacheCreation1hInputTokens += eff.CacheCreation.Ephemeral1hInputTokens
+	u.TokenCounts.add(eff)
+
+	mode := eff.mode()
+	for i := range u.Breakdown {
+		if u.Breakdown[i].Mode == mode {
+			u.Breakdown[i].add(eff)
+			return
+		}
 	}
+	entry := ModeUsage{Mode: mode}
+	entry.add(eff)
+	u.Breakdown = append(u.Breakdown, entry)
+}
+
+// finalize drops a breakdown that says nothing: one entry covering the whole
+// turn at the default rate, which the totals already express.
+func (u *Usage) finalize() {
+	if len(u.Breakdown) == 1 && u.Breakdown[0].Mode == (Mode{}) {
+		u.Breakdown = nil
+	}
+}
+
+// add folds one API call's effective usage into the counts. A nil
+// CacheCreation (source gave no TTL split) leaves the breakdown totals at 0.
+func (t *TokenCounts) add(eff usageData) {
+	t.InputTokens += eff.InputTokens
+	t.OutputTokens += eff.OutputTokens
+	t.CacheCreationInputTokens += eff.CacheCreationInputTokens
+	t.CacheReadInputTokens += eff.CacheReadInputTokens
+	if eff.CacheCreation != nil {
+		t.CacheCreation5mInputTokens += eff.CacheCreation.Ephemeral5mInputTokens
+		t.CacheCreation1hInputTokens += eff.CacheCreation.Ephemeral1hInputTokens
+	}
+}
+
+// modeDefault is the value both billing dimensions carry when a call was priced
+// at the default rate. An absent field means the same: transcripts written
+// before Claude Code recorded these fields describe ordinary, default-rate calls.
+const modeDefault = "standard"
+
+// mode returns the billing dimensions of this call, normalizing the default
+// values away so that a zero Mode means "nothing to price differently".
+func (u *usageData) mode() Mode {
+	var m Mode
+	if u.Speed != "" && u.Speed != modeDefault {
+		m.Speed = u.Speed
+	}
+	if u.ServiceTier != "" && u.ServiceTier != modeDefault {
+		m.ServiceTier = u.ServiceTier
+	}
+	return m
 }
 
 // transcriptEntry captures only the fields we need from transcript JSONL entries.
@@ -68,6 +146,15 @@ type usageData struct {
 	CacheReadInputTokens     int64          `json:"cache_read_input_tokens"`
 	CacheCreation            *cacheCreation `json:"cache_creation"`
 	Iterations               []usageData    `json:"iterations"`
+	// Speed is the mode the API served this call in ("standard" or "fast"), as
+	// reported by the response rather than by the local /fast toggle — so it
+	// reflects what was actually billed. It sits on the top-level usage object
+	// only, never on an iteration.
+	Speed string `json:"speed"`
+	// ServiceTier is the tier the call was served under ("standard",
+	// "priority", "batch"), the other dimension Anthropic prices on. Top-level
+	// only, like Speed.
+	ServiceTier string `json:"service_tier"`
 }
 
 // cacheCreation splits cache-creation tokens by TTL.
@@ -98,6 +185,11 @@ func (u *usageData) effective() usageData {
 	// iteration-summed CacheCreationInputTokens total — the flat total stays
 	// authoritative; the split is best-effort.
 	sum.CacheCreation = u.CacheCreation
+	// The billing dimensions are top-level only too, so the final iteration's
+	// mode is attributed to every summed attempt. A fallback that crossed modes
+	// therefore lands wholly in one breakdown entry — also best-effort.
+	sum.Speed = u.Speed
+	sum.ServiceTier = u.ServiceTier
 	return sum
 }
 
@@ -216,6 +308,7 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 		eff := perCall[key].effective()
 		usage.add(eff)
 	}
+	usage.finalize()
 	return &usage, nil
 }
 

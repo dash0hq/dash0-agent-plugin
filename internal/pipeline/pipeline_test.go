@@ -162,11 +162,11 @@ func TestProcess_MissingSessionID_FallsBackToRandom(t *testing.T) {
 	assert.Equal(t, "session_id was missing from hook payload", ev["dash0.warning"])
 }
 
-// 2b. A session_id containing path-traversal characters (e.g. "../etc") is
+// A session_id containing path-traversal characters (e.g. "../etc") is
 //
-//	rejected: Process substitutes a random safe ID, logs a warning, and no
-//	file is created outside dataDir. This guards MkdirAll, filelog writes,
-//	and RemoveAll which all use sessionID as a directory name under dataDir.
+// rejected: Process substitutes a random safe ID, logs a warning, and no
+// file is created outside dataDir. This guards MkdirAll, filelog writes,
+// and RemoveAll which all use sessionID as a directory name under dataDir.
 func TestProcess_InvalidSessionID_FallsBackToRandom(t *testing.T) {
 	s := newSetup(t, "")
 
@@ -209,8 +209,8 @@ func TestProcess_InvalidSessionID_FallsBackToRandom(t *testing.T) {
 	assert.Len(t, parentEntries, 1, "nothing written outside dataDir")
 }
 
-//  3. UserPromptSubmit creates a fresh trace_id and chat_span_id for the
-//     turn and preserves the model previously set at SessionStart.
+// UserPromptSubmit creates a fresh trace_id and chat_span_id for the
+// turn and preserves the model previously set at SessionStart.
 func TestProcess_UserPromptSubmit_GeneratesFreshTraceID(t *testing.T) {
 	s := newSetup(t, "")
 
@@ -561,7 +561,7 @@ func writeAgentTranscript(t *testing.T, inputTokens, outputTokens int) string {
 	return path
 }
 
-// 14. The observed real-world ordering: a subagent's SubagentStop arrives
+// The observed real-world ordering: a subagent's SubagentStop arrives
 // AFTER the turn's Stop has already cleared the session trace context.
 // The snapshot taken at SubagentStart must keep the subagent span — and its
 // token usage — attached to the spawning turn's trace instead of dropping it.
@@ -644,7 +644,97 @@ func TestProcess_EmitsCacheCreationTTLBreakdown(t *testing.T) {
 	assert.Equal(t, "250", intAttr(t, sub, "dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"))
 }
 
-// 15. A SubagentStop that straggles past the NEXT turn's UserPromptSubmit must
+// Fast mode and non-default service tiers bill off their own rate tables, so a
+// turn that mixes them is only priceable with the per-mode breakdown alongside
+// the totals. This locks the attribute key, the JSON shape, and that the
+// entries sum back to the flat counters.
+func TestProcess_EmitsUsageBreakdown(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	path := filepath.Join(t.TempDir(), "agent-transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"agent prompt"}}`,
+		`{"type":"assistant","requestId":"req_agent_1","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":200,"cache_read_input_tokens":1000,"cache_creation":{"ephemeral_5m_input_tokens":50,"ephemeral_1h_input_tokens":150},"speed":"fast"}}}`,
+		`{"type":"assistant","requestId":"req_agent_2","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":20,"output_tokens":7,"cache_creation_input_tokens":100,"cache_read_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":0},"speed":"standard"}}}`,
+	}
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": path,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	sub := (*spans)[0]
+	// Totals cover both calls and are untouched by the breakdown.
+	assert.Equal(t, "30", intAttr(t, sub, "gen_ai.usage.input_tokens"))
+	assert.Equal(t, "12", intAttr(t, sub, "gen_ai.usage.output_tokens"))
+
+	// The breakdown carries each mode's share, defaults omitted from the entry.
+	assert.JSONEq(t, `[
+		{"speed":"fast","input_tokens":10,"output_tokens":5,
+		 "cache_creation_input_tokens":200,"cache_read_input_tokens":1000,
+		 "cache_creation_5m_input_tokens":50,"cache_creation_1h_input_tokens":150},
+		{"input_tokens":20,"output_tokens":7,
+		 "cache_creation_input_tokens":100,"cache_read_input_tokens":2000,
+		 "cache_creation_5m_input_tokens":100,"cache_creation_1h_input_tokens":0}
+	]`, strAttr(t, sub, "dash0.gen_ai.usage.breakdown"))
+}
+
+// The common turn bills entirely at default rates, so it must carry no
+// breakdown at all — its absence is what says "price the totals as standard".
+func TestProcess_OmitsUsageBreakdownAtDefaultRates(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	path := filepath.Join(t.TempDir(), "agent-transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"agent prompt"}}`,
+		`{"type":"assistant","requestId":"req_agent_1","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"speed":"standard"}}}`,
+	}
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do it"})
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{
+		"hook_event_name":       "SubagentStop",
+		"session_id":            "sess-1",
+		"agent_id":              "agent1",
+		"agent_transcript_path": path,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	for _, a := range (*spans)[0].Attributes {
+		assert.NotEqual(t, "dash0.gen_ai.usage.breakdown", a.Key)
+	}
+}
+
+// strAttr returns the stringValue of the named span attribute, failing the test
+// if it is absent or not a string attribute.
+func strAttr(t *testing.T, span otlp.Span, key string) string {
+	t.Helper()
+	for _, a := range span.Attributes {
+		if a.Key == key {
+			require.NotNil(t, a.Value.StringValue, "attribute %s is not a string", key)
+			return *a.Value.StringValue
+		}
+	}
+	t.Fatalf("attribute %s not found on span", key)
+	return ""
+}
+
+// A SubagentStop that straggles past the NEXT turn's UserPromptSubmit must
 // still attach to the turn that spawned it, not to the new turn's trace.
 func TestProcess_SubagentStopAfterNextPrompt_KeepsSpawningTrace(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
@@ -681,7 +771,7 @@ func TestProcess_SubagentStopAfterNextPrompt_KeepsSpawningTrace(t *testing.T) {
 	assert.Equal(t, turn1Ctx.TraceID, sub.TraceID, "late subagent span belongs to turn 1, not turn 2")
 }
 
-// 16. Without a SubagentStart snapshot (e.g. plugin installed mid-session),
+// Without a SubagentStart snapshot (e.g. plugin installed mid-session),
 // SubagentStop falls back to the live session context as before.
 func TestProcess_SubagentStopWithoutSnapshot_FallsBackToSessionContext(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
@@ -709,7 +799,7 @@ func TestProcess_SubagentStopWithoutSnapshot_FallsBackToSessionContext(t *testin
 	assert.Equal(t, turnCtx.TraceID, (*spans)[0].TraceID)
 }
 
-// 17. SubagentStop consumes its snapshot: the per-agent file is removed so a
+// SubagentStop consumes its snapshot: the per-agent file is removed so a
 // long-lived session does not accumulate stale agent contexts.
 func TestProcess_SubagentStop_CleansUpSnapshot(t *testing.T) {
 	url, _, _ := mockOTLPServer(t)

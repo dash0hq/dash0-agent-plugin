@@ -126,11 +126,11 @@ omitted when its value is empty.
 #### Usage breakdown
 
 The token counters above cover a whole turn, which is many API calls — and those calls do
-not all bill at the same rate. Anthropic prices fast mode (`speed`) off a higher rate table
-and non-standard service tiers (`service_tier`: `batch`, `priority`) off their own, and a
-single turn can mix them, since `/fast` toggles mid-session and fast mode falls back to
-standard while it is rate-limited. `dash0.gen_ai.usage.breakdown` therefore partitions the
-turn by billing mode:
+not all bill at the same rate. Anthropic prices fast mode (`speed`) off a higher rate table,
+non-standard service tiers (`service_tier`: `batch`, `priority`) off their own, and US-only
+inference (`inference_geo`: `us`) at a premium over global routing. A single turn can mix
+them, since `/fast` toggles mid-session and fast mode falls back to standard while it is
+rate-limited. `dash0.gen_ai.usage.breakdown` therefore partitions the turn by billing mode:
 
 ```json
 [
@@ -147,6 +147,8 @@ turn by billing mode:
   counters** — they are a partition of the totals, not extra tokens.
 - A dimension is **omitted from an entry when it holds the default**, so the second entry
   above is the default-rate one. An entry's rate table is chosen by the dimensions present.
+  For `inference_geo` the defaults are `global` (Anthropic's default routing) and
+  `not_available`, which is what Claude Code records when the deployment reports no geo.
 - The attribute is **absent when the whole turn billed at default rates**, which is the
   common case: absent means "price the flat counters as standard".
 - A new mode arrives as a new field or value **inside** the entries — never as a new

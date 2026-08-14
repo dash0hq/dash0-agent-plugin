@@ -839,3 +839,41 @@ func assertBreakdownSumsToTotals(t *testing.T, usage *Usage) {
 	}
 	assert.Equal(t, usage.TokenCounts, sum, "breakdown entries must sum back to the turn totals")
 }
+
+// Data residency is the third billing dimension: Anthropic prices US-only
+// inference above global routing, and Claude Code never asks for it — a
+// workspace default applies it server-side — so it can only be observed here.
+func TestReadTurnUsageBreaksDownInferenceGeo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"speed":"fast","service_tier":"standard","inference_geo":"us"}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	require.Len(t, usage.Breakdown, 1)
+	assert.Equal(t, Mode{Speed: "fast", InferenceGeo: "us"}, usage.Breakdown[0].Mode,
+		"the dimensions combine rather than replace one another")
+}
+
+// "not_available" is what Claude Code records on nearly every call today, and
+// "global" is the documented default routing. Neither is a billing mode, or
+// every ordinary turn would carry a breakdown describing nothing.
+func TestReadTurnUsageTreatsNonPremiumGeosAsDefault(t *testing.T) {
+	for _, geo := range []string{"not_available", "global", ""} {
+		path := filepath.Join(t.TempDir(), "transcript.jsonl")
+		writeTranscript(t, path, []string{
+			`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+			`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"speed":"standard","service_tier":"standard","inference_geo":"` + geo + `"}}}`,
+		})
+
+		usage, err := ReadTurnUsage(path)
+		require.NoError(t, err)
+		require.NotNil(t, usage)
+
+		assert.Nil(t, usage.Breakdown, "inference_geo %q must not read as a billing mode", geo)
+	}
+}

@@ -38,6 +38,11 @@ type Mode struct {
 	// ServiceTier is the request's service tier ("priority", "batch", …), which
 	// prices differently — batch at a discount, priority at a premium.
 	ServiceTier string `json:"service_tier,omitempty"`
+	// InferenceGeo is where inference ran ("us"), which Anthropic prices at a
+	// premium over global routing. Claude Code never asks for it; a workspace
+	// default or a migrated legacy data-residency opt-out applies it server-side,
+	// so a turn can carry it with nothing set locally.
+	InferenceGeo string `json:"inference_geo,omitempty"`
 }
 
 // ModeUsage is the share of a turn's tokens that one billing mode accounts for.
@@ -98,7 +103,7 @@ func (t *TokenCounts) add(eff usageData) {
 	}
 }
 
-// modeDefault is the value both billing dimensions carry when a call was priced
+// modeDefault is the value speed and service tier carry when a call was priced
 // at the default rate. An absent field means the same: transcripts written
 // before Claude Code recorded these fields describe ordinary, default-rate calls.
 const modeDefault = "standard"
@@ -113,7 +118,24 @@ func (u *usageData) mode() Mode {
 	if u.ServiceTier != "" && u.ServiceTier != modeDefault {
 		m.ServiceTier = u.ServiceTier
 	}
+	if !isDefaultInferenceGeo(u.InferenceGeo) {
+		m.InferenceGeo = u.InferenceGeo
+	}
 	return m
+}
+
+// isDefaultInferenceGeo reports whether a geo carries no price premium.
+// "global" is Anthropic's documented default routing, and "not_available" is
+// what Claude Code records when the deployment reports no geo at all — the
+// value on nearly every call today. Neither may look like a billing mode, or
+// every ordinary turn would carry a breakdown describing nothing.
+func isDefaultInferenceGeo(geo string) bool {
+	switch geo {
+	case "", "global", "not_available":
+		return true
+	default:
+		return false
+	}
 }
 
 // transcriptEntry captures only the fields we need from transcript JSONL entries.
@@ -155,6 +177,11 @@ type usageData struct {
 	// "priority", "batch"), the other dimension Anthropic prices on. Top-level
 	// only, like Speed.
 	ServiceTier string `json:"service_tier"`
+	// InferenceGeo is where inference actually ran ("us", "global", or
+	// "not_available" when the deployment reports none). Top-level only, like
+	// Speed, and likewise the response's account of what was billed rather than
+	// what the request asked for.
+	InferenceGeo string `json:"inference_geo"`
 }
 
 // cacheCreation splits cache-creation tokens by TTL.
@@ -190,6 +217,7 @@ func (u *usageData) effective() usageData {
 	// therefore lands wholly in one breakdown entry — also best-effort.
 	sum.Speed = u.Speed
 	sum.ServiceTier = u.ServiceTier
+	sum.InferenceGeo = u.InferenceGeo
 	return sum
 }
 

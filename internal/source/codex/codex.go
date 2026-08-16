@@ -44,19 +44,20 @@ func Normalize(event map[string]any, sessionDir string, now time.Time) map[strin
 		ensureDurationMs(event, sessionDir, now)
 		anchorSpawnAgent(event)
 	case "Stop", "StopFailure", "SubagentStop":
-		injectTokenUsage(event)
+		injectRollout(event)
 	}
 
 	return event
 }
 
-// injectTokenUsage reads the just-completed turn's token usage from the Codex
-// rollout file and writes it onto the event as gen_ai.usage.* attributes, which
-// the pipeline's LLM span builder emits verbatim. A sub-agent has its own rollout
+// injectRollout reads the Codex rollout file once and writes what it yields onto
+// the event: the just-completed turn's token usage as gen_ai.usage.* attributes,
+// and the account's billing/allowance state as dash0.gen_ai.* ones. The pipeline's
+// LLM span builder emits both verbatim. A sub-agent has its own rollout
 // (agent_transcript_path); the main session uses transcript_path. Best-effort: on
 // a missing path or any read/parse failure the event is left unchanged and the
-// span is emitted without token attributes.
-func injectTokenUsage(event map[string]any) {
+// span is emitted without these attributes.
+func injectRollout(event map[string]any) {
 	path, _ := event["transcript_path"].(string)
 	if atp, _ := event["agent_transcript_path"].(string); atp != "" {
 		path = atp
@@ -77,18 +78,54 @@ func injectTokenUsage(event map[string]any) {
 		return
 	}
 
-	usage, err := ReadTurnUsage(path)
+	rollout, err := ReadRollout(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "codex: reading rollout usage: %v\n", err)
+		fmt.Fprintf(os.Stderr, "codex: reading rollout: %v\n", err)
 		return
 	}
-	if usage == nil {
+	if rollout == nil {
 		return
 	}
 
-	event["gen_ai.usage.input_tokens"] = usage.InputTokens
-	event["gen_ai.usage.output_tokens"] = usage.OutputTokens
-	event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+	if usage := rollout.Usage; usage != nil {
+		event["gen_ai.usage.input_tokens"] = usage.InputTokens
+		event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+		event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+	}
+	injectBilling(event, rollout.Limits)
+}
+
+// injectBilling writes the account's billing and allowance state onto the event.
+// Attribute names, the harness-neutral namespace, and the omit-don't-zero rule
+// are specified in DEVELOPMENT.md.
+func injectBilling(event map[string]any, l *Limits) {
+	// Always stated, including "unknown" — recording that we looked and could
+	// not tell is different from never having looked. Everything below is
+	// omitted rather than zeroed, because a zero here reads as a measurement.
+	event["dash0.gen_ai.billing_mode"] = l.BillingMode()
+	if l == nil {
+		return
+	}
+
+	if l.PlanType != "" {
+		event["dash0.gen_ai.plan_type"] = l.PlanType
+	}
+	if w := l.Window; w != nil {
+		event["dash0.gen_ai.rate_limit.used_percent"] = w.UsedPercent
+		event["dash0.gen_ai.rate_limit.window_minutes"] = w.WindowMinutes
+		event["dash0.gen_ai.rate_limit.resets_at"] = w.ResetsAt
+	}
+	// Null until a limit is actually hit, and a limit not hit is not an event.
+	if l.ReachedType != "" {
+		event["dash0.gen_ai.rate_limit.reached_type"] = l.ReachedType
+	}
+	if c := l.Credits; c != nil {
+		event["dash0.gen_ai.credits.available"] = c.HasCredits
+		event["dash0.gen_ai.credits.unlimited"] = c.Unlimited
+		if c.Balance != nil {
+			event["dash0.gen_ai.credits.balance"] = *c.Balance
+		}
+	}
 }
 
 // anchorSpawnAgent makes Codex's sub-agent delegation parent correctly.

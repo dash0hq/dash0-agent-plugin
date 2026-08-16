@@ -24,10 +24,63 @@ type Usage struct {
 	ReasoningOutputTokens int64 // reasoning tokens (a subset of OutputTokens); parsed for future use, not yet emitted
 }
 
+// Limits holds the account-level allowance state Codex reports alongside token
+// usage. Unlike Usage this is NOT per-turn: it describes the plan the session
+// runs under and how much of the current window it has consumed, so the reader
+// keeps the most recent value seen rather than resetting at turn boundaries.
+type Limits struct {
+	PlanType    string  // free / go / plus / pro / business; empty when absent
+	Window      *Window // the primary allowance window; nil when unreported
+	ReachedType string  // which window blocked, once a limit is hit; empty until then
+	Credits     *Credits
+}
+
+// Window is an allowance window and how much of it is consumed. Nil rather than
+// zero-valued when unreported: "0% consumed" is a measurement, not an absence.
+type Window struct {
+	UsedPercent   float64 // consumption against the allowance, 0-100
+	WindowMinutes int64   // length of the window (43200 = 30 days)
+	ResetsAt      int64   // unix seconds at which the window resets
+}
+
+// Credits is the prepaid balance a user can hold for usage beyond the included
+// allowance — the one place per-token spend re-enters a subscription. Nil when
+// the CLI predates the field (rollouts before ~14 Jul 2026 report it as null).
+type Credits struct {
+	HasCredits bool
+	Unlimited  bool
+	Balance    *float64 // nil when unreported; distinct from a balance of zero
+}
+
+// Billing modes. See DEVELOPMENT.md for why "api" is never among them.
+const (
+	BillingSubscription = "subscription"
+	BillingUnknown      = "unknown"
+)
+
+// BillingMode reports whether the session is billed per token at all — the only
+// thing the cost label depends on. The finer detail travels as PlanType. Safe on
+// a nil receiver, which is the pre-July-CLI case.
+func (l *Limits) BillingMode() string {
+	if l == nil || l.PlanType == "" {
+		return BillingUnknown
+	}
+	return BillingSubscription
+}
+
+// Rollout is everything one pass over a rollout file yields.
+type Rollout struct {
+	Usage  *Usage  // the most recent turn's token counts; nil when the file has none
+	Limits *Limits // account allowance state; nil when the CLI predates the field
+}
+
 // rolloutLine is the subset of a Codex rollout JSONL record we read. A rollout
 // interleaves several record types (session_meta, turn_context, response_item,
 // event_msg); token usage lives on event_msg records whose payload type is
 // "token_count", and turn boundaries are event_msg records of type "user_message".
+//
+// Note RateLimits is a SIBLING of Info, not a child of it — a token_count
+// payload carries {type, info, rate_limits} side by side.
 type rolloutLine struct {
 	Type    string `json:"type"`
 	Payload struct {
@@ -35,7 +88,26 @@ type rolloutLine struct {
 		Info struct {
 			LastTokenUsage codexTokenUsage `json:"last_token_usage"`
 		} `json:"info"`
+		RateLimits *codexRateLimits `json:"rate_limits"`
 	} `json:"payload"`
+}
+
+// codexRateLimits mirrors the rate_limits block on a token_count payload.
+// Pointer-typed sub-objects so an absent block stays distinguishable from a
+// present-but-zero one.
+type codexRateLimits struct {
+	PlanType string `json:"plan_type"`
+	Primary  *struct {
+		UsedPercent   float64 `json:"used_percent"`
+		WindowMinutes int64   `json:"window_minutes"`
+		ResetsAt      int64   `json:"resets_at"`
+	} `json:"primary"`
+	ReachedType string `json:"rate_limit_reached_type"`
+	Credits     *struct {
+		HasCredits bool     `json:"has_credits"`
+		Unlimited  bool     `json:"unlimited"`
+		Balance    *float64 `json:"balance"`
+	} `json:"credits"`
 }
 
 // codexTokenUsage mirrors the per-API-call token counts Codex records in
@@ -67,6 +139,20 @@ type codexTokenUsage struct {
 // module today and no compressed rollout has been observed to test against (Codex
 // 0.142.5 writes plain .jsonl).
 func ReadTurnUsage(rolloutPath string) (*Usage, error) {
+	r, err := ReadRollout(rolloutPath)
+	if err != nil || r == nil {
+		return nil, err
+	}
+	return r.Usage, nil
+}
+
+// ReadRollout walks a Codex rollout file once and returns both the most recent
+// turn's token usage and the account's allowance state. The two have different
+// lifetimes: usage is per-turn and resets at each user_message, while limits
+// describe the account and simply carry the last value seen.
+//
+// Returns (nil, nil) for a compressed rollout, matching ReadTurnUsage.
+func ReadRollout(rolloutPath string) (*Rollout, error) {
 	if strings.HasSuffix(rolloutPath, ".zst") {
 		return nil, nil
 	}
@@ -81,6 +167,7 @@ func ReadTurnUsage(rolloutPath string) (*Usage, error) {
 
 	var turn Usage
 	var hasUsage bool
+	var limits *Limits
 	for dec.More() {
 		var line rolloutLine
 		if err := dec.Decode(&line); err != nil {
@@ -92,7 +179,8 @@ func ReadTurnUsage(rolloutPath string) (*Usage, error) {
 		switch line.Payload.Type {
 		case "user_message":
 			// New turn — discard usage accumulated for the previous turn so only
-			// the most recent turn's counts survive.
+			// the most recent turn's counts survive. Limits deliberately survive:
+			// they describe the account, not the turn.
 			turn = Usage{}
 			hasUsage = false
 		case "token_count":
@@ -107,11 +195,31 @@ func ReadTurnUsage(rolloutPath string) (*Usage, error) {
 			turn.OutputTokens += u.OutputTokens
 			turn.ReasoningOutputTokens += u.ReasoningOutputTokens
 			hasUsage = true
+
+			if rl := line.Payload.RateLimits; rl != nil {
+				l := Limits{PlanType: rl.PlanType, ReachedType: rl.ReachedType}
+				if p := rl.Primary; p != nil {
+					l.Window = &Window{
+						UsedPercent:   p.UsedPercent,
+						WindowMinutes: p.WindowMinutes,
+						ResetsAt:      p.ResetsAt,
+					}
+				}
+				if c := rl.Credits; c != nil {
+					l.Credits = &Credits{
+						HasCredits: c.HasCredits,
+						Unlimited:  c.Unlimited,
+						Balance:    c.Balance,
+					}
+				}
+				limits = &l
+			}
 		}
 	}
 
-	if !hasUsage {
-		return nil, nil
+	out := &Rollout{Limits: limits}
+	if hasUsage {
+		out.Usage = &turn
 	}
-	return &turn, nil
+	return out, nil
 }

@@ -110,11 +110,10 @@ func injectBilling(event map[string]any, l *Limits) {
 	if l.PlanType != "" {
 		event["dash0.gen_ai.plan_type"] = l.PlanType
 	}
-	if w := l.Window; w != nil {
-		event["dash0.gen_ai.rate_limit.used_percent"] = w.UsedPercent
-		event["dash0.gen_ai.rate_limit.window_minutes"] = w.WindowMinutes
-		event["dash0.gen_ai.rate_limit.resets_at"] = w.ResetsAt
-	}
+	// Both slots emit under matching keys so a consumer picks the window it wants
+	// by window_minutes, rather than relying on an ordering Codex does not fix.
+	injectWindow(event, "primary", l.Primary)
+	injectWindow(event, "secondary", l.Secondary)
 	// Null until a limit is actually hit, and a limit not hit is not an event.
 	if l.ReachedType != "" {
 		event["dash0.gen_ai.rate_limit.reached_type"] = l.ReachedType
@@ -126,6 +125,18 @@ func injectBilling(event map[string]any, l *Limits) {
 			event["dash0.gen_ai.credits.balance"] = *c.Balance
 		}
 	}
+}
+
+// injectWindow writes one allowance window under dash0.gen_ai.rate_limit.<slot>.*,
+// or nothing at all when the plan does not report that slot.
+func injectWindow(event map[string]any, slot string, w *Window) {
+	if w == nil {
+		return
+	}
+	prefix := "dash0.gen_ai.rate_limit." + slot + "."
+	event[prefix+"used_percent"] = w.UsedPercent
+	event[prefix+"window_minutes"] = w.WindowMinutes
+	event[prefix+"resets_at"] = w.ResetsAt
 }
 
 // anchorSpawnAgent makes Codex's sub-agent delegation parent correctly.

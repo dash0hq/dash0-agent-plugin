@@ -30,16 +30,21 @@ type Usage struct {
 // keeps the most recent value seen rather than resetting at turn boundaries.
 type Limits struct {
 	PlanType    string  // free / go / plus / pro / business; empty when absent
-	Window      *Window // the primary allowance window; nil when unreported
+	Primary     *Window // nil when unreported
+	Secondary   *Window // nil when the plan reports only one window
 	ReachedType string  // which window blocked, once a limit is hit; empty until then
 	Credits     *Credits
 }
 
 // Window is an allowance window and how much of it is consumed. Nil rather than
 // zero-valued when unreported: "0% consumed" is a measurement, not an absence.
+//
+// Codex models both slots as the same RateLimitWindow type, and which duration
+// occupies which slot is not fixed — read WindowMinutes to tell a short rolling
+// window from a monthly one rather than assuming an ordering.
 type Window struct {
 	UsedPercent   float64 // consumption against the allowance, 0-100
-	WindowMinutes int64   // length of the window (43200 = 30 days)
+	WindowMinutes int64   // length of the window (43200 = 30 days, 300 = 5 hours)
 	ResetsAt      int64   // unix seconds at which the window resets
 }
 
@@ -92,22 +97,40 @@ type rolloutLine struct {
 	} `json:"payload"`
 }
 
-// codexRateLimits mirrors the rate_limits block on a token_count payload.
-// Pointer-typed sub-objects so an absent block stays distinguishable from a
-// present-but-zero one.
+// codexRateLimits mirrors the rate_limits block on a token_count payload
+// (RateLimitSnapshot in the Codex source). Pointer-typed sub-objects so an absent
+// block stays distinguishable from a present-but-zero one.
 type codexRateLimits struct {
-	PlanType string `json:"plan_type"`
-	Primary  *struct {
-		UsedPercent   float64 `json:"used_percent"`
-		WindowMinutes int64   `json:"window_minutes"`
-		ResetsAt      int64   `json:"resets_at"`
-	} `json:"primary"`
-	ReachedType string `json:"rate_limit_reached_type"`
+	PlanType    string       `json:"plan_type"`
+	Primary     *codexWindow `json:"primary"`
+	Secondary   *codexWindow `json:"secondary"`
+	ReachedType string       `json:"rate_limit_reached_type"`
 	Credits     *struct {
 		HasCredits bool     `json:"has_credits"`
 		Unlimited  bool     `json:"unlimited"`
 		Balance    *float64 `json:"balance"`
 	} `json:"credits"`
+}
+
+// codexWindow is Codex's RateLimitWindow — the shape both the primary and
+// secondary slots carry.
+type codexWindow struct {
+	UsedPercent   float64 `json:"used_percent"`
+	WindowMinutes int64   `json:"window_minutes"`
+	ResetsAt      int64   `json:"resets_at"`
+}
+
+// newWindow converts a wire window, preserving absence: a null slot stays nil
+// rather than becoming a zero-valued window.
+func newWindow(w *codexWindow) *Window {
+	if w == nil {
+		return nil
+	}
+	return &Window{
+		UsedPercent:   w.UsedPercent,
+		WindowMinutes: w.WindowMinutes,
+		ResetsAt:      w.ResetsAt,
+	}
 }
 
 // codexTokenUsage mirrors the per-API-call token counts Codex records in
@@ -197,13 +220,11 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 			hasUsage = true
 
 			if rl := line.Payload.RateLimits; rl != nil {
-				l := Limits{PlanType: rl.PlanType, ReachedType: rl.ReachedType}
-				if p := rl.Primary; p != nil {
-					l.Window = &Window{
-						UsedPercent:   p.UsedPercent,
-						WindowMinutes: p.WindowMinutes,
-						ResetsAt:      p.ResetsAt,
-					}
+				l := Limits{
+					PlanType:    rl.PlanType,
+					ReachedType: rl.ReachedType,
+					Primary:     newWindow(rl.Primary),
+					Secondary:   newWindow(rl.Secondary),
 				}
 				if c := rl.Credits; c != nil {
 					l.Credits = &Credits{

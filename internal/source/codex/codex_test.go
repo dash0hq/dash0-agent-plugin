@@ -198,9 +198,9 @@ func TestNormalizeEmitsRateLimits(t *testing.T) {
 
 	assert.Equal(t, "subscription", out["dash0.gen_ai.billing_mode"])
 	assert.Equal(t, "pro", out["dash0.gen_ai.plan_type"])
-	assert.Equal(t, 29.0, out["dash0.gen_ai.rate_limit.used_percent"])
-	assert.Equal(t, int64(43200), out["dash0.gen_ai.rate_limit.window_minutes"])
-	assert.Equal(t, int64(1786008501), out["dash0.gen_ai.rate_limit.resets_at"])
+	assert.Equal(t, 29.0, out["dash0.gen_ai.rate_limit.primary.used_percent"])
+	assert.Equal(t, int64(43200), out["dash0.gen_ai.rate_limit.primary.window_minutes"])
+	assert.Equal(t, int64(1786008501), out["dash0.gen_ai.rate_limit.primary.resets_at"])
 	assert.Equal(t, "primary", out["dash0.gen_ai.rate_limit.reached_type"])
 	assert.Equal(t, true, out["dash0.gen_ai.credits.available"])
 	assert.Equal(t, false, out["dash0.gen_ai.credits.unlimited"])
@@ -224,9 +224,10 @@ func TestNormalizeEmitsUnknownBillingModeWithoutRateLimits(t *testing.T) {
 	assert.Equal(t, "unknown", out["dash0.gen_ai.billing_mode"])
 	for _, k := range []string{
 		"dash0.gen_ai.plan_type",
-		"dash0.gen_ai.rate_limit.used_percent",
-		"dash0.gen_ai.rate_limit.window_minutes",
-		"dash0.gen_ai.rate_limit.resets_at",
+		"dash0.gen_ai.rate_limit.primary.used_percent",
+		"dash0.gen_ai.rate_limit.primary.window_minutes",
+		"dash0.gen_ai.rate_limit.primary.resets_at",
+		"dash0.gen_ai.rate_limit.secondary.used_percent",
 		"dash0.gen_ai.rate_limit.reached_type",
 		"dash0.gen_ai.credits.available",
 		"dash0.gen_ai.credits.unlimited",
@@ -235,6 +236,64 @@ func TestNormalizeEmitsUnknownBillingModeWithoutRateLimits(t *testing.T) {
 		_, present := out[k]
 		assert.False(t, present, "%s must be absent, not zero-valued", k)
 	}
+}
+
+// Both windows are emitted under matching keys, so a consumer reads whichever it
+// needs by window_minutes rather than by guessing which slot holds which
+// duration.
+func TestNormalizeEmitsBothRateLimitWindows(t *testing.T) {
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "s1",
+		"transcript_path": writeRollout(t, `{"plan_type":"pro",`+
+			`"primary":{"used_percent":29,"window_minutes":43200,"resets_at":1786008501},`+
+			`"secondary":{"used_percent":80,"window_minutes":300,"resets_at":1786000000}}`),
+	}, t.TempDir(), time.Now().UTC())
+	require.NotNil(t, out)
+
+	assert.Equal(t, 29.0, out["dash0.gen_ai.rate_limit.primary.used_percent"])
+	assert.Equal(t, int64(43200), out["dash0.gen_ai.rate_limit.primary.window_minutes"])
+	assert.Equal(t, 80.0, out["dash0.gen_ai.rate_limit.secondary.used_percent"])
+	assert.Equal(t, int64(300), out["dash0.gen_ai.rate_limit.secondary.window_minutes"])
+	assert.Equal(t, int64(1786000000), out["dash0.gen_ai.rate_limit.secondary.resets_at"])
+}
+
+// A window the plan does not report is omitted entirely — the asymmetry between
+// the two slots must not surface as a fabricated zero.
+func TestNormalizeOmitsNullSecondaryWindow(t *testing.T) {
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "s1",
+		"transcript_path": writeRollout(t, `{"plan_type":"free",`+
+			`"primary":{"used_percent":5,"window_minutes":43200,"resets_at":1},"secondary":null}`),
+	}, t.TempDir(), time.Now().UTC())
+	require.NotNil(t, out)
+
+	assert.Equal(t, 5.0, out["dash0.gen_ai.rate_limit.primary.used_percent"])
+	for _, k := range []string{
+		"dash0.gen_ai.rate_limit.secondary.used_percent",
+		"dash0.gen_ai.rate_limit.secondary.window_minutes",
+		"dash0.gen_ai.rate_limit.secondary.resets_at",
+	} {
+		_, present := out[k]
+		assert.False(t, present, "%s must be absent when the plan reports no second window", k)
+	}
+}
+
+// A compressed rollout is unreadable without a zstd dependency this module
+// avoids, so we never learn the billing mode — and must not guess it. The span
+// carries the reader diagnostic instead, keeping the gap visible in telemetry.
+func TestNormalizeCompressedRolloutEmitsNoBillingMode(t *testing.T) {
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "s1",
+		"transcript_path": "/home/u/.codex/sessions/rollout-x.jsonl.zst",
+	}, t.TempDir(), time.Now().UTC())
+	require.NotNil(t, out)
+
+	assert.Equal(t, true, out["dash0.codex.rollout.compressed"])
+	_, present := out["dash0.gen_ai.billing_mode"]
+	assert.False(t, present, "an unreadable rollout tells us nothing, not \"unknown\"")
 }
 
 // A limit that has not been hit reports null, and a null throttle event is not

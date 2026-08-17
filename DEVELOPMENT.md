@@ -123,9 +123,9 @@ omitted when its value is empty.
 | `exception.message` | Error text                                                           | On `StopFailure`.              |
 | `dash0.gen_ai.billing_mode` | `subscription` \| `unknown`                                          | Codex only. Always set. Never `api` — see below. |
 | `dash0.gen_ai.plan_type` | `free`, `plus`, `pro`, …                                             | Codex only. Omitted when unreported. |
-| `dash0.gen_ai.rate_limit.used_percent` | float, 0–100                                                         | Codex only. Omitted when unreported. |
-| `dash0.gen_ai.rate_limit.window_minutes` | integer (`43200` = 30 days)                                          | Codex only. |
-| `dash0.gen_ai.rate_limit.resets_at` | integer, unix seconds                                                | Codex only. |
+| `dash0.gen_ai.rate_limit.{primary,secondary}.used_percent` | float, 0–100                                                         | Codex only. Omitted per slot when unreported. |
+| `dash0.gen_ai.rate_limit.{primary,secondary}.window_minutes` | integer (`43200` = 30 days, `300` = 5 hours)                         | Codex only. |
+| `dash0.gen_ai.rate_limit.{primary,secondary}.resets_at` | integer, unix seconds                                                | Codex only. |
 | `dash0.gen_ai.rate_limit.reached_type` | Which window blocked                                                 | Codex only. Omitted until a limit is actually hit. |
 | `dash0.gen_ai.credits.available` | boolean                                                              | Codex only. CLI ≥ ~14 Jul 2026. |
 | `dash0.gen_ai.credits.unlimited` | boolean                                                              | Codex only. |
@@ -137,6 +137,12 @@ Cost is computed as provider list price × tokens. On a subscription there is no
 per-token price at all — a flat fee buys a rationed allowance and the marginal
 token is free — so that figure is a list-price *equivalent*, not spend.
 `dash0.gen_ai.billing_mode` tells the consumer which it is.
+
+A plan may report two allowance windows. Codex models both slots as the same
+`RateLimitWindow` and does **not** fix which duration lands in which slot, so
+both are emitted under matching keys and a consumer selects the one it wants by
+`window_minutes` — a short rolling window is what blocks someone mid-session,
+whereas a 30-day window rarely does. A slot the plan omits is not emitted.
 
 Two rules the reader holds to:
 

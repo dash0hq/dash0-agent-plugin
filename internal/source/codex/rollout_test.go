@@ -161,10 +161,10 @@ func TestReadRolloutParsesRateLimits(t *testing.T) {
 	require.NotNil(t, r)
 	require.NotNil(t, r.Limits)
 	assert.Equal(t, "plus", r.Limits.PlanType)
-	require.NotNil(t, r.Limits.Window)
-	assert.Equal(t, 29.0, r.Limits.Window.UsedPercent)
-	assert.Equal(t, int64(43200), r.Limits.Window.WindowMinutes)
-	assert.Equal(t, int64(1786008501), r.Limits.Window.ResetsAt)
+	require.NotNil(t, r.Limits.Primary)
+	assert.Equal(t, 29.0, r.Limits.Primary.UsedPercent)
+	assert.Equal(t, int64(43200), r.Limits.Primary.WindowMinutes)
+	assert.Equal(t, int64(1786008501), r.Limits.Primary.ResetsAt)
 
 	// The same pass still yields the turn's token usage.
 	require.NotNil(t, r.Usage)
@@ -194,8 +194,8 @@ func TestReadRolloutLimitsSurviveTurnBoundaries(t *testing.T) {
 	// Limits are the most recent seen, not reset by the turn boundary.
 	require.NotNil(t, r.Limits)
 	assert.Equal(t, "plus", r.Limits.PlanType)
-	require.NotNil(t, r.Limits.Window)
-	assert.Equal(t, 40.0, r.Limits.Window.UsedPercent)
+	require.NotNil(t, r.Limits.Primary)
+	assert.Equal(t, 40.0, r.Limits.Primary.UsedPercent)
 }
 
 // A turn that reports usage but no rate_limits (Codex CLI before the field
@@ -231,7 +231,52 @@ func TestReadRolloutRateLimitsWithoutPrimaryWindow(t *testing.T) {
 
 	// The plan is still known — only the window is missing.
 	assert.Equal(t, "plus", r.Limits.PlanType)
-	assert.Nil(t, r.Limits.Window)
+	assert.Nil(t, r.Limits.Primary)
+}
+
+// primary and secondary are both RateLimitWindow in the Codex source, so they
+// parse identically. Which duration lands in which slot is NOT fixed — read
+// window_minutes to tell them apart rather than assuming one is the short one.
+//
+// secondary was null in all 76 captured events (a free-plan account), so the
+// populated shape here comes from the type names embedded in the codex 0.142.5
+// binary, not from observed data.
+func TestReadRolloutParsesSecondaryWindow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}},` +
+		`"rate_limits":{"plan_type":"pro",` +
+		`"primary":{"used_percent":29,"window_minutes":43200,"resets_at":1786008501},` +
+		`"secondary":{"used_percent":80,"window_minutes":300,"resets_at":1786000000}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	r, err := ReadRollout(path)
+	require.NoError(t, err)
+	require.NotNil(t, r.Limits)
+
+	require.NotNil(t, r.Limits.Primary)
+	assert.Equal(t, 29.0, r.Limits.Primary.UsedPercent)
+	assert.Equal(t, int64(43200), r.Limits.Primary.WindowMinutes)
+
+	require.NotNil(t, r.Limits.Secondary)
+	assert.Equal(t, 80.0, r.Limits.Secondary.UsedPercent)
+	assert.Equal(t, int64(300), r.Limits.Secondary.WindowMinutes)
+	assert.Equal(t, int64(1786000000), r.Limits.Secondary.ResetsAt)
+}
+
+// The common real shape: a plan reporting one window and leaving the other null.
+func TestReadRolloutNullSecondaryLeavesItNil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}},` +
+		`"rate_limits":{"plan_type":"free","primary":{"used_percent":5,"window_minutes":43200,"resets_at":1},"secondary":null}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	r, err := ReadRollout(path)
+	require.NoError(t, err)
+	require.NotNil(t, r.Limits)
+	require.NotNil(t, r.Limits.Primary)
+	assert.Nil(t, r.Limits.Secondary)
 }
 
 // credits is version-gated: rollouts before ~14 Jul 2026 report it as null.
@@ -336,7 +381,7 @@ func TestBillingMode(t *testing.T) {
 		// cost figure is just as much a counterfactual as on a paid plan.
 		{"free is still not per-token billed", &Limits{PlanType: "free"}, "subscription"},
 		// Limits present but no plan named: consistent with API-key auth, unproven.
-		{"limits without a plan", &Limits{Window: &Window{UsedPercent: 5}}, "unknown"},
+		{"limits without a plan", &Limits{Primary: &Window{UsedPercent: 5}}, "unknown"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

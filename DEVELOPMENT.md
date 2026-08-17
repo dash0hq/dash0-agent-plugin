@@ -138,11 +138,33 @@ per-token price at all — a flat fee buys a rationed allowance and the marginal
 token is free — so that figure is a list-price *equivalent*, not spend.
 `dash0.gen_ai.billing_mode` tells the consumer which it is.
 
-A plan may report two allowance windows. Codex models both slots as the same
-`RateLimitWindow` and does **not** fix which duration lands in which slot, so
-both are emitted under matching keys and a consumer selects the one it wants by
-`window_minutes` — a short rolling window is what blocks someone mid-session,
-whereas a 30-day window rarely does. A slot the plan omits is not emitted.
+**Allowance windows.** A plan enforces one or two windows at once, and you are
+blocked when *either* exhausts. Codex models both slots as the same
+`RateLimitWindow`, whose `window_minutes` it documents as "Rolling window
+duration, in minutes".
+
+**Which duration lands in which slot depends on the plan**, so read
+`window_minutes` rather than assuming an ordering. Observed and inferred from
+codex 0.142.5:
+
+| Plan | `primary` | `secondary` |
+|---|---|---|
+| Free | monthly (`43200`) — observed | absent — observed |
+| Paid | 5-hour (`300`) | weekly (`10080`) |
+
+The paid row is inferred, not observed: the binary carries `five-hour-limit` and
+`weekly-limit` status placeholders, and its reset-credit copy comes in exactly two
+flavours — "Reset your current 5-hour and weekly usage limits" (a pair) versus
+"Reset your current monthly usage limit" (alone).
+
+A dashboard that assumes two windows renders empty for free-plan sessions, and one
+that assumes `primary` is short mislabels them. A slot the plan omits is not
+emitted.
+
+The two windows answer different questions: a short window means blocked *now*,
+recovering in hours; a long one means degraded for days. `reached_type` names which
+window tripped, which is what separates "wait" from "upgrade" — that is why it is a
+string rather than a boolean.
 
 Two rules the reader holds to:
 

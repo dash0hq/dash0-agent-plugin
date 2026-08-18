@@ -7,20 +7,26 @@ the handoff brief's prose.
 ## Setup
 
 1. Install Cursor.
-2. Copy the capture `hooks.json` into Cursor's user-scope config:
+2. Write the capture `hooks.json` into Cursor's user-scope config, stamping in
+   the absolute path of *your* checkout. Run this from anywhere inside the repo:
 
    ```bash
    mkdir -p ~/.cursor
-   cp test/capture/cursor/hooks.json ~/.cursor/hooks.json
+   REPO=$(git rev-parse --show-toplevel)
+   jq --arg cmd "$REPO/test/capture/cursor/capture.sh" \
+      '.hooks |= map_values(map(.command = $cmd))' \
+      "$REPO/test/capture/cursor/hooks.json" > ~/.cursor/hooks.json
    ```
+
+   The checked-in `hooks.json` is the source of truth for *which* events are
+   captured; its `command` values are the placeholder `SET_BY_SETUP_STEP`,
+   which the `jq` above replaces. Cursor needs an absolute path here, so
+   copying the file unmodified will not work. (This is the same rewrite
+   `install-cursor.sh` does for the real plugin hooks.)
 
    > If you already have a `~/.cursor/hooks.json` with other hooks, merge by
    > hand — Cursor's hooks config does not deep-merge across scopes the way
-   > you might expect, and we don't want to clobber anything you set up.
-   >
-   > The `command` paths use `$HOME/dash0/dash0-agent-plugin/...`. If your
-   > checkout lives elsewhere, edit them — Cursor needs an absolute path and
-   > expands `$HOME` itself.
+   > you might expect, and the command above overwrites the file.
 3. Make the capture script executable:
 
    ```bash

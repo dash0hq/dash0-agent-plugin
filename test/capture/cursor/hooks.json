@@ -2,55 +2,55 @@
   "version": 1,
   "hooks": {
     "sessionStart": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "sessionEnd": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "beforeSubmitPrompt": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "afterAgentResponse": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "afterAgentThought": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "preToolUse": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "postToolUse": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "postToolUseFailure": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "beforeMCPExecution": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "afterMCPExecution": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "beforeShellExecution": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "afterShellExecution": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "beforeReadFile": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "afterFileEdit": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "subagentStart": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "subagentStop": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ],
     "preCompact": [
-      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+      {"command": "SET_BY_SETUP_STEP"}
     ]
   }
 }

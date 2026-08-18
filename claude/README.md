@@ -18,12 +18,12 @@ claude --plugin-dir /path/to/dash0-agent-plugin
 
 # Build the binary locally (instead of downloading from GitHub Releases)
 VERSION=$(grep '^VERSION=' claude/claude-on-event.sh | cut -d'"' -f2)
-go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/on-event/
+go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/claude-on-event/
 ```
 
 ### Running hooks from source
 
-This repo ships a `.claude/settings.json` that wires every hook to run the Go source directly (`CLAUDE_PLUGIN_DATA=/tmp/dash0-dev go run ./cmd/on-event/`), so a Claude Code session started **inside this repo** exercises your local code instead of the released binary.
+This repo ships a `.claude/settings.json` that wires every hook to run the Go source directly (`CLAUDE_PLUGIN_DATA=/tmp/dash0-dev go run ./cmd/claude-on-event/`), so a Claude Code session started **inside this repo** exercises your local code instead of the released binary.
 
 These are plain project-level command hooks, **not** plugin-managed hooks — the plugin itself is not installed as a plugin in this session.
 

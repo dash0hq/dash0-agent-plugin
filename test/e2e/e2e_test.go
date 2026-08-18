@@ -215,11 +215,11 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	assert.NotEmpty(t, traceReqs, "expected at least one /v1/traces request (connectivity check on SessionStart)")
 }
 
-// buildClaudeBinary compiles cmd/on-event into a temp dir and returns its path.
+// buildClaudeBinary compiles cmd/claude-on-event into a temp dir and returns its path.
 func buildClaudeBinary(t *testing.T, pluginDir string) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "on-event")
-	build := exec.Command("go", "build", "-o", bin, "./cmd/on-event")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/claude-on-event")
 	build.Dir = pluginDir
 	out, err := build.CombinedOutput()
 	require.NoError(t, err, "build failed: %s", string(out))

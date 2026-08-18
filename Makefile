@@ -25,7 +25,7 @@ build: ## Build all Go packages.
 	go build ./...
 
 .PHONY: build-binary
-build-binary: ## Build one command to $(OUT). Example: make build-binary PKG=./cmd/on-event OUT=bin/on-event
+build-binary: ## Build one command to $(OUT). Example: make build-binary PKG=./cmd/claude-on-event OUT=bin/on-event
 	go build -o $(OUT) $(PKG)
 
 .PHONY: fmt

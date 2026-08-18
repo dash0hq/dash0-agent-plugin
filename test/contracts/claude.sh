@@ -67,7 +67,7 @@ start_mock_otlp   # http://localhost:4319
 export CLAUDE_PLUGIN_DATA=/tmp/pdata
 VERSION=$(grep '^VERSION=' "$REPO/claude/claude-on-event.sh" | sed 's/VERSION="//;s/"//')
 rm -rf "$CLAUDE_PLUGIN_DATA"; mkdir -p "$CLAUDE_PLUGIN_DATA/bin"
-make -C "$REPO" build-binary PKG=./cmd/on-event OUT="$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-$(os_arch)"
+make -C "$REPO" build-binary PKG=./cmd/claude-on-event OUT="$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-$(os_arch)"
 
 # credentials from ~/.claude/dash0-agent-plugin.local.md.
 export HOME=/tmp/home-cfg; rm -rf "$HOME"; mkdir -p "$HOME/.claude"

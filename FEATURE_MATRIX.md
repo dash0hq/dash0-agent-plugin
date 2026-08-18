@@ -13,7 +13,7 @@ span properties can be populated.
 | `gen_ai.harness.name` | `claude-code` | `cursor` | `codex` | `github-copilot-cli` |
 | `gen_ai.provider.name` | `anthropic` fallback + per-model | per-model only | `openai` fallback + per-model | per-model only |
 | Default `service.name` / agent name | `claude-code` | `cursor` | `codex` | `github-copilot-cli` |
-| Entrypoint | `cmd/on-event` | `cmd/cursor-on-event` | `cmd/codex-on-event` | `cmd/copilot-on-event` |
+| Entrypoint | `cmd/claude-on-event` | `cmd/cursor-on-event` | `cmd/codex-on-event` | `cmd/copilot-on-event` |
 | Config file | `~/.claude/dash0-agent-plugin.local.md` (or `.claude/…`) | `~/.cursor/dash0-agent-plugin.local.md` (or `.cursor/…`) | `~/.codex/dash0-agent-plugin.local.md` (or `.codex/…`) | `~/.copilot/dash0-agent-plugin.local.md` (global only) |
 | Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `~/.local/state/dash0-agent-plugin/cursor` | `~/.local/state/dash0-agent-plugin/codex` | `~/.local/state/dash0-agent-plugin/copilot` |
 | Hooks registered in | plugin manifest `claude/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |

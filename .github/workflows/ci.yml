@@ -237,7 +237,7 @@ jobs:
       - name: userConfig covers all plugin options
         run: |
           # Extract option keys used in Go code via pluginOption/pluginOptionSecure/pluginOptionBool/pluginOptionBoolDefault
-          USED_KEYS=$(grep -ohE 'pluginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' cmd/on-event/main.go | \
+          USED_KEYS=$(grep -ohE 'pluginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' cmd/claude-on-event/main.go | \
             sed 's/pluginOption[^"]*"//' | sed 's/"$//' | sort -u)
           # Extract keys declared in plugin.json userConfig
           DECLARED_KEYS=$(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json | sort -u)

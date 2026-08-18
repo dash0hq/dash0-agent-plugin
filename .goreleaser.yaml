@@ -4,7 +4,11 @@ project_name: on-event
 version: 2
 
 builds:
-  - id: on-event
+  # The Claude Code binary is published as `on-event-<os>-<arch>`, without the
+  # `claude-` prefix the other runtimes use. That asset name is baked into every
+  # already-installed claude-on-event.sh bootstrap, so it stays as it is even
+  # though the Go package is cmd/claude-on-event.
+  - id: claude-on-event
     env:
       - CGO_ENABLED=0
     ldflags:
@@ -16,7 +20,7 @@ builds:
       - amd64
       - arm64
     dir: ./
-    main: ./cmd/on-event
+    main: ./cmd/claude-on-event
     binary: "on-event-{{ .Os }}-{{ .Arch }}"
     no_unique_dist_dir: true
   - id: cursor-on-event

@@ -24,7 +24,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 go build -o /out/on-event ./cmd/on-event/
+RUN CGO_ENABLED=0 go build -o /out/on-event ./cmd/claude-on-event/
 
 # ---- Stage 2: runtime ----
 FROM debian:bookworm-slim

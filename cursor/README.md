@@ -89,7 +89,7 @@ The push triggers `.github/workflows/release.yml`, which runs GoReleaser
 
 | Artifact | Source |
 |---|---|
-| `on-event-{darwin,linux}-{amd64,arm64}` | `cmd/on-event` (Claude Code) |
+| `on-event-{darwin,linux}-{amd64,arm64}` | `cmd/claude-on-event` (Claude Code) |
 | `cursor-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/cursor-on-event` (this) |
 | `checksums.txt` | sha256 of every artifact |
 

@@ -121,6 +121,66 @@ omitted when its value is empty.
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On`invoke_agent` spans.        |
 | `exception.message` | Error text                                                           | On `StopFailure`.              |
+| `dash0.gen_ai.billing_mode` | `subscription` \| `unknown`                                          | Codex only. Always set. Never `api` — see below. |
+| `dash0.gen_ai.plan_type` | `free`, `plus`, `pro`, …                                             | Codex only. Omitted when unreported. |
+| `dash0.gen_ai.rate_limit.{primary,secondary}.used_percent` | float, 0–100                                                         | Codex only. Omitted per slot when unreported. |
+| `dash0.gen_ai.rate_limit.{primary,secondary}.window_minutes` | integer (`43200` = 30 days, `300` = 5 hours)                         | Codex only. |
+| `dash0.gen_ai.rate_limit.{primary,secondary}.resets_at` | integer, unix seconds                                                | Codex only. |
+| `dash0.gen_ai.rate_limit.reached_type` | Which window blocked                                                 | Codex only. Omitted until a limit is actually hit. |
+| `dash0.gen_ai.credits.available` | boolean                                                              | Codex only. CLI ≥ ~14 Jul 2026. |
+| `dash0.gen_ai.credits.unlimited` | boolean                                                              | Codex only. |
+| `dash0.gen_ai.credits.balance` | float                                                                | Codex only. Omitted when unreported. |
+
+#### Billing mode and rate limits
+
+Cost is computed as provider list price × tokens. On a subscription there is no
+per-token price at all — a flat fee buys a rationed allowance and the marginal
+token is free — so that figure is a list-price *equivalent*, not spend.
+`dash0.gen_ai.billing_mode` tells the consumer which it is.
+
+**Allowance windows.** A plan enforces one or two windows at once, and you are
+blocked when *either* exhausts. Codex models both slots as the same
+`RateLimitWindow`, whose `window_minutes` it documents as "Rolling window
+duration, in minutes".
+
+**Which duration lands in which slot depends on the plan**, so read
+`window_minutes` rather than assuming an ordering. Observed and inferred from
+codex 0.142.5:
+
+| Plan | `primary` | `secondary` |
+|---|---|---|
+| Free | monthly (`43200`) — observed | absent — observed |
+| Paid | 5-hour (`300`) | weekly (`10080`) |
+
+The paid row is inferred, not observed: the binary carries `five-hour-limit` and
+`weekly-limit` status placeholders, and its reset-credit copy comes in exactly two
+flavours — "Reset your current 5-hour and weekly usage limits" (a pair) versus
+"Reset your current monthly usage limit" (alone).
+
+A dashboard that assumes two windows renders empty for free-plan sessions, and one
+that assumes `primary` is short mislabels them. A slot the plan omits is not
+emitted.
+
+The two windows answer different questions: a short window means blocked *now*,
+recovering in hours; a long one means degraded for days. `reached_type` names which
+window tripped, which is what separates "wait" from "upgrade" — that is why it is a
+string rather than a boolean.
+
+Two rules the reader holds to:
+
+- **It never emits `api`.** A plan is only reported for ChatGPT-authenticated
+  sessions, so an absent plan is *consistent with* API-key auth without proving
+  it. Claiming `api` would assert the cost figure is real spend, which is the
+  error this exists to prevent. Absence is `unknown`.
+- **Unreported values are omitted, not zeroed.** "0% of allowance consumed" and
+  "balance $0.00" read as measurements; a CLI that never reported them has made
+  no such claim. Only `billing_mode` is unconditional, because recording that we
+  looked and could not tell differs from never having looked.
+
+The namespace is harness-neutral (`dash0.gen_ai.*`, not `dash0.codex.*`) because
+the same mismatch exists for Claude Code (Max plans) and Copilot (per-seat, so
+its cost figure is never spend). `dash0.codex.rollout.compressed` stays
+Codex-scoped as a reader diagnostic.
 
 ### Tool-call spans (`execute_tool`)
 

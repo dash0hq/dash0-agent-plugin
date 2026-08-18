@@ -1,8 +1,9 @@
 # Cursor source — developer reference
 
-This directory holds the Cursor-side configuration and capture scaffolding
-for the Cursor → Dash0 integration. It is the developer reference: how to
-build, sideload local changes, cut releases, and collect fixture payloads.
+This directory holds everything shipped to Cursor — the bootstrap wrapper
+(`cursor-on-event.sh`), the hook registration template (`plugin-hooks.json`),
+and skills. It is the developer reference: how to build, sideload local changes,
+and cut releases.
 
 End-user install / configure / uninstall docs live in
 [.cursor-plugin/README.md](../.cursor-plugin/README.md).
@@ -14,7 +15,6 @@ End-user install / configure / uninstall docs live in
 | `plugin-hooks.json` | Source of truth for which Cursor events the plugin listens to. `install-cursor.sh` reads this file, translates `./cursor/cursor-on-event.sh` to `$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh`, and merges the entries into the user's `~/.cursor/hooks.json` (Cursor doesn't fire hooks from local plugins directly). |
 | `cursor-on-event.sh` | Bootstrap wrapper Cursor invokes on each event: loads the config file, downloads + checksum-verifies the `cursor-on-event` binary on first run, then execs it. |
 | `skills/` | Cursor-only agent skills (e.g. `dash0-configure`). Referenced from `.cursor-plugin/plugin.json`. |
-| `capture/` | Records real Cursor hook payloads as test fixtures. See `capture/README.md`. |
 
 The code that consumes Cursor hooks lives elsewhere:
 
@@ -192,7 +192,7 @@ Run a prompt that uses at least one tool. You should see:
 ## Switch to capture mode
 
 To collect new fixture payloads instead of emitting spans, swap in the
-capture `hooks.json` — see `capture/README.md`.
+capture `hooks.json` — see [`test/capture/cursor/README.md`](../test/capture/cursor/README.md).
 
 ## Uninstall
 

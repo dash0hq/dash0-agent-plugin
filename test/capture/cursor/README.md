@@ -11,16 +11,20 @@ the handoff brief's prose.
 
    ```bash
    mkdir -p ~/.cursor
-   cp cursor/capture/hooks.json ~/.cursor/hooks.json
+   cp test/capture/cursor/hooks.json ~/.cursor/hooks.json
    ```
 
    > If you already have a `~/.cursor/hooks.json` with other hooks, merge by
    > hand — Cursor's hooks config does not deep-merge across scopes the way
    > you might expect, and we don't want to clobber anything you set up.
+   >
+   > The `command` paths use `$HOME/dash0/dash0-agent-plugin/...`. If your
+   > checkout lives elsewhere, edit them — Cursor needs an absolute path and
+   > expands `$HOME` itself.
 3. Make the capture script executable:
 
    ```bash
-   chmod +x cursor/capture/capture.sh
+   chmod +x test/capture/cursor/capture.sh
    ```
 4. Restart Cursor so it picks up the new hooks file.
 
@@ -39,7 +43,7 @@ can in one session:
 Each hook invocation writes a JSON file under:
 
 ```
-cursor/captured/<timestamp>_<event_name>.json
+test/capture/cursor/captured/<timestamp>_<event_name>.json
 ```
 
 If you want to direct captures elsewhere, set `DASH0_CURSOR_CAPTURE_DIR`
@@ -63,4 +67,4 @@ For each captured payload:
 ## Teardown
 
 Remove or rename `~/.cursor/hooks.json` to stop capturing. The
-`cursor/captured/` directory is git-ignored.
+`test/capture/cursor/captured/` directory is git-ignored.

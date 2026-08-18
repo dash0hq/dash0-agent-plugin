@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "sessionEnd": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "beforeSubmitPrompt": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "afterAgentResponse": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "afterAgentThought": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "preToolUse": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "postToolUse": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "postToolUseFailure": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "beforeMCPExecution": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "afterMCPExecution": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "beforeShellExecution": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "afterShellExecution": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "beforeReadFile": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "afterFileEdit": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "subagentStart": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "subagentStop": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ],
+    "preCompact": [
+      {"command": "$HOME/dash0/dash0-agent-plugin/test/capture/cursor/capture.sh"}
+    ]
+  }
+}

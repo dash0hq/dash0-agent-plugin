@@ -12,6 +12,9 @@ across runtimes — see [DEVELOPMENT.md](../DEVELOPMENT.md#releasing).
 
 ## Local development
 
+Load the working copy as a plugin, and build the binary to the exact path its
+bootstrap resolves so nothing is downloaded from GitHub Releases:
+
 ```bash
 # Test locally without marketplace
 claude --plugin-dir /path/to/dash0-agent-plugin
@@ -21,14 +24,17 @@ VERSION=$(grep '^VERSION=' claude/claude-on-event.sh | cut -d'"' -f2)
 go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/claude-on-event/
 ```
 
-### Running hooks from source
+For a `--plugin-dir` load, Claude computes
+`CLAUDE_PLUGIN_DATA=~/.claude/plugins/data/<plugin-name>-inline` itself and
+ignores any preset value, which is why the build target above is that exact path.
+Per-session state lands in `<CLAUDE_PLUGIN_DATA>/<session_id>/` (`started`,
+`trace_context.json`, `events.jsonl`).
 
-This repo ships a `.claude/settings.json` that wires every hook to run the Go source directly (`CLAUDE_PLUGIN_DATA=/tmp/dash0-dev go run ./cmd/claude-on-event/`), so a Claude Code session started **inside this repo** exercises your local code instead of the released binary.
-
-These are plain project-level command hooks, **not** plugin-managed hooks — the plugin itself is not installed as a plugin in this session.
-
-In this case `CLAUDE_PLUGIN_DATA` is the filesystem root for per-session state, written to `<CLAUDE_PLUGIN_DATA>/<session_id>/` (`started`, `trace_context.json`, `events.jsonl`).
-It is deliberately pointed at `/tmp/dash0-dev` to not pollute the repository.
+> Do **not** wire the hooks up through a project-level `.claude/settings.json` in
+> this repo. If you also have the plugin installed — which most of us do, since we
+> dogfood it — both registrations fire for every event and you get duplicate
+> spans, with no obvious sign that is what is happening. `--plugin-dir` replaces
+> the installed copy for that session instead of stacking on top of it.
 
 ## Known limitations
 

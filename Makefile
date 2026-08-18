@@ -42,7 +42,7 @@ test: test-scripts ## Run Go unit + integration tests with the race detector.
 
 .PHONY: test-scripts
 test-scripts: ## Run the unit tests for the Python diagnostic scripts.
-	python3 -m unittest discover -s scripts -p '*_test.py'
+	python3 -m unittest discover -s claude/tools -p '*_test.py'
 
 .PHONY: test-e2e
 test-e2e: ## Run the build-tagged end-to-end tests.

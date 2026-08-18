@@ -209,7 +209,7 @@ func installCodex(t *testing.T, pluginDir, home, state, otlpURL, token string) {
 	require.NoError(t, err, "install-codex.sh failed")
 }
 
-// codexPluginVersion reads the pinned VERSION from scripts/codex-on-event.sh so
+// codexPluginVersion reads the pinned VERSION from codex/codex-on-event.sh so
 // the pre-staged binary path matches what install-codex.sh derives.
 func codexPluginVersion(t *testing.T, pluginDir string) string {
 	t.Helper()
@@ -220,7 +220,7 @@ func codexPluginVersion(t *testing.T, pluginDir string) string {
 			return strings.Trim(strings.TrimPrefix(line, "VERSION="), `"`)
 		}
 	}
-	t.Fatal("VERSION= not found in scripts/codex-on-event.sh")
+	t.Fatal("VERSION= not found in codex/codex-on-event.sh")
 	return ""
 }
 

@@ -166,14 +166,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Version consistency (plugin.json == on-event.sh)
+      - name: Version consistency (plugin.json == claude-on-event.sh)
         run: |
           PLUGIN_VERSION=$(jq -r '.version' .claude-plugin/plugin.json)
-          SCRIPT_VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          SCRIPT_VERSION=$(grep '^VERSION=' claude/claude-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
           echo "plugin.json: $PLUGIN_VERSION"
-          echo "on-event.sh: $SCRIPT_VERSION"
+          echo "claude-on-event.sh: $SCRIPT_VERSION"
           if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
-            echo "::error::Version mismatch: plugin.json=$PLUGIN_VERSION, on-event.sh=$SCRIPT_VERSION"
+            echo "::error::Version mismatch: plugin.json=$PLUGIN_VERSION, claude-on-event.sh=$SCRIPT_VERSION"
             exit 1
           fi
 
@@ -182,9 +182,9 @@ jobs:
           # Mirror of the Claude version check. Both files are bumped together
           # by scripts/release.sh; this guards against a hand-edit drifting.
           PLUGIN_VERSION=$(jq -r '.version' .cursor-plugin/plugin.json)
-          SCRIPT_VERSION=$(grep '^VERSION=' scripts/cursor-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          SCRIPT_VERSION=$(grep '^VERSION=' cursor/cursor-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
           echo ".cursor-plugin/plugin.json: $PLUGIN_VERSION"
-          echo "scripts/cursor-on-event.sh: $SCRIPT_VERSION"
+          echo "cursor/cursor-on-event.sh: $SCRIPT_VERSION"
           if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
             echo "::error::Version mismatch: .cursor-plugin/plugin.json=$PLUGIN_VERSION, cursor-on-event.sh=$SCRIPT_VERSION"
             exit 1
@@ -215,7 +215,7 @@ jobs:
 
       - name: Release assets exist for configured version
         run: |
-          VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          VERSION=$(grep '^VERSION=' claude/claude-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
           echo "Checking release assets for v$VERSION"
           # Check if the release tag exists at all — if not, this is a
           # version bump PR preparing for a future release. Warn but don't fail.
@@ -321,19 +321,19 @@ jobs:
 
       - name: Hook script is valid
         run: |
-          # Check on-event.sh is executable and has valid shebang
-          if [ ! -x scripts/on-event.sh ]; then
-            echo "::error::scripts/on-event.sh is not executable"
+          # Check claude-on-event.sh is executable and has valid shebang
+          if [ ! -x claude/claude-on-event.sh ]; then
+            echo "::error::claude/claude-on-event.sh is not executable"
             exit 1
           fi
-          HEAD=$(head -1 scripts/on-event.sh)
+          HEAD=$(head -1 claude/claude-on-event.sh)
           if [[ "$HEAD" != "#!/"* ]]; then
-            echo "::error::scripts/on-event.sh missing shebang"
+            echo "::error::claude/claude-on-event.sh missing shebang"
             exit 1
           fi
           # Check hooks.json references an existing script
           HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command' hooks/hooks.json)
-          EXPECTED='${CLAUDE_PLUGIN_ROOT}/scripts/on-event.sh'
+          EXPECTED='${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh'
           if [ "$HOOK_CMD" != "$EXPECTED" ]; then
             echo "::error::hooks.json command ($HOOK_CMD) does not match expected ($EXPECTED)"
             exit 1
@@ -346,13 +346,13 @@ jobs:
           # command referenced from cursor/plugin-hooks.json resolves to a file
           # relative to the repo root — which is the plugin root Cursor will
           # resolve against when the plugin is dropped into ~/.cursor/plugins/.
-          if [ ! -x scripts/cursor-on-event.sh ]; then
-            echo "::error::scripts/cursor-on-event.sh is not executable"
+          if [ ! -x cursor/cursor-on-event.sh ]; then
+            echo "::error::cursor/cursor-on-event.sh is not executable"
             exit 1
           fi
-          HEAD=$(head -1 scripts/cursor-on-event.sh)
+          HEAD=$(head -1 cursor/cursor-on-event.sh)
           if [[ "$HEAD" != "#!/"* ]]; then
-            echo "::error::scripts/cursor-on-event.sh missing shebang"
+            echo "::error::cursor/cursor-on-event.sh missing shebang"
             exit 1
           fi
           COMMANDS=$(jq -r '.hooks | to_entries[] | .value[] | .command' cursor/plugin-hooks.json | sort -u)

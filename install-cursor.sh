@@ -39,14 +39,14 @@
 #                                           the plugin listens to — read by this
 #                                           installer to update ~/.cursor/hooks.json.
 #       cursor/skills/<skill>/SKILL.md      Skills the plugin ships.
-#       scripts/cursor-on-event.sh          Bootstrap Cursor invokes on each event.
+#       cursor/cursor-on-event.sh          Bootstrap Cursor invokes on each event.
 #   ~/.local/state/dash0-agent-plugin/cursor/bin/cursor-on-event-<v>-<os>-<arch>
 #       The binary the bootstrap execs. Pre-downloaded so the connectivity
 #       check below can run before Cursor restarts.
 #   ~/.cursor/hooks.json
 #       Cursor's user-scope hook registrations. This installer merges its
 #       events in (with commands pointing at
-#       $HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh
+#       $HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh
 #       — Cursor expands $HOME at hook time), preserving any non-Dash0
 #       entries the file already contained. Local plugins are surfaced in
 #       Cursor's UI and provide skills, but Cursor 3.9.x does NOT fire hooks
@@ -192,7 +192,7 @@ BIN_DIR="$STATE_BASE/bin"
 BIN_PATH="$BIN_DIR/cursor-on-event-${VERSION}-${OS}-${ARCH}"
 
 PLUGIN_DIR="$HOME/.cursor/plugins/local/dash0-agent-plugin"
-SCRIPT_PATH="$PLUGIN_DIR/scripts/cursor-on-event.sh"
+SCRIPT_PATH="$PLUGIN_DIR/cursor/cursor-on-event.sh"
 MANIFEST_PATH="$PLUGIN_DIR/.cursor-plugin/plugin.json"
 HOOKS_MANIFEST_PATH="$PLUGIN_DIR/cursor/plugin-hooks.json"
 SKILLS_DIR="$PLUGIN_DIR/cursor/skills"
@@ -200,7 +200,7 @@ SKILLS_DIR="$PLUGIN_DIR/cursor/skills"
 CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
 HOOKS_PATH="$HOME/.cursor/hooks.json"
 
-mkdir -p "$BIN_DIR" "$PLUGIN_DIR/.cursor-plugin" "$PLUGIN_DIR/cursor" "$PLUGIN_DIR/scripts" "$SKILLS_DIR" "$HOME/.cursor" \
+mkdir -p "$BIN_DIR" "$PLUGIN_DIR/.cursor-plugin" "$PLUGIN_DIR/cursor" "$SKILLS_DIR" "$HOME/.cursor" \
   || die "could not create install directories"
 
 # ---------------------------------------------------------------------------
@@ -240,11 +240,18 @@ ok "installed binary → $BIN_PATH"
 # ---------------------------------------------------------------------------
 
 install_plugin_file() {
-  # install_plugin_file <repo-relative-source> <local-dest> [--executable]
-  local src="$1" dest="$2" flag="${3:-}"
+  # install_plugin_file <repo-relative-source> <local-dest> [--executable] [legacy-source]
+  # A legacy-source is tried when the primary path 404s, so pinning an older
+  # release (DASH0_VERSION) still resolves files that have since moved.
+  local src="$1" dest="$2" flag="${3:-}" legacy="${4:-}"
   info "downloading ${src}..."
-  fetch "$RAW_BASE/$src" "$dest" \
-    || die "failed to download: $RAW_BASE/$src"
+  if ! fetch "$RAW_BASE/$src" "$dest"; then
+    if [ -n "$legacy" ] && fetch "$RAW_BASE/$legacy" "$dest"; then
+      info "fell back to legacy path ${legacy}"
+    else
+      die "failed to download: $RAW_BASE/$src"
+    fi
+  fi
   if [ "$flag" = "--executable" ]; then
     chmod +x "$dest"
   fi
@@ -253,7 +260,9 @@ install_plugin_file() {
 
 install_plugin_file ".cursor-plugin/plugin.json"     "$MANIFEST_PATH"
 install_plugin_file "cursor/plugin-hooks.json"       "$HOOKS_MANIFEST_PATH"
-install_plugin_file "scripts/cursor-on-event.sh"     "$SCRIPT_PATH" --executable
+# The bootstrap moved from scripts/ to cursor/ after v0.1.24 — see the legacy
+# fallback note above. Drop the third argument once v0.1.24 is unsupported.
+install_plugin_file "cursor/cursor-on-event.sh"      "$SCRIPT_PATH" --executable "scripts/cursor-on-event.sh"
 
 SKILLS="dash0-configure"
 for skill in $SKILLS; do
@@ -336,7 +345,7 @@ ok "wrote config → $CONFIG_PATH (chmod 600)"
 #    only ~/.cursor/hooks.json (user scope) and <project>/.cursor/hooks.json
 #    are honored. Cursor DOES expand $HOME in the `command` field at hook
 #    invocation time, so we point each entry at
-#    $HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh
+#    $HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh
 #    (literal $HOME string).
 #
 #    Merge strategy: preserve every existing entry whose command does NOT
@@ -348,7 +357,7 @@ ok "wrote config → $CONFIG_PATH (chmod 600)"
 info "merging Dash0 hook registrations into ${HOOKS_PATH}..."
 
 # shellcheck disable=SC2016 # literal $HOME on purpose: Cursor expands it at hook invocation time
-DASH0_HOOK_CMD='$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh'
+DASH0_HOOK_CMD='$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh'
 DASH0_HOOKS_TMP=$(mktemp)
 jq --arg cmd "$DASH0_HOOK_CMD" \
    '{version: (.version // 1), hooks: (.hooks | map_values(map(.command = $cmd)))}' \

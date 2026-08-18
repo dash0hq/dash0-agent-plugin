@@ -48,14 +48,14 @@ ENV PATH="/root/.local/bin:${PATH}"
 COPY scripts/docker/marketplace.json /opt/dash0-marketplace/.claude-plugin/marketplace.json
 COPY .claude-plugin /opt/dash0-marketplace/dash0-agent-plugin/.claude-plugin
 COPY hooks          /opt/dash0-marketplace/dash0-agent-plugin/hooks
-COPY scripts        /opt/dash0-marketplace/dash0-agent-plugin/scripts
+COPY claude         /opt/dash0-marketplace/dash0-agent-plugin/claude
 
 # Drop the locally built binary into the plugin's data dir under the exact
-# name on-event.sh expects, so it skips the GitHub Releases download.
+# name claude-on-event.sh expects, so it skips the GitHub Releases download.
 # Data dir convention: ~/.claude/plugins/data/<plugin-name>-<marketplace-name>/
 COPY --from=builder /out/on-event /tmp/on-event
 RUN set -eux; \
-    VERSION="$(sed -n 's/^VERSION="\(.*\)"/\1/p' /opt/dash0-marketplace/dash0-agent-plugin/scripts/on-event.sh)"; \
+    VERSION="$(sed -n 's/^VERSION="\(.*\)"/\1/p' /opt/dash0-marketplace/dash0-agent-plugin/claude/claude-on-event.sh)"; \
     ARCH="$(dpkg --print-architecture)"; \
     BIN_DIR="/root/.claude/plugins/data/dash0-agent-plugin-dash0-local/bin"; \
     mkdir -p "$BIN_DIR"; \

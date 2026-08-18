@@ -24,7 +24,7 @@ import (
 )
 
 // TestE2EHookInvocation simulates what Claude Code does when firing a hook:
-// builds the binary, invokes on-event.sh with a SessionStart event on stdin,
+// builds the binary, invokes claude-on-event.sh with a SessionStart event on stdin,
 // and verifies the mock OTLP server receives the connectivity check.
 func TestE2EHookInvocation(t *testing.T) {
 	pluginDir := findPluginDir(t)
@@ -150,7 +150,7 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Stage the plugin with the REAL scripts/on-event.sh (not a stub), then place
+	// Stage the plugin with the REAL claude/claude-on-event.sh (not a stub), then place
 	// the freshly built binary where that script resolves it so it skips the
 	// GitHub download and execs our binary. For a --plugin-dir load, Claude computes
 	// CLAUDE_PLUGIN_DATA=$HOME/.claude/plugins/data/<plugin-name>-inline (it
@@ -159,7 +159,6 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	copyDir(t, filepath.Join(pluginDir, ".claude-plugin"), filepath.Join(stageDir, ".claude-plugin"))
 	copyDir(t, filepath.Join(pluginDir, "hooks"), filepath.Join(stageDir, "hooks"))
 	copyDir(t, filepath.Join(pluginDir, "claude"), filepath.Join(stageDir, "claude"))
-	copyDir(t, filepath.Join(pluginDir, "scripts"), filepath.Join(stageDir, "scripts"))
 
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -228,18 +227,18 @@ func buildClaudeBinary(t *testing.T, pluginDir string) string {
 	return bin
 }
 
-// claudePluginVersion reads the pinned VERSION from scripts/on-event.sh so the
+// claudePluginVersion reads the pinned VERSION from claude/claude-on-event.sh so the
 // pre-staged binary path matches what the shipped script derives.
 func claudePluginVersion(t *testing.T, pluginDir string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(pluginDir, "scripts", "on-event.sh"))
+	data, err := os.ReadFile(filepath.Join(pluginDir, "claude", "claude-on-event.sh"))
 	require.NoError(t, err)
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "VERSION=") {
 			return strings.Trim(strings.TrimPrefix(line, "VERSION="), `"`)
 		}
 	}
-	t.Fatal("VERSION= not found in scripts/on-event.sh")
+	t.Fatal("VERSION= not found in claude/claude-on-event.sh")
 	return ""
 }
 

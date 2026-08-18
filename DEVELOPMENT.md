@@ -10,9 +10,9 @@ Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Act
 - `.cursor-plugin/plugin.json` — `version` field
 - `copilot/plugin.json` — `version` field
 - `.github/plugin/marketplace.json` — `metadata.version` and the plugin entry `version` (Copilot marketplace)
-- `scripts/on-event.sh` — `VERSION=` line (Claude Code binary downloader)
-- `scripts/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
-- `scripts/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
+- `claude/claude-on-event.sh` — `VERSION=` line (Claude Code binary downloader)
+- `cursor/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
+- `codex/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
 - `copilot/copilot-on-event.sh` — `VERSION=` line (Copilot binary downloader; vendored inside the `copilot/` subpath-install package)
 
 `main` is protected, so the script commits the version bump on a `release/v<version>` branch and pushes it — it does **not** push a tag. Open a PR from that branch and merge it.

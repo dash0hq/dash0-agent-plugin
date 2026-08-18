@@ -65,7 +65,7 @@ fi
 echo "== credential delivery reaches a real OTLP request =="
 start_mock_otlp   # http://localhost:4319
 export CLAUDE_PLUGIN_DATA=/tmp/pdata
-VERSION=$(grep '^VERSION=' "$REPO/scripts/on-event.sh" | sed 's/VERSION="//;s/"//')
+VERSION=$(grep '^VERSION=' "$REPO/claude/claude-on-event.sh" | sed 's/VERSION="//;s/"//')
 rm -rf "$CLAUDE_PLUGIN_DATA"; mkdir -p "$CLAUDE_PLUGIN_DATA/bin"
 make -C "$REPO" build-binary PKG=./cmd/on-event OUT="$CLAUDE_PLUGIN_DATA/bin/on-event-${VERSION}-$(os_arch)"
 
@@ -80,7 +80,7 @@ dataset: "cfg-file-ds"
 MD
 ( cd "$(mktemp -d)" \
   && echo '{"hook_event_name":"SessionStart","session_id":"contract-c1","model":"opus"}' \
-     | bash "$REPO/scripts/on-event.sh" )
+     | bash "$REPO/claude/claude-on-event.sh" )
 
 # credentials from env vars only, no config file present.
 export HOME=/tmp/home-env; rm -rf "$HOME"; mkdir -p "$HOME/.claude"
@@ -89,7 +89,7 @@ export HOME=/tmp/home-env; rm -rf "$HOME"; mkdir -p "$HOME/.claude"
      | DASH0_OTLP_URL=http://localhost:4319 \
        CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=env-token \
        DASH0_DATASET=env-ds \
-       bash "$REPO/scripts/on-event.sh" )
+       bash "$REPO/claude/claude-on-event.sh" )
 
 sleep 2
 RESULT=$(curl -s http://localhost:4319/requests)
@@ -100,5 +100,5 @@ fail=0
 [ "$(echo "$RESULT" | jq '[.requests[]|select(.auth=="Bearer env-token")]|length')" -ge 1 ] \
   || { echo "ERROR: env-var token did not reach the OTLP request"; fail=1; }
 [ "$fail" -eq 0 ] || exit 1
-echo "PASS: config-file and env-var credentials flow through on-event.sh to real OTLP requests"
+echo "PASS: config-file and env-var credentials flow through claude-on-event.sh to real OTLP requests"
 echo "ALL CLAUDE CONTRACTS PASSED"

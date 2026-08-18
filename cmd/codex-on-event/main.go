@@ -1,5 +1,5 @@
 // codex-on-event is the OpenAI Codex-side entrypoint. Codex spawns this binary
-// fresh for every hook event (via scripts/codex-on-event.sh, which downloads the
+// fresh for every hook event (via codex/codex-on-event.sh, which downloads the
 // matching release on first run), pipes the hook JSON in on stdin, and expects a
 // clean exit. The binary:
 //

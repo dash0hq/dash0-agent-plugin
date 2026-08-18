@@ -23,7 +23,7 @@ span properties can be populated.
 
 ## Configuration options
 
-Frontmatter keys in the `.local.md` file. The shell wrapper (`scripts/*-on-event.sh`)
+Frontmatter keys in the `.local.md` file. The shell wrapper (`<runtime>/<runtime>-on-event.sh`)
 parses them and exports the env vars the binary reads. "No (env only)" means the
 wrapper doesn't parse that key from the file, so it must be set as an environment
 variable instead.

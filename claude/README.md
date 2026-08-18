@@ -1,7 +1,7 @@
 # Claude Code source — developer reference
 
-This directory holds the Claude Code-side plugin surface (slash commands and
-skills) for the Claude Code → Dash0 integration. This file is the developer
+This directory holds everything shipped to Claude Code — the bootstrap wrapper
+(`claude-on-event.sh`), slash commands, and skills. This file is the developer
 reference: how to build and run local changes.
 
 End-user install / configure / uninstall docs live in
@@ -15,7 +15,7 @@ across runtimes — see [DEVELOPMENT.md](../DEVELOPMENT.md#releasing).
 claude --plugin-dir /path/to/dash0-agent-plugin
 
 # Build the binary locally (instead of downloading from GitHub Releases)
-VERSION=$(grep '^VERSION=' scripts/on-event.sh | cut -d'"' -f2)
+VERSION=$(grep '^VERSION=' claude/claude-on-event.sh | cut -d'"' -f2)
 go build -o ~/.claude/plugins/data/dash0-agent-plugin-inline/bin/on-event-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/') ./cmd/on-event/
 ```
 

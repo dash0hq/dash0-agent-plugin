@@ -8,6 +8,27 @@ End-user install / configure / uninstall docs live in
 [.codex-plugin/README.md](../.codex-plugin/README.md). Releasing is shared
 across runtimes — see [DEVELOPMENT.md](../DEVELOPMENT.md#releasing).
 
+## Adding or removing a hook event — update both lists
+
+The two install paths enumerate the event set separately:
+
+| Path | Reads |
+|---|---|
+| `codex plugin add` (marketplace) | `codex/hooks.json`, via `.codex-plugin/plugin.json` |
+| `install-codex.sh` | `codex.HookEvents` in `internal/source/codex/trust.go`, rendered by `emit-codex-hooks` |
+
+The installer cannot read `codex/hooks.json` — it only fetches the bootstrap
+script — and it needs Go regardless, because every hook requires a
+`trusted_hash` derived from install-time values (the absolute command path, and a
+group index that depends on the user's own existing hooks). Codex ignores a hook
+whose hash does not match, without a prompt.
+
+Change one list and you must change the other, or that install path silently
+stops instrumenting the event. `TestCodexHookEventsMatchManifest` in
+`test/consistency` fails when they diverge. A new event also needs its
+`HasMatcher` value checked against real Codex behaviour — see the notes in
+`trust.go`.
+
 ## Build & run locally
 
 Wire once against your local build, then rebuild-and-run.

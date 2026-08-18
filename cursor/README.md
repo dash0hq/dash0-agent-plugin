@@ -20,7 +20,8 @@ The code that consumes Cursor hooks lives elsewhere:
 
 - `cmd/cursor-on-event/` — the binary the bootstrap script execs
 - `internal/source/cursor/` — Cursor-specific event normalization
-- `internal/pipeline/` — shared OTLP span emission (also used by Claude Code)
+- `internal/harness/` — resolves the config from Cursor's environment (shared by all four runtimes)
+- `internal/pipeline/` — shared OTLP span emission (used by all four runtimes)
 - `.cursor-plugin/plugin.json` — native plugin manifest Cursor reads from `~/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json` (declares `skills`; hooks are wired via `~/.cursor/hooks.json` at install time, not via the manifest)
 - `cursor/skills/dash0-configure/SKILL.md` — agent skill that walks the user through writing the config file
 

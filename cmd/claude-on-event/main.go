@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/dotenv"
+	"github.com/dash0hq/dash0-agent-plugin/internal/harness"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
 	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
 )
+
+var hn = harness.Claude
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "session-url" {
@@ -33,8 +36,7 @@ func run() error {
 
 	// Claude Code always sets this. Treat a missing value as a hard error rather
 	// than falling back, because a silent fallback would put session state where
-	// Claude cannot see it. The directory itself is created by pipeline.Process,
-	// which makes <dataDir>/<session-id> and its parents.
+	// Claude cannot see it.
 	dataDir := os.Getenv("CLAUDE_PLUGIN_DATA")
 	if dataDir == "" {
 		return fmt.Errorf("CLAUDE_PLUGIN_DATA is not set")
@@ -45,33 +47,21 @@ func run() error {
 		return err
 	}
 
-	cfg := otlp.Config{
-		OTLPUrl:              pluginOption("OTLP_URL"),
-		AuthToken:            pluginOptionSecure("AUTH_TOKEN"),
-		Dataset:              pluginOption("DATASET"),
-		AgentName:            pluginOption("AGENT_NAME"),
-		HarnessName:          "claude-code",
-		TeamName:             pluginOption("TEAM_NAME"),
-		Provider:             "anthropic",
-		OmitUserInfo:         pluginOptionBoolDefault("OMIT_USER_INFO", false),
-		OmitIdentityFallback: pluginOptionBoolDefault("OMIT_IDENTITY_FALLBACK", false),
-		OmitIO:               pluginOptionBoolDefault("OMIT_IO", true),
-		Debug:                pluginOptionBool("DEBUG"),
-		DebugFile:            pluginOption("DEBUG_FILE"),
-	}
-	if cfg.AgentName == "" {
-		cfg.AgentName = "claude-code"
-	}
-	cfg.ValidateURL()
-
+	cfg := hn.Config()
 	now := time.Now().UTC()
 	result, err := pipeline.Process(event, cfg, dataDir, now)
 	if err != nil {
 		return err
 	}
 
+	printSessionMessage(event, result, cfg)
+
+	return nil
+}
+
+// printSessionMessage displays a link to the current Session in Dash0.
+func printSessionMessage(event map[string]any, result pipeline.Result, cfg otlp.Config) {
 	hookEvent, _ := event["hook_event_name"].(string)
-	sessionID, _ := event["session_id"].(string)
 
 	for _, msg := range result.Messages {
 		text := msg.UserText
@@ -84,13 +74,26 @@ func run() error {
 		printHookResponse(text, msg.ModelContext)
 	}
 
-	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" && pluginOptionBool("SHOW_SESSION_LINK") {
+	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" && hn.PluginOptionBool("SHOW_SESSION_LINK") {
+		sessionID, _ := event["session_id"].(string)
 		if link := sessionurl.SessionURL(cfg.OTLPUrl, sessionID, cfg.Dataset); link != "" {
 			printHookResponse(fmt.Sprintf("dash0: view session → %s", link), "")
 		}
 	}
+}
 
-	return nil
+// printHookResponse outputs a JSON response that Claude Code renders as both
+// a user-visible message (systemMessage) and model context (additionalContext).
+func printHookResponse(userMessage, modelContext string) {
+	resp := map[string]string{}
+	if userMessage != "" {
+		resp["systemMessage"] = userMessage
+	}
+	if modelContext != "" {
+		resp["additionalContext"] = modelContext
+	}
+	out, _ := json.Marshal(resp)
+	fmt.Fprintln(os.Stdout, string(out))
 }
 
 // printSessionURL backs the `session-url` subcommand (invoked by the
@@ -115,7 +118,7 @@ func sessionURL() (string, error) {
 		return "", err
 	}
 	dotenv.Load(".env")
-	otlpURL := pluginOption("OTLP_URL")
+	otlpURL := hn.PluginOption("OTLP_URL")
 	if otlpURL == "" {
 		return "", fmt.Errorf("OTLP_URL is not configured")
 	}
@@ -123,67 +126,9 @@ func sessionURL() (string, error) {
 	if sessionID == "" {
 		return "", fmt.Errorf("session_id not provided")
 	}
-	link := sessionurl.SessionURL(otlpURL, sessionID, pluginOption("DATASET"))
+	link := sessionurl.SessionURL(otlpURL, sessionID, hn.PluginOption("DATASET"))
 	if link == "" {
 		return "", fmt.Errorf("cannot derive app URL from OTLP_URL %q", otlpURL)
 	}
 	return link, nil
-}
-
-// parseEventFromStdin reads the hook event payload from stdin and JSON-decodes
-// it into a generic map.
-// printHookResponse outputs a JSON response that Claude Code renders as both
-// a user-visible message (systemMessage) and model context (additionalContext).
-func printHookResponse(userMessage, modelContext string) {
-	resp := map[string]string{}
-	if userMessage != "" {
-		resp["systemMessage"] = userMessage
-	}
-	if modelContext != "" {
-		resp["additionalContext"] = modelContext
-	}
-	out, _ := json.Marshal(resp)
-	fmt.Fprintln(os.Stdout, string(out))
-}
-
-// envBool returns true when the environment variable is set to "true" or "1".
-func envBool(key string) bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
-	return v == "true" || v == "1"
-}
-
-// pluginOption returns the configured value for the given key, preferring
-// the userConfig-derived CLAUDE_PLUGIN_OPTION_<key> over the legacy DASH0_<key>.
-// An empty CLAUDE_PLUGIN_OPTION_<key> falls through to DASH0_<key>.
-//
-// Note: sensitive values (AUTH_TOKEN) must use pluginOptionSecure instead to
-// prevent env var leakage into tool-spawned shells.
-func pluginOption(key string) string {
-	if v := os.Getenv("CLAUDE_PLUGIN_OPTION_" + key); v != "" {
-		return v
-	}
-	return os.Getenv("DASH0_" + key)
-}
-
-// pluginOptionSecure reads only from CLAUDE_PLUGIN_OPTION_<key> without falling
-// back to DASH0_<key>. Use for sensitive values like auth tokens that must not
-// leak into tool-spawned shell environments.
-func pluginOptionSecure(key string) string {
-	return os.Getenv("CLAUDE_PLUGIN_OPTION_" + key)
-}
-
-// pluginOptionBool is the boolean counterpart of pluginOption.
-func pluginOptionBool(key string) bool {
-	v := strings.ToLower(strings.TrimSpace(pluginOption(key)))
-	return v == "true" || v == "1"
-}
-
-// pluginOptionBoolDefault returns defaultVal when the option is unset/empty,
-// and parses as boolean otherwise.
-func pluginOptionBoolDefault(key string, defaultVal bool) bool {
-	v := strings.ToLower(strings.TrimSpace(pluginOption(key)))
-	if v == "" {
-		return defaultVal
-	}
-	return v == "true" || v == "1"
 }

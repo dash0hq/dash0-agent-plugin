@@ -262,9 +262,20 @@ jobs:
 
       - name: userConfig covers all plugin options
         run: |
-          # Extract option keys used in Go code via pluginOption/pluginOptionSecure/pluginOptionBool/pluginOptionBoolDefault
-          USED_KEYS=$(grep -ohE 'pluginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' cmd/claude-on-event/main.go | \
-            sed 's/pluginOption[^"]*"//' | sed 's/"$//' | sort -u)
+          # Extract option keys read in Go code via the harness accessors
+          # (hn.PluginOption / PluginOptionSecure / PluginOptionBool / PluginOptionBoolDefault).
+          # internal/harness is scanned too: AgentName() reads AGENT_NAME there
+          # rather than at the call site, and only quoted literals match, so the
+          # generic key parameters in that file contribute nothing.
+          USED_KEYS=$(grep -ohE '\.PluginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' \
+            cmd/claude-on-event/main.go internal/harness/harness.go | \
+            sed 's/.*PluginOption[^"]*"//' | sed 's/"$//' | sort -u)
+          # Finding nothing means the call form changed and this guard silently
+          # stopped guarding — fail instead of passing on an empty set.
+          if [ -z "$USED_KEYS" ]; then
+            echo "::error::No plugin-option keys found in cmd/claude-on-event/main.go — update this grep to match the current accessor names"
+            exit 1
+          fi
           # Extract keys declared in plugin.json userConfig
           DECLARED_KEYS=$(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json | sort -u)
           echo "Used in code: $USED_KEYS"

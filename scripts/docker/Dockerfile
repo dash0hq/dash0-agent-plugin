@@ -47,7 +47,6 @@ ENV PATH="/root/.local/bin:${PATH}"
 #   /opt/dash0-marketplace/dash0-agent-plugin/              -> the plugin
 COPY scripts/docker/marketplace.json /opt/dash0-marketplace/.claude-plugin/marketplace.json
 COPY .claude-plugin /opt/dash0-marketplace/dash0-agent-plugin/.claude-plugin
-COPY hooks          /opt/dash0-marketplace/dash0-agent-plugin/hooks
 COPY claude         /opt/dash0-marketplace/dash0-agent-plugin/claude
 
 # Drop the locally built binary into the plugin's data dir under the exact

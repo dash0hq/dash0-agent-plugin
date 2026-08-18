@@ -263,9 +263,10 @@ jobs:
           # Cursor auto-discovers commands/, skills/, and hooks/hooks.json at the
           # repo root when not overridden in .cursor-plugin/plugin.json. Claude
           # auto-discovers skills/ and commands/ at the root. Keep runtime assets
-          # under claude/ and cursor/ instead.
+          # under claude/ and cursor/ instead — Claude's own hooks are declared
+          # explicitly as claude/hooks.json so a root hooks/ dir never exists.
           fail=0
-          for dir in commands skills; do
+          for dir in commands skills hooks; do
             if [ -d "$dir" ]; then
               echo "::error::root $dir/ must not exist — move runtime assets under claude/ or cursor/"
               fail=1
@@ -332,7 +333,14 @@ jobs:
             exit 1
           fi
           # Check hooks.json references an existing script
-          HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command' hooks/hooks.json)
+          # The manifest declares the hooks file explicitly; read it from there
+          # so the check follows a future move instead of hardcoding the path.
+          HOOKS_FILE=$(jq -r '.hooks' .claude-plugin/plugin.json)
+          if [ ! -f "$HOOKS_FILE" ]; then
+            echo "::error::.claude-plugin/plugin.json hooks ($HOOKS_FILE) does not exist"
+            exit 1
+          fi
+          HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$HOOKS_FILE")
           EXPECTED='${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh'
           if [ "$HOOK_CMD" != "$EXPECTED" ]; then
             echo "::error::hooks.json command ($HOOK_CMD) does not match expected ($EXPECTED)"

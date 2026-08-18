@@ -157,7 +157,6 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	// ignores any preset value), so the binary must land under that path.
 	stageDir := t.TempDir()
 	copyDir(t, filepath.Join(pluginDir, ".claude-plugin"), filepath.Join(stageDir, ".claude-plugin"))
-	copyDir(t, filepath.Join(pluginDir, "hooks"), filepath.Join(stageDir, "hooks"))
 	copyDir(t, filepath.Join(pluginDir, "claude"), filepath.Join(stageDir, "claude"))
 
 	home, err := os.UserHomeDir()

@@ -1,8 +1,9 @@
 # Claude Code source — developer reference
 
 This directory holds everything shipped to Claude Code — the bootstrap wrapper
-(`claude-on-event.sh`), slash commands, and skills. This file is the developer
-reference: how to build and run local changes.
+(`claude-on-event.sh`), the hook registration (`hooks.json`, declared as the
+`hooks` path in `.claude-plugin/plugin.json`), slash commands, and skills. This
+file is the developer reference: how to build and run local changes.
 
 End-user install / configure / uninstall docs live in
 [.claude-plugin/README.md](../.claude-plugin/README.md). Releasing is shared

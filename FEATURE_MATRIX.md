@@ -16,7 +16,7 @@ span properties can be populated.
 | Entrypoint | `cmd/on-event` | `cmd/cursor-on-event` | `cmd/codex-on-event` | `cmd/copilot-on-event` |
 | Config file | `~/.claude/dash0-agent-plugin.local.md` (or `.claude/…`) | `~/.cursor/dash0-agent-plugin.local.md` (or `.cursor/…`) | `~/.codex/dash0-agent-plugin.local.md` (or `.codex/…`) | `~/.copilot/dash0-agent-plugin.local.md` (global only) |
 | Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `~/.local/state/dash0-agent-plugin/cursor` | `~/.local/state/dash0-agent-plugin/codex` | `~/.local/state/dash0-agent-plugin/copilot` |
-| Hooks registered in | plugin manifest `hooks/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |
+| Hooks registered in | plugin manifest `claude/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |
 | Wired hook events | 24 | 9 | 10 | 4 |
 | Supported OS/arch | `darwin`,`linux` × `amd64`,`arm64` | same | same | same |
 | Unsupported platform | hook fails | hook fails | hook fails | fails open (untraced) |

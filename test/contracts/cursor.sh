@@ -82,7 +82,7 @@ DASH0_AUTH_TOKEN=e2e-token \
 fail=0
 EXPECTED_PATHS=(
   "$HOME/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json"
-  "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/plugin-hooks.json"
+  "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/hooks.json"
   "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/skills/dash0-configure/SKILL.md"
   "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh"
   "$HOME/.cursor/dash0-agent-plugin.local.md"

@@ -288,15 +288,15 @@ jobs:
             fail=1
           fi
           # Cursor 3.9.x silently ignores `hooks` in local-plugin manifests, so we
-          # deliberately omit it. install-cursor.sh reads cursor/plugin-hooks.json
+          # deliberately omit it. install-cursor.sh reads cursor/hooks.json
           # directly instead. Assert the field is absent so it doesn't sneak back
           # in and mislead future readers.
           if [ "$CURSOR_HOOKS" != "unset" ]; then
-            echo "::error::.cursor-plugin/plugin.json must NOT set 'hooks' — Cursor ignores it for local plugins; installer reads cursor/plugin-hooks.json directly"
+            echo "::error::.cursor-plugin/plugin.json must NOT set 'hooks' — Cursor ignores it for local plugins; installer reads cursor/hooks.json directly"
             fail=1
           fi
-          if [ ! -f "cursor/plugin-hooks.json" ]; then
-            echo "::error::cursor/plugin-hooks.json is missing (installer reads this file as the source of truth for hook events)"
+          if [ ! -f "cursor/hooks.json" ]; then
+            echo "::error::cursor/hooks.json is missing (installer reads this file as the source of truth for hook events)"
             fail=1
           fi
           if [ "$fail" -ne 0 ]; then exit 1; fi
@@ -351,7 +351,7 @@ jobs:
         run: |
           # Mirror of the Claude hook-script check for the Cursor side. Verifies
           # the bootstrap script is executable, has a shebang, and that every
-          # command referenced from cursor/plugin-hooks.json resolves to a file
+          # command referenced from cursor/hooks.json resolves to a file
           # relative to the repo root — which is the plugin root Cursor will
           # resolve against when the plugin is dropped into ~/.cursor/plugins/.
           if [ ! -x cursor/cursor-on-event.sh ]; then
@@ -363,9 +363,9 @@ jobs:
             echo "::error::cursor/cursor-on-event.sh missing shebang"
             exit 1
           fi
-          COMMANDS=$(jq -r '.hooks | to_entries[] | .value[] | .command' cursor/plugin-hooks.json | sort -u)
+          COMMANDS=$(jq -r '.hooks | to_entries[] | .value[] | .command' cursor/hooks.json | sort -u)
           if [ -z "$COMMANDS" ]; then
-            echo "::error::cursor/plugin-hooks.json has no hook commands"
+            echo "::error::cursor/hooks.json has no hook commands"
             exit 1
           fi
           fail=0
@@ -373,12 +373,12 @@ jobs:
             # Resolve relative to the plugin root (repo root here).
             resolved="${cmd#./}"
             if [ ! -f "$resolved" ]; then
-              echo "::error::cursor/plugin-hooks.json references missing command: $cmd (resolved to $resolved)"
+              echo "::error::cursor/hooks.json references missing command: $cmd (resolved to $resolved)"
               fail=1
             elif [ ! -x "$resolved" ]; then
-              echo "::error::cursor/plugin-hooks.json references non-executable command: $cmd"
+              echo "::error::cursor/hooks.json references non-executable command: $cmd"
               fail=1
             fi
           done
           if [ "$fail" -ne 0 ]; then exit 1; fi
-          echo "PASS: cursor/plugin-hooks.json commands all resolve to executable files"
+          echo "PASS: cursor/hooks.json commands all resolve to executable files"

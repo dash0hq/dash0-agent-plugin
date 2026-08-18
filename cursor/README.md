@@ -1,7 +1,7 @@
 # Cursor source — developer reference
 
 This directory holds everything shipped to Cursor — the bootstrap wrapper
-(`cursor-on-event.sh`), the hook registration template (`plugin-hooks.json`),
+(`cursor-on-event.sh`), the hook registration template (`hooks.json`),
 and skills. It is the developer reference: how to build, sideload local changes,
 and cut releases.
 
@@ -12,7 +12,7 @@ End-user install / configure / uninstall docs live in
 
 | Path | Purpose |
 |---|---|
-| `plugin-hooks.json` | Source of truth for which Cursor events the plugin listens to. `install-cursor.sh` reads this file, translates `./cursor/cursor-on-event.sh` to `$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh`, and merges the entries into the user's `~/.cursor/hooks.json` (Cursor doesn't fire hooks from local plugins directly). |
+| `hooks.json` | Source of truth for which Cursor events the plugin listens to. Unlike `claude/hooks.json`, `codex/hooks.json` and `copilot/hooks.json`, it is **not** referenced from the plugin manifest — Cursor ignores manifest hooks for local plugins, so this file is an installer template instead. `install-cursor.sh` reads it, translates `./cursor/cursor-on-event.sh` to `$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh`, and merges the entries into the user's `~/.cursor/hooks.json` (Cursor doesn't fire hooks from local plugins directly). |
 | `cursor-on-event.sh` | Bootstrap wrapper Cursor invokes on each event: loads the config file, downloads + checksum-verifies the `cursor-on-event` binary on first run, then execs it. |
 | `skills/` | Cursor-only agent skills (e.g. `dash0-configure`). Referenced from `.cursor-plugin/plugin.json`. |
 
@@ -31,14 +31,14 @@ The `install-cursor.sh` script lays the plugin down at `~/.cursor/plugins/local/
 ```
 ~/.cursor/plugins/local/dash0-agent-plugin/
 ├── .cursor-plugin/plugin.json          (manifest — declares skills, no hooks)
-├── cursor/plugin-hooks.json            (installer template — see below)
+├── cursor/hooks.json                   (installer template — see below)
 ├── cursor/skills/dash0-configure/…     (shipped skills)
 └── cursor/cursor-on-event.sh           (bootstrap wrapper Cursor invokes)
 ```
 
 **Hooks are registered in `~/.cursor/hooks.json`, not in the plugin manifest.** Cursor 3.9.x loads the local plugin (making the name + skills surface in the UI with a "local plugin" label) but silently ignores any `hooks` field in the manifest — verified with a probe plugin whose only hook was a `printf … >> /tmp/probe.log` script; no invocation was ever recorded despite `[pluginsSubsystem] loadUserLocalPlugin` log lines confirming the manifest loaded. Hooks fire only from `~/.cursor/hooks.json` (user scope) and `<project>/.cursor/hooks.json` (project scope).
 
-`install-cursor.sh` therefore reads `cursor/plugin-hooks.json` (source of truth for which events the plugin listens to), translates each `./cursor/cursor-on-event.sh` command to `$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh` (Cursor expands `$HOME` at invocation time), and merges the entries into `~/.cursor/hooks.json` — preserving any non-Dash0 hooks already there. `uninstall-cursor.sh` uses the reverse strip: remove entries whose `command` contains `cursor-on-event.sh`, delete the file if it ends up with no hooks, else write the reduced JSON back.
+`install-cursor.sh` therefore reads `cursor/hooks.json` (source of truth for which events the plugin listens to), translates each `./cursor/cursor-on-event.sh` command to `$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh` (Cursor expands `$HOME` at invocation time), and merges the entries into `~/.cursor/hooks.json` — preserving any non-Dash0 hooks already there. `uninstall-cursor.sh` uses the reverse strip: remove entries whose `command` contains `cursor-on-event.sh`, delete the file if it ends up with no hooks, else write the reduced JSON back.
 
 Both scripts require `jq` for reliable JSON manipulation.
 
@@ -132,7 +132,7 @@ by hand for sideload:
 ```bash
 jq --arg cmd '$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh' \
    '{version: (.version // 1), hooks: (.hooks | map_values(map(.command = $cmd)))}' \
-   cursor/plugin-hooks.json > ~/.cursor/hooks.json
+   cursor/hooks.json > ~/.cursor/hooks.json
 ```
 
 Replace the `>` with the merge invocation from `install-cursor.sh` if you
@@ -161,7 +161,7 @@ chmod 600 ~/.cursor/dash0-agent-plugin.local.md
 `~/.cursor/hooks.json` at startup. Subsequent rebuilds (step 1) take effect
 on the next hook fire without another restart, since the bootstrap script
 `exec`'s a fresh binary each time. Changes to the hook event list
-(`cursor/plugin-hooks.json`) require re-running step 3 and restarting.
+(`cursor/hooks.json`) require re-running step 3 and restarting.
 
 To tear down the sideload:
 

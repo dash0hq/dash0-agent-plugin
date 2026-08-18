@@ -35,7 +35,7 @@
 # What this installs:
 #   ~/.cursor/plugins/local/dash0-agent-plugin/
 #       .cursor-plugin/plugin.json          Cursor plugin manifest (name, skills).
-#       cursor/plugin-hooks.json            Source of truth for which Cursor events
+#       cursor/hooks.json            Source of truth for which Cursor events
 #                                           the plugin listens to — read by this
 #                                           installer to update ~/.cursor/hooks.json.
 #       cursor/skills/<skill>/SKILL.md      Skills the plugin ships.
@@ -194,7 +194,7 @@ BIN_PATH="$BIN_DIR/cursor-on-event-${VERSION}-${OS}-${ARCH}"
 PLUGIN_DIR="$HOME/.cursor/plugins/local/dash0-agent-plugin"
 SCRIPT_PATH="$PLUGIN_DIR/cursor/cursor-on-event.sh"
 MANIFEST_PATH="$PLUGIN_DIR/.cursor-plugin/plugin.json"
-HOOKS_MANIFEST_PATH="$PLUGIN_DIR/cursor/plugin-hooks.json"
+HOOKS_MANIFEST_PATH="$PLUGIN_DIR/cursor/hooks.json"
 SKILLS_DIR="$PLUGIN_DIR/cursor/skills"
 
 CONFIG_PATH="$HOME/.cursor/dash0-agent-plugin.local.md"
@@ -259,7 +259,9 @@ install_plugin_file() {
 }
 
 install_plugin_file ".cursor-plugin/plugin.json"     "$MANIFEST_PATH"
-install_plugin_file "cursor/plugin-hooks.json"       "$HOOKS_MANIFEST_PATH"
+# Renamed from cursor/plugin-hooks.json after v0.1.24 — see the legacy
+# fallback note above. Drop the fourth argument once v0.1.24 is unsupported.
+install_plugin_file "cursor/hooks.json"              "$HOOKS_MANIFEST_PATH" "" "cursor/plugin-hooks.json"
 # The bootstrap moved from scripts/ to cursor/ after v0.1.24 — see the legacy
 # fallback note above. Drop the third argument once v0.1.24 is unsupported.
 install_plugin_file "cursor/cursor-on-event.sh"      "$SCRIPT_PATH" --executable "scripts/cursor-on-event.sh"
@@ -351,7 +353,7 @@ ok "wrote config → $CONFIG_PATH (chmod 600)"
 #    Merge strategy: preserve every existing entry whose command does NOT
 #    contain "cursor-on-event.sh"; replace every entry whose command DOES
 #    (matches both prior Dash0 entries and pre-0.1.17 legacy paths); add our
-#    fresh set from the just-installed cursor/plugin-hooks.json.
+#    fresh set from the just-installed cursor/hooks.json.
 # ---------------------------------------------------------------------------
 
 info "merging Dash0 hook registrations into ${HOOKS_PATH}..."

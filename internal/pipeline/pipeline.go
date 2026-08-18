@@ -10,6 +10,7 @@ package pipeline
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -36,6 +37,28 @@ type Result struct {
 type Message struct {
 	UserText     string
 	ModelContext string
+}
+
+// ReadEvent decodes one hook event from r, which every entrypoint feeds from
+// os.Stdin. Each coding agent delivers its payload as a single JSON object on
+// stdin, so the read is source-agnostic; per-agent differences start at
+// normalization, not here.
+//
+// It takes an io.Reader rather than reading os.Stdin directly so callers and
+// tests can supply their own input.
+func ReadEvent(r io.Reader) (map[string]any, error) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("reading stdin: %w", err)
+	}
+	var event map[string]any
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return nil, fmt.Errorf("parsing JSON from stdin: %w", err)
+	}
+	if event == nil {
+		return nil, fmt.Errorf("hook event payload is JSON null, not an object")
+	}
+	return event, nil
 }
 
 // Process consumes a single normalized hook event and produces side effects

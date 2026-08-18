@@ -6,7 +6,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
@@ -41,7 +40,7 @@ func run() error {
 		return fmt.Errorf("CLAUDE_PLUGIN_DATA is not set")
 	}
 
-	event, err := parseEventFromStdin()
+	event, err := pipeline.ReadEvent(os.Stdin)
 	if err != nil {
 		return err
 	}
@@ -111,7 +110,7 @@ func printSessionURL() {
 // the payload carries no session_id, or the OTLP host is not a recognized Dash0
 // host (see sessionurl.SessionURL).
 func sessionURL() (string, error) {
-	event, err := parseEventFromStdin()
+	event, err := pipeline.ReadEvent(os.Stdin)
 	if err != nil {
 		return "", err
 	}
@@ -133,18 +132,6 @@ func sessionURL() (string, error) {
 
 // parseEventFromStdin reads the hook event payload from stdin and JSON-decodes
 // it into a generic map.
-func parseEventFromStdin() (map[string]any, error) {
-	raw, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return nil, fmt.Errorf("reading stdin: %w", err)
-	}
-	var event map[string]any
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return nil, fmt.Errorf("parsing JSON from stdin: %w", err)
-	}
-	return event, nil
-}
-
 // printHookResponse outputs a JSON response that Claude Code renders as both
 // a user-visible message (systemMessage) and model context (additionalContext).
 func printHookResponse(userMessage, modelContext string) {

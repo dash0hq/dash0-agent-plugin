@@ -16,10 +16,8 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,14 +99,9 @@ func run() error {
 		return err
 	}
 
-	raw, err := io.ReadAll(os.Stdin)
+	event, err := pipeline.ReadEvent(os.Stdin)
 	if err != nil {
-		return fmt.Errorf("reading stdin: %w", err)
-	}
-
-	var event map[string]any
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return fmt.Errorf("parsing JSON from stdin: %w", err)
+		return err
 	}
 
 	// Codex hooks carry the workspace as `cwd`. Codex may spawn the hook with a

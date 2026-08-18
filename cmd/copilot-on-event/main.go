@@ -25,7 +25,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,13 +50,9 @@ func run() error {
 		eventName = os.Args[1]
 	}
 
-	raw, err := io.ReadAll(os.Stdin)
+	event, err := pipeline.ReadEvent(os.Stdin)
 	if err != nil {
-		return fmt.Errorf("reading stdin: %w", err)
-	}
-	var event map[string]any
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return fmt.Errorf("parsing JSON from stdin: %w", err)
+		return err
 	}
 
 	// Every Copilot payload (camelCase and pascalCase alike) carries the

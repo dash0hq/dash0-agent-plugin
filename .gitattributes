@@ -1,0 +1,6 @@
+# Git for Windows checks out CRLF by default, which breaks the bash entry
+# points ("bad interpreter: /usr/bin/env bash^M") and the byte-compared golden
+# fixtures. Pin both to LF regardless of platform.
+*.sh text eol=lf
+*.jsonl text eol=lf
+internal/source/codex/testdata/golden_spans.json text eol=lf

@@ -1,11 +1,13 @@
 name: E2E Release Verification
 
-# Runs after a release is published. Tests the full flow: on-event.sh
-# downloads the real binary from GitHub Releases, invokes it with events,
-# and verifies the mock OTLP server receives the expected requests.
+# Runs after a release is published. Exercises the download path the CI job
+# cannot: scripts/on-event.sh fetches the real binary from GitHub Releases,
+# verifies its checksum, and runs a turn of hook events through it. That makes
+# this the only check that the asset name the script builds matches what
+# GoReleaser actually published.
 #
-# Does NOT run on push to main — the binary won't exist until a release
-# is cut. Use workflow_dispatch for manual testing.
+# Does NOT run on push to main — the binary won't exist until a release is cut.
+# Use workflow_dispatch for manual testing.
 
 on:
   release:
@@ -14,7 +16,15 @@ on:
 
 jobs:
   e2e-release:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # Git Bash on Windows — the interpreter the hook actually gets there.
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -24,69 +34,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build mock OTLP server
-        run: make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp
-
-      - name: Start mock OTLP server
-        run: |
-          /tmp/mock-otlp &
-          sleep 1
-          echo "Mock OTLP server started on :4319"
-
-      - name: Run on-event.sh with SessionStart
+      - name: Bootstrap script downloads the released binary
         env:
-          CLAUDE_PLUGIN_DATA: /tmp/e2e-plugin-data
-          DASH0_OTLP_URL: http://localhost:4319
-          CLAUDE_PLUGIN_OPTION_OTLP_URL: http://localhost:4319
-          CLAUDE_PLUGIN_OPTION_AUTH_TOKEN: e2e-release-test-token
-        run: |
-          mkdir -p "$CLAUDE_PLUGIN_DATA"
-          echo '{"hook_event_name":"SessionStart","session_id":"e2e-release-test","model":"opus"}' | \
-            bash scripts/on-event.sh
-          echo "on-event.sh completed"
-
-      - name: Run on-event.sh with full turn
-        env:
-          CLAUDE_PLUGIN_DATA: /tmp/e2e-plugin-data
-          DASH0_OTLP_URL: http://localhost:4319
-          CLAUDE_PLUGIN_OPTION_OTLP_URL: http://localhost:4319
-          CLAUDE_PLUGIN_OPTION_AUTH_TOKEN: e2e-release-test-token
-        run: |
-          echo '{"hook_event_name":"UserPromptSubmit","session_id":"e2e-release-test","prompt":"hello"}' | \
-            bash scripts/on-event.sh
-          echo '{"hook_event_name":"PostToolUse","session_id":"e2e-release-test","tool_name":"Bash","tool_use_id":"tu1","duration_ms":100}' | \
-            bash scripts/on-event.sh
-          echo '{"hook_event_name":"Stop","session_id":"e2e-release-test","model":"opus","stop_reason":"end_turn"}' | \
-            bash scripts/on-event.sh
-          echo "Full turn completed"
-
-      - name: Verify mock received requests
-        run: |
-          sleep 2
-          RESULT=$(curl -s http://localhost:4319/requests)
-          echo "Requests received:"
-          echo "$RESULT" | jq .
-          COUNT=$(echo "$RESULT" | jq '.count')
-          if [ "$COUNT" -lt 3 ]; then
-            echo "::error::Expected at least 3 requests (connectivity check + tool span + chat span), got $COUNT"
-            exit 1
-          fi
-          # Verify auth header was sent on at least one request
-          HAS_AUTH=$(echo "$RESULT" | jq '[.requests[] | select(.auth == "Bearer e2e-release-test-token")] | length')
-          if [ "$HAS_AUTH" -lt 1 ]; then
-            echo "::error::No request had the expected auth header"
-            exit 1
-          fi
-          echo "E2E release verification passed ($COUNT requests received, $HAS_AUTH with auth)"
-
-      - name: Verify binary was downloaded (not pre-existing)
-        env:
-          CLAUDE_PLUGIN_DATA: /tmp/e2e-plugin-data
-        run: |
-          ls -la "$CLAUDE_PLUGIN_DATA/bin/"
-          BINARY=$(ls "$CLAUDE_PLUGIN_DATA/bin/" | head -1)
-          echo "Downloaded binary: $BINARY"
-          if [ -z "$BINARY" ]; then
-            echo "::error::No binary found — on-event.sh failed to download"
-            exit 1
-          fi
+          DASH0_E2E_RELEASE_DOWNLOAD: "1"
+        run: go test -tags=e2e -v -timeout=180s -run TestBootstrapScriptDownloadsReleasedBinary ./test/e2e/

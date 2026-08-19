@@ -83,6 +83,39 @@ jobs:
           claude plugin marketplace add anthropics/claude-plugins-official --scope user
           claude plugin install dash0@claude-plugins-official --scope user
 
+  # Windows is a supported target for the Claude hook: Claude Code runs
+  # scripts/on-event.sh through Git Bash, so both the Go code and the bootstrap
+  # script need a real Windows runner. Everything here uses `shell: bash` (Git
+  # Bash) because that is the interpreter the hook actually gets.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        # No -race and no `make`: the race detector needs a cgo toolchain and
+        # GNU make is not part of the windows-latest image contract. Coverage
+        # of the race-sensitive paths stays with the Linux build-and-test job.
+        run: go test ./...
+
+      - name: Bootstrap script e2e (Git Bash)
+        # Direct `go test`, not `make test-e2e`: that target also pulls in the
+        # credentialed Claude/Codex flows, and GNU make is not part of the
+        # windows-latest image contract.
+        run: go test -tags=e2e -v -timeout=120s -run TestBootstrapScript ./test/e2e/
+
   # Contract tests mapping to the documented install/credential/uninstall paths
   # (each runtime README's "Installation" + "Configuration"). They pin the
   # behavior the docs depend on, so a CLI change or a wrong doc assumption fails

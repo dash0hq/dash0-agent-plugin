@@ -44,6 +44,10 @@ test: ## Run Go unit + integration tests with the race detector.
 test-e2e: ## Run the build-tagged end-to-end tests.
 	go test -tags=e2e -v -timeout=300s ./test/e2e/
 
+.PHONY: test-e2e-bootstrap
+test-e2e-bootstrap: ## Run the credential-free bootstrap-script e2e test (Linux, macOS, Windows/Git Bash).
+	go test -tags=e2e -v -timeout=120s -run TestBootstrapScript ./test/e2e/
+
 .PHONY: go-mod-tidy
 go-mod-tidy: ## Run go mod tidy and fail if go.mod/go.sum change.
 	go mod tidy

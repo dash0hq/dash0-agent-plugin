@@ -48,6 +48,10 @@ test-e2e: ## Run the build-tagged end-to-end tests.
 test-e2e-bootstrap: ## Run the credential-free bootstrap-script e2e test (Linux, macOS, Windows/Git Bash).
 	go test -tags=e2e -v -timeout=120s -run TestBootstrapScript ./test/e2e/
 
+.PHONY: test-e2e-claude-hook
+test-e2e-claude-hook: ## Drive the real Claude CLI through the real hook script (needs ANTHROPIC_API_KEY, spends budget).
+	DASH0_E2E_CLAUDE_HOOK=1 go test -tags=e2e -v -timeout=300s -run TestE2EFullFlowWithClaudeRealHook ./test/e2e/
+
 .PHONY: go-mod-tidy
 go-mod-tidy: ## Run go mod tidy and fail if go.mod/go.sum change.
 	go mod tidy

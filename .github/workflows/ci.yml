@@ -116,6 +116,39 @@ jobs:
         # windows-latest image contract.
         run: go test -tags=e2e -v -timeout=120s -run TestBootstrapScript ./test/e2e/
 
+  # The Claude-driven half of Windows coverage. Split from the `windows` job
+  # because it needs the API-key secret, and therefore the same fork guard the
+  # Linux e2e job carries. This is what answers whether Claude Code can execute
+  # a .sh hook on Windows at all, or whether a .cmd/.ps1 entry point is needed.
+  windows-e2e:
+    runs-on: windows-latest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Claude hook e2e
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DASH0_E2E_CLAUDE_HOOK: "1"
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set — add it at Settings → Secrets → Actions"
+            exit 1
+          fi
+          go test -tags=e2e -v -timeout=300s -run TestE2EFullFlowWithClaudeRealHook ./test/e2e/
+
   # Contract tests mapping to the documented install/credential/uninstall paths
   # (each runtime README's "Installation" + "Configuration"). They pin the
   # behavior the docs depend on, so a CLI change or a wrong doc assumption fails
@@ -177,6 +210,10 @@ jobs:
           # key (project codex-o11y, budget-capped); see SIG-172/SIG-174. Inherits
           # this job's fork guard, so a fork PR never receives the secret.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Opts TestE2EFullFlowWithClaudeRealHook in. Unlike the stubbed
+          # TestE2EFullFlowWithClaude it drives the real scripts/on-event.sh, so
+          # it costs an extra Claude turn per run.
+          DASH0_E2E_CLAUDE_HOOK: "1"
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::error::ANTHROPIC_API_KEY secret is not set — add it at Settings → Secrets → Actions"

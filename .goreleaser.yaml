@@ -1,13 +1,25 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-project_name: on-event
+project_name: dash0-agent-plugin
 
 version: 2
 
 builds:
   # The Claude Code binary is published as `on-event-<os>-<arch>`, without the
-  # `claude-` prefix the other runtimes use. That asset name is baked into every
-  # already-installed claude-on-event.sh bootstrap, so it stays as it is even
-  # though the Go package is cmd/claude-on-event.
+  # `claude-` prefix the other runtimes use, even though the Go package is
+  # cmd/claude-on-event.
+  #
+  # Renaming it to claude-on-event needs no release-timing coordination: the
+  # bootstrap tries claude-on-event-<os>-<arch> and falls back to
+  # on-event-<os>-<arch>, so the two can be switched independently. Change the
+  # template here and the next release publishes the new name. Every install keeps
+  # working either way, because each script asks its own pinned release, and that
+  # release carries whichever name it was built with.
+  #
+  # The fallback exists because the Claude marketplace lists this repo with no ref
+  # (`{"source": "github", "repo": "dash0hq/dash0-agent-plugin"}`), so install and
+  # update take the default branch, which pairs the checked-in script with the LAST
+  # PUBLISHED release. Without the fallback, renaming here alone would make every
+  # fresh install ask that release for a name it does not carry.
   - id: claude-on-event
     env:
       - CGO_ENABLED=0

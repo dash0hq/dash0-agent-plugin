@@ -15,6 +15,23 @@ Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Act
 - `codex/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
 - `copilot/copilot-on-event.sh` — `VERSION=` line (Copilot binary downloader; vendored inside the `copilot/` subpath-install package)
 
+> **Renaming a published asset.** The Claude marketplace lists this repo with no
+> ref, so `claude plugin install` and `update` take the default branch. A
+> checked-in bootstrap is therefore paired with the *last published* release, and a
+> script that asks for a name that release does not carry breaks every fresh
+> install until the next tag.
+>
+> `claude/claude-on-event.sh` handles this by trying each name it may have been
+> published under, newest first, and using the first that resolves. So the rename
+> is a one-line change to `.goreleaser.yaml`: the next release publishes the new
+> name, already-installed scripts keep resolving the old one, and no commit on the
+> default branch is ever inconsistent. Drop the stale candidate from the list once
+> every release that carries the old name is out of support.
+>
+> The CI job "Release assets exist for configured version" reads the candidates out
+> of each bootstrap and requires at least one to exist per platform, so a name that
+> nothing publishes cannot pass unnoticed.
+
 `main` is protected, so the script commits the version bump on a `release/v<version>` branch and pushes it — it does **not** push a tag. Open a PR from that branch and merge it.
 
 After the PR is merged, tag the merged commit on `main` manually:

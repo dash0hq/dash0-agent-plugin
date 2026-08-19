@@ -62,7 +62,7 @@ func run() error {
 	if cfg.AgentName == "" {
 		cfg.AgentName = "claude-code"
 	}
-	pipeline.ValidateOTLPURL(&cfg)
+	cfg.ValidateURL()
 
 	now := time.Now().UTC()
 	result, err := pipeline.Process(event, cfg, dataDir, now)

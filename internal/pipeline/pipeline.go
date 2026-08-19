@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -696,19 +695,4 @@ func extractAgentIDFromResponse(v any) string {
 	}
 	id, _ := m["agentId"].(string)
 	return id
-}
-
-// ValidateOTLPURL clears cfg.OTLPUrl if it is malformed and logs to stderr.
-// Returns whether the URL was valid.
-func ValidateOTLPURL(cfg *otlp.Config) bool {
-	if cfg.OTLPUrl == "" {
-		return false
-	}
-	u, err := url.Parse(cfg.OTLPUrl)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		fmt.Fprintf(os.Stderr, "on-event: OTLP URL is not valid: %q\n", cfg.OTLPUrl)
-		cfg.OTLPUrl = ""
-		return false
-	}
-	return true
 }

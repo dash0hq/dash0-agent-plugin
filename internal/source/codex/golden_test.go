@@ -53,7 +53,7 @@ func TestGoldenSpanTree(t *testing.T) {
 		OmitUserInfo: true,
 		OmitIO:       false,
 	}
-	require.True(t, pipeline.ValidateOTLPURL(&cfg))
+	require.True(t, cfg.ValidateURL())
 
 	f, err := os.Open(filepath.Join("testdata", "captured_events.jsonl"))
 	require.NoError(t, err)

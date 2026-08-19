@@ -87,7 +87,7 @@ func run() error {
 		Debug:                dash0EnvBool("DEBUG", false),
 		DebugFile:            dash0Env("DEBUG_FILE"),
 	}
-	pipeline.ValidateOTLPURL(&cfg)
+	cfg.ValidateURL()
 
 	hookEvent, _ := event["hook_event_name"].(string)
 

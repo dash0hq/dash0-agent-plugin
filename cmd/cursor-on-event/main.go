@@ -81,7 +81,7 @@ func run() error {
 		Debug:                dash0EnvBool("DEBUG", false),
 		DebugFile:            dash0Env("DEBUG_FILE"),
 	}
-	pipeline.ValidateOTLPURL(&cfg)
+	cfg.ValidateURL()
 
 	now := time.Now().UTC()
 	result, err := pipeline.Process(event, cfg, dataDir, now)

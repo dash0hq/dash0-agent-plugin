@@ -8,7 +8,7 @@ set -euo pipefail
 # shellcheck source=test/contracts/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-VERSION=$(grep '^VERSION=' "$REPO/scripts/codex-on-event.sh" | sed 's/VERSION="//;s/"//')
+VERSION=$(grep '^VERSION=' "$REPO/codex/codex-on-event.sh" | sed 's/VERSION="//;s/"//')
 BINNAME="codex-on-event-${VERSION}-$(os_arch)"
 start_mock_otlp   # http://localhost:4319
 
@@ -32,7 +32,7 @@ MD
 # (codex-on-event.sh checks the project file first).
 ( cd "$(mktemp -d)" \
   && echo '{"hook_event_name":"SessionStart","session_id":"contract-g1","model":"gpt-5.5","source":"startup"}' \
-     | bash "$REPO/scripts/codex-on-event.sh" )
+     | bash "$REPO/codex/codex-on-event.sh" )
 
 # credentials from env vars only, no config file present.
 export HOME=/tmp/codex-home-env; rm -rf "$HOME"; mkdir -p "$HOME/.codex"
@@ -41,7 +41,7 @@ export HOME=/tmp/codex-home-env; rm -rf "$HOME"; mkdir -p "$HOME/.codex"
      | DASH0_OTLP_URL=http://localhost:4319 \
        CODEX_PLUGIN_OPTION_AUTH_TOKEN=codex-env-token \
        DASH0_DATASET=codex-env-ds \
-       bash "$REPO/scripts/codex-on-event.sh" )
+       bash "$REPO/codex/codex-on-event.sh" )
 
 sleep 2
 RESULT=$(curl -s http://localhost:4319/requests)
@@ -62,7 +62,7 @@ rm -rf "$HOME" "$XDG_STATE_HOME"
 STATE_BASE="$XDG_STATE_HOME/dash0-agent-plugin/codex"
 mkdir -p "$STATE_BASE/bin" "$HOME/.codex"
 make -C "$REPO" build-binary PKG=./cmd/codex-on-event OUT="$STATE_BASE/bin/$BINNAME"
-cp "$REPO/scripts/codex-on-event.sh" "$STATE_BASE/codex-on-event.sh"
+cp "$REPO/codex/codex-on-event.sh" "$STATE_BASE/codex-on-event.sh"
 
 # Seed config.toml with an unrelated setting AND a user-authored hook the
 # installer must preserve.

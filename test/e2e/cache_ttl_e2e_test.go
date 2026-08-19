@@ -33,7 +33,7 @@ func TestE2ECacheCreationTTL(t *testing.T) {
 	pluginDir := findPluginDir(t)
 
 	binary := filepath.Join(t.TempDir(), "on-event-cachettl")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/on-event")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/claude-on-event")
 	build.Dir = pluginDir
 	out, err := build.CombinedOutput()
 	require.NoError(t, err, "build failed: %s", string(out))

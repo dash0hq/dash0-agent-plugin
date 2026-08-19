@@ -30,15 +30,24 @@ is git-ignored.
    ```bash
    chmod +x test/capture/copilot/capture.sh
    ```
-3. Install BOTH capture configs at user scope (they are additive):
+3. Install BOTH capture configs at user scope (they are additive), stamping in
+   the absolute path of *your* checkout. Run this from anywhere inside the repo:
    ```bash
    mkdir -p ~/.copilot/hooks
-   cp test/capture/copilot/hooks-camelcase.json  ~/.copilot/hooks/dash0-capture-camel.json
-   cp test/capture/copilot/hooks-pascalcase.json ~/.copilot/hooks/dash0-capture-pascal.json
+   REPO=$(git rev-parse --show-toplevel)
+   for casing in camelcase pascalcase; do
+     jq --arg cmd "$REPO/test/capture/copilot/capture.sh" \
+        '.hooks |= map_values(map(.bash |= sub("^SET_BY_SETUP_STEP"; $cmd)))' \
+        "$REPO/test/capture/copilot/hooks-${casing}.json" \
+        > ~/.copilot/hooks/dash0-capture-${casing%case}.json
+   done
    ```
-   > The `bash` commands use `$HOME/dash0/dash0-agent-plugin/...`. If your checkout
-   > lives elsewhere, edit the paths (or set `DASH0_COPILOT_CAPTURE_DIR`). Hooks
-   > load at CLI startup, so start a fresh `copilot` after copying.
+   The checked-in files are the source of truth for *which* events are captured
+   and under which casing label; their `bash` values start with the placeholder
+   `SET_BY_SETUP_STEP`, which the `jq` above replaces while keeping the trailing
+   `camel` / `pascal` argument. Copilot needs an absolute path here, so copying
+   the files unmodified will not work.
+   > Hooks load at CLI startup, so start a fresh `copilot` afterwards.
 
 ## Run
 
@@ -52,6 +61,8 @@ Exercise as much as possible in one session (interactive first; then repeat with
 - `/compact` if the session is long enough.
 
 Each hook invocation writes `test/capture/copilot/captured/<ts>_<label>_<event>.json`.
+To direct captures elsewhere, set `DASH0_COPILOT_CAPTURE_DIR` before launching
+`copilot`.
 
 Then grab the raw session event stream (for the token/model work, D3):
 

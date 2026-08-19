@@ -194,7 +194,7 @@ func installCodex(t *testing.T, pluginDir, home, state, otlpURL, token string) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %s", string(out))
 	}
-	bootstrap, err := os.ReadFile(filepath.Join(pluginDir, "scripts", "codex-on-event.sh"))
+	bootstrap, err := os.ReadFile(filepath.Join(pluginDir, "codex", "codex-on-event.sh"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(codexState, "codex-on-event.sh"), bootstrap, 0o755))
 
@@ -209,18 +209,18 @@ func installCodex(t *testing.T, pluginDir, home, state, otlpURL, token string) {
 	require.NoError(t, err, "install-codex.sh failed")
 }
 
-// codexPluginVersion reads the pinned VERSION from scripts/codex-on-event.sh so
+// codexPluginVersion reads the pinned VERSION from codex/codex-on-event.sh so
 // the pre-staged binary path matches what install-codex.sh derives.
 func codexPluginVersion(t *testing.T, pluginDir string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(pluginDir, "scripts", "codex-on-event.sh"))
+	data, err := os.ReadFile(filepath.Join(pluginDir, "codex", "codex-on-event.sh"))
 	require.NoError(t, err)
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "VERSION=") {
 			return strings.Trim(strings.TrimPrefix(line, "VERSION="), `"`)
 		}
 	}
-	t.Fatal("VERSION= not found in scripts/codex-on-event.sh")
+	t.Fatal("VERSION= not found in codex/codex-on-event.sh")
 	return ""
 }
 
@@ -403,7 +403,7 @@ func TestE2ECodexMarketplaceInstall(t *testing.T) {
 	for _, f := range []string{
 		filepath.Join(".codex-plugin", "plugin.json"),
 		filepath.Join("codex", "hooks.json"),
-		filepath.Join("scripts", "codex-on-event.sh"),
+		filepath.Join("codex", "codex-on-event.sh"),
 	} {
 		_, statErr := os.Stat(filepath.Join(root, f))
 		require.NoError(t, statErr, "installed plugin missing %s", f)

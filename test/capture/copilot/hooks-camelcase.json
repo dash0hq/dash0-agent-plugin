@@ -1,18 +1,18 @@
 {
   "version": 1,
   "hooks": {
-    "sessionStart":        [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "sessionEnd":          [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "userPromptSubmitted": [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "preToolUse":          [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "postToolUse":         [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "postToolUseFailure":  [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "agentStop":           [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "subagentStart":       [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "subagentStop":        [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "errorOccurred":       [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "preCompact":          [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "permissionRequest":   [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}],
-    "notification":        [{"type": "command", "bash": "$HOME/dash0/dash0-agent-plugin/test/capture/copilot/capture.sh camel", "timeoutSec": 10}]
+    "sessionStart":        [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "sessionEnd":          [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "userPromptSubmitted": [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "preToolUse":          [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "postToolUse":         [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "postToolUseFailure":  [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "agentStop":           [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "subagentStart":       [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "subagentStop":        [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "errorOccurred":       [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "preCompact":          [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "permissionRequest":   [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}],
+    "notification":        [{"type": "command", "bash": "SET_BY_SETUP_STEP camel", "timeoutSec": 10}]
   }
 }

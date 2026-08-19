@@ -166,14 +166,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Version consistency (plugin.json == on-event.sh)
+      - name: Version consistency (plugin.json == claude-on-event.sh)
         run: |
           PLUGIN_VERSION=$(jq -r '.version' .claude-plugin/plugin.json)
-          SCRIPT_VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          SCRIPT_VERSION=$(grep '^VERSION=' claude/claude-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
           echo "plugin.json: $PLUGIN_VERSION"
-          echo "on-event.sh: $SCRIPT_VERSION"
+          echo "claude-on-event.sh: $SCRIPT_VERSION"
           if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
-            echo "::error::Version mismatch: plugin.json=$PLUGIN_VERSION, on-event.sh=$SCRIPT_VERSION"
+            echo "::error::Version mismatch: plugin.json=$PLUGIN_VERSION, claude-on-event.sh=$SCRIPT_VERSION"
             exit 1
           fi
 
@@ -182,9 +182,9 @@ jobs:
           # Mirror of the Claude version check. Both files are bumped together
           # by scripts/release.sh; this guards against a hand-edit drifting.
           PLUGIN_VERSION=$(jq -r '.version' .cursor-plugin/plugin.json)
-          SCRIPT_VERSION=$(grep '^VERSION=' scripts/cursor-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          SCRIPT_VERSION=$(grep '^VERSION=' cursor/cursor-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
           echo ".cursor-plugin/plugin.json: $PLUGIN_VERSION"
-          echo "scripts/cursor-on-event.sh: $SCRIPT_VERSION"
+          echo "cursor/cursor-on-event.sh: $SCRIPT_VERSION"
           if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
             echo "::error::Version mismatch: .cursor-plugin/plugin.json=$PLUGIN_VERSION, cursor-on-event.sh=$SCRIPT_VERSION"
             exit 1
@@ -215,29 +215,55 @@ jobs:
 
       - name: Release assets exist for configured version
         run: |
-          VERSION=$(grep '^VERSION=' scripts/on-event.sh | sed 's/VERSION="//' | sed 's/"//')
-          echo "Checking release assets for v$VERSION"
-          # Check if the release tag exists at all — if not, this is a
-          # version bump PR preparing for a future release. Warn but don't fail.
-          TAG_STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "https://github.com/dash0hq/dash0-agent-plugin/releases/tag/v${VERSION}")
-          if [ "$TAG_STATUS" = "404" ]; then
-            echo "::warning::Release v$VERSION does not exist yet — this is expected for version bump PRs. Will be validated after release."
-            exit 0
-          fi
-          for BINARY in on-event-linux-amd64 on-event-linux-arm64 on-event-darwin-amd64 on-event-darwin-arm64; do
-            URL="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${VERSION}/${BINARY}"
-            STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "$URL")
-            echo "  $BINARY: $STATUS"
-            if [ "$STATUS" != "200" ]; then
-              echo "::error::Binary $BINARY not found at $URL (HTTP $STATUS)"
-              exit 1
+          # Derive the version and every asset name each bootstrap may request,
+          # so this checks what the scripts actually ask for. Hardcoding the names
+          # here once let a rename through: the script asked for
+          # claude-on-event-<os>-<arch> while this job probed on-event-<os>-<arch>
+          # and passed.
+          #
+          # A script may list more than one candidate and try them in order, which
+          # is how a published name can be changed without release-timing
+          # coordination. So the requirement is that AT LEAST ONE candidate exists
+          # per platform, not that all of them do.
+          fail=0
+          for SCRIPT in claude/claude-on-event.sh cursor/cursor-on-event.sh \
+                        codex/codex-on-event.sh copilot/copilot-on-event.sh; do
+            VERSION=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$SCRIPT")
+            CANDIDATES=$(grep -oE '"[a-z-]+-\$\{OS\}-\$\{ARCH\}"' "$SCRIPT" \
+              | tr -d '"' | sed 's/-\${OS}-\${ARCH}//' | sort -u)
+            if [ -z "$VERSION" ] || [ -z "$CANDIDATES" ]; then
+              echo "::error::Could not read VERSION or asset names from $SCRIPT — update this parser"
+              fail=1
+              continue
             fi
+            TAG_STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "https://github.com/dash0hq/dash0-agent-plugin/releases/tag/v${VERSION}")
+            if [ "$TAG_STATUS" = "404" ]; then
+              echo "::warning::Release v$VERSION does not exist yet — expected for a version bump PR. Validated after release."
+              continue
+            fi
+            for PLATFORM in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+              found=""
+              for NAME in $CANDIDATES; do
+                URL="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${VERSION}/${NAME}-${PLATFORM}"
+                STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "$URL")
+                echo "  $SCRIPT -> ${NAME}-${PLATFORM}: $STATUS"
+                if [ "$STATUS" = "200" ]; then
+                  found="${NAME}-${PLATFORM}"
+                  break
+                fi
+              done
+              if [ -z "$found" ]; then
+                echo "::error::$SCRIPT can obtain no binary for $PLATFORM from release v${VERSION} — tried: $(echo $CANDIDATES | tr ' ' ',')"
+                fail=1
+              fi
+            done
           done
+          if [ "$fail" -ne 0 ]; then exit 1; fi
 
       - name: userConfig covers all plugin options
         run: |
           # Extract option keys used in Go code via pluginOption/pluginOptionSecure/pluginOptionBool/pluginOptionBoolDefault
-          USED_KEYS=$(grep -ohE 'pluginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' cmd/on-event/main.go | \
+          USED_KEYS=$(grep -ohE 'pluginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' cmd/claude-on-event/main.go | \
             sed 's/pluginOption[^"]*"//' | sed 's/"$//' | sort -u)
           # Extract keys declared in plugin.json userConfig
           DECLARED_KEYS=$(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json | sort -u)
@@ -263,9 +289,10 @@ jobs:
           # Cursor auto-discovers commands/, skills/, and hooks/hooks.json at the
           # repo root when not overridden in .cursor-plugin/plugin.json. Claude
           # auto-discovers skills/ and commands/ at the root. Keep runtime assets
-          # under claude/ and cursor/ instead.
+          # under claude/ and cursor/ instead — Claude's own hooks are declared
+          # explicitly as claude/hooks.json so a root hooks/ dir never exists.
           fail=0
-          for dir in commands skills; do
+          for dir in commands skills hooks; do
             if [ -d "$dir" ]; then
               echo "::error::root $dir/ must not exist — move runtime assets under claude/ or cursor/"
               fail=1
@@ -287,15 +314,15 @@ jobs:
             fail=1
           fi
           # Cursor 3.9.x silently ignores `hooks` in local-plugin manifests, so we
-          # deliberately omit it. install-cursor.sh reads cursor/plugin-hooks.json
+          # deliberately omit it. install-cursor.sh reads cursor/hooks.json
           # directly instead. Assert the field is absent so it doesn't sneak back
           # in and mislead future readers.
           if [ "$CURSOR_HOOKS" != "unset" ]; then
-            echo "::error::.cursor-plugin/plugin.json must NOT set 'hooks' — Cursor ignores it for local plugins; installer reads cursor/plugin-hooks.json directly"
+            echo "::error::.cursor-plugin/plugin.json must NOT set 'hooks' — Cursor ignores it for local plugins; installer reads cursor/hooks.json directly"
             fail=1
           fi
-          if [ ! -f "cursor/plugin-hooks.json" ]; then
-            echo "::error::cursor/plugin-hooks.json is missing (installer reads this file as the source of truth for hook events)"
+          if [ ! -f "cursor/hooks.json" ]; then
+            echo "::error::cursor/hooks.json is missing (installer reads this file as the source of truth for hook events)"
             fail=1
           fi
           if [ "$fail" -ne 0 ]; then exit 1; fi
@@ -321,19 +348,26 @@ jobs:
 
       - name: Hook script is valid
         run: |
-          # Check on-event.sh is executable and has valid shebang
-          if [ ! -x scripts/on-event.sh ]; then
-            echo "::error::scripts/on-event.sh is not executable"
+          # Check claude-on-event.sh is executable and has valid shebang
+          if [ ! -x claude/claude-on-event.sh ]; then
+            echo "::error::claude/claude-on-event.sh is not executable"
             exit 1
           fi
-          HEAD=$(head -1 scripts/on-event.sh)
+          HEAD=$(head -1 claude/claude-on-event.sh)
           if [[ "$HEAD" != "#!/"* ]]; then
-            echo "::error::scripts/on-event.sh missing shebang"
+            echo "::error::claude/claude-on-event.sh missing shebang"
             exit 1
           fi
           # Check hooks.json references an existing script
-          HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command' hooks/hooks.json)
-          EXPECTED='${CLAUDE_PLUGIN_ROOT}/scripts/on-event.sh'
+          # The manifest declares the hooks file explicitly; read it from there
+          # so the check follows a future move instead of hardcoding the path.
+          HOOKS_FILE=$(jq -r '.hooks' .claude-plugin/plugin.json)
+          if [ ! -f "$HOOKS_FILE" ]; then
+            echo "::error::.claude-plugin/plugin.json hooks ($HOOKS_FILE) does not exist"
+            exit 1
+          fi
+          HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$HOOKS_FILE")
+          EXPECTED='${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh'
           if [ "$HOOK_CMD" != "$EXPECTED" ]; then
             echo "::error::hooks.json command ($HOOK_CMD) does not match expected ($EXPECTED)"
             exit 1
@@ -343,21 +377,21 @@ jobs:
         run: |
           # Mirror of the Claude hook-script check for the Cursor side. Verifies
           # the bootstrap script is executable, has a shebang, and that every
-          # command referenced from cursor/plugin-hooks.json resolves to a file
+          # command referenced from cursor/hooks.json resolves to a file
           # relative to the repo root — which is the plugin root Cursor will
           # resolve against when the plugin is dropped into ~/.cursor/plugins/.
-          if [ ! -x scripts/cursor-on-event.sh ]; then
-            echo "::error::scripts/cursor-on-event.sh is not executable"
+          if [ ! -x cursor/cursor-on-event.sh ]; then
+            echo "::error::cursor/cursor-on-event.sh is not executable"
             exit 1
           fi
-          HEAD=$(head -1 scripts/cursor-on-event.sh)
+          HEAD=$(head -1 cursor/cursor-on-event.sh)
           if [[ "$HEAD" != "#!/"* ]]; then
-            echo "::error::scripts/cursor-on-event.sh missing shebang"
+            echo "::error::cursor/cursor-on-event.sh missing shebang"
             exit 1
           fi
-          COMMANDS=$(jq -r '.hooks | to_entries[] | .value[] | .command' cursor/plugin-hooks.json | sort -u)
+          COMMANDS=$(jq -r '.hooks | to_entries[] | .value[] | .command' cursor/hooks.json | sort -u)
           if [ -z "$COMMANDS" ]; then
-            echo "::error::cursor/plugin-hooks.json has no hook commands"
+            echo "::error::cursor/hooks.json has no hook commands"
             exit 1
           fi
           fail=0
@@ -365,12 +399,12 @@ jobs:
             # Resolve relative to the plugin root (repo root here).
             resolved="${cmd#./}"
             if [ ! -f "$resolved" ]; then
-              echo "::error::cursor/plugin-hooks.json references missing command: $cmd (resolved to $resolved)"
+              echo "::error::cursor/hooks.json references missing command: $cmd (resolved to $resolved)"
               fail=1
             elif [ ! -x "$resolved" ]; then
-              echo "::error::cursor/plugin-hooks.json references non-executable command: $cmd"
+              echo "::error::cursor/hooks.json references non-executable command: $cmd"
               fail=1
             fi
           done
           if [ "$fail" -ne 0 ]; then exit 1; fi
-          echo "PASS: cursor/plugin-hooks.json commands all resolve to executable files"
+          echo "PASS: cursor/hooks.json commands all resolve to executable files"

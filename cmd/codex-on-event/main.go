@@ -107,7 +107,7 @@ func run() error {
 	// Codex hooks carry the workspace as `cwd`. Codex may spawn the hook with a
 	// different process CWD, so chdir into the payload's cwd before normalization
 	// so vcs.Detect()'s git commands see the right working tree.
-	hn.ChdirToEventCwd(event)
+	pipeline.ChdirToEventCwd(event)
 
 	// Normalization needs the per-session scratch dir to back-calculate tool-call
 	// duration from the matching PreToolUse it logged earlier. Compute it the same

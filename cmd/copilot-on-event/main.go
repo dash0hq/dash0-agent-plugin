@@ -58,7 +58,7 @@ func run() error {
 	// Every Copilot payload (camelCase and pascalCase alike) carries the
 	// workspace as `cwd`. chdir into the payload's cwd before anything git-dependent runs
 	// so the pipeline sees the right working tree.
-	hn.ChdirToEventCwd(event)
+	pipeline.ChdirToEventCwd(event)
 
 	event = copilot.Normalize(eventName, event)
 	if event == nil {

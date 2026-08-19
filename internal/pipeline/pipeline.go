@@ -60,6 +60,21 @@ func ReadEvent(r io.Reader) (map[string]any, error) {
 	return event, nil
 }
 
+// ChdirToEventCwd switches to the working directory named in a hook payload, so
+// repository detection and relative config lookups resolve against the user's
+// project and not wherever the agent started the binary. A missing or unusable
+// cwd is ignored: the chdir is an improvement, not a requirement.
+//
+// It belongs beside ReadEvent: both prepare one event before Process consumes it,
+// and neither depends on which agent sent it.
+func ChdirToEventCwd(event map[string]any) {
+	cwd, ok := event["cwd"].(string)
+	if !ok || cwd == "" {
+		return
+	}
+	_ = os.Chdir(cwd)
+}
+
 // Process consumes a single normalized hook event and produces side effects
 // (filelog write, trace context update, OTLP export) plus a Result with any
 // messages the source should render. dataDir is the per-source scratch root

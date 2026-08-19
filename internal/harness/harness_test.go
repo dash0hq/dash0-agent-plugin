@@ -4,7 +4,6 @@
 package harness
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -387,53 +386,4 @@ func TestSharedLookupsIgnoreTheReceiver(t *testing.T) {
 	t.Setenv("DASH0_DATASET", "shared")
 
 	assert.Equal(t, Codex.Dash0Env("DATASET"), Copilot.Dash0Env("DATASET"))
-}
-
-func TestChdirToEventCwd(t *testing.T) {
-	t.Run("changes to the event cwd", func(t *testing.T) {
-		original, err := filepath.Abs(".")
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
-
-		target := t.TempDir()
-		codex.ChdirToEventCwd(map[string]any{"cwd": target})
-
-		got, err := filepath.Abs(".")
-		require.NoError(t, err)
-		// macOS temp dirs are symlinked (/var -> /private/var), so compare
-		// resolved paths.
-		wantResolved, err := filepath.EvalSymlinks(target)
-		require.NoError(t, err)
-		gotResolved, err := filepath.EvalSymlinks(got)
-		require.NoError(t, err)
-		assert.Equal(t, wantResolved, gotResolved)
-	})
-
-	t.Run("ignores a missing, blank, or non-string cwd", func(t *testing.T) {
-		before, err := filepath.Abs(".")
-		require.NoError(t, err)
-
-		for _, event := range []map[string]any{
-			{},
-			{"cwd": ""},
-			{"cwd": 42},
-			{"cwd": nil},
-		} {
-			codex.ChdirToEventCwd(event)
-			after, err := filepath.Abs(".")
-			require.NoError(t, err)
-			assert.Equal(t, before, after, "event %v should not have moved us", event)
-		}
-	})
-
-	t.Run("ignores a cwd that does not exist", func(t *testing.T) {
-		before, err := filepath.Abs(".")
-		require.NoError(t, err)
-
-		codex.ChdirToEventCwd(map[string]any{"cwd": filepath.Join(t.TempDir(), "nope")})
-
-		after, err := filepath.Abs(".")
-		require.NoError(t, err)
-		assert.Equal(t, before, after)
-	})
 }

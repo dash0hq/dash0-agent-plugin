@@ -22,11 +22,16 @@ Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Act
 > install until the next tag.
 >
 > `claude/claude-on-event.sh` handles this by trying each name it may have been
-> published under, newest first, and using the first that resolves. So the rename
-> is a one-line change to `.goreleaser.yaml`: the next release publishes the new
-> name, already-installed scripts keep resolving the old one, and no commit on the
-> default branch is ever inconsistent. Drop the stale candidate from the list once
-> every release that carries the old name is out of support.
+> published under, newest first, and using the first that resolves. Each installed
+> script asks its own pinned release, and that release carries whichever name it
+> was built with, so no commit on the default branch is ever inconsistent.
+>
+> The Claude asset is already switched: releases from v0.1.25 on publish
+> `claude-on-event-<os>-<arch>`, and v0.1.24 and earlier carry the unprefixed
+> `on-event-<os>-<arch>`. Drop the `on-event-<os>-<arch>` candidate from the script
+> once no supported install can still be pinned to v0.1.24 or earlier. The local
+> cache filename stays `on-event-<version>-<os>-<arch>` on purpose, because
+> changing it would force every existing install to download again.
 >
 > The CI job "Release assets exist for configured version" reads the candidates out
 > of each bootstrap and requires at least one to exist per platform, so a name that

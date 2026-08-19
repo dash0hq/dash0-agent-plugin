@@ -122,7 +122,6 @@ func run() error {
 	if hookEvent == "Stop" {
 		sessionID, _ := event["session_id"].(string)
 		sessionDir := pipeline.SessionDir(dataDir, sessionID)
-		_ = os.MkdirAll(sessionDir, 0o755)
 		if t, newCursor := copilot.ReadTurn(sessionID, sessionDir); t != nil {
 			turn = t
 			if t.Usage != nil {

@@ -32,13 +32,13 @@ func main() {
 func run() error {
 	dotenv.Load(".env")
 
+	// Claude Code always sets this. Treat a missing value as a hard error rather
+	// than falling back, because a silent fallback would put session state where
+	// Claude cannot see it. The directory itself is created by pipeline.Process,
+	// which makes <dataDir>/<session-id> and its parents.
 	dataDir := os.Getenv("CLAUDE_PLUGIN_DATA")
 	if dataDir == "" {
 		return fmt.Errorf("CLAUDE_PLUGIN_DATA is not set")
-	}
-
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return fmt.Errorf("creating data directory: %w", err)
 	}
 
 	event, err := parseEventFromStdin()

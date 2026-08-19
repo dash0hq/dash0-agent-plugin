@@ -47,9 +47,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return fmt.Errorf("creating data directory %s: %w", dataDir, err)
-	}
 
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {

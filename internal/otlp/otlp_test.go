@@ -503,3 +503,48 @@ func TestHashIdentity(t *testing.T) {
 		assert.Len(t, result, 16)
 	})
 }
+
+func TestConfigValidateURL(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		url     string
+		want    bool
+		wantURL string // the value left in the Config afterwards
+	}{
+		{"valid https host", "https://ingress.eu-west-1.aws.dash0.com", true, "https://ingress.eu-west-1.aws.dash0.com"},
+		{"valid with port and path", "http://localhost:4318/v1/traces", true, "http://localhost:4318/v1/traces"},
+		{"empty stays empty", "", false, ""},
+		{"no scheme is cleared", "ingress.dash0.com:4318", false, ""},
+		{"no host is cleared", "https://", false, ""},
+		{"malformed is cleared", "http://%zz", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{OTLPUrl: tc.url}
+			assert.Equal(t, tc.want, cfg.ValidateURL())
+			// Clearing is the mechanism that disables export, so the resulting
+			// value matters as much as the bool.
+			assert.Equal(t, tc.wantURL, cfg.OTLPUrl)
+		})
+	}
+}
+
+// A cleared URL must actually stop the exporters, which is the whole point of
+// clearing it rather than only reporting false.
+func TestConfigValidateURLClearingStopsExport(t *testing.T) {
+	var got int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	good := Config{OTLPUrl: srv.URL, AuthToken: "t"}
+	require.True(t, good.ValidateURL())
+	require.NoError(t, SendLog(map[string]any{"hook_event_name": "SessionStart"}, good))
+	require.Equal(t, 1, got, "a valid URL must reach the endpoint")
+
+	bad := Config{OTLPUrl: "not a url", AuthToken: "t"}
+	require.False(t, bad.ValidateURL())
+	require.NoError(t, SendLog(map[string]any{"hook_event_name": "SessionStart"}, bad))
+	assert.Equal(t, 1, got, "a cleared URL must send nothing")
+}

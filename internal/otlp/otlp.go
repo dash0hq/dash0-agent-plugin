@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -113,6 +114,23 @@ type Config struct {
 	// OS-derived user.name is dropped instead of reported. For orgs that would
 	// rather have no attribution than an approximate one.
 	OmitIdentityFallback bool
+}
+
+// ValidateURL reports whether OTLPUrl is usable, and clears it when it is not.
+// Clearing is what stops the exporters: a Config with an empty OTLPUrl sends
+// nothing, so a typo in the endpoint disables export instead of making every hook
+// fail. The bad value is logged once to stderr.
+func (c *Config) ValidateURL() bool {
+	if c.OTLPUrl == "" {
+		return false
+	}
+	u, err := url.Parse(c.OTLPUrl)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		fmt.Fprintf(os.Stderr, "on-event: OTLP URL is not valid: %q\n", c.OTLPUrl)
+		c.OTLPUrl = ""
+		return false
+	}
+	return true
 }
 
 // SendLog sends the event as an OTLP log record to the configured endpoint.

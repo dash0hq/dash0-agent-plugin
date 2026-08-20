@@ -6,6 +6,7 @@ package pipeline
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -728,4 +730,110 @@ func TestProcess_SubagentStop_CleansUpSnapshot(t *testing.T) {
 	snap, err = otlp.LoadAgentTraceContext(s.sessionDir("sess-1"), "agent1")
 	require.NoError(t, err)
 	assert.Nil(t, snap, "snapshot must be removed after SubagentStop")
+}
+
+func TestReadEvent(t *testing.T) {
+	t.Run("decodes a hook payload", func(t *testing.T) {
+		event, err := ReadEvent(strings.NewReader(
+			`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash"}`))
+		require.NoError(t, err)
+		assert.Equal(t, "PreToolUse", event["hook_event_name"])
+		assert.Equal(t, "s1", event["session_id"])
+		assert.Equal(t, "Bash", event["tool_name"])
+	})
+
+	t.Run("rejects malformed JSON", func(t *testing.T) {
+		_, err := ReadEvent(strings.NewReader(`{"hook_event_name":`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parsing JSON from stdin")
+	})
+
+	// Empty stdin is an error, not an empty event: json.Unmarshal rejects "".
+	// Every entrypoint turns that into a stderr line and exit 0, so a hook fired
+	// with no payload is logged rather than silently treated as a real event.
+	t.Run("empty input is an error", func(t *testing.T) {
+		_, err := ReadEvent(strings.NewReader(""))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parsing JSON from stdin")
+	})
+
+	// "null" is valid JSON but unmarshals to a nil map, which Process cannot use:
+	// it writes the timestamp into the event and would panic. Rejecting it here
+	// keeps every ReadEvent success usable by the caller.
+	t.Run("literal null is rejected", func(t *testing.T) {
+		event, err := ReadEvent(strings.NewReader("null"))
+		require.Error(t, err)
+		assert.Nil(t, event)
+		assert.Contains(t, err.Error(), "JSON null")
+	})
+
+	// An empty object is a different case: usable, just without any fields.
+	t.Run("an empty object is accepted", func(t *testing.T) {
+		event, err := ReadEvent(strings.NewReader("{}"))
+		require.NoError(t, err)
+		assert.NotNil(t, event)
+		assert.Empty(t, event)
+	})
+
+	t.Run("a JSON array is rejected: events are objects", func(t *testing.T) {
+		_, err := ReadEvent(strings.NewReader(`[{"hook_event_name":"Stop"}]`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parsing JSON from stdin")
+	})
+
+	t.Run("surfaces a read failure", func(t *testing.T) {
+		_, err := ReadEvent(iotest.ErrReader(errors.New("pipe broke")))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "reading stdin")
+		assert.Contains(t, err.Error(), "pipe broke")
+	})
+}
+
+func TestChdirToEventCwd(t *testing.T) {
+	t.Run("changes to the event cwd", func(t *testing.T) {
+		original, err := filepath.Abs(".")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
+
+		target := t.TempDir()
+		ChdirToEventCwd(map[string]any{"cwd": target})
+
+		got, err := filepath.Abs(".")
+		require.NoError(t, err)
+		// macOS temp dirs are symlinked (/var -> /private/var), so compare
+		// resolved paths.
+		wantResolved, err := filepath.EvalSymlinks(target)
+		require.NoError(t, err)
+		gotResolved, err := filepath.EvalSymlinks(got)
+		require.NoError(t, err)
+		assert.Equal(t, wantResolved, gotResolved)
+	})
+
+	t.Run("ignores a missing, blank, or non-string cwd", func(t *testing.T) {
+		before, err := filepath.Abs(".")
+		require.NoError(t, err)
+
+		for _, event := range []map[string]any{
+			{},
+			{"cwd": ""},
+			{"cwd": 42},
+			{"cwd": nil},
+		} {
+			ChdirToEventCwd(event)
+			after, err := filepath.Abs(".")
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "event %v should not have moved us", event)
+		}
+	})
+
+	t.Run("ignores a cwd that does not exist", func(t *testing.T) {
+		before, err := filepath.Abs(".")
+		require.NoError(t, err)
+
+		ChdirToEventCwd(map[string]any{"cwd": filepath.Join(t.TempDir(), "nope")})
+
+		after, err := filepath.Abs(".")
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+	})
 }

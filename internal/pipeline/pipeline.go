@@ -10,7 +10,7 @@ package pipeline
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,6 +36,43 @@ type Result struct {
 type Message struct {
 	UserText     string
 	ModelContext string
+}
+
+// ReadEvent decodes one hook event from r, which every entrypoint feeds from
+// os.Stdin. Each coding agent delivers its payload as a single JSON object on
+// stdin, so the read is source-agnostic; per-agent differences start at
+// normalization, not here.
+//
+// It takes an io.Reader rather than reading os.Stdin directly so callers and
+// tests can supply their own input.
+func ReadEvent(r io.Reader) (map[string]any, error) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("reading stdin: %w", err)
+	}
+	var event map[string]any
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return nil, fmt.Errorf("parsing JSON from stdin: %w", err)
+	}
+	if event == nil {
+		return nil, fmt.Errorf("hook event payload is JSON null, not an object")
+	}
+	return event, nil
+}
+
+// ChdirToEventCwd switches to the working directory named in a hook payload, so
+// repository detection and relative config lookups resolve against the user's
+// project and not wherever the agent started the binary. A missing or unusable
+// cwd is ignored: the chdir is an improvement, not a requirement.
+//
+// It belongs beside ReadEvent: both prepare one event before Process consumes it,
+// and neither depends on which agent sent it.
+func ChdirToEventCwd(event map[string]any) {
+	cwd, ok := event["cwd"].(string)
+	if !ok || cwd == "" {
+		return
+	}
+	_ = os.Chdir(cwd)
 }
 
 // Process consumes a single normalized hook event and produces side effects
@@ -673,19 +710,4 @@ func extractAgentIDFromResponse(v any) string {
 	}
 	id, _ := m["agentId"].(string)
 	return id
-}
-
-// ValidateOTLPURL clears cfg.OTLPUrl if it is malformed and logs to stderr.
-// Returns whether the URL was valid.
-func ValidateOTLPURL(cfg *otlp.Config) bool {
-	if cfg.OTLPUrl == "" {
-		return false
-	}
-	u, err := url.Parse(cfg.OTLPUrl)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		fmt.Fprintf(os.Stderr, "on-event: OTLP URL is not valid: %q\n", cfg.OTLPUrl)
-		cfg.OTLPUrl = ""
-		return false
-	}
-	return true
 }

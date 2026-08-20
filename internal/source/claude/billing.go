@@ -127,7 +127,7 @@ func presence(key string) func(func(string) bool) bool {
 	return func(present func(string) bool) bool { return present(key) }
 }
 
-// billingMode applies Claude Code's documented authentication precedence — the
+// billing applies Claude Code's documented authentication precedence — the
 // order is theirs, not ours, and is load-bearing: a credential further down the
 // list is not the one in use. Full table, and the two tiers a hook cannot see
 // (apiKeyHelper, gateway sessions), are in DEVELOPMENT.md.
@@ -196,7 +196,7 @@ const (
 	billingTypeGooglePlay       = "google_play_subscription"
 )
 
-// Info is what a Claude Code session reports about how it bills.
+// Billing is what a Claude Code session reports about how it bills.
 type Billing struct {
 	// BillingMode is always set, including BillingUnknown — recording that we
 	// looked and could not tell differs from never having looked.
@@ -296,7 +296,7 @@ func fileExists(path string) bool {
 
 // readAccount decodes the billing subset of the config at path.
 //
-// Returns nil only when the file cannot be read or parsed — which billingMode
+// Returns nil only when the file cannot be read or parsed — which modeFromAccount
 // reports as "unknown". A readable file with no oauthAccount is NOT nil: we looked
 // successfully and found no subscription, which is different from not looking.
 //

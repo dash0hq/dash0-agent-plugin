@@ -159,9 +159,10 @@ omitted when its value is empty.
 Cost is computed as provider list price × tokens. On a subscription there is no
 per-token price at all — a flat fee buys a rationed allowance and the marginal
 token is free — so that figure is a list-price *equivalent*, not spend.
-`dash0.gen_ai.billing_mode` tells the consumer which it is. `bedrock` and `vertex`
-are per-token but at a negotiated cloud rate, so those figures are neither
-list-equivalent *nor* spend.
+`dash0.gen_ai.billing_mode` tells the consumer which it is. `metered_external` is
+the third case: per-token, but metered by somebody else at a rate we cannot see —
+a negotiated cloud rate, say — so that figure is neither list-equivalent *nor*
+spend.
 
 **An absent `billing_mode` means "undetermined", never "billed per token".** All
 four harnesses are predominantly sold as subscriptions; only Claude Code and Codex
@@ -174,11 +175,12 @@ expose a detectable signal, and Copilot is per-seat, so its figure is never spen
 over an authenticated subscription, so a stale `oauthAccount` can sit in
 `~/.claude.json` while traffic bills per token. Reading `billingType` alone reports
 `subscription` for those users — telling a customer their real spend is not real
-spend. Evaluated in order:
+spend.
 
-The order below is **Claude Code's documented authentication precedence**, not
-ours — see "Authentication precedence" in its authentication docs. It is
-load-bearing: a credential further down the list is not the one in use.
+The signals are evaluated in the order below, which is **Claude Code's documented
+authentication precedence**, not ours — see "Authentication precedence" in its
+authentication docs. It is load-bearing: a credential further down the list is not
+the one in use.
 
 | Rank | Signal | Mode | Provider | Why |
 |---|---|---|---|---|

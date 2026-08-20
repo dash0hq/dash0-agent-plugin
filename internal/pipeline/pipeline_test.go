@@ -533,9 +533,16 @@ func pinClaudeAuthEnv(t *testing.T, configJSON string) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude.json"), []byte(configJSON), 0o600))
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "")
-	t.Setenv("CLAUDE_CODE_USE_VERTEX", "")
+	// Every tier, not just the ones these cases exercise: a variable left
+	// unpinned is one the host can set, and a higher-ranked credential silently
+	// wins. The list must track the precedence table in DEVELOPMENT.md.
+	for _, key := range []string{
+		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+		"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+		"ANTHROPIC_PROFILE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
+	} {
+		t.Setenv(key, "")
+	}
 }
 
 // intAttr returns the intValue of the named span attribute, failing the test if

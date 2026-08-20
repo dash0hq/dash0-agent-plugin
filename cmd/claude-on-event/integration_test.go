@@ -304,6 +304,7 @@ func TestIntegrationClaudeBillingModeFromConfig(t *testing.T) {
 				"CLAUDE_CODE_USE_BEDROCK=", "CLAUDE_CODE_USE_VERTEX=",
 				"CLAUDE_CODE_USE_FOUNDRY=", "CLAUDE_CODE_OAUTH_TOKEN=",
 				"ANTHROPIC_PROFILE=",
+				"ANTHROPIC_FEDERATION_RULE_ID=", "ANTHROPIC_ORGANIZATION_ID=",
 			)
 			env = append(env, tc.extraEnv...)
 

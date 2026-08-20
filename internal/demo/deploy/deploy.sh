@@ -37,6 +37,7 @@ TIMEOUT="${TIMEOUT:-30}"
 
 DASH0_DATASET="${DASH0_DATASET:-}"
 DEMO_TURNS="${DEMO_TURNS:-1}"
+DEMO_CANARY="${DEMO_CANARY:-}"
 : "${DASH0_OTLP_URL:?set DASH0_OTLP_URL}"
 : "${DASH0_AUTH_TOKEN:?set DASH0_AUTH_TOKEN}"
 
@@ -85,6 +86,11 @@ ROLE_ARN="$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output 
 ENV_PAIRS="DASH0_OTLP_URL=$DASH0_OTLP_URL,DASH0_AUTH_TOKEN=$DASH0_AUTH_TOKEN,DEMO_TURNS=$DEMO_TURNS"
 if [ -n "$DASH0_DATASET" ]; then
   ENV_PAIRS="$ENV_PAIRS,DASH0_DATASET=$DASH0_DATASET"
+fi
+# DEMO_CANARY gates the deterministic cost-validation canary turns; only set it
+# on the cost-validation deployment so they never reach the demo datasets.
+if [ -n "$DEMO_CANARY" ]; then
+  ENV_PAIRS="$ENV_PAIRS,DEMO_CANARY=$DEMO_CANARY"
 fi
 ENV_VARS="Variables={$ENV_PAIRS}"
 

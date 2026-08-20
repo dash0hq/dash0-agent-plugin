@@ -1,0 +1,15 @@
+# Build context excludes for scripts/docker/Dockerfile.
+#
+# Patterns are matched from the context root, so nested matches need `**/`.
+#
+# __pycache__ matters for correctness, not just size: `COPY claude` would
+# otherwise place compiled .pyc files inside the plugin layout in the image.
+# They are git-ignored, so a real marketplace install never sees them.
+**/__pycache__/
+**/*.pyc
+
+# Never needed by the image, and large.
+.git/
+bin/
+dist/
+cover.out

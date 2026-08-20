@@ -7,7 +7,7 @@
 
 set -u
 
-CAPTURE_DIR="${DASH0_CURSOR_CAPTURE_DIR:-$HOME/source/dash0-agent-plugin/cursor/captured}"
+CAPTURE_DIR="${DASH0_CURSOR_CAPTURE_DIR:-$(dirname "${BASH_SOURCE[0]}")/captured}"
 mkdir -p "$CAPTURE_DIR" 2>/dev/null || exit 0
 
 # Read all stdin into a variable so we can parse hook_event_name without

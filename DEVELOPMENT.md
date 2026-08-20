@@ -10,10 +10,32 @@ Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Act
 - `.cursor-plugin/plugin.json` — `version` field
 - `copilot/plugin.json` — `version` field
 - `.github/plugin/marketplace.json` — `metadata.version` and the plugin entry `version` (Copilot marketplace)
-- `scripts/on-event.sh` — `VERSION=` line (Claude Code binary downloader)
-- `scripts/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
-- `scripts/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
+- `claude/claude-on-event.sh` — `VERSION=` line (Claude Code binary downloader)
+- `cursor/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
+- `codex/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
 - `copilot/copilot-on-event.sh` — `VERSION=` line (Copilot binary downloader; vendored inside the `copilot/` subpath-install package)
+
+> **Renaming a published asset.** The Claude marketplace lists this repo with no
+> ref, so `claude plugin install` and `update` take the default branch. A
+> checked-in bootstrap is therefore paired with the *last published* release, and a
+> script that asks for a name that release does not carry breaks every fresh
+> install until the next tag.
+>
+> `claude/claude-on-event.sh` handles this by trying each name it may have been
+> published under, newest first, and using the first that resolves. Each installed
+> script asks its own pinned release, and that release carries whichever name it
+> was built with, so no commit on the default branch is ever inconsistent.
+>
+> The Claude asset is already switched: releases from v0.1.25 on publish
+> `claude-on-event-<os>-<arch>`, and v0.1.24 and earlier carry the unprefixed
+> `on-event-<os>-<arch>`. Drop the `on-event-<os>-<arch>` candidate from the script
+> once no supported install can still be pinned to v0.1.24 or earlier. The local
+> cache filename stays `on-event-<version>-<os>-<arch>` on purpose, because
+> changing it would force every existing install to download again.
+>
+> The CI job "Release assets exist for configured version" reads the candidates out
+> of each bootstrap and requires at least one to exist per platform, so a name that
+> nothing publishes cannot pass unnoticed.
 
 `main` is protected, so the script commits the version bump on a `release/v<version>` branch and pushes it — it does **not** push a tag. Open a PR from that branch and merge it.
 

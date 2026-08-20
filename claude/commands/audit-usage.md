@@ -17,7 +17,7 @@ Dash0 look wrong: it produces the ground truth to compare them against.
 2. Run:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/claude-code-usage-audit.py" <session-id>
+python3 "${CLAUDE_PLUGIN_ROOT}/claude/tools/claude-code-usage-audit.py" <session-id>
 ```
 
    If `python3` is not installed, say so and stop — the script needs it. If the

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart":       [{"command": "./cursor/cursor-on-event.sh"}],
+    "sessionEnd":         [{"command": "./cursor/cursor-on-event.sh"}],
+    "beforeSubmitPrompt": [{"command": "./cursor/cursor-on-event.sh"}],
+    "afterAgentResponse": [{"command": "./cursor/cursor-on-event.sh"}],
+    "preToolUse":         [{"command": "./cursor/cursor-on-event.sh"}],
+    "postToolUse":        [{"command": "./cursor/cursor-on-event.sh"}],
+    "postToolUseFailure": [{"command": "./cursor/cursor-on-event.sh"}],
+    "subagentStart":      [{"command": "./cursor/cursor-on-event.sh"}],
+    "subagentStop":       [{"command": "./cursor/cursor-on-event.sh"}]
+  }
+}

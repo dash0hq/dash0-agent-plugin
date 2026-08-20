@@ -6,7 +6,7 @@
 events.jsonl
 dist/
 bin/
-cursor/captured/
+test/capture/cursor/captured/
 test/capture/copilot/captured/
 cover.out
 __pycache__/

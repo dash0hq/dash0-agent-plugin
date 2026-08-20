@@ -167,7 +167,12 @@ if [ -f "$SCRIPT_PATH" ]; then
   ok "bootstrap already present → $SCRIPT_PATH"
 else
   info "downloading codex-on-event.sh..."
-  fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_PATH" || die "failed to download: $RAW_BASE/scripts/codex-on-event.sh"
+  # The bootstrap moved from scripts/ to codex/ after v0.1.24, so fall back to
+  # the old path when an older release is pinned via DASH0_VERSION. Drop the
+  # fallback once v0.1.24 is unsupported.
+  fetch "$RAW_BASE/codex/codex-on-event.sh" "$SCRIPT_PATH" \
+    || fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_PATH" \
+    || die "failed to download: $RAW_BASE/codex/codex-on-event.sh"
   chmod +x "$SCRIPT_PATH"
   ok "installed bootstrap → $SCRIPT_PATH"
 fi

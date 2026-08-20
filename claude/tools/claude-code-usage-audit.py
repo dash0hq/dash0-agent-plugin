@@ -24,9 +24,9 @@ token counts the cost is derived from instead. Cache writes are reported split b
 the TTL recorded in the transcript, since the two tiers are billed differently.
 
 Usage:
-  python3 scripts/claude-code-usage-audit.py                 # list recent sessions
-  python3 scripts/claude-code-usage-audit.py <SESSION_ID>    # audit one session
-  python3 scripts/claude-code-usage-audit.py <SESSION_ID> --json
+  python3 claude/tools/claude-code-usage-audit.py                 # list recent sessions
+  python3 claude/tools/claude-code-usage-audit.py <SESSION_ID>    # audit one session
+  python3 claude/tools/claude-code-usage-audit.py <SESSION_ID> --json
 
 The session id is the `gen_ai.conversation.id` on the spans in Dash0, and the
 transcript filename on disk.

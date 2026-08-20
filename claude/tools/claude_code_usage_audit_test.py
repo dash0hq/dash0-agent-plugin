@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for claude-code-usage-audit.py.
 
-Run with:  python3 -m unittest discover -s scripts -p '*_test.py'
+Run with:  python3 -m unittest discover -s claude/tools -p '*_test.py'
 """
 
 import importlib.util

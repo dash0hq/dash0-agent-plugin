@@ -11,7 +11,7 @@ Prints the Dash0 session URL and opens it in the browser.
 1. Get the session URL by running:
 
 ```bash
-echo '{"session_id": "<current_session_id>"}' | CLAUDE_PLUGIN_OPTION_OTLP_URL="${CLAUDE_PLUGIN_OPTION_OTLP_URL}" DASH0_OTLP_URL="${DASH0_OTLP_URL}" "${CLAUDE_PLUGIN_ROOT}/scripts/on-event.sh" session-url
+echo '{"session_id": "<current_session_id>"}' | CLAUDE_PLUGIN_OPTION_OTLP_URL="${CLAUDE_PLUGIN_OPTION_OTLP_URL}" DASH0_OTLP_URL="${DASH0_OTLP_URL}" "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh" session-url
 ```
 
 Replace `<current_session_id>` with the session ID from `$CLAUDE_SESSION_ID`.

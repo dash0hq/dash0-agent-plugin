@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "sessionEnd": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "beforeSubmitPrompt": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "afterAgentResponse": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "afterAgentThought": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "preToolUse": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "postToolUse": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "postToolUseFailure": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "beforeMCPExecution": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "afterMCPExecution": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "beforeShellExecution": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "afterShellExecution": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "beforeReadFile": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "afterFileEdit": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "subagentStart": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "subagentStop": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ],
+    "preCompact": [
+      {"command": "SET_BY_SETUP_STEP"}
+    ]
+  }
+}

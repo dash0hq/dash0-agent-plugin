@@ -261,3 +261,92 @@ func TestIntegrationInvalidOTLPUrlLogsWarning(t *testing.T) {
 	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-badurl","model":"opus"}`, env)
 	assert.Contains(t, stderr, `OTLP URL is not valid: "not-a-url"`)
 }
+
+// Billing mode is verified against the real binary rather than only in-process,
+// because it depends on the environment the hook INHERITS — which unit tests fake.
+//
+// It needs no particular account: the reader derives mode from a config file and
+// env credentials, so a synthetic config isolated by CLAUDE_CONFIG_DIR reproduces
+// any customer's shape exactly. `usage_based` in particular is a Claude Console
+// account, which nobody here has, and which would otherwise be reported as a
+// subscription — telling that customer their real spend is not real spend.
+func TestIntegrationClaudeBillingModeFromConfig(t *testing.T) {
+	cases := []struct {
+		name        string
+		billingType string
+		extraEnv    []string
+		want        string
+		wantProv    string
+	}{
+		{"console account bills per token", "usage_based", nil, "api", ""},
+		{"team subscription", "stripe_subscription", nil, "subscription", ""},
+		{"unrecognised type is not assumed", "paddle_subscription", nil, "unknown", ""},
+		// The environment outranks the config: a subscription on disk plus Bedrock
+		// in the env is per-token at an AWS rate.
+		{"bedrock env beats a subscription config", "stripe_subscription",
+			[]string{"CLAUDE_CODE_USE_BEDROCK=1"}, "metered_external", "bedrock"},
+		{"bearer token is a gateway", "stripe_subscription",
+			[]string{"ANTHROPIC_AUTH_TOKEN=tok"}, "metered_external", "gateway"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgDir := t.TempDir()
+			cfg := fmt.Sprintf(`{"claudeMaxTier":"not_max","oauthAccount":{"billingType":%q,"seatTier":"team_standard"}}`, tc.billingType)
+			require.NoError(t, os.WriteFile(filepath.Join(cfgDir, ".claude.json"), []byte(cfg), 0o600))
+
+			srv, spans, mu := spansCollector(t)
+			env := append(makeEnv(t.TempDir(), srv.URL),
+				"CLAUDE_CONFIG_DIR="+cfgDir,
+				// Pinned empty so a credential exported on the host machine cannot
+				// change the result under us.
+				"ANTHROPIC_API_KEY=", "ANTHROPIC_AUTH_TOKEN=",
+				"CLAUDE_CODE_USE_BEDROCK=", "CLAUDE_CODE_USE_VERTEX=",
+				"CLAUDE_CODE_USE_FOUNDRY=", "CLAUDE_CODE_OAUTH_TOKEN=",
+				"ANTHROPIC_PROFILE=",
+				"ANTHROPIC_FEDERATION_RULE_ID=", "ANTHROPIC_ORGANIZATION_ID=",
+			)
+			env = append(env, tc.extraEnv...)
+
+			// Billing mode only rides alongside a cost figure, so the Stop event
+			// needs a transcript with a complete turn — which is what a real Stop
+			// always has.
+			tp := filepath.Join(t.TempDir(), "transcript.jsonl")
+			require.NoError(t, os.WriteFile(tp, []byte(
+				`{"type":"user","message":{"role":"user","content":"hi"}}`+"\n"+
+					`{"type":"assistant","requestId":"r1","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":5,"output_tokens":6}}}`+"\n"), 0o644))
+
+			for _, ev := range []string{
+				`{"hook_event_name":"SessionStart","session_id":"bill-1","model":"opus"}`,
+				`{"hook_event_name":"UserPromptSubmit","session_id":"bill-1","prompt":"hi"}`,
+				fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"bill-1","transcript_path":%q}`, tp),
+			} {
+				execBinary(t, ev, env)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, *spans, 1)
+			assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", tc.want),
+				"want billing_mode=%s, attrs: %v", tc.want, (*spans)[0].Attributes)
+			if tc.wantProv != "" {
+				assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_provider", tc.wantProv))
+			} else {
+				for _, a := range (*spans)[0].Attributes {
+					assert.NotEqual(t, "dash0.gen_ai.billing_provider", a.Key,
+						"no intermediary, so no provider")
+				}
+			}
+		})
+	}
+}
+
+// hasStringAttr reports whether attrs carries key=value as a string attribute.
+func hasStringAttr(attrs []otlp.Attribute, key, value string) bool {
+	for _, a := range attrs {
+		if a.Key == key && a.Value.StringValue != nil && *a.Value.StringValue == value {
+			return true
+		}
+	}
+	return false
+}

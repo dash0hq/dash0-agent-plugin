@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package claudeconfig
+package claude
 
 import (
 	"fmt"
@@ -93,51 +93,62 @@ func TestBillingMode(t *testing.T) {
 	subscribed := &account{BillingType: "stripe_subscription", SeatTier: "team_standard"}
 
 	cases := []struct {
-		name string
-		auth authEnv
-		acct *account
-		want string
+		name     string
+		auth     func(string) string
+		acct     *account
+		want     string
+		wantProv string
 	}{
 		// The counterexamples: config says subscription, auth says otherwise.
-		{"bedrock beats a subscription config", authEnv{Bedrock: true}, subscribed, "bedrock"},
-		{"vertex beats a subscription config", authEnv{Vertex: true}, subscribed, "vertex"},
-		{"foundry beats a subscription config", authEnv{Foundry: true}, subscribed, "foundry"},
-		{"api key beats a subscription config", authEnv{APIKey: true}, subscribed, "api"},
+		{"bedrock beats a subscription config", envOf(map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}), subscribed, "metered_external", "bedrock"},
+		{"vertex beats a subscription config", envOf(map[string]string{"CLAUDE_CODE_USE_VERTEX": "1"}), subscribed, "metered_external", "vertex"},
+		{"foundry beats a subscription config", envOf(map[string]string{"CLAUDE_CODE_USE_FOUNDRY": "1"}), subscribed, "metered_external", "foundry"},
+		{"api key beats a subscription config", envOf(map[string]string{"ANTHROPIC_API_KEY": "k"}), subscribed, "api", ""},
 
 		// A bearer token means a gateway or proxy sits in front: per-token, but on
 		// terms we cannot see. Reporting "subscription" here (the pre-fix
 		// behaviour) told the customer their real spend was not real spend.
-		{"bearer token is a gateway, not a subscription", authEnv{AuthToken: true}, subscribed, "gateway"},
+		{"bearer token is a gateway, not a subscription", envOf(map[string]string{"ANTHROPIC_AUTH_TOKEN": "t"}), subscribed, "metered_external", "gateway"},
 		// Enterprise WIF / named profile: real Anthropic billing, contract rates.
-		{"named profile is a gateway-class credential", authEnv{Profile: true}, subscribed, "gateway"},
+		{"named profile is a gateway-class credential", envOf(map[string]string{"ANTHROPIC_PROFILE": "p"}), subscribed, "metered_external", "gateway"},
 
-		// A long-lived OAuth token IS subscription-backed — the docs require a
-		// Pro/Max/Team/Enterprise plan for it — so it is not per-token.
-		{"oauth token is subscription-backed", authEnv{OAuthToken: true}, nil, "subscription"},
+		// A long-lived OAuth token proves a PLAN-BACKED credential, not the plan's
+		// billing model: an enterprise org can sit on usage-based billing
+		// (seatTier "enterprise_usage_based"). So rank 5 resolves from the account
+		// exactly as rank 7 does, rather than assuming a subscription.
+		{"oauth token defers to the plan's billing type", envOf(map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "o"}), subscribed, "subscription", ""},
+		{"oauth token on a usage-based plan is per-token", envOf(map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "o"}), &account{BillingType: "usage_based"}, "api", ""},
+		{"oauth token with no visible plan is unknown", envOf(map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "o"}), nil, "unknown", ""},
+
+		// An enterprise seat can itself be the per-token signal, even when no
+		// billingType is reported.
+		{"enterprise usage-based seat is per-token", envOf(nil), &account{SeatTier: "enterprise_usage_based"}, "api", ""},
 
 		// No auth override: the config decides.
-		{"subscription from the config", authEnv{}, subscribed, "subscription"},
-		{"no config at all", authEnv{}, nil, "unknown"},
-		{"config present but no billingType", authEnv{}, &account{SeatTier: "team_standard"}, "unknown"},
+		{"subscription from the config", envOf(nil), subscribed, "subscription", ""},
+		{"no config at all", envOf(nil), nil, "unknown", ""},
+		{"config present but no billingType", envOf(nil), &account{SeatTier: "team_standard"}, "unknown", ""},
 
 		// billingType is NOT uniformly a subscription. Claude Console accounts —
 		// "organizations that prefer API-based billing" — log in like anyone else
 		// and carry an oauthAccount, but bill per token. Treating any non-empty
 		// value as a subscription tells them their real spend is not real spend.
-		{"usage_based is per-token, not a subscription", authEnv{}, &account{BillingType: "usage_based"}, "api"},
-		{"contracted stripe is still a subscription", authEnv{}, &account{BillingType: "stripe_subscription_contracted"}, "subscription"},
-		{"apple subscription", authEnv{}, &account{BillingType: "apple_subscription"}, "subscription"},
-		{"google play subscription", authEnv{}, &account{BillingType: "google_play_subscription"}, "subscription"},
+		{"usage_based is per-token, not a subscription", envOf(nil), &account{BillingType: "usage_based"}, "api", ""},
+		{"contracted stripe is still a subscription", envOf(nil), &account{BillingType: "stripe_subscription_contracted"}, "subscription", ""},
+		{"apple subscription", envOf(nil), &account{BillingType: "apple_subscription"}, "subscription", ""},
+		{"google play subscription", envOf(nil), &account{BillingType: "google_play_subscription"}, "subscription", ""},
 		// An unrecognised value is not a licence to guess: a future billing type we
 		// have never seen must not be silently labelled a subscription.
-		{"unrecognised billingType is unknown", authEnv{}, &account{BillingType: "paddle_subscription"}, "unknown"},
+		{"unrecognised billingType is unknown", envOf(nil), &account{BillingType: "paddle_subscription"}, "unknown", ""},
 
 		// An API key with no config is still definitively per-token.
-		{"api key with no config", authEnv{APIKey: true}, nil, "api"},
+		{"api key with no config", envOf(map[string]string{"ANTHROPIC_API_KEY": "k"}), nil, "api", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, billingMode(tc.auth, tc.acct))
+			mode, provider := billing(tc.auth, tc.acct)
+			assert.Equal(t, tc.want, mode)
+			assert.Equal(t, tc.wantProv, provider, "provider qualifies metered_external only")
 		})
 	}
 }
@@ -146,8 +157,10 @@ func TestBillingMode(t *testing.T) {
 // definitive rather than merely consistent with per-token billing. Guard that the
 // two harnesses stay distinguishable on purpose, not by accident.
 func TestBillingModeEmitsAPIWhenProven(t *testing.T) {
-	assert.Equal(t, "api", billingMode(authEnv{APIKey: true}, nil))
-	assert.Equal(t, "unknown", billingMode(authEnv{}, nil), "absence is never api")
+	mode, _ := billing(envOf(map[string]string{"ANTHROPIC_API_KEY": "k"}), nil)
+	assert.Equal(t, "api", mode)
+	absent, _ := billing(envOf(nil), nil)
+	assert.Equal(t, "unknown", absent, "absence is never api")
 }
 
 // The order is Claude Code's documented authentication precedence, not ours, so
@@ -157,25 +170,47 @@ func TestBillingModeEmitsAPIWhenProven(t *testing.T) {
 func TestBillingModePrecedenceOrder(t *testing.T) {
 	subscribed := &account{BillingType: "stripe_subscription"}
 
-	// Each entry drops the tier above it, so every case still has all LOWER-ranked
-	// signals set. A reordering that let a lower tier win fails here. Rank 4
-	// (apiKeyHelper) is undetectable and so cannot appear.
+	// Driven through the env lookup, the same interface production uses, so the
+	// ordered tier table itself is under test. Each case drops the tier above it
+	// while leaving every LOWER-ranked variable set, so a reordering that let a
+	// lower tier win fails here. Rank 4 (apiKeyHelper) is undetectable and so
+	// cannot appear.
+	all := map[string]string{
+		"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_VERTEX": "1",
+		"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_AUTH_TOKEN": "t",
+		"ANTHROPIC_API_KEY": "k", "CLAUDE_CODE_OAUTH_TOKEN": "o",
+		"ANTHROPIC_PROFILE": "p",
+	}
+	drop := func(keys ...string) map[string]string {
+		m := map[string]string{}
+		for k, v := range all {
+			m[k] = v
+		}
+		for _, k := range keys {
+			delete(m, k)
+		}
+		return m
+	}
+
 	cases := []struct {
-		name string
-		auth authEnv
-		want string
+		name     string
+		env      map[string]string
+		want     string
+		wantProv string
 	}{
-		{"rank 1 bedrock outranks all", authEnv{Bedrock: true, Vertex: true, Foundry: true, AuthToken: true, APIKey: true, OAuthToken: true, Profile: true}, "bedrock"},
-		{"rank 1 vertex", authEnv{Vertex: true, Foundry: true, AuthToken: true, APIKey: true, OAuthToken: true, Profile: true}, "vertex"},
-		{"rank 1 foundry", authEnv{Foundry: true, AuthToken: true, APIKey: true, OAuthToken: true, Profile: true}, "foundry"},
-		{"rank 2 bearer token beats the api key", authEnv{AuthToken: true, APIKey: true, OAuthToken: true, Profile: true}, "gateway"},
-		{"rank 3 api key beats the oauth token", authEnv{APIKey: true, OAuthToken: true, Profile: true}, "api"},
-		{"rank 5 oauth token beats a profile", authEnv{OAuthToken: true, Profile: true}, "subscription"},
-		{"rank 6 profile beats the login credential", authEnv{Profile: true}, "gateway"},
+		{"rank 1 bedrock outranks all", all, "metered_external", "bedrock"},
+		{"rank 1 vertex", drop("CLAUDE_CODE_USE_BEDROCK"), "metered_external", "vertex"},
+		{"rank 1 foundry", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"), "metered_external", "foundry"},
+		{"rank 2 bearer token beats the api key", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"), "metered_external", "gateway"},
+		{"rank 3 api key beats the oauth token", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_AUTH_TOKEN"), "api", ""},
+		{"rank 5 oauth token beats a profile", map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "o", "ANTHROPIC_PROFILE": "p"}, "subscription", ""},
+		{"rank 6 profile beats the login credential", map[string]string{"ANTHROPIC_PROFILE": "p"}, "metered_external", "gateway"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, billingMode(tc.auth, subscribed))
+			mode, provider := billing(envOf(tc.env), subscribed)
+			assert.Equal(t, tc.want, mode)
+			assert.Equal(t, tc.wantProv, provider)
 		})
 	}
 }
@@ -309,6 +344,7 @@ func TestRead(t *testing.T) {
 		got := read(home, envOf(nil))
 		assert.Equal(t, "subscription", got.BillingMode)
 		assert.Equal(t, "team_standard", got.PlanType)
+		assert.Empty(t, got.Provider, "nobody else meters a subscription")
 	})
 
 	// The counterexample end to end: a real subscription config on disk, but
@@ -318,7 +354,8 @@ func TestRead(t *testing.T) {
 		writeFile(t, filepath.Join(home, ".claude.json"), subscriptionJSON)
 
 		got := read(home, envOf(map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}))
-		assert.Equal(t, "bedrock", got.BillingMode)
+		assert.Equal(t, "metered_external", got.BillingMode)
+		assert.Equal(t, "bedrock", got.Provider, "who meters it is a separate dimension")
 		// The plan is still worth reporting — it says which seat they hold even
 		// though this session does not bill against it.
 		assert.Equal(t, "team_standard", got.PlanType)

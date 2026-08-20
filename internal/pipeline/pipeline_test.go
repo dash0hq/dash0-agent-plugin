@@ -370,7 +370,7 @@ func TestProcess_Stop_EmitsChatSpanAndClearsContext(t *testing.T) {
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
 
 	mu.Lock()
 	require.Len(t, *spans, 1)
@@ -430,7 +430,7 @@ func TestProcess_Stop_EmitsClaudeBillingMode(t *testing.T) {
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -452,12 +452,13 @@ func TestProcess_Stop_ClaudeBedrockOverridesSubscriptionConfig(t *testing.T) {
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
 
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, *spans, 1)
-	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "bedrock"))
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "metered_external"))
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_provider", "bedrock"))
 	assert.False(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "subscription"),
 		"the config must not win over the environment")
 }
@@ -476,7 +477,7 @@ func TestProcess_Stop_BillingModeNotEmittedForOtherHarnesses(t *testing.T) {
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "gpt-5.5"})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -485,6 +486,43 @@ func TestProcess_Stop_BillingModeNotEmittedForOtherHarnesses(t *testing.T) {
 		assert.NotEqual(t, "dash0.gen_ai.billing_mode", a.Key, "Claude's read leaked onto a %s span", "codex")
 		assert.NotEqual(t, "dash0.gen_ai.plan_type", a.Key)
 	}
+}
+
+// Billing mode qualifies a cost figure, so with no usage there is nothing to
+// qualify and the attributes stay off the span. Keeps a turn that reported no
+// tokens from carrying a label about a number it does not have.
+func TestProcess_Stop_NoUsageEmitsNoBillingMode(t *testing.T) {
+	pinClaudeAuthEnv(t, `{"oauthAccount":{"billingType":"stripe_subscription","seatTier":"team_standard"}}`)
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "claude-code"
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	// No transcript, so no token usage — an interrupted turn.
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	for _, a := range (*spans)[0].Attributes {
+		assert.NotEqual(t, "dash0.gen_ai.billing_mode", a.Key, "no cost figure, so nothing to qualify")
+		assert.NotEqual(t, "dash0.gen_ai.plan_type", a.Key)
+	}
+}
+
+// claudeTranscript writes a minimal Claude-format transcript with one complete
+// turn, so a Stop event yields token usage. Billing mode is only emitted
+// alongside a cost figure, so a transcript is what makes these tests realistic —
+// a real Stop always has one.
+func claudeTranscript(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "transcript.jsonl")
+	require.NoError(t, os.WriteFile(p, []byte(
+		`{"type":"user","message":{"role":"user","content":"hi"}}`+"\n"+
+			`{"type":"assistant","requestId":"r1","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":5,"output_tokens":6}}}`+"\n"), 0o644))
+	return p
 }
 
 // pinClaudeAuthEnv points the Claude config lookup at a fixture and pins every
@@ -742,7 +780,7 @@ func TestProcess_SubagentStopAfterNextPrompt_KeepsSpawningTrace(t *testing.T) {
 	require.NotNil(t, turn1Ctx)
 
 	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "turn 2"})
 
 	turn2Ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))

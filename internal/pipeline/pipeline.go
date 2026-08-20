@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dash0hq/dash0-agent-plugin/internal/claudeconfig"
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
+	"github.com/dash0hq/dash0-agent-plugin/internal/source/claude"
 	"github.com/dash0hq/dash0-agent-plugin/internal/transcript"
 	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
@@ -408,14 +408,7 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "on-event: reading transcript: %v\n", err)
 			}
-			if usage != nil {
-				event["gen_ai.usage.input_tokens"] = usage.InputTokens
-				event["gen_ai.usage.output_tokens"] = usage.OutputTokens
-				event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
-				event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
-				event["dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens"] = usage.CacheCreation5mInputTokens
-				event["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"] = usage.CacheCreation1hInputTokens
-			}
+			injectTurnUsage(event, usage)
 		}
 
 		if title := transcript.ReadSessionTitle(transcriptPath); title != "" {
@@ -429,10 +422,30 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		}
 	}
 
-	injectClaudeBilling(event, cfg)
+	// Only when there is a cost figure to qualify: billing mode exists to say what
+	// that number means, so on a turn that reported no tokens it would annotate
+	// nothing.
+	if _, hasUsage := event["gen_ai.usage.input_tokens"]; hasUsage {
+		injectClaudeBilling(event, cfg)
+	}
 
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
+}
+
+// injectTurnUsage writes the turn's token counts onto the event as gen_ai.usage.*
+// attributes, which the span builder emits verbatim. No-op when the transcript
+// yielded nothing, so the span is emitted without token attributes.
+func injectTurnUsage(event map[string]any, usage *transcript.Usage) {
+	if usage == nil {
+		return
+	}
+	event["gen_ai.usage.input_tokens"] = usage.InputTokens
+	event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+	event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
+	event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+	event["dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens"] = usage.CacheCreation5mInputTokens
+	event["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"] = usage.CacheCreation1hInputTokens
 }
 
 // injectClaudeBilling records whether a Claude Code session is billed per token,
@@ -443,16 +456,22 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 // derives its own billing mode from the rollout, and stamping Claude's account
 // state onto a Codex span would silently overwrite it with the wrong answer.
 //
-// Unlike Codex's reader this one does not depend on the transcript — billing is
-// account state, not turn state — so it runs whether or not a transcript exists.
+// Billing is account state rather than turn state, so it does not read the
+// transcript — but the caller gates it on usage being present, since the mode
+// exists to qualify a cost figure.
 func injectClaudeBilling(event map[string]any, cfg otlp.Config) {
 	if cfg.HarnessName != "claude-code" {
 		return
 	}
 
-	info := claudeconfig.Read()
-	// Always stated, including "unknown": recording that we looked and could not
-	// tell differs from never having looked.
+	info := claude.ReadBilling()
+	// Who meters the session is a separate dimension from whether it is metered at
+	// all, so a consumer can read either attribute alone without being misled.
+	if info.Provider != "" {
+		event["dash0.gen_ai.billing_provider"] = info.Provider
+	}
+	// Stated even when "unknown": alongside a cost figure, recording that we
+	// looked and could not tell differs from never having looked.
 	event["dash0.gen_ai.billing_mode"] = info.BillingMode
 	if info.PlanType != "" {
 		event["dash0.gen_ai.plan_type"] = info.PlanType

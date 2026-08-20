@@ -143,7 +143,8 @@ omitted when its value is empty.
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On`invoke_agent` spans.        |
 | `exception.message` | Error text                                                           | On `StopFailure`.              |
-| `dash0.gen_ai.billing_mode` | `subscription` \| `api` \| `bedrock` \| `vertex` \| `foundry` \| `gateway` \| `unknown` | Claude Code + Codex. Always set. Codex only ever says `subscription`/`unknown` — see below. |
+| `dash0.gen_ai.billing_mode` | `subscription` \| `api` \| `metered_external` \| `unknown`             | Claude Code + Codex. Set whenever token usage is (Codex: always). Codex only ever says `subscription`/`unknown` — see below. |
+| `dash0.gen_ai.billing_provider` | `bedrock` \| `vertex` \| `foundry` \| `gateway`                        | Claude Code only. Present only when the mode is `metered_external`. |
 | `dash0.gen_ai.plan_type` | Codex: `free`, `plus`, `pro`. Claude Code: `team_standard`, Max tiers | Claude Code + Codex. Omitted when unreported. Provider vocabulary — display, don't parse. |
 | `dash0.gen_ai.rate_limit.{primary,secondary}.used_percent` | float, 0–100                                                         | Codex only. Omitted per slot when unreported. |
 | `dash0.gen_ai.rate_limit.{primary,secondary}.window_minutes` | integer (`43200` = 30 days, `300` = 5 hours)                         | Codex only. |
@@ -179,16 +180,33 @@ The order below is **Claude Code's documented authentication precedence**, not
 ours — see "Authentication precedence" in its authentication docs. It is
 load-bearing: a credential further down the list is not the one in use.
 
-| Rank | Signal | Mode | Why |
-|---|---|---|---|
-| 1 | `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` | `bedrock` / `vertex` / `foundry` | AWS / Google / Microsoft bills, at a rate we cannot see |
-| 2 | `ANTHROPIC_AUTH_TOKEN` | `gateway` | bearer token — an LLM gateway or proxy sits in front |
-| 3 | `ANTHROPIC_API_KEY` | `api` | direct per-token at list price; the figure **is** spend |
-| 4 | `apiKeyHelper` | — | **undetectable**, see below |
-| 5 | `CLAUDE_CODE_OAUTH_TOKEN` | `subscription` | requires a Pro/Max/Team/Enterprise plan, so plan-backed |
-| 6 | `ANTHROPIC_PROFILE`, or the federation pair | `gateway` | enterprise WIF — real Anthropic billing at contract rates |
-| 7 | `/login` credential (`oauthAccount.billingType`) | `subscription` | |
-| — | none of the above | `unknown` | |
+| Rank | Signal | Mode | Provider | Why |
+|---|---|---|---|---|
+| 1 | `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` | `metered_external` | `bedrock` / `vertex` / `foundry` | AWS / Google / Microsoft bills, at a rate we cannot see |
+| 2 | `ANTHROPIC_AUTH_TOKEN` | `metered_external` | `gateway` | bearer token — an LLM gateway or proxy sits in front |
+| 3 | `ANTHROPIC_API_KEY` | `api` | — | direct per-token at list price; the figure **is** spend |
+| 4 | `apiKeyHelper` | — | — | **undetectable**, see below |
+| 5 | `CLAUDE_CODE_OAUTH_TOKEN` | *from the plan* | — | plan-backed, but a plan is not proof of a subscription |
+| 6 | `ANTHROPIC_PROFILE`, or the federation pair | `metered_external` | `gateway` | enterprise WIF — Anthropic billing at contract rates |
+| 7 | `/login` credential | *from the plan* | — | `billingType` decides; see below |
+| — | none of the above | `unknown` | — | |
+
+**Mode and provider are deliberately orthogonal.** "Is this per-token" and "who
+bills it" are different questions, so folding the vendor into the mode would force
+a consumer to enumerate vendors to answer the first. Crucially `api` must keep
+meaning *per-token at list price, so this figure IS spend* — a Bedrock session is
+per-token at an AWS-negotiated rate, so calling it `api` would invite a consumer to
+present the wrong number as spend. `metered_external` says "somebody else sets the
+rate"; the provider says who. A new provider is a value rather than a new mode.
+
+**Ranks 5 and 7 resolve from the account, not from the tier.** A plan-backed
+credential proves plan-backed *auth*, not the plan's billing model: an enterprise
+org can sit on usage-based billing (`seatTier: enterprise_usage_based`), and
+`billingType: usage_based` is the Claude Console path for organizations that prefer
+API-based billing. Both report `api`. The subscription family
+(`stripe_subscription`, `stripe_subscription_contracted`, `apple_subscription`,
+`google_play_subscription`) reports `subscription`; anything unrecognised reports
+`unknown` rather than being assumed a subscription.
 
 The config file is consulted **only at rank 7**, because it describes who the user
 *is* rather than how this session bills. Reading it first is the bug this ordering
@@ -200,7 +218,7 @@ unset values.
 `env` block into the process environment (managed last), and hooks inherit it. So a
 key configured in user, project, or managed settings already reaches rank 2/3.
 
-**Two tiers are invisible to a hook and fall through:**
+**Three credential forms are invisible to a hook and fall through:**
 
 - **rank 4, `apiKeyHelper`** — a *command* that mints a key at runtime, so it never
   becomes a value we can observe. A user with a helper *and* a stale login
@@ -209,11 +227,11 @@ key configured in user, project, or managed settings already reaches rank 2/3.
   unreadable from a hook, so a partial read would only create false confidence.
 - **a Claude apps gateway session**, which outranks even rank 1 but exposes no
   documented environment signal.
-
-Only the env-driven profile forms at rank 6 are detected. The docs also describe an
-"active profile" chosen by a file in the Anthropic config directory, whose rank
-against `/login` depends on the auth mode recorded inside it — more depth than a
-cost annotation warrants, so it falls through to rank 7.
+- **rank 6's "active profile" form** — only the env-driven forms (a named
+  `ANTHROPIC_PROFILE`, or the federation pair) are detected. An active profile is
+  chosen by a file in the Anthropic config directory and its rank against `/login`
+  depends on the auth mode recorded inside it, which is more depth than a cost
+  annotation warrants, so it falls through to rank 7.
 
 Config file resolution follows the CLI (undocumented, taken from the 2.1.81
 bundle), and note the asymmetric defaults:
@@ -270,8 +288,14 @@ Two rules the readers hold to:
   proven rather than inferred. The asymmetry is deliberate, not an inconsistency.
 - **Unreported values are omitted, not zeroed.** "0% of allowance consumed" and
   "balance $0.00" read as measurements; a CLI that never reported them has made
-  no such claim. Only `billing_mode` is unconditional, because recording that we
-  looked and could not tell differs from never having looked.
+  no such claim. `billing_mode` is the exception and is stated even as `unknown`,
+  because alongside a cost figure "we looked and could not tell" differs from
+  "we never looked".
+
+Claude Code emits it only on spans that carry token usage: the mode exists to say
+what a cost figure means, so on a turn that reported no tokens it would annotate
+nothing. Codex currently emits it unconditionally — an inconsistency tracked
+separately.
 
 The namespace is harness-neutral (`dash0.gen_ai.*`, not `dash0.codex.*`) because
 the same mismatch exists for Claude Code (Max plans) and Copilot (per-seat, so

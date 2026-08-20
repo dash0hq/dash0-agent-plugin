@@ -276,16 +276,17 @@ func TestIntegrationClaudeBillingModeFromConfig(t *testing.T) {
 		billingType string
 		extraEnv    []string
 		want        string
+		wantProv    string
 	}{
-		{"console account bills per token", "usage_based", nil, "api"},
-		{"team subscription", "stripe_subscription", nil, "subscription"},
-		{"unrecognised type is not assumed", "paddle_subscription", nil, "unknown"},
+		{"console account bills per token", "usage_based", nil, "api", ""},
+		{"team subscription", "stripe_subscription", nil, "subscription", ""},
+		{"unrecognised type is not assumed", "paddle_subscription", nil, "unknown", ""},
 		// The environment outranks the config: a subscription on disk plus Bedrock
 		// in the env is per-token at an AWS rate.
 		{"bedrock env beats a subscription config", "stripe_subscription",
-			[]string{"CLAUDE_CODE_USE_BEDROCK=1"}, "bedrock"},
+			[]string{"CLAUDE_CODE_USE_BEDROCK=1"}, "metered_external", "bedrock"},
 		{"bearer token is a gateway", "stripe_subscription",
-			[]string{"ANTHROPIC_AUTH_TOKEN=tok"}, "gateway"},
+			[]string{"ANTHROPIC_AUTH_TOKEN=tok"}, "metered_external", "gateway"},
 	}
 
 	for _, tc := range cases {
@@ -306,10 +307,18 @@ func TestIntegrationClaudeBillingModeFromConfig(t *testing.T) {
 			)
 			env = append(env, tc.extraEnv...)
 
+			// Billing mode only rides alongside a cost figure, so the Stop event
+			// needs a transcript with a complete turn — which is what a real Stop
+			// always has.
+			tp := filepath.Join(t.TempDir(), "transcript.jsonl")
+			require.NoError(t, os.WriteFile(tp, []byte(
+				`{"type":"user","message":{"role":"user","content":"hi"}}`+"\n"+
+					`{"type":"assistant","requestId":"r1","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":5,"output_tokens":6}}}`+"\n"), 0o644))
+
 			for _, ev := range []string{
 				`{"hook_event_name":"SessionStart","session_id":"bill-1","model":"opus"}`,
 				`{"hook_event_name":"UserPromptSubmit","session_id":"bill-1","prompt":"hi"}`,
-				`{"hook_event_name":"Stop","session_id":"bill-1"}`,
+				fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"bill-1","transcript_path":%q}`, tp),
 			} {
 				execBinary(t, ev, env)
 			}
@@ -319,6 +328,14 @@ func TestIntegrationClaudeBillingModeFromConfig(t *testing.T) {
 			require.Len(t, *spans, 1)
 			assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", tc.want),
 				"want billing_mode=%s, attrs: %v", tc.want, (*spans)[0].Attributes)
+			if tc.wantProv != "" {
+				assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_provider", tc.wantProv))
+			} else {
+				for _, a := range (*spans)[0].Attributes {
+					assert.NotEqual(t, "dash0.gen_ai.billing_provider", a.Key,
+						"no intermediary, so no provider")
+				}
+			}
 		})
 	}
 }

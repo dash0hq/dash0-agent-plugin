@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package claudeconfig reads Claude Code's account configuration to determine how
-// a session is billed.
+// Package claude reads Claude Code's local state. Today that is account
+// configuration, to determine how a session is billed.
 //
 // Cost is computed as provider list price × tokens, which is only the user's
 // spend when they are billed per token. Which case applies is decided by AUTH
@@ -13,7 +13,7 @@
 // Privacy: the config also holds emailAddress, displayName and organization
 // identifiers. Only billing fields are decoded, so the identity fields cannot be
 // mapped, logged or emitted. It holds no secrets — tokens live in the keychain.
-package claudeconfig
+package claude
 
 import (
 	"encoding/json"
@@ -54,18 +54,28 @@ const (
 	BillingSubscription = "subscription"
 	// BillingAPI: genuinely per-token at list price — the figure IS spend.
 	BillingAPI = "api"
-	// BillingBedrock / BillingVertex / BillingFoundry: per-token, but at a
-	// negotiated cloud rate we cannot see, so the figure is neither
-	// list-equivalent nor real spend. Billed by AWS / Google / Microsoft.
-	BillingBedrock = "bedrock"
-	BillingVertex  = "vertex"
-	BillingFoundry = "foundry"
-	// BillingGateway: a proxy, LLM gateway or federated enterprise credential
-	// sits in front. Genuinely metered, but on terms we cannot see — same
-	// reasoning as the cloud providers, different intermediary.
-	BillingGateway = "gateway"
+	// BillingMeteredExternal: per-token, but somebody else meters it at a rate we
+	// cannot see, so the figure is neither a list-price equivalent nor real spend.
+	// Which intermediary travels separately, as the provider.
+	BillingMeteredExternal = "metered_external"
 	// BillingUnknown: we looked and could not tell. Never conflate with api.
 	BillingUnknown = "unknown"
+)
+
+// Billing providers — who meters a BillingMeteredExternal session. A separate
+// dimension from the mode on purpose: "is this per-token" and "who bills it" are
+// different questions, and keeping them apart means a consumer can read the mode
+// alone without being misled, a backend can ask for all metered sessions without
+// enumerating vendors, and a new provider is a value here rather than a new mode.
+//
+// ProviderGateway covers an unnamed intermediary — an LLM gateway, proxy, or
+// federated enterprise credential — where we know somebody else sets the rate but
+// not who.
+const (
+	ProviderBedrock = "bedrock"
+	ProviderVertex  = "vertex"
+	ProviderFoundry = "foundry"
+	ProviderGateway = "gateway"
 )
 
 // account is the billing subset of the config's oauthAccount. Deliberately
@@ -77,16 +87,44 @@ type account struct {
 	MaxTier     string // e.g. "not_max"
 }
 
-// authEnv records which auth-selecting variables are PRESENT. Values are never
-// read — an API key's contents are irrelevant to us and must not be touched.
-type authEnv struct {
-	Bedrock    bool
-	Vertex     bool
-	Foundry    bool
-	AuthToken  bool
-	APIKey     bool
-	OAuthToken bool
-	Profile    bool
+// authTier is one rung of Claude Code's authentication precedence: the condition
+// that selects it, and the billing mode it implies. An empty mode means "this tier
+// is plan-backed — resolve from the account".
+//
+// Keeping the ranks as ordered DATA rather than a switch means the order is the
+// table, and adding a provider is one line.
+type authTier struct {
+	name string
+	mode string
+	// provider names the intermediary when mode is BillingMeteredExternal.
+	provider string
+	// set reports whether this tier's credential is present. Presence only —
+	// values are never read, since an API key's contents are irrelevant to us.
+	set func(present func(string) bool) bool
+}
+
+// authTiers is the documented precedence, highest first. Rank 4 (apiKeyHelper) is
+// absent because a hook cannot observe it; see DEVELOPMENT.md.
+var authTiers = []authTier{
+	{name: "bedrock", mode: BillingMeteredExternal, provider: ProviderBedrock, set: presence(envBedrock)},
+	{name: "vertex", mode: BillingMeteredExternal, provider: ProviderVertex, set: presence(envVertex)},
+	{name: "foundry", mode: BillingMeteredExternal, provider: ProviderFoundry, set: presence(envFoundry)},
+	{name: "bearer token", mode: BillingMeteredExternal, provider: ProviderGateway, set: presence(envAuthToken)},
+	{name: "api key", mode: BillingAPI, set: presence(envAPIKey)},
+	// Plan-backed: mode comes from the account, not from the tier.
+	{name: "setup token", mode: "", set: presence(envOAuthToken)},
+	{name: "profile/federation", mode: BillingMeteredExternal, provider: ProviderGateway, set: func(present func(string) bool) bool {
+		// Only the env-driven forms: a named profile, or the federation pair. The
+		// docs also describe an "active profile" chosen by a file in the Anthropic
+		// config directory, whose rank against /login depends on an auth mode
+		// recorded inside it — more depth than a cost annotation warrants, so it
+		// falls through to the account.
+		return present(envProfile) || (present(envFederationRule) && present(envFederationOrgID))
+	}},
+}
+
+func presence(key string) func(func(string) bool) bool {
+	return func(present func(string) bool) bool { return present(key) }
 }
 
 // billingMode applies Claude Code's documented authentication precedence — the
@@ -96,31 +134,43 @@ type authEnv struct {
 //
 // The config file is consulted last, deliberately: it describes who the user is,
 // not how this session bills. Consulting it first is the bug this order prevents.
-func billingMode(auth authEnv, acct *account) string {
-	switch {
-	case auth.Bedrock:
-		return BillingBedrock
-	case auth.Vertex:
-		return BillingVertex
-	case auth.Foundry:
-		return BillingFoundry
-	case auth.AuthToken:
-		return BillingGateway
-	case auth.APIKey:
-		return BillingAPI
-	case auth.OAuthToken:
-		return BillingSubscription
-	case auth.Profile:
-		return BillingGateway
-	}
-	if acct != nil {
-		switch acct.BillingType {
-		case billingTypeUsageBased:
-			return BillingAPI
-		case billingTypeStripe, billingTypeStripeContracted,
-			billingTypeApple, billingTypeGooglePlay:
-			return BillingSubscription
+func billing(getenv func(string) string, acct *account) (mode, provider string) {
+	// An exported-but-empty variable is how shells leave unset values; treating it
+	// as present would report api for a subscriber.
+	present := func(key string) bool { return getenv(key) != "" }
+
+	for _, tier := range authTiers {
+		if !tier.set(present) {
+			continue
 		}
+		if tier.mode != "" {
+			return tier.mode, tier.provider
+		}
+		// A plan-backed credential (rank 5) is not proof of a subscription — an
+		// enterprise org can sit on usage-based billing — so it resolves exactly
+		// as the /login credential at rank 7 does. No intermediary either way.
+		return modeFromAccount(acct), ""
+	}
+	return modeFromAccount(acct), ""
+}
+
+// modeFromAccount resolves how a plan-backed account bills. Unknown when we
+// cannot tell: a credential we recognise is not a licence to assume its billing.
+func modeFromAccount(acct *account) string {
+	if acct == nil {
+		return BillingUnknown
+	}
+	// An enterprise seat can carry usage-based billing directly, with no
+	// billingType reported alongside it.
+	if acct.SeatTier == seatTierEnterpriseUsageBased {
+		return BillingAPI
+	}
+	switch acct.BillingType {
+	case billingTypeUsageBased:
+		return BillingAPI
+	case billingTypeStripe, billingTypeStripeContracted,
+		billingTypeApple, billingTypeGooglePlay:
+		return BillingSubscription
 	}
 	return BillingUnknown
 }
@@ -134,6 +184,11 @@ func billingMode(auth authEnv, acct *account) string {
 // a subscription: a future billing type we have never seen is not a licence to
 // claim the cost figure is not the user's spend.
 const (
+	// seatTierEnterpriseUsageBased is a seatTier, not a billingType — Claude Code
+	// gates on `seatTier === "enterprise_usage_based"` to identify an enterprise
+	// org billing per token.
+	seatTierEnterpriseUsageBased = "enterprise_usage_based"
+
 	billingTypeUsageBased       = "usage_based"
 	billingTypeStripe           = "stripe_subscription"
 	billingTypeStripeContracted = "stripe_subscription_contracted"
@@ -142,19 +197,23 @@ const (
 )
 
 // Info is what a Claude Code session reports about how it bills.
-type Info struct {
+type Billing struct {
 	// BillingMode is always set, including BillingUnknown — recording that we
 	// looked and could not tell differs from never having looked.
 	BillingMode string
+	// Provider names who meters the session, and is set only when BillingMode is
+	// BillingMeteredExternal. Orthogonal to the mode: a consumer can read either
+	// alone without being misled.
+	Provider string
 	// PlanType is the provider's plan identifier, empty when nothing useful is
 	// known. Callers omit the attribute rather than emitting a blank.
 	PlanType string
 }
 
-// Read reports how the current Claude Code session bills. Best-effort by design:
+// ReadBilling reports how the current Claude Code session bills. Best-effort by design:
 // this annotates cost and is never worth failing a span over, so every failure
 // path lands on BillingUnknown.
-func Read() Info {
+func ReadBilling() Billing {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		// Without a home directory the default config location is unknowable. An
@@ -166,38 +225,13 @@ func Read() Info {
 
 // read takes its inputs explicitly so the whole surface, CLAUDE_CONFIG_DIR
 // rerooting included, is testable without mutating the process environment.
-func read(home string, getenv func(string) string) Info {
-	// Presence, not value: an empty exported variable is how shells leave unset
-	// values, and treating it as present would report api for a subscriber.
-	present := func(key string) bool { return getenv(key) != "" }
-
-	auth := authFromEnv(present)
-
+func read(home string, getenv func(string) string) Billing {
 	acct := readAccount(configPath(home, getenv(envConfigDir)))
 
 	// The plan is reported even when auth overrides the mode: it still says which
 	// seat the user holds, even though this session does not bill against it.
-	return Info{BillingMode: billingMode(auth, acct), PlanType: planType(acct)}
-}
-
-// authFromEnv records which credential tiers are present.
-//
-// Only the ENV-DRIVEN profile forms are detected: a named ANTHROPIC_PROFILE, or
-// the federation pair (both required). The docs also describe an "active profile"
-// selected by a file in the Anthropic config directory, whose rank against the
-// login credential depends on the auth mode recorded inside it — more depth than
-// a cost annotation warrants, so that form is deliberately not detected and falls
-// through to the config file.
-func authFromEnv(present func(string) bool) authEnv {
-	return authEnv{
-		Bedrock:    present(envBedrock),
-		Vertex:     present(envVertex),
-		Foundry:    present(envFoundry),
-		AuthToken:  present(envAuthToken),
-		APIKey:     present(envAPIKey),
-		OAuthToken: present(envOAuthToken),
-		Profile:    present(envProfile) || (present(envFederationRule) && present(envFederationOrgID)),
-	}
+	mode, provider := billing(getenv, acct)
+	return Billing{BillingMode: mode, Provider: provider, PlanType: planType(acct)}
 }
 
 // maxTierNone is the sentinel claudeMaxTier carries when the account has no Max

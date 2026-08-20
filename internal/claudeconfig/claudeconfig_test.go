@@ -120,6 +120,18 @@ func TestBillingMode(t *testing.T) {
 		{"no config at all", authEnv{}, nil, "unknown"},
 		{"config present but no billingType", authEnv{}, &account{SeatTier: "team_standard"}, "unknown"},
 
+		// billingType is NOT uniformly a subscription. Claude Console accounts —
+		// "organizations that prefer API-based billing" — log in like anyone else
+		// and carry an oauthAccount, but bill per token. Treating any non-empty
+		// value as a subscription tells them their real spend is not real spend.
+		{"usage_based is per-token, not a subscription", authEnv{}, &account{BillingType: "usage_based"}, "api"},
+		{"contracted stripe is still a subscription", authEnv{}, &account{BillingType: "stripe_subscription_contracted"}, "subscription"},
+		{"apple subscription", authEnv{}, &account{BillingType: "apple_subscription"}, "subscription"},
+		{"google play subscription", authEnv{}, &account{BillingType: "google_play_subscription"}, "subscription"},
+		// An unrecognised value is not a licence to guess: a future billing type we
+		// have never seen must not be silently labelled a subscription.
+		{"unrecognised billingType is unknown", authEnv{}, &account{BillingType: "paddle_subscription"}, "unknown"},
+
 		// An API key with no config is still definitively per-token.
 		{"api key with no config", authEnv{APIKey: true}, nil, "api"},
 	}

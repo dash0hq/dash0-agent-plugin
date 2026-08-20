@@ -113,11 +113,33 @@ func billingMode(auth authEnv, acct *account) string {
 	case auth.Profile:
 		return BillingGateway
 	}
-	if acct != nil && acct.BillingType != "" {
-		return BillingSubscription
+	if acct != nil {
+		switch acct.BillingType {
+		case billingTypeUsageBased:
+			return BillingAPI
+		case billingTypeStripe, billingTypeStripeContracted,
+			billingTypeApple, billingTypeGooglePlay:
+			return BillingSubscription
+		}
 	}
 	return BillingUnknown
 }
+
+// billingType values carried by oauthAccount. Not all of them mean "subscription":
+// a Claude Console account — the path for organizations that prefer API-based
+// billing — logs in like any other and carries an oauthAccount, but bills per
+// token. Claude Code itself branches on usage_based for the same reason.
+//
+// An unrecognised value falls through to BillingUnknown rather than being assumed
+// a subscription: a future billing type we have never seen is not a licence to
+// claim the cost figure is not the user's spend.
+const (
+	billingTypeUsageBased       = "usage_based"
+	billingTypeStripe           = "stripe_subscription"
+	billingTypeStripeContracted = "stripe_subscription_contracted"
+	billingTypeApple            = "apple_subscription"
+	billingTypeGooglePlay       = "google_play_subscription"
+)
 
 // Info is what a Claude Code session reports about how it bills.
 type Info struct {

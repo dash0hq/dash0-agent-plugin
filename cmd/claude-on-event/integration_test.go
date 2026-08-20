@@ -261,3 +261,74 @@ func TestIntegrationInvalidOTLPUrlLogsWarning(t *testing.T) {
 	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-badurl","model":"opus"}`, env)
 	assert.Contains(t, stderr, `OTLP URL is not valid: "not-a-url"`)
 }
+
+// Billing mode is verified against the real binary rather than only in-process,
+// because it depends on the environment the hook INHERITS — which unit tests fake.
+//
+// It needs no particular account: the reader derives mode from a config file and
+// env credentials, so a synthetic config isolated by CLAUDE_CONFIG_DIR reproduces
+// any customer's shape exactly. `usage_based` in particular is a Claude Console
+// account, which nobody here has, and which would otherwise be reported as a
+// subscription — telling that customer their real spend is not real spend.
+func TestIntegrationClaudeBillingModeFromConfig(t *testing.T) {
+	cases := []struct {
+		name        string
+		billingType string
+		extraEnv    []string
+		want        string
+	}{
+		{"console account bills per token", "usage_based", nil, "api"},
+		{"team subscription", "stripe_subscription", nil, "subscription"},
+		{"unrecognised type is not assumed", "paddle_subscription", nil, "unknown"},
+		// The environment outranks the config: a subscription on disk plus Bedrock
+		// in the env is per-token at an AWS rate.
+		{"bedrock env beats a subscription config", "stripe_subscription",
+			[]string{"CLAUDE_CODE_USE_BEDROCK=1"}, "bedrock"},
+		{"bearer token is a gateway", "stripe_subscription",
+			[]string{"ANTHROPIC_AUTH_TOKEN=tok"}, "gateway"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgDir := t.TempDir()
+			cfg := fmt.Sprintf(`{"claudeMaxTier":"not_max","oauthAccount":{"billingType":%q,"seatTier":"team_standard"}}`, tc.billingType)
+			require.NoError(t, os.WriteFile(filepath.Join(cfgDir, ".claude.json"), []byte(cfg), 0o600))
+
+			srv, spans, mu := spansCollector(t)
+			env := append(makeEnv(t.TempDir(), srv.URL),
+				"CLAUDE_CONFIG_DIR="+cfgDir,
+				// Pinned empty so a credential exported on the host machine cannot
+				// change the result under us.
+				"ANTHROPIC_API_KEY=", "ANTHROPIC_AUTH_TOKEN=",
+				"CLAUDE_CODE_USE_BEDROCK=", "CLAUDE_CODE_USE_VERTEX=",
+				"CLAUDE_CODE_USE_FOUNDRY=", "CLAUDE_CODE_OAUTH_TOKEN=",
+				"ANTHROPIC_PROFILE=",
+			)
+			env = append(env, tc.extraEnv...)
+
+			for _, ev := range []string{
+				`{"hook_event_name":"SessionStart","session_id":"bill-1","model":"opus"}`,
+				`{"hook_event_name":"UserPromptSubmit","session_id":"bill-1","prompt":"hi"}`,
+				`{"hook_event_name":"Stop","session_id":"bill-1"}`,
+			} {
+				execBinary(t, ev, env)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, *spans, 1)
+			assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", tc.want),
+				"want billing_mode=%s, attrs: %v", tc.want, (*spans)[0].Attributes)
+		})
+	}
+}
+
+// hasStringAttr reports whether attrs carries key=value as a string attribute.
+func hasStringAttr(attrs []otlp.Attribute, key, value string) bool {
+	for _, a := range attrs {
+		if a.Key == key && a.Value.StringValue != nil && *a.Value.StringValue == value {
+			return true
+		}
+	}
+	return false
+}

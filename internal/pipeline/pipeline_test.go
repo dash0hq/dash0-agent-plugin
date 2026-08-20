@@ -417,6 +417,89 @@ func TestProcess_Stop_PreservesUpstreamInjectedUsage(t *testing.T) {
 	assert.Equal(t, "111", intAttr(t, (*spans)[0], "gen_ai.usage.output_tokens"))
 }
 
+// Claude Code billing mode rides on the chat span. The config is redirected via
+// CLAUDE_CONFIG_DIR and the auth variables are pinned empty, so the test reads a
+// fixture rather than the developer's real account and cannot be perturbed by a
+// key that happens to be exported on the machine running it.
+func TestProcess_Stop_EmitsClaudeBillingMode(t *testing.T) {
+	pinClaudeAuthEnv(t, `{"claudeMaxTier":"not_max","oauthAccount":{"billingType":"stripe_subscription","seatTier":"team_standard"}}`)
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "claude-code"
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "subscription"))
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.plan_type", "team_standard"))
+}
+
+// The environment decides, not the config file: a subscription account on disk
+// plus Bedrock in the environment bills per token at an AWS rate. Emitting
+// "subscription" here would tell the customer their real spend is not real spend.
+func TestProcess_Stop_ClaudeBedrockOverridesSubscriptionConfig(t *testing.T) {
+	pinClaudeAuthEnv(t, `{"oauthAccount":{"billingType":"stripe_subscription","seatTier":"team_standard"}}`)
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "claude-code"
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "bedrock"))
+	assert.False(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "subscription"),
+		"the config must not win over the environment")
+}
+
+// This read is Claude-specific but sits in the shared LLM-span path, so it must be
+// harness-guarded: Codex emits its own billing mode from the rollout, and stamping
+// Claude's answer onto a Codex span would silently overwrite it with the wrong
+// account's state.
+func TestProcess_Stop_BillingModeNotEmittedForOtherHarnesses(t *testing.T) {
+	// A perfectly readable Claude config is present; the harness is what excludes it.
+	pinClaudeAuthEnv(t, `{"oauthAccount":{"billingType":"stripe_subscription","seatTier":"team_standard"}}`)
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "codex"
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "gpt-5.5"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	for _, a := range (*spans)[0].Attributes {
+		assert.NotEqual(t, "dash0.gen_ai.billing_mode", a.Key, "Claude's read leaked onto a %s span", "codex")
+		assert.NotEqual(t, "dash0.gen_ai.plan_type", a.Key)
+	}
+}
+
+// pinClaudeAuthEnv points the Claude config lookup at a fixture and pins every
+// auth variable empty, so these tests neither read the developer's real account
+// nor inherit an exported key from the host.
+func pinClaudeAuthEnv(t *testing.T, configJSON string) {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude.json"), []byte(configJSON), 0o600))
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "")
+	t.Setenv("CLAUDE_CODE_USE_VERTEX", "")
+}
+
 // intAttr returns the intValue of the named span attribute, failing the test if
 // it is absent or not an integer attribute.
 func intAttr(t *testing.T, span otlp.Span, key string) string {

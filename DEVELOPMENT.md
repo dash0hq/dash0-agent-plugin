@@ -121,8 +121,8 @@ omitted when its value is empty.
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On`invoke_agent` spans.        |
 | `exception.message` | Error text                                                           | On `StopFailure`.              |
-| `dash0.gen_ai.billing_mode` | `subscription` \| `unknown`                                          | Codex only. Always set. Never `api` — see below. |
-| `dash0.gen_ai.plan_type` | `free`, `plus`, `pro`, …                                             | Codex only. Omitted when unreported. |
+| `dash0.gen_ai.billing_mode` | `subscription` \| `api` \| `bedrock` \| `vertex` \| `foundry` \| `gateway` \| `unknown` | Claude Code + Codex. Always set. Codex only ever says `subscription`/`unknown` — see below. |
+| `dash0.gen_ai.plan_type` | Codex: `free`, `plus`, `pro`. Claude Code: `team_standard`, Max tiers | Claude Code + Codex. Omitted when unreported. Provider vocabulary — display, don't parse. |
 | `dash0.gen_ai.rate_limit.{primary,secondary}.used_percent` | float, 0–100                                                         | Codex only. Omitted per slot when unreported. |
 | `dash0.gen_ai.rate_limit.{primary,secondary}.window_minutes` | integer (`43200` = 30 days, `300` = 5 hours)                         | Codex only. |
 | `dash0.gen_ai.rate_limit.{primary,secondary}.resets_at` | integer, unix seconds                                                | Codex only. |
@@ -136,7 +136,79 @@ omitted when its value is empty.
 Cost is computed as provider list price × tokens. On a subscription there is no
 per-token price at all — a flat fee buys a rationed allowance and the marginal
 token is free — so that figure is a list-price *equivalent*, not spend.
-`dash0.gen_ai.billing_mode` tells the consumer which it is.
+`dash0.gen_ai.billing_mode` tells the consumer which it is. `bedrock` and `vertex`
+are per-token but at a negotiated cloud rate, so those figures are neither
+list-equivalent *nor* spend.
+
+**An absent `billing_mode` means "undetermined", never "billed per token".** All
+four harnesses are predominantly sold as subscriptions; only Claude Code and Codex
+expose a detectable signal, and Copilot is per-seat, so its figure is never spend.
+
+##### How it is derived, per harness
+
+**Claude Code — by auth precedence, not by the config file.** Setting
+`ANTHROPIC_API_KEY` disables the OAuth flow, and an env-var key takes precedence
+over an authenticated subscription, so a stale `oauthAccount` can sit in
+`~/.claude.json` while traffic bills per token. Reading `billingType` alone reports
+`subscription` for those users — telling a customer their real spend is not real
+spend. Evaluated in order:
+
+The order below is **Claude Code's documented authentication precedence**, not
+ours — see "Authentication precedence" in its authentication docs. It is
+load-bearing: a credential further down the list is not the one in use.
+
+| Rank | Signal | Mode | Why |
+|---|---|---|---|
+| 1 | `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` | `bedrock` / `vertex` / `foundry` | AWS / Google / Microsoft bills, at a rate we cannot see |
+| 2 | `ANTHROPIC_AUTH_TOKEN` | `gateway` | bearer token — an LLM gateway or proxy sits in front |
+| 3 | `ANTHROPIC_API_KEY` | `api` | direct per-token at list price; the figure **is** spend |
+| 4 | `apiKeyHelper` | — | **undetectable**, see below |
+| 5 | `CLAUDE_CODE_OAUTH_TOKEN` | `subscription` | requires a Pro/Max/Team/Enterprise plan, so plan-backed |
+| 6 | `ANTHROPIC_PROFILE`, or the federation pair | `gateway` | enterprise WIF — real Anthropic billing at contract rates |
+| 7 | `/login` credential (`oauthAccount.billingType`) | `subscription` | |
+| — | none of the above | `unknown` | |
+
+The config file is consulted **only at rank 7**, because it describes who the user
+*is* rather than how this session bills. Reading it first is the bug this ordering
+exists to prevent. Env vars are checked for *presence* only — an API key's value is
+never read — and an empty variable counts as unset, since that is how shells leave
+unset values.
+
+`settings.env` needs no special handling: Claude Code merges every settings scope's
+`env` block into the process environment (managed last), and hooks inherit it. So a
+key configured in user, project, or managed settings already reaches rank 2/3.
+
+**Two tiers are invisible to a hook and fall through:**
+
+- **rank 4, `apiKeyHelper`** — a *command* that mints a key at runtime, so it never
+  becomes a value we can observe. A user with a helper *and* a stale login
+  credential is reported `subscription`. Detecting it would mean reading the
+  settings precedence chain, two tiers of which (server-managed and CLI args) are
+  unreadable from a hook, so a partial read would only create false confidence.
+- **a Claude apps gateway session**, which outranks even rank 1 but exposes no
+  documented environment signal.
+
+Only the env-driven profile forms at rank 6 are detected. The docs also describe an
+"active profile" chosen by a file in the Anthropic config directory, whose rank
+against `/login` depends on the auth mode recorded inside it — more depth than a
+cost annotation warrants, so it falls through to rank 7.
+
+Config file resolution follows the CLI (undocumented, taken from the 2.1.81
+bundle), and note the asymmetric defaults:
+
+```
+configDir = $CLAUDE_CONFIG_DIR ?? ~/.claude
+1. $configDir/.config.json                    ← wins if it exists
+2. ${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json
+```
+
+`plan_type` comes from `claudeMaxTier` when it names a real tier, else `seatTier` —
+an account can be `not_max` *and* `team_standard` at once, so keying on the Max
+tier alone would report "not_max" for a paying Team customer.
+
+**Codex — from the rollout's `rate_limits`,** covered below. Everything from here
+to the end of this section is Codex-only; Claude Code persists no allowance data
+locally.
 
 **Allowance windows.** A plan enforces one or two windows at once, and you are
 blocked when *either* exhausts. Codex models both slots as the same
@@ -166,12 +238,14 @@ recovering in hours; a long one means degraded for days. `reached_type` names wh
 window tripped, which is what separates "wait" from "upgrade" — that is why it is a
 string rather than a boolean.
 
-Two rules the reader holds to:
+Two rules the readers hold to:
 
-- **It never emits `api`.** A plan is only reported for ChatGPT-authenticated
-  sessions, so an absent plan is *consistent with* API-key auth without proving
-  it. Claiming `api` would assert the cost figure is real spend, which is the
-  error this exists to prevent. Absence is `unknown`.
+- **Codex never emits `api`; Claude Code may.** For Codex a plan is only reported
+  for ChatGPT-authenticated sessions, so an absent plan is *consistent with*
+  API-key auth without proving it — claiming `api` would assert the figure is real
+  spend, the very error this exists to prevent, so absence stays `unknown`. Claude
+  Code is different: the docs make `ANTHROPIC_API_KEY` definitive, so `api` there is
+  proven rather than inferred. The asymmetry is deliberate, not an inconsistency.
 - **Unreported values are omitted, not zeroed.** "0% of allowance consumed" and
   "balance $0.00" read as measurements; a CLI that never reported them has made
   no such claim. Only `billing_mode` is unconditional, because recording that we

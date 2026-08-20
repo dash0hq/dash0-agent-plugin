@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/claudeconfig"
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
@@ -428,8 +429,34 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		}
 	}
 
+	injectClaudeBilling(event, cfg)
+
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
+}
+
+// injectClaudeBilling records whether a Claude Code session is billed per token,
+// so the consumer knows whether the cost figure is spend or a list-price
+// equivalent. See DEVELOPMENT.md for the attribute contract.
+//
+// Harness-guarded because this function sits in the shared LLM-span path: Codex
+// derives its own billing mode from the rollout, and stamping Claude's account
+// state onto a Codex span would silently overwrite it with the wrong answer.
+//
+// Unlike Codex's reader this one does not depend on the transcript — billing is
+// account state, not turn state — so it runs whether or not a transcript exists.
+func injectClaudeBilling(event map[string]any, cfg otlp.Config) {
+	if cfg.HarnessName != "claude-code" {
+		return
+	}
+
+	info := claudeconfig.Read()
+	// Always stated, including "unknown": recording that we looked and could not
+	// tell differs from never having looked.
+	event["dash0.gen_ai.billing_mode"] = info.BillingMode
+	if info.PlanType != "" {
+		event["dash0.gen_ai.plan_type"] = info.PlanType
+	}
 }
 
 // sessionIDPattern restricts session IDs to filename-safe characters. Session

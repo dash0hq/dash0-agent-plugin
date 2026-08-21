@@ -730,7 +730,7 @@ func TestTokenUsageOnLLMSpan(t *testing.T) {
 
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-tok","model":"claude-sonnet-4-20250514"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-tok","prompt":"hello"}`)
-	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-tok","model":"claude-sonnet-4-20250514","transcript_path":"%s"}`, transcriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-tok","model":"claude-sonnet-4-20250514","transcript_path":%q}`, transcriptPath))
 
 	chatSpan := findSpan(*spans, "chat")
 	require.NotNil(t, chatSpan)
@@ -799,8 +799,8 @@ func TestModelOnToolSpanFromTranscriptWhenSessionStartOmitsModel(t *testing.T) {
 	// SessionStart WITHOUT model — simulates the real-world bug.
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-no-model"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-no-model","prompt":"hello"}`)
-	feed(t, fmt.Sprintf(`{"hook_event_name":"PostToolUse","session_id":"sess-no-model","tool_name":"Bash","tool_use_id":"tu1","tool_response":"ok","transcript_path":"%s"}`, transcriptPath))
-	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-no-model","transcript_path":"%s"}`, transcriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"PostToolUse","session_id":"sess-no-model","tool_name":"Bash","tool_use_id":"tu1","tool_response":"ok","transcript_path":%q}`, transcriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-no-model","transcript_path":%q}`, transcriptPath))
 
 	require.Len(t, *spans, 2, "expected tool span + chat span")
 
@@ -1071,7 +1071,7 @@ func TestSubagentStopEmitsChatSpanWithTokens(t *testing.T) {
 
 	// Sub-agent does its work (tool calls inside sub-agent omitted for brevity).
 	// SubagentStop fires when sub-agent finishes.
-	feed(t, fmt.Sprintf(`{"hook_event_name":"SubagentStop","session_id":"sess-substop","agent_id":"sub1","agent_type":"Explore","agent_transcript_path":"%s"}`, agentTranscriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"SubagentStop","session_id":"sess-substop","agent_id":"sub1","agent_type":"Explore","agent_transcript_path":%q}`, agentTranscriptPath))
 
 	// Main agent Stop.
 	feed(t, `{"hook_event_name":"Stop","session_id":"sess-substop"}`)

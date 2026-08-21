@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -597,7 +596,7 @@ exec %q "$@"
 	)
 	// Own process group so copilot's exit-time cleanup (which can signal its
 	// process group) cannot SIGKILL the test binary that spawned it.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setNewProcessGroup(cmd)
 	out, err := cmd.CombinedOutput()
 	t.Logf("copilot -p output (err=%v):\n%s", err, out)
 	require.NoError(t, err, "copilot -p failed")

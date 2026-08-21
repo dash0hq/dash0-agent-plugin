@@ -97,7 +97,10 @@ func TestDataDirPrecedence(t *testing.T) {
 		t.Setenv("CODEX_PLUGIN_DATA", "")
 		t.Setenv("DASH0_PLUGIN_DATA", "")
 		t.Setenv("XDG_STATE_HOME", "")
+		// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows, so both
+		// have to move or this asserts against the real home on one platform.
 		t.Setenv("HOME", "/home/somebody")
+		t.Setenv("USERPROFILE", "/home/somebody")
 
 		got, err := Codex.DataDir()
 		require.NoError(t, err)

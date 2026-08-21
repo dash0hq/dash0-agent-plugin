@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -158,21 +159,32 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	// Stage the plugin with the REAL claude/claude-on-event.sh (not a stub), then place
 	// the freshly built binary where that script resolves it so it skips the
 	// GitHub download and execs our binary. For a --plugin-dir load, Claude computes
-	// CLAUDE_PLUGIN_DATA=$HOME/.claude/plugins/data/<plugin-name>-inline (it
+	// CLAUDE_PLUGIN_DATA=<config-dir>/plugins/data/<plugin-name>-inline (it
 	// ignores any preset value), so the binary must land under that path.
 	stageDir := t.TempDir()
 	copyDir(t, filepath.Join(pluginDir, ".claude-plugin"), filepath.Join(stageDir, ".claude-plugin"))
 	copyDir(t, filepath.Join(pluginDir, "claude"), filepath.Join(stageDir, "claude"))
 
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	// Give Claude its own config directory. A real "dash0-agent-plugin" install
+	// already on this machine (via the marketplace) otherwise wins over the
+	// --plugin-dir copy — Claude logs "blocked by managed settings" and silently
+	// runs the installed plugin's hooks instead, so the test would pass or fail
+	// for a reason that has nothing to do with the code under test. Isolation
+	// also keeps the run out of the developer's real ~/.claude.
+	configDir := t.TempDir()
 	ver := claudePluginVersion(t, pluginDir)
-	goos, arch := unameOSArch(t)
-	binDir := filepath.Join(home, ".claude", "plugins", "data", claudePluginName(t, pluginDir)+"-inline", "bin")
+	// claude/claude-on-event.sh derives this name from `uname`, normalizing
+	// mingw/msys/cygwin to "windows" and appending ".exe" there. runtime.GOOS/
+	// GOARCH already give the normalized form directly, matching the GoReleaser
+	// asset names the script's download path expects.
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
+	binDir := filepath.Join(configDir, "plugins", "data", claudePluginName(t, pluginDir)+"-inline", "bin")
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
-	staged := filepath.Join(binDir, fmt.Sprintf("on-event-%s-%s-%s", ver, goos, arch))
+	staged := filepath.Join(binDir, fmt.Sprintf("on-event-%s-%s-%s%s", ver, runtime.GOOS, runtime.GOARCH, exe))
 	copyExecutable(t, binary, staged)
-	t.Cleanup(func() { os.Remove(staged) })
 
 	workDir := t.TempDir()
 
@@ -184,16 +196,23 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	settings := fmt.Sprintf("---\notlp_url: %q\nauth_token: \"e2e-test-token\"\n---\n", srv.URL)
 	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".claude", "dash0-agent-plugin.local.md"), []byte(settings), 0o644))
 
-	cmd := exec.Command(claudeBin,
+	args := []string{
 		"--print",
 		"--plugin-dir", stageDir,
 		"--dangerously-skip-permissions",
 		"-p", "respond with exactly: hello",
 		"--model", "haiku",
-		"--max-budget-usd", "0.05",
-	)
+	}
+	// --max-budget-usd is an API-billing guard: under subscription (OAuth token)
+	// auth the CLI rejects the run outright with "Exceeded USD budget", before
+	// producing any output or firing a single hook. Only pass it on the
+	// API-key path, where it actually guards spend.
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		args = append(args, "--max-budget-usd", "0.05")
+	}
+	cmd := exec.Command(claudeBin, args...)
 	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+configDir)
 
 	output, cmdErr := cmd.CombinedOutput()
 	t.Logf("claude output (err=%v): %s", cmdErr, string(output))
@@ -223,7 +242,14 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 // buildClaudeBinary compiles cmd/claude-on-event into a temp dir and returns its path.
 func buildClaudeBinary(t *testing.T, pluginDir string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "on-event")
+	name := "on-event"
+	if runtime.GOOS == "windows" {
+		// go build honors -o verbatim: without the extension, Windows refuses to
+		// exec the file directly ("executable file not found in %PATH%"), even
+		// with a full path.
+		name += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	build := exec.Command("go", "build", "-o", bin, "./cmd/claude-on-event")
 	build.Dir = pluginDir
 	out, err := build.CombinedOutput()

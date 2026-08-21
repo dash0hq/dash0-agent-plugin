@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1053,9 +1054,13 @@ func TestChdirToEventCwd(t *testing.T) {
 	t.Run("changes to the event cwd", func(t *testing.T) {
 		original, err := filepath.Abs(".")
 		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
 
+		// Create the directory BEFORE registering the chdir back. Cleanups run in
+		// reverse, so this order returns to the original directory first and then
+		// deletes the temp one — Windows refuses to remove a directory that is any
+		// process's working directory.
 		target := t.TempDir()
+		t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
 		ChdirToEventCwd(map[string]any{"cwd": target})
 
 		got, err := filepath.Abs(".")
@@ -1675,7 +1680,15 @@ func TestProcess_PostToolUse_DoesNotWaitForATranscriptThatDoesNotExist(t *testin
 	}
 	elapsed := time.Since(start)
 
-	assert.Less(t, elapsed, modelWaitBudget,
+	// The Windows runner comes in just over the budget (1.10s measured) doing the
+	// work these three calls do without waiting at all, so it gets headroom. The
+	// property still holds: paying the wait even once puts this past 2s, and
+	// paying it per call puts it past 3s.
+	budget := modelWaitBudget
+	if runtime.GOOS == "windows" {
+		budget = 2 * modelWaitBudget
+	}
+	assert.Less(t, elapsed, budget,
 		"three tool calls must not each pay the wait; before the existence check this took ~3x the budget")
 
 	mu.Lock()

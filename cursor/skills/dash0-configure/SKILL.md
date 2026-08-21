@@ -26,7 +26,7 @@ Cursor has no plugin settings UI and no keychain support, so the config file is 
 
 ## Scope
 
-Ask whether to write user-level (`~/.cursor/dash0-agent-plugin.local.md`, applies to all projects) or project-level (`.cursor/dash0-agent-plugin.local.md`, only the current workspace — overrides the user-level file entirely, does not merge). Default to user-level unless the user asks for project-only.
+Ask whether to write user-level (`~/.cursor/dash0-agent-plugin.local.md`, applies to all projects) or project-level (`.cursor/dash0-agent-plugin.local.md`, only the current workspace — overrides the user-level file entirely, does not merge). Default to user-level unless the user asks for project-only. On Windows the user-level file is `%USERPROFILE%\.cursor\dash0-agent-plugin.local.md`.
 
 > [!WARNING]
 > A project-level file takes over the auth token for every session in that workspace. If that token is wrong or scoped to a different organization, exports fail as a silent 401. Prefer user-level unless the user needs a different dataset or team for one project.
@@ -79,7 +79,12 @@ Ask whether to write user-level (`~/.cursor/dash0-agent-plugin.local.md`, applie
    ---
    ```
 
-6. Run `chmod 600 <file>` so the token isn't world-readable.
+6. Restrict the file to its owner, so the token isn't readable by other accounts.
+
+   - macOS and Linux: `chmod 600 <file>`
+   - Windows: `powershell -NoProfile -Command 'icacls "<file>" /inheritance:r /grant:r "$($env:USERNAME):(F)" "SYSTEM:(F)"'`
+
+   Keep the PowerShell wrapper and the single quotes. A Bash shell rewrites the bare `/inheritance:r` and `/grant:r` flags as file paths, and `%USERNAME%` expands in `cmd.exe` only.
 
 7. Tell the user:
 

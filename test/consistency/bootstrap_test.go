@@ -43,18 +43,32 @@ func readBootstrap(t *testing.T, agent string) string {
 	return string(body)
 }
 
-// sharedRegion returns the marker-delimited body, markers included.
-func sharedRegion(t *testing.T, agent string) string {
+// sharedRegion returns the marker-delimited body of a file, markers included.
+func sharedRegion(t *testing.T, name, body string) string {
 	t.Helper()
-	body := readBootstrap(t, agent)
 
 	start := strings.Index(body, sharedBegin)
-	require.NotEqual(t, -1, start, "%s-on-event.sh has no %q marker", agent, sharedBegin)
+	require.NotEqual(t, -1, start, "%s has no %q marker", name, sharedBegin)
 	end := strings.Index(body, sharedEnd)
-	require.NotEqual(t, -1, end, "%s-on-event.sh has no %q marker", agent, sharedEnd)
-	require.Less(t, start, end, "%s-on-event.sh has the markers in the wrong order", agent)
+	require.NotEqual(t, -1, end, "%s has no %q marker", name, sharedEnd)
+	require.Less(t, start, end, "%s has the markers in the wrong order", name)
 
 	return body[start : end+len(sharedEnd)]
+}
+
+// shellRegion is the shared region of an agent's POSIX bootstrap.
+func shellRegion(t *testing.T, agent string) string {
+	t.Helper()
+	return sharedRegion(t, agent+"-on-event.sh", readBootstrap(t, agent))
+}
+
+// powerShellRegion is the shared region of an agent's Windows bootstrap.
+func powerShellRegion(t *testing.T, agent string) string {
+	t.Helper()
+	name := agent + "-on-event.ps1"
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), agent, name))
+	require.NoError(t, err)
+	return sharedRegion(t, name, string(body))
 }
 
 // The three fail-open bootstraps carry one implementation. Nothing enforces that
@@ -62,11 +76,11 @@ func sharedRegion(t *testing.T, agent string) string {
 // marketplace source is ./copilot and both installers fetch one file from a raw
 // URL — so this test is what keeps a fix from landing in one and not the others.
 func TestFailOpenBootstrapsShareOneImplementation(t *testing.T) {
-	reference := sharedRegion(t, failOpenAgents[0])
+	reference := shellRegion(t, failOpenAgents[0])
 	require.NotEmpty(t, strings.TrimSpace(reference))
 
 	for _, agent := range failOpenAgents[1:] {
-		assert.Equal(t, reference, sharedRegion(t, agent),
+		assert.Equal(t, reference, shellRegion(t, agent),
 			"%s-on-event.sh has diverged from %s-on-event.sh inside the shared region — "+
 				"apply the change to all of %v", agent, failOpenAgents[0], failOpenAgents)
 	}
@@ -75,7 +89,7 @@ func TestFailOpenBootstrapsShareOneImplementation(t *testing.T) {
 // The shared region must not name one agent, or copying it to the next one
 // carries a wrong asset name that only shows up as a download 404.
 func TestSharedRegionIsAgentAgnostic(t *testing.T) {
-	region := sharedRegion(t, failOpenAgents[0])
+	region := shellRegion(t, failOpenAgents[0])
 
 	for _, agent := range failOpenAgents {
 		assert.NotContains(t, region, agent+"-on-event",
@@ -159,6 +173,34 @@ func bootstrapVersion(t *testing.T, agent string) string {
 	return m[1]
 }
 
+// powerShellVersion reads the $Version the PowerShell bootstrap pins.
+func powerShellVersion(t *testing.T, agent string) string {
+	t.Helper()
+	name := agent + "-on-event.ps1"
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), agent, name))
+	require.NoError(t, err)
+	m := regexp.MustCompile(`(?m)^\$Version = '([^']+)'$`).FindStringSubmatch(string(body))
+	require.Len(t, m, 2, "no $Version in %s", name)
+	return m[1]
+}
+
+// Each pair of bootstraps pins its own version, outside the shared region because
+// the syntax differs. scripts/release.sh bumps all seven together, but nothing
+// stopped a hand edit or a dropped line in that script from moving one and not the
+// other. The cost of drift is silent and total: the version is in the cache
+// filename and the asset name, so Windows would fetch a release asset that does
+// not exist, and the local-dev setup would stage a binary under a name the
+// PowerShell bootstrap never looks for.
+func TestBootstrapVersionsMatchAcrossPlatforms(t *testing.T) {
+	for _, agent := range failOpenAgents {
+		t.Run(agent, func(t *testing.T) {
+			assert.Equal(t, bootstrapVersion(t, agent), powerShellVersion(t, agent),
+				"%s-on-event.sh and %s-on-event.ps1 pin different versions — "+
+					"bump both (scripts/release.sh does)", agent, agent)
+		})
+	}
+}
+
 // The cache filename a bootstrap derives has to match the one it downloads to,
 // or every hook event re-downloads. Pre-placing a stub under the derived name and
 // asserting it runs is the only check that the two agree — and under a Git Bash
@@ -235,6 +277,88 @@ func TestClaudeBootstrapDerivesTheCacheNamePerPlatform(t *testing.T) {
 			assert.NoError(t, err, "output: %s", out)
 			assert.Contains(t, string(out), "STUB-RAN",
 				"the bootstrap did not find %s — it derived a different name", stub)
+		})
+	}
+}
+
+// The PowerShell bootstraps carry one implementation too, and their banner says
+// so. Nothing enforced it: this file only ever read <agent>-on-event.sh, so the
+// three .ps1 regions could drift silently — and the Windows install path is the
+// one nobody exercises locally.
+func TestPowerShellBootstrapsShareOneImplementation(t *testing.T) {
+	reference := powerShellRegion(t, failOpenAgents[0])
+	require.NotEmpty(t, strings.TrimSpace(reference))
+
+	for _, agent := range failOpenAgents[1:] {
+		assert.Equal(t, reference, powerShellRegion(t, agent),
+			"%s-on-event.ps1 has diverged from %s-on-event.ps1 inside the shared region — "+
+				"apply the change to all of %v", agent, failOpenAgents[0], failOpenAgents)
+	}
+}
+
+// powerShellFiles is every .ps1 the repository ships: the installers and
+// uninstallers at the root, plus each agent's bootstrap.
+func powerShellFiles(t *testing.T) []string {
+	t.Helper()
+	root := repoRoot(t)
+	files, err := filepath.Glob(filepath.Join(root, "*.ps1"))
+	require.NoError(t, err)
+	for _, agent := range failOpenAgents {
+		files = append(files, filepath.Join(root, agent, agent+"-on-event.ps1"))
+	}
+	require.NotEmpty(t, files)
+	return files
+}
+
+// Nothing else parses these files. The .sh side has shellcheck over every script
+// and a `bash -n` on the bootstrap; this side had two tests that read the bytes
+// and none that asked whether the result is valid PowerShell. A missing brace
+// would ship green in all three bootstraps at once and surface only as a hook that
+// produces no output, which is the failure mode with no error message anywhere.
+//
+// powershell.exe, not pwsh, where both exist: 5.1 is the target and the stricter
+// parser of the two, and windows-latest supplies it. Elsewhere pwsh parses the same
+// grammar minus the 5.1 restrictions, which still catches an unbalanced brace.
+// ParseFile reports every error in the file rather than stopping at the first.
+func TestPowerShellFilesParse(t *testing.T) {
+	shell := "pwsh"
+	if runtime.GOOS == "windows" {
+		shell = "powershell"
+	}
+	if _, err := exec.LookPath(shell); err != nil {
+		t.Skipf("%s is not on PATH", shell)
+	}
+
+	for _, file := range powerShellFiles(t) {
+		t.Run(filepath.Base(file), func(t *testing.T) {
+			// The path goes in as a single-quoted PowerShell literal, doubling any
+			// quote it contains. A double-quoted one would need the backslashes of a
+			// Windows path escaped, which is the mistake this test exists to catch.
+			literal := "'" + strings.ReplaceAll(file, "'", "''") + "'"
+			script := "$e = $null; " +
+				"[System.Management.Automation.Language.Parser]::ParseFile(" + literal + ", [ref]$null, [ref]$e) | Out-Null; " +
+				"if ($e.Count) { $e | ForEach-Object { [Console]::Error.WriteLine($_) }; exit 1 }"
+			out, err := exec.Command(shell, "-NoProfile", "-Command", script).CombinedOutput()
+			assert.NoError(t, err, "%s reported parse errors:\n%s", shell, out)
+		})
+	}
+}
+
+// Windows PowerShell 5.1 reads a .ps1 with no byte-order mark using the system's
+// legacy codepage, so a multi-byte character is mis-decoded and can cascade into
+// a parse error that shows up as a hook doing nothing at all. Every file here is
+// written without a BOM, so every file here has to stay ASCII. This has regressed
+// three times.
+func TestPowerShellFilesAreASCII(t *testing.T) {
+	for _, file := range powerShellFiles(t) {
+		t.Run(filepath.Base(file), func(t *testing.T) {
+			body, err := os.ReadFile(file)
+			require.NoError(t, err)
+			for i, b := range body {
+				require.Less(t, b, byte(0x80),
+					"non-ASCII byte %#x at offset %d — line %d",
+					b, i, 1+strings.Count(string(body[:i]), "\n"))
+			}
 		})
 	}
 }

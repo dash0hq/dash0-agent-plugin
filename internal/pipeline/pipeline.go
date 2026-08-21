@@ -8,6 +8,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,6 +53,13 @@ func ReadEvent(r io.Reader) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading stdin: %w", err)
 	}
+	// Drop a UTF-8 byte-order mark. Windows tooling adds one readily — a
+	// PowerShell pipeline into a native command writes whatever encoding the
+	// console carries, and Encoding.UTF8 emits a BOM — and the JSON decoder
+	// rejects it as `invalid character 'ï'`. internal/config skips one for the
+	// same reason.
+	raw = bytes.TrimPrefix(raw, []byte("\ufeff"))
+
 	var event map[string]any
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return nil, fmt.Errorf("parsing JSON from stdin: %w", err)

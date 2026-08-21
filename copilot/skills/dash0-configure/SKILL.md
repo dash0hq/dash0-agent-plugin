@@ -96,7 +96,7 @@ not merge). Default to user-level unless the user asks for project-only. Below,
 
    For every key above except `enabled`, `true` and `1` are true and any other
    non-blank value is false, so write `true` or `false` and nothing else.
-   `enabled` is parsed by the shell wrapper instead: only the literal `false`
+   `enabled` is the one key the binary reads strictly: only the literal `false`
    turns the plugin off.
 
 5. Show the user the exact file you are about to write, with `auth_token` masked

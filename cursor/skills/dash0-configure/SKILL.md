@@ -65,7 +65,7 @@ Ask whether to write user-level (`~/.cursor/dash0-agent-plugin.local.md`, applie
    | `omit_identity_fallback` | Report only a real `git config user.name`, never the OS account | `false` |
    | `enabled` | Set to `false` to turn the plugin off for this scope without uninstalling | `true` |
 
-   For every key above except `enabled`, `true` and `1` are true and any other non-blank value is false, so write `true` or `false` and nothing else. `enabled` is parsed by the shell wrapper instead: only the literal `false` turns the plugin off.
+   For every key above except `enabled`, `true` and `1` are true and any other non-blank value is false, so write `true` or `false` and nothing else. `enabled` is the one key the binary reads strictly: only the literal `false` turns the plugin off.
 
 5. Show the user the exact file you are about to write, with `auth_token` masked to its last 4 chars, and ask them to confirm. Write it only after they agree. Omit every key whose value is blank, and include the `otlp_url` and `auth_token` lines exactly as step 2 settled them.
 

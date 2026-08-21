@@ -118,7 +118,7 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+pluginData,
@@ -209,7 +209,7 @@ func TestE2ECopilotDefersTurnWhenTraceContextMissing(t *testing.T) {
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+pluginData,
@@ -290,7 +290,7 @@ func TestE2ECopilotVCSAttributes(t *testing.T) {
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
 		cmd.Dir = nonRepo
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+pluginData,
@@ -355,7 +355,7 @@ func TestE2ECopilotDropsSubAgentSessions(t *testing.T) {
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+t.TempDir(),
@@ -391,7 +391,7 @@ func TestE2ECopilotSystemNotificationInput(t *testing.T) {
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+pluginData,
@@ -499,10 +499,16 @@ func TestE2ECopilotCredentialContracts(t *testing.T) {
 		placed := filepath.Join(binDir, fmt.Sprintf("copilot-on-event-%s-%s-%s", version, runtime.GOOS, runtime.GOARCH))
 		copyExecutable(t, bin, placed)
 
+		// The project file is resolved from the event's `cwd`, not from the
+		// directory the hook was spawned in — the binary chdirs into the payload's
+		// cwd first, because Copilot may spawn a hook from anywhere. So the event
+		// has to name the workspace, and cmd.Dir is deliberately left elsewhere to
+		// prove the spawn directory is not what decides it.
+		event := `{"sessionId":"` + copilotConvID + `","cwd":"` + workspace + `","source":"new"}`
+
 		cmd := exec.Command("bash", bootstrap, "sessionStart")
-		cmd.Dir = workspace // bootstrap resolves the project file relative to CWD
 		cmd.Env = append(os.Environ(), "HOME="+home, "COPILOT_PLUGIN_DATA="+pdata)
-		cmd.Stdin = strings.NewReader(sessionStart)
+		cmd.Stdin = strings.NewReader(event)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "bootstrap failed: %s", out)
 
@@ -517,7 +523,7 @@ func TestE2ECopilotCredentialContracts(t *testing.T) {
 		defer srv.Close()
 
 		cmd := exec.Command(bin, "sessionStart")
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=env-token",
 			"COPILOT_PLUGIN_DATA="+t.TempDir(),
@@ -820,4 +826,15 @@ func gitRepoWithRemote(t *testing.T, dir, remote string) {
 		cmd.Dir = dir
 		require.NoError(t, cmd.Run(), "git %v", args)
 	}
+}
+
+// hermeticEnv is os.Environ() with HOME and USERPROFILE pointed at one fresh
+// directory, so a run cannot read the developer's real config. The config file
+// outranks DASH0_*, so without this a real ~/.copilot file decides otlp_url and
+// the case either reads an empty capture or exports to a live dataset.
+// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows, so both move.
+func hermeticEnv(t *testing.T) []string {
+	t.Helper()
+	home := t.TempDir()
+	return append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
 }

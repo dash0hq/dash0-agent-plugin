@@ -193,6 +193,8 @@ dataset: "default"
 
 Or run `/dash0-configure` to walk through the values interactively — the skill writes the same file for you.
 
+A project file replaces the user-level one entirely; the two are never merged. Where a value is set both here and in `pluginConfigs` (what `/plugin` → **Configure** writes), the `pluginConfigs` value wins.
+
 
 ### Verify
 

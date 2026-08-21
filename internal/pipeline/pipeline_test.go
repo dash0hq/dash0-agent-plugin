@@ -1009,6 +1009,16 @@ func TestReadEvent(t *testing.T) {
 		assert.Contains(t, err.Error(), "parsing JSON from stdin")
 	})
 
+	// A PowerShell pipeline into a native command writes whatever encoding the
+	// console carries, and Encoding.UTF8 emits a BOM, so a Windows harness can
+	// prepend one. json.Unmarshal reports it as `invalid character 'ï'`.
+	t.Run("skips a UTF-8 byte-order mark", func(t *testing.T) {
+		event, err := ReadEvent(strings.NewReader(
+			"\ufeff" + `{"hook_event_name":"SessionStart","session_id":"s1"}`))
+		require.NoError(t, err)
+		assert.Equal(t, "SessionStart", event["hook_event_name"])
+	})
+
 	// Empty stdin is an error, not an empty event: json.Unmarshal rejects "".
 	// Every entrypoint turns that into a stderr line and exit 0, so a hook fired
 	// with no payload is logged rather than silently treated as a real event.

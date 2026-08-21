@@ -9,8 +9,6 @@
 #   stdin (JSON) → cursor-on-event.sh → cursor-on-event binary → OTLP
 #
 # Responsibilities:
-#   - Load configuration from a YAML-frontmatter config file (per-project or
-#     global), exposing values as DASH0_* env vars for the binary.
 #   - Detect OS/arch and download the matching cursor-on-event binary from
 #     GitHub Releases on first run, verifying the checksum.
 #   - exec the binary, forwarding stdin.
@@ -27,53 +25,6 @@ fail_open() {
   echo "cursor-on-event: $*" >&2
   exit 0
 }
-
-# Load settings from a YAML-frontmatter config file. Returns 1 if the file
-# doesn't exist so callers can fall through to the next location.
-load_settings() {
-  local file="$1"
-  [[ -f "$file" ]] || return 1
-
-  local frontmatter
-  frontmatter=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$file")
-
-  local enabled
-  enabled=$(echo "$frontmatter" | grep '^enabled:' | sed 's/enabled: *//' || true)
-  if [[ "$enabled" == "false" ]]; then
-    exit 0
-  fi
-
-  local val
-  val=$(echo "$frontmatter" | grep '^otlp_url:' | sed 's/otlp_url: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OTLP_URL="$val"
-  val=$(echo "$frontmatter" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export CURSOR_PLUGIN_OPTION_AUTH_TOKEN="$val"
-  val=$(echo "$frontmatter" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DATASET="$val"
-  val=$(echo "$frontmatter" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_AGENT_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^team_name:' | sed 's/team_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_TEAM_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^omit_io:' | sed 's/omit_io: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_identity_fallback:' | sed 's/omit_identity_fallback: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IDENTITY_FALLBACK="$val"
-  val=$(echo "$frontmatter" | grep '^debug:' | sed 's/debug: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG="$val"
-  val=$(echo "$frontmatter" | grep '^debug_file:' | sed 's/debug_file: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG_FILE="$val"
-
-  return 0
-}
-
-# Project-scoped settings take precedence over global settings.
-# Cursor sets the workspace as CWD when running hooks.
-PROJECT_SETTINGS=".cursor/dash0-agent-plugin.local.md"
-GLOBAL_SETTINGS="$HOME/.cursor/dash0-agent-plugin.local.md"
-
-load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
 
 # Where the downloaded binary lives. Mirrors the per-source scratch root
 # layout from cmd/cursor-on-event/main.go so users can clean up the whole

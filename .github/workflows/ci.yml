@@ -341,11 +341,9 @@ jobs:
             echo "::error::No plugin-option keys found — update this grep to match the current accessor names"
             exit 1
           fi
-          # Every declared option must be read somewhere, except the two keychain
-          # references, which only the bootstrap script reads.
+          # Every declared option must be read somewhere.
           UNREAD=""
           for key in $(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json); do
-            case "$key" in AUTH_TOKEN_KEYCHAIN_ACCOUNT|AUTH_TOKEN_KEYCHAIN_SERVICE) continue ;; esac
             if ! echo "$USED_KEYS" | grep -qx "$key"; then
               UNREAD="$UNREAD $key"
             fi

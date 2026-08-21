@@ -323,7 +323,11 @@ func runBinary(t *testing.T, binary, event, dataDir, otlpURL string) {
 		"CLAUDE_PLUGIN_OPTION_AUTH_TOKEN=e2e-test-token",
 		"CLAUDE_PLUGIN_OPTION_OMIT_USER_INFO=false",
 		"CLAUDE_PLUGIN_OPTION_OMIT_IO=false",
-		"HOME=" + os.Getenv("HOME"),
+		// A temp home, not the developer's: config lookups fall back to
+		// ~/.claude/dash0-agent-plugin.local.md, and its auth_token outranks the
+		// prefixed option below, so a configured machine would send its own token
+		// here. The binary only needs os.UserHomeDir to resolve to something.
+		"HOME=" + t.TempDir(),
 		"PATH=" + os.Getenv("PATH"),
 	}
 	out, err := cmd.CombinedOutput()

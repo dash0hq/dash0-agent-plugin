@@ -252,16 +252,26 @@ printf "%s" "$BLOCK" >> "$CONFIG_TOML" || die "failed to write $CONFIG_TOML"
 ok "registered + pre-trusted hooks (managed block in $CONFIG_TOML)"
 
 # 9. Connectivity check.
+#
+#    No credentials are passed in. The binary resolves otlp_url, auth_token and
+#    dataset from the config file written above, exactly as it will on a real hook
+#    fire, so this validates that file rather than the values held in this shell.
+#    Passing the token as CODEX_PLUGIN_OPTION_AUTH_TOKEN would outrank the file
+#    and hide a token the installer wrote but the binary cannot use.
+#
+#    The check runs in an empty scratch directory, which is also its state root.
+#    A project-level config file in the installer's working directory outranks the
+#    user-level one, and this check has no business validating some unrelated
+#    repository's configuration.
 if [ -n "$DASH0_OTLP_URL" ] && [ -n "$DASH0_AUTH_TOKEN" ]; then
   info "running connectivity check..."
+  CHECK_DIR=$(mktemp -d)
   CHECK_OUT=$(
-    echo '{"hook_event_name":"SessionStart","session_id":"install-check","model":"gpt-5.5","source":"startup"}' \
-      | DASH0_OTLP_URL="$DASH0_OTLP_URL" \
-        CODEX_PLUGIN_OPTION_AUTH_TOKEN="$DASH0_AUTH_TOKEN" \
-        DASH0_DATASET="$DASH0_DATASET" \
-        DASH0_PLUGIN_DATA="$(mktemp -d)" \
-        "$BIN_PATH" 2>&1 || true
+    cd "$CHECK_DIR" \
+      && echo '{"hook_event_name":"SessionStart","session_id":"install-check","model":"gpt-5.5","source":"startup"}' \
+      | DASH0_PLUGIN_DATA="$CHECK_DIR" "$BIN_PATH" 2>&1 || true
   )
+  rm -rf "$CHECK_DIR"
   case "$CHECK_OUT" in
     *"connectivity check failed"*) warn "connectivity check failed:"; printf "    %s\n" "$CHECK_OUT" ;;
     *"connected"*)                 ok "connectivity check passed" ;;

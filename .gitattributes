@@ -1,0 +1,19 @@
+# Every text file is LF in the working tree, on every platform. Git for Windows
+# checks out CRLF by default, and the Go tests compare fixture bytes: a golden
+# JSON file checked out with CRLF fails against a payload the code built with LF,
+# which is a checkout artifact and not a bug in anything.
+* text=auto eol=lf
+
+# Line endings for the files a harness executes.
+#
+# Git for Windows checks out CRLF by default. A bootstrap wrapper with CRLF
+# endings fails at its shebang with "bad interpreter: /usr/bin/env bash^M", and a
+# marketplace install clones this repo, so this affects users, not only
+# developers.
+*.sh  text eol=lf
+*.ps1 text eol=lf
+
+# Batch files want CRLF: cmd.exe resolves labels by byte offset and mis-parses
+# LF-only files in some constructs.
+*.cmd text eol=crlf
+*.bat text eol=crlf

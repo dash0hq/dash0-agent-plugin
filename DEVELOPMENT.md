@@ -132,7 +132,7 @@ omitted when its value is empty.
 |---|---|--------------------------------|
 | `gen_ai.operation.name` | `chat` or `invoke_agent`                                             |                                |
 | `gen_ai.request.model` | `claude-…`, `gpt-…`, `cursor-auto`, …                                |                                |
-| `gen_ai.conversation.name` | Session title                                                        | Claude only (from transcript). |
+| `gen_ai.conversation.name` | Session title                                                        | Claude only (from transcript). Content-gated by `omit_io`: the title is derived from the first prompt. |
 | `gen_ai.usage.input_tokens` | integer                                                              |                                |
 | `gen_ai.usage.output_tokens` | integer                                                              |                                |
 | `gen_ai.usage.cache_read.input_tokens` | integer                                                              |                                |

@@ -319,8 +319,10 @@ func TestSendLogDropsSessionBookkeeping(t *testing.T) {
 }
 
 // TestSendLogDropsUnmappedBookkeeping covers the fields that do not reach a span
-// today because InstructionsLoaded and SessionEnd map to no span. Denying them is
-// only useful if it holds when that changes, which is what this asserts.
+// today because InstructionsLoaded maps to no span. Denying them is only useful
+// if it holds when that changes, which is what this asserts. "reason" is in the
+// same list but was not in the same position: SessionEnd does produce a chat span
+// when a trace context is open, so that one was live.
 func TestSendLogDropsUnmappedBookkeeping(t *testing.T) {
 	var received ExportLogsRequest
 

@@ -317,13 +317,17 @@ var attrSkipKeys = map[string]bool{
 	"session_crons":    true,
 	"background_tasks": true,
 
-	// InstructionsLoaded and SessionEnd bookkeeping. Neither event maps to a
-	// span today, so these do not reach Dash0 yet; denying them now means
-	// mapping either event later cannot leak them by accident.
+	// InstructionsLoaded bookkeeping. That event maps to no span, so these three
+	// did not reach Dash0; denying them now means mapping the event later cannot
+	// leak them by accident.
 	"file_path":   true,
 	"load_reason": true,
 	"memory_type": true,
-	"reason":      true,
+
+	// SessionEnd bookkeeping. This one was live: pipeline.go sends a chat span
+	// on SessionEnd when a trace context is still open, which is how an
+	// interrupted session gets a turn at all. So "reason" exported on that span.
+	"reason": true,
 }
 
 // MaxContentBytes is the maximum size for content attributes (tool I/O, prompts).
@@ -340,6 +344,14 @@ var contentKeys = map[string]bool{
 	"tool_response":          true,
 	"last_assistant_message": true,
 	"prompt":                 true,
+
+	// Not a hook payload field. pipeline.go sets it from the transcript, already
+	// namespaced, so it arrives here under its final name rather than a raw one.
+	// It is the session title, which Claude Code derives from the user's first
+	// prompt, so it is user content and omit_io has to cover it. Listing it here
+	// is the whole fix: eventAttributes keys redaction off the event key, and
+	// this key needs no attrKeyMap entry because it is already correct.
+	"gen_ai.conversation.name": true,
 }
 
 // userInfoKeys lists event fields that contain user-identifying information.

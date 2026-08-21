@@ -289,6 +289,11 @@ func sendOTLP(cfg Config, path string, payload []byte) error {
 }
 
 // attrSkipKeys lists event fields that should not appear as log attributes.
+//
+// eventAttributes copies every field it does not recognize, so this list is the
+// only thing standing between a new hook payload field and an unnamespaced
+// attribute on a customer's span. A field added upstream lands in Dash0 under its
+// raw payload name until it is denied here. See the comment on eventAttributes.
 var attrSkipKeys = map[string]bool{
 	"hook_event_name":       true,
 	"transcript_path":       true,
@@ -300,6 +305,25 @@ var attrSkipKeys = map[string]bool{
 	"source":                true,
 	"duration_ms":           true,
 	"prompt_role":           true,
+
+	// Claude Code turn and session bookkeeping. None of it describes the
+	// operation the span represents, and none of it is namespaced.
+	//
+	// prompt_id groups the spans of one turn, which the trace already does
+	// through parenting, so it is redundant rather than merely unwanted.
+	// background_tasks additionally carries the Task tool's description, so it
+	// leaks model-authored content on a key that omit_io does not cover.
+	"prompt_id":        true,
+	"session_crons":    true,
+	"background_tasks": true,
+
+	// InstructionsLoaded and SessionEnd bookkeeping. Neither event maps to a
+	// span today, so these do not reach Dash0 yet; denying them now means
+	// mapping either event later cannot leak them by accident.
+	"file_path":   true,
+	"load_reason": true,
+	"memory_type": true,
+	"reason":      true,
 }
 
 // MaxContentBytes is the maximum size for content attributes (tool I/O, prompts).
@@ -394,6 +418,13 @@ func inputMessageRole(event map[string]any) string {
 }
 
 // eventAttributes converts all fields in the event map to OTLP log attributes.
+//
+// This is a deny list, not an allow list: an unrecognized field is exported
+// under its raw payload name rather than dropped. That is how prompt_id,
+// session_crons, and background_tasks reached production spans — Claude Code
+// added them to the Stop payload and nothing here had to change for them to
+// ship. Every new upstream field is exported by default, so attrSkipKeys has to
+// be updated whenever a payload grows.
 func eventAttributes(event map[string]any, cfg Config) []Attribute {
 	var attrs []Attribute
 	for k, v := range event {

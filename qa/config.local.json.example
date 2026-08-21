@@ -1,0 +1,8 @@
+{
+  "apiUrl": "https://api.eu-west-1.aws.dash0-dev.com",
+  "appUrl": "https://app.dash0-dev.com",
+  "ingestUrl": "https://ingress.eu-west-1.aws.dash0-dev.com",
+  "authToken": "auth_REPLACE_ME",
+  "dataset": "default",
+  "org": "your-org-slug"
+}

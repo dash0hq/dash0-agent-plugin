@@ -32,20 +32,28 @@ fail_open() {
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
 
+# Git Bash, MSYS2 and Cygwin report kernel strings like MINGW64_NT-10.0-26200,
+# never "windows", so the release asset would be requested under a name that does
+# not exist. EXE carries the suffix GoReleaser appends for Windows builds through
+# to both the asset name and the cache filename; it stays empty elsewhere, so a
+# POSIX cache path is unchanged and nothing re-downloads.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+EXE=""
+case "$OS" in
+  mingw*|msys*|cygwin*) OS="windows"; EXE=".exe" ;;
+esac
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64)  ARCH="amd64" ;;
-  aarch64) ARCH="arm64" ;;
-  arm64)   ARCH="arm64" ;;
+  x86_64|amd64)  ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/${AGENT}-on-event-${VERSION}-${OS}-${ARCH}"
+BINARY="$BIN_DIR/${AGENT}-on-event-${VERSION}-${OS}-${ARCH}${EXE}"
 
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
-  ASSET="${AGENT}-on-event-${OS}-${ARCH}"
+  ASSET="${AGENT}-on-event-${OS}-${ARCH}${EXE}"
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
@@ -85,7 +93,9 @@ if [ ! -x "$BINARY" ]; then
     fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
-  chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
+  if [ "$OS" != "windows" ]; then
+    chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
+  fi
 fi
 
 # Forward stdin, plus the event-name argument for the agents that pass one. The

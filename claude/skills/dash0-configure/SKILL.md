@@ -28,6 +28,8 @@ If the user already has values set via the UI, the file this skill writes will b
 
 Ask whether to write user-level (`~/.claude/dash0-agent-plugin.local.md`, applies to all projects) or project-level (`.claude/dash0-agent-plugin.local.md`, only the current project — overrides the user-level file entirely, does not merge). Default to user-level unless the user asks for project-only.
 
+On Windows the user-level file is `%USERPROFILE%\.claude\dash0-agent-plugin.local.md`; the project-level path is the same as everywhere else.
+
 ## Workflow
 
 1. If the target file already exists, read it and show the user the current values with the `auth_token` masked (show only the last 4 chars). Ask whether to overwrite. If they decline, stop.
@@ -52,7 +54,12 @@ Ask whether to write user-level (`~/.claude/dash0-agent-plugin.local.md`, applie
    ---
    ```
 
-4. Run `chmod 600 <file>` so the token isn't world-readable.
+4. Restrict the file to its owner, so the token isn't readable by other accounts.
+
+   - macOS and Linux: `chmod 600 <file>`
+   - Windows: `icacls "<file>" /inheritance:r /grant:r "%USERNAME%:(F)" "SYSTEM:(F)"`
+
+   Use `icacls` on Windows even though the Bash tool runs under Git Bash: `chmod` there sets the read-only bit and leaves the NTFS permissions untouched, so the token stays readable by every account on the machine.
 
 5. Tell the user:
 

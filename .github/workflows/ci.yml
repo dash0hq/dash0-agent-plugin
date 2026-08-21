@@ -253,8 +253,15 @@ jobs:
             # The fail-open bootstraps build the asset name from $AGENT, so resolve
             # that before matching. Claude spells its candidates out literally.
             AGENT=$(sed -n 's/^AGENT="\(.*\)"/\1/p' "$SCRIPT")
-            CANDIDATES=$(grep -oE '"[a-zA-Z${}_-]+-\$\{OS\}-\$\{ARCH\}"' "$SCRIPT" \
-              | tr -d '"' | sed 's/-\${OS}-\${ARCH}//' | sed "s/\\${AGENT}/${AGENT}/" | sort -u)
+            # ${EXE} is empty off Windows and ".exe" on it, so it is stripped here and
+            # re-applied per platform in the probe loop below.
+            CANDIDATES=$(grep -oE '"[a-zA-Z${}_-]+-\$\{OS\}-\$\{ARCH\}(\$\{EXE\})?"' "$SCRIPT" \
+              | tr -d '"' | sed 's/-\${OS}-\${ARCH}\(\${EXE}\)\{0,1\}//' | sort -u)
+            # Resolve a literal ${AGENT} with bash, not sed. Escaping a literal
+            # $ on sed's left-hand side while expanding a shell variable on its
+            # right needed quoting that silently produced s/\cursor/cursor/ and
+            # matched nothing, so every candidate stayed unresolved.
+            CANDIDATES=${CANDIDATES//'${AGENT}'/$AGENT}
             if [ -z "$VERSION" ] || [ -z "$CANDIDATES" ]; then
               echo "::error::Could not read VERSION or asset names from $SCRIPT — update this parser"
               fail=1

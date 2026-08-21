@@ -9,16 +9,24 @@ BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
 VERSION="0.1.24"
 
-# Detect OS and architecture.
+# Detect OS and architecture. Git Bash, MSYS2 and Cygwin report kernel strings
+# like MINGW64_NT-10.0-26200, never "windows", so without this the release asset
+# would be requested under a name that does not exist. EXE carries the suffix
+# GoReleaser appends for Windows builds through to both the asset name and the
+# cache filename; it stays empty elsewhere, so a POSIX cache path is unchanged and
+# nothing re-downloads.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+EXE=""
+case "$OS" in
+  mingw*|msys*|cygwin*) OS="windows"; EXE=".exe" ;;
+esac
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64)  ARCH="amd64" ;;
-  aarch64) ARCH="arm64" ;;
-  arm64)   ARCH="arm64" ;;
+  x86_64|amd64)  ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}"
+BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}${EXE}"
 
 # Download the binary on first run.
 if [ ! -x "$BINARY" ]; then
@@ -44,7 +52,7 @@ if [ ! -x "$BINARY" ]; then
   # with no release-timing coordination: before the rename ships the first
   # candidate 404s and the second succeeds, and after it ships the first one hits.
   ASSET=""
-  for CANDIDATE in "claude-on-event-${OS}-${ARCH}" "on-event-${OS}-${ARCH}"; do
+  for CANDIDATE in "claude-on-event-${OS}-${ARCH}${EXE}" "on-event-${OS}-${ARCH}${EXE}"; do
     # stderr is dropped: a miss on the first candidate is expected until the
     # rename ships, and the message below covers the case where none is found.
     if fetch "${BASE_URL}/${CANDIDATE}" "$BINARY" 2>/dev/null; then
@@ -90,7 +98,9 @@ if [ ! -x "$BINARY" ]; then
     exit 1
   fi
 
-  chmod +x "$BINARY"
+  if [ "$OS" != "windows" ]; then
+    chmod +x "$BINARY"
+  fi
 fi
 
 # Forward stdin and arguments to the binary.

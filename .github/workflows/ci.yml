@@ -292,8 +292,11 @@ jobs:
           for SCRIPT in claude/claude-on-event.sh cursor/cursor-on-event.sh \
                         codex/codex-on-event.sh copilot/copilot-on-event.sh; do
             VERSION=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$SCRIPT")
-            CANDIDATES=$(grep -oE '"[a-z-]+-\$\{OS\}-\$\{ARCH\}"' "$SCRIPT" \
-              | tr -d '"' | sed 's/-\${OS}-\${ARCH}//' | sort -u)
+            # The fail-open bootstraps build the asset name from $AGENT, so resolve
+            # that before matching. Claude spells its candidates out literally.
+            AGENT=$(sed -n 's/^AGENT="\(.*\)"/\1/p' "$SCRIPT")
+            CANDIDATES=$(grep -oE '"[a-zA-Z${}_-]+-\$\{OS\}-\$\{ARCH\}"' "$SCRIPT" \
+              | tr -d '"' | sed 's/-\${OS}-\${ARCH}//' | sed "s/\\${AGENT}/${AGENT}/" | sort -u)
             if [ -z "$VERSION" ] || [ -z "$CANDIDATES" ]; then
               echo "::error::Could not read VERSION or asset names from $SCRIPT — update this parser"
               fail=1

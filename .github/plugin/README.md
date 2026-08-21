@@ -153,6 +153,12 @@ other than `Darwin` or `Linux` on `x86_64`/`arm64`/`aarch64` is unsupported, in
 particular `MINGW64_NT-…` or `MSYS_NT-…`, which is Windows under Git Bash. See
 [Requirements](#requirements).
 
+A refused download looks the same. The bootstrap verifies every binary it fetches
+and never runs one it cannot verify, but it still exits 0, so telemetry just
+stops: look for `refusing to run an unverified binary` (no entry for the asset in
+`checksums.txt`), `checksum mismatch`, or `no sha256 tool` on the hook's stderr or
+in the debug log.
+
 ### No traces arrive
 
 - Confirm you **restarted `copilot`** after installing (hooks load at startup).

@@ -346,6 +346,12 @@ The hook is trying to download a binary for an unsupported platform. Run
 `x86_64`/`arm64`/`aarch64` is unsupported, in particular `MINGW64_NT-…` or
 `MSYS_NT-…`, which is Windows under Git Bash. See [Requirements](#requirements).
 
+A refused download reports separately. The bootstrap verifies every binary it
+fetches and never runs one it cannot verify, exiting non-zero with the reason:
+`refusing to run an unverified binary` (no entry for the asset in
+`checksums.txt`), `checksum mismatch`, or `no sha256 tool` — see
+[Requirements](#requirements).
+
 ### No spans in Dash0 after install
 
 Check the `dash0:` message on session start:

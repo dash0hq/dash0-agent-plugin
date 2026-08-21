@@ -66,6 +66,14 @@ launch function (not just the test's hook injection), after pushing this branch:
 `copilot plugin install dash0hq/dash0-agent-plugin:copilot`, run `/dash0-configure`,
 open a new shell, and confirm per-turn spans reach your Dash0 dataset.
 
+> [!TIP]
+> **A session that emits no spans.** The install registers the hooks from the
+> manifest's `hooks` key, so nothing has to be wired by hand. To see whether they
+> fire, start Copilot with `--log-level debug --log-dir <dir>` and search the log
+> for `hook`: the bootstrap reports itself as `[hook stderr] dash0: …`. Check that
+> `copilot plugin list` shows the plugin as `enabled`, since a disabled plugin
+> contributes no hooks.
+
 ## Tool spans & sub-agent handling
 
 Copilot's hooks are used **only for the session/turn lifecycle** (`sessionStart`,

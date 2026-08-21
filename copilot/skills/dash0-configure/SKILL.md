@@ -41,7 +41,8 @@ file is the only place these values live.
 Ask whether to write user-level (applies to all projects) or project-level (only
 the current workspace — takes precedence over the user-level file entirely, does
 not merge). Default to user-level unless the user asks for project-only. Below,
-`<target>` is the file you settled on.
+`<target>` is the file you settled on. On Windows the user-level file is
+`%USERPROFILE%\.copilot\dash0-agent-plugin.local.md`.
 
 > [!WARNING]
 > A project-level file takes over the auth token for every session in that
@@ -114,7 +115,15 @@ not merge). Default to user-level unless the user asks for project-only. Below,
    ---
    ```
 
-6. `chmod 600 <target>` so the token isn't world-readable.
+6. Restrict `<target>` to its owner, so the token isn't readable by other
+   accounts.
+
+   - macOS and Linux: `chmod 600 <target>`
+   - Windows: `powershell -NoProfile -Command 'icacls "<target>" /inheritance:r /grant:r "$($env:USERNAME):(F)" "SYSTEM:(F)"'`
+
+   Keep the PowerShell wrapper and the single quotes. A Bash shell rewrites the
+   bare `/inheritance:r` and `/grant:r` flags as file paths, and `%USERNAME%`
+   expands in `cmd.exe` only.
 
 7. The `dash0: no team configured` warning cannot be silenced. If the user
    deliberately runs without a team, say so plainly rather than looking for a way
@@ -122,11 +131,20 @@ not merge). Default to user-level unless the user asks for project-only. Below,
 
 ## Step B — install the launch shell function
 
-Append this to the user's shell profile (`~/.zshrc`, `~/.bashrc`, …), replacing
-any prior copy between the markers. It enables native OTel into a per-session
-file under the convention directory the plugin reads, then runs the real
-`copilot`. It sets **no** OTLP endpoint or token — native OTel only writes the
-local file; the Dash0 token stays in the config file from Step A.
+Pick the snippet for the user's shell. Append it to their profile, replacing any
+prior copy between the markers. It enables native OTel into a per-session file
+under the convention directory the plugin reads, then runs the real `copilot`. It
+sets **no** OTLP endpoint or token — native OTel only writes the local file; the
+Dash0 token stays in the config file from Step A.
+
+Write each snippet **verbatim**. Re-quoting it for whatever shell or heredoc does
+the appending is how it gets corrupted: doubling the single quotes in the
+PowerShell block, for instance, makes the profile unparseable, and the user then
+sees spans arrive with no usage data and nothing reporting an error. Ask the user
+which shell they launch `copilot` from — on Windows that is PowerShell or cmd, and
+they need the matching one.
+
+### bash and zsh (`~/.zshrc`, `~/.bashrc`, …)
 
 ```bash
 # >>> dash0-agent-plugin (copilot) >>>
@@ -142,6 +160,115 @@ copilot() {
 # <<< dash0-agent-plugin (copilot) <<<
 ```
 
+### PowerShell (the file `$PROFILE` names)
+
+Create the file first if it does not exist:
+`New-Item -ItemType File -Force -Path $PROFILE`.
+
+```powershell
+# >>> dash0-agent-plugin (copilot) >>>
+function copilot {
+  # The real CLI, resolved past this function. `command copilot` has no
+  # PowerShell equivalent, so the Application lookup is what avoids recursing.
+  $exe = Get-Command copilot -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (-not $exe) { Write-Error 'copilot is not on PATH'; return }
+  $real = $exe.Source
+
+  $dir = "$env:USERPROFILE\.local\state\dash0-agent-plugin\copilot\otel"
+  try {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  } catch {
+    & $real @args   # fail open: no directory, no native OTel, still a working CLI
+    return
+  }
+  $file = Join-Path $dir ("otel-$PID-" + (Get-Random) + ".jsonl")
+
+  $env:COPILOT_OTEL_ENABLED = 'true'
+  $env:COPILOT_OTEL_FILE_EXPORTER_PATH = $file
+  $env:OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT = 'true'
+  try {
+    & $real @args
+  } finally {
+    Remove-Item Env:\COPILOT_OTEL_ENABLED, Env:\COPILOT_OTEL_FILE_EXPORTER_PATH, `
+      Env:\OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+  }
+}
+# <<< dash0-agent-plugin (copilot) <<<
+```
+
+Two ways the PowerShell version differs from the shell one, both unavoidable:
+
+- **The variables are set on the session, not on one command.** PowerShell has no
+  `VAR=value command` form, so the `finally` block removes them again. A session
+  that already sets `COPILOT_OTEL_*` for its own reasons loses those values.
+- **`$LASTEXITCODE` carries Copilot's exit code out of the function** on its own,
+  so there is no `return $rc` to write.
+
+After writing the profile, **verify it parses** — a mangled write (doubled quotes,
+say) is a parse error, and a parse error stops the WHOLE profile from loading, so
+the function silently never exists and Copilot reports no usage:
+
+```powershell
+powershell -Command "if (Get-Command copilot -CommandType Function -ErrorAction SilentlyContinue) { 'ok' } else { 'FUNCTION NOT DEFINED' }"
+```
+
+### cmd.exe (a `copilot.cmd` wrapper on PATH)
+
+`cmd.exe` has no profile, so there is nothing to append a function to: its only
+per-shell hooks are the `AutoRun` registry value, which fires for every `cmd`
+session, and `doskey` macros, which don't work in batch scripts. A wrapper named
+`copilot.cmd` in a directory that comes **before** the npm global bin
+(`%APPDATA%\npm`) on PATH is the equivalent — `cmd` finds it first, and it calls
+the real CLI by the absolute path `where` reports.
+
+Write it to a directory the user already has early on PATH (`%USERPROFILE%\.local\bin`
+is a common one), then confirm `where copilot.cmd` lists it first.
+
+```bat
+@echo off
+rem >>> dash0-agent-plugin (copilot) >>>
+setlocal EnableExtensions
+
+rem The real CLI: the first `where` hit that is not this file. Only the
+rem cmd-runnable extensions are asked for -- npm also installs an extensionless
+rem `copilot` shell script, which `where copilot` returns FIRST and cmd cannot run.
+set "DASH0_REAL="
+for /f "delims=" %%I in ('where copilot.cmd copilot.exe copilot.bat 2^>nul') do (
+  if not defined DASH0_REAL if /i not "%%~fI"=="%~f0" set "DASH0_REAL=%%~fI"
+)
+if not defined DASH0_REAL (
+  echo copilot is not on PATH 1>&2
+  exit /b 1
+)
+
+set "DASH0_DIR=%USERPROFILE%\.local\state\dash0-agent-plugin\copilot\otel"
+if not exist "%DASH0_DIR%" mkdir "%DASH0_DIR%" 2>nul
+if not exist "%DASH0_DIR%" (
+  rem Fail open: no directory, no native OTel, still a working CLI.
+  call "%DASH0_REAL%" %*
+  exit /b %ERRORLEVEL%
+)
+
+set "DASH0_FILE=%DASH0_DIR%\otel-%RANDOM%-%RANDOM%.jsonl"
+set "COPILOT_OTEL_ENABLED=true"
+set "COPILOT_OTEL_FILE_EXPORTER_PATH=%DASH0_FILE%"
+set "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true"
+
+call "%DASH0_REAL%" %*
+set "DASH0_RC=%ERRORLEVEL%"
+del "%DASH0_FILE%" 2>nul
+rem setlocal scopes the variables, so nothing leaks back to the caller. The rc is
+rem expanded before endlocal discards it.
+endlocal & exit /b %DASH0_RC%
+rem <<< dash0-agent-plugin (copilot) <<<
+```
+
+Unlike the other two this one is a file rather than a profile edit, so it takes
+effect immediately — no new shell needed. `setlocal` scopes the variables, which
+is why it needs no cleanup block.
+
 Notes:
 - `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` makes Copilot write
   prompt/response message content (not just metadata) to the local file — this
@@ -150,20 +277,24 @@ Notes:
   per-session file (deleted on exit); what actually leaves for Dash0 is still
   gated by the plugin's `omit_io` option (default `true` redacts prompt/response —
   set `omit_io: false` in Step A to export the text).
-- The directory `~/.local/state/dash0-agent-plugin/copilot/otel` is a fixed
-  convention shared with the plugin — **do not change it** or the plugin won't
-  find the file.
-- `command copilot` runs the real CLI (avoids recursing into this function).
-- It is fail-open: if the directory can't be created it falls straight through
-  to `command copilot`.
+- The directory `~/.local/state/dash0-agent-plugin/copilot/otel`
+  (`%USERPROFILE%\.local\state\dash0-agent-plugin\copilot\otel` on Windows) is a
+  fixed convention shared with the plugin — **do not change it** or the plugin
+  won't find the file. The `.jsonl` extension is part of it: the reader skips
+  every other file in that directory.
+- The real CLI is reached past the function by `command copilot` in bash and zsh,
+  by the `Get-Command -CommandType Application` lookup in PowerShell, and by the
+  `where` hit that is not the wrapper itself in cmd.
+- All three are fail-open: if the directory can't be created they fall straight
+  through to the real CLI.
 
 ## Finish
 
 > Configuration written and the launch function installed. **Open a new shell**
-> (or `source` your profile) and run `copilot` as usual — each session now
-> emits canonical spans with per-turn token/cost/model to your Dash0 dataset.
-> A `copilot` launched from a shell without the function still emits spans, just
-> without usage data.
+> (or re-source your profile — `. $PROFILE` in PowerShell) and run `copilot` as
+> usual — each session now emits canonical spans with per-turn
+> token/cost/model to your Dash0 dataset. A `copilot` launched from a shell
+> without the function still emits spans, just without usage data.
 
 Re-running Step A takes effect on the next hook fire (the bootstrap re-reads the
 config each invocation). Changes to the launch function require a new shell.

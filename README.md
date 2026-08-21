@@ -11,7 +11,7 @@ Trace through a session, see what each turn cost, find where the agent got stuck
 - **OpenAI Codex** — installation, configuration, and usage in [`.codex-plugin/README.md`](./.codex-plugin/README.md).
 - **GitHub Copilot CLI** — installation, configuration, and usage in [`.github/plugin/README.md`](./.github/plugin/README.md).
 
-All runtimes require macOS or Linux on `amd64` or `arm64`. Windows is not supported.
+All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other three use a PowerShell bootstrap.
 
 ## Repository layout
 

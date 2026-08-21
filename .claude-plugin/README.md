@@ -5,10 +5,13 @@ Claude Code plugin that captures agent activity as OpenTelemetry traces — tool
 ## Requirements
 
 - **Agent:** the Claude Code CLI.
-- **Operating system:** macOS or Linux (Windows is not supported).
+- **Operating system:** macOS, Linux, or Windows.
 - **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
-- **Shell tooling:** `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
-  bootstrap downloads and checksum-verifies the hook binary on first run.
+- **Shell tooling:**
+  - macOS and Linux: `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
+    bootstrap downloads and checksum-verifies the hook binary on first run.
+  - Windows: [Git for Windows](https://gitforwindows.org/). Claude Code runs hook
+    commands through Git Bash, which brings all of the above with it.
 
 ## Installation
 
@@ -342,9 +345,10 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 ### Every hook fails with a 404
 
 The hook is trying to download a binary for an unsupported platform. Run
-`uname -s -m` — anything other than `Darwin` or `Linux` on
-`x86_64`/`arm64`/`aarch64` is unsupported, in particular `MINGW64_NT-…` or
-`MSYS_NT-…`, which is Windows under Git Bash. See [Requirements](#requirements).
+`uname -s -m` — the supported kernels are `Darwin`, `Linux`, and Windows, which
+Git Bash reports as `MINGW64_NT-…`, `MSYS_NT-…`, or `CYGWIN_NT-…`, on
+`x86_64`/`arm64`/`aarch64`. Anything else is unsupported. See
+[Requirements](#requirements).
 
 A refused download reports separately. The bootstrap verifies every binary it
 fetches and never runs one it cannot verify, exiting non-zero with the reason:

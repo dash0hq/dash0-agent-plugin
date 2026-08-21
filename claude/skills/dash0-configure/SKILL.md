@@ -35,6 +35,8 @@ If the user already has values set via the UI or managed settings, the file this
 
 Ask whether to write user-level (`~/.claude/dash0-agent-plugin.local.md`, applies to all projects) or project-level (`.claude/dash0-agent-plugin.local.md`, only the current project — overrides the user-level file entirely, does not merge). Default to user-level unless the user asks for project-only.
 
+On Windows the user-level file is `%USERPROFILE%\.claude\dash0-agent-plugin.local.md`; the project-level path is the same as everywhere else.
+
 > [!WARNING]
 > A wrong or differently scoped token in either file fails as a silent 401, with no error in the session. A project-level file is the riskier one, because it is the level a user is most likely to point at a one-off token, and it replaces the user-level file whole rather than merging with it. Prefer user-level unless the user needs a different dataset or team for one project.
 
@@ -88,7 +90,14 @@ Ask whether to write user-level (`~/.claude/dash0-agent-plugin.local.md`, applie
    ---
    ```
 
-6. Run `chmod 600 <file>` so the token isn't world-readable.
+6. Restrict the file to its owner, so the token isn't readable by other accounts.
+
+   - macOS and Linux: `chmod 600 <file>`
+   - Windows: `powershell -NoProfile -Command 'icacls "<file>" /inheritance:r /grant:r "$($env:USERNAME):(F)" "SYSTEM:(F)"'`
+
+   Do not use `chmod` on Windows, even though the Bash tool runs under Git Bash. It sets the read-only bit and leaves the NTFS permissions untouched, so the token stays readable by every account on the machine.
+
+   Keep the PowerShell wrapper and the single quotes. Git Bash rewrites the bare `/inheritance:r` and `/grant:r` flags as file paths, and `%USERNAME%` expands in `cmd.exe` only.
 
 7. Tell the user:
 

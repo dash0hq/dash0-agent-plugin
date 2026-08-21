@@ -5,10 +5,13 @@ Claude Code plugin that captures agent activity as OpenTelemetry traces — tool
 ## Requirements
 
 - **Agent:** the Claude Code CLI.
-- **Operating system:** macOS or Linux (Windows is not supported).
+- **Operating system:** macOS, Linux, or Windows.
 - **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
-- **Shell tooling:** `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
-  bootstrap downloads and checksum-verifies the hook binary on first run.
+- **Shell tooling:**
+  - macOS and Linux: `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
+    bootstrap downloads and checksum-verifies the hook binary on first run.
+  - Windows: [Git for Windows](https://gitforwindows.org/). Claude Code runs hook
+    commands through Git Bash, which brings all of the above with it.
 
 ## Installation
 
@@ -193,6 +196,8 @@ dataset: "default"
 
 Or run `/dash0-configure` to walk through the values interactively — the skill writes the same file for you.
 
+A project file replaces the user-level one entirely; the two are never merged. Where a value is set both here and in `pluginConfigs` (what `/plugin` → **Configure** writes), the `pluginConfigs` value wins — including `auth_token`. Earlier releases had the file's `auth_token` win instead — the one option that worked the other way round.
+
 
 ### Verify
 
@@ -332,9 +337,10 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 ### Every hook fails with a 404
 
 The hook is trying to download a binary for an unsupported platform. Run
-`uname -s -m` — anything other than `Darwin` or `Linux` on
-`x86_64`/`arm64`/`aarch64` is unsupported, in particular `MINGW64_NT-…` or
-`MSYS_NT-…`, which is Windows under Git Bash. See [Requirements](#requirements).
+`uname -s -m` — the supported kernels are `Darwin`, `Linux`, and Windows, which
+Git Bash reports as `MINGW64_NT-…`, `MSYS_NT-…`, or `CYGWIN_NT-…`, on
+`x86_64`/`arm64`/`aarch64`. Anything else is unsupported. See
+[Requirements](#requirements).
 
 ### No spans in Dash0 after install
 

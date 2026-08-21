@@ -5,12 +5,16 @@ Cursor plugin that emits agent activity as OpenTelemetry spans to your Dash0 end
 ## Requirements
 
 - **Agent:** Cursor.
-- **Operating system:** macOS or Linux (Windows is not supported).
+- **Operating system:** macOS, Linux, or Windows.
 - **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
-- **Shell tooling:** `bash`, `curl` or `wget`, `sha256sum` or `shasum`, and `jq`
-  (`brew install jq` on macOS; your distro's package manager on Linux) — the
-  installer needs `jq` to merge safely into your `~/.cursor/hooks.json`, and the
-  bootstrap downloads and checksum-verifies the hook binary on first run.
+- **Shell tooling:**
+  - macOS and Linux: `bash`, `curl` or `wget`, `sha256sum` or `shasum`, and `jq`
+    (`brew install jq` on macOS; your distro's package manager on Linux) — the
+    installer needs `jq` to merge safely into your `~/.cursor/hooks.json`, and the
+    bootstrap downloads and checksum-verifies the hook binary on first run.
+  - Windows: nothing extra. The PowerShell installer reads and writes JSON
+    itself, so it needs no `jq`, and both `curl.exe` and `Get-FileHash` ship with
+    Windows.
 
 ## Installation
 
@@ -18,7 +22,13 @@ Cursor plugin that emits agent activity as OpenTelemetry spans to your Dash0 end
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.sh | bash
 ```
 
-The installer lays the plugin down under `~/.cursor/plugins/local/dash0-agent-plugin/` — Cursor scans that directory on startup and picks up the plugin manifest and shipped skills. Hook registrations are merged into `~/.cursor/hooks.json` at the user scope (Cursor doesn't fire hooks from local-plugin manifests, only from `~/.cursor/hooks.json` and project-scope `.cursor/hooks.json`). Any hooks you already had in that file are preserved; only entries whose `command` references `cursor-on-event.sh` are managed by this installer. Credentials go to `~/.cursor/dash0-agent-plugin.local.md`, and the binary is fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) (verifying the checksum) into `~/.local/state/dash0-agent-plugin/cursor/bin/`.
+On Windows, run the PowerShell installer instead:
+
+```powershell
+irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.ps1 | iex
+```
+
+The installer lays the plugin down under `~/.cursor/plugins/local/dash0-agent-plugin/` — Cursor scans that directory on startup and picks up the plugin manifest and shipped skills. Hook registrations are merged into `~/.cursor/hooks.json` at the user scope (Cursor doesn't fire hooks from local-plugin manifests, only from `~/.cursor/hooks.json` and project-scope `.cursor/hooks.json`). Any hooks you already had in that file are preserved; only entries whose `command` references a `cursor-on-event` bootstrap are managed by this installer. Credentials go to `~/.cursor/dash0-agent-plugin.local.md`, and the binary is fetched from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) (verifying the checksum) into `~/.local/state/dash0-agent-plugin/cursor/bin/`.
 
 After install, **quit and relaunch Cursor.**
 
@@ -42,13 +52,25 @@ DASH0_DATASET=default \
   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.sh | bash
 ```
 
+On Windows, `iex` cannot pass arguments, so build the script block first:
+
+```powershell
+$installer = irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.ps1
+& ([scriptblock]::Create($installer)) `
+  -Endpoint https://ingress.<region>.aws.dash0.com `
+  -Token <your-token> `
+  -Dataset default
+```
+
+The same environment variables work there too.
+
 Each flag (and its env-var equivalent) skips the corresponding prompt. The team-name prompt has no flag — set `DASH0_TEAM_NAME` if you want to provide it non-interactively. `DASH0_VERSION` pins a specific release; default is the latest GitHub release.
 
-> **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.cursor/dash0-agent-plugin.local.md` (which the bootstrap script then passes to the hook as `CURSOR_PLUGIN_OPTION_AUTH_TOKEN`). This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
+> **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.cursor/dash0-agent-plugin.local.md`. This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
 
 ## Upgrading
 
-Re-run the installer; it fetches the latest release (or the release pinned by `DASH0_VERSION`) and leaves your credentials untouched. Quit and relaunch Cursor to pick up the update.
+Re-run the installer for your platform; it fetches the latest release (or the release pinned by `DASH0_VERSION`) and leaves your credentials untouched. Quit and relaunch Cursor to pick up the update.
 
 ## Configuration
 
@@ -73,7 +95,7 @@ team_name: "<your-team>"      # optional — tagged as dash0.team.name on every 
 
 The installer writes this file for you. To reconfigure later, re-run the `dash0-configure` skill in Cursor, or edit the file directly — see [Options](#options) for every key. Config changes take effect on the next hook fire — no restart needed. (A restart is only needed after upgrading the plugin's registered event set, since Cursor reads `~/.cursor/hooks.json` at startup.)
 
-Per-project overrides work: drop a `.cursor/dash0-agent-plugin.local.md` inside your repo and it takes precedence over the global file (the bootstrap script checks the workspace CWD first, then `$HOME/.cursor/`).
+Per-project overrides work: drop a `.cursor/dash0-agent-plugin.local.md` inside your repo and it takes precedence over the global file (the binary checks the workspace CWD first, then `$HOME/.cursor/`).
 
 ### Verify
 
@@ -124,7 +146,7 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 | `DASH0_DEBUG` | Print OTel payloads to stderr (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Write debug output to this file path |
 
-> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field (the bootstrap passes it to the hook as `CURSOR_PLUGIN_OPTION_AUTH_TOKEN`).
+> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field.
 
 ## Privacy defaults
 
@@ -157,10 +179,10 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 
 ### Every hook fails with a 404
 
-The hook is trying to download a binary for an unsupported platform. Run
-`uname -s -m` — anything other than `Darwin` or `Linux` on
-`x86_64`/`arm64`/`aarch64` is unsupported, in particular `MINGW64_NT-…` or
-`MSYS_NT-…`, which is Windows under Git Bash. See [Requirements](#requirements).
+The hook is trying to download a binary for an unsupported platform. Releases
+carry macOS, Linux, and Windows binaries for `amd64` and `arm64` only — check
+what your machine reports with `uname -s -m`, or with
+`$env:PROCESSOR_ARCHITECTURE` on Windows. See [Requirements](#requirements).
 
 ### No spans arrive
 
@@ -179,7 +201,13 @@ The hook is trying to download a binary for an unsupported platform. Run
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/uninstall-cursor.sh | bash
 ```
 
-Pass `-s -- --yes` to skip the confirmation prompt. The uninstaller removes the entire `~/.cursor/plugins/local/dash0-agent-plugin/` directory plus the credential config and cached binary, and strips Dash0's entries from `~/.cursor/hooks.json` while preserving any hooks you added yourself (if the file ends up with no entries, it's deleted). It also cleans up files left behind by pre-0.1.17 shell-installer versions (a legacy `~/.local/share/dash0-agent-plugin/` and `~/.cursor/skills-cursor/dash0-configure/`). `jq` must be installed.
+On Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/uninstall-cursor.ps1 | iex
+```
+
+Pass `-s -- --yes` (or `-Yes`, via the script-block form above) to skip the confirmation prompt. The uninstaller removes the entire `~/.cursor/plugins/local/dash0-agent-plugin/` directory plus the credential config and cached binary, and strips Dash0's entries from `~/.cursor/hooks.json` while preserving any hooks you added yourself (if the file ends up with no entries, it's deleted). The shell version also cleans up files left behind by pre-0.1.17 shell-installer versions (a legacy `~/.local/share/dash0-agent-plugin/` and `~/.cursor/skills-cursor/dash0-configure/`) and needs `jq`; the PowerShell version needs neither, since Windows never saw those layouts.
 
 After uninstalling, restart Cursor so it stops registering the hooks.
 

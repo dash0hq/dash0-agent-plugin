@@ -8,95 +8,52 @@
 #
 #   stdin (JSON) → cursor-on-event.sh → cursor-on-event binary → OTLP
 #
-# Responsibilities:
-#   - Load configuration from a YAML-frontmatter config file (per-project or
-#     global), exposing values as DASH0_* env vars for the binary.
-#   - Detect OS/arch and download the matching cursor-on-event binary from
-#     GitHub Releases on first run, verifying the checksum.
-#   - exec the binary, forwarding stdin.
-#
-# Fail-open: any error before exec'ing the binary logs to stderr and exits 0
-# so a broken installer never breaks the user's Cursor session.
-
-# Note: we deliberately do NOT use `set -e`; the trap below converts any
-# failure into a stderr log and a clean exit so Cursor's agent loop is never
-# blocked by telemetry plumbing.
+# Fail-open: any error before exec'ing the binary logs to stderr and exits 0 so
+# a broken installer never breaks the user's Cursor session. `set -e` is
+# deliberately absent; fail_open does that job.
 set -u
 
+AGENT="cursor"
+VERSION="0.1.24"
+
+# Where the downloaded binary lives. Mirrors the per-source scratch root layout
+# from internal/harness so a user can clean up the whole tree at once.
+BASE="${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor}"
+
+# >>> shared bootstrap — byte-identical across cursor, codex and copilot >>>
+# test/consistency asserts these three regions match, so a fix lands in all of
+# them or in none. Everything agent-specific is declared above.
+
 fail_open() {
-  echo "cursor-on-event: $*" >&2
+  echo "${AGENT}-on-event: $*" >&2
   exit 0
 }
 
-# Load settings from a YAML-frontmatter config file. Returns 1 if the file
-# doesn't exist so callers can fall through to the next location.
-load_settings() {
-  local file="$1"
-  [[ -f "$file" ]] || return 1
-
-  local frontmatter
-  frontmatter=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$file")
-
-  local enabled
-  enabled=$(echo "$frontmatter" | grep '^enabled:' | sed 's/enabled: *//' || true)
-  if [[ "$enabled" == "false" ]]; then
-    exit 0
-  fi
-
-  local val
-  val=$(echo "$frontmatter" | grep '^otlp_url:' | sed 's/otlp_url: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OTLP_URL="$val"
-  val=$(echo "$frontmatter" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export CURSOR_PLUGIN_OPTION_AUTH_TOKEN="$val"
-  val=$(echo "$frontmatter" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DATASET="$val"
-  val=$(echo "$frontmatter" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_AGENT_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^team_name:' | sed 's/team_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_TEAM_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^omit_io:' | sed 's/omit_io: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_identity_fallback:' | sed 's/omit_identity_fallback: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IDENTITY_FALLBACK="$val"
-  val=$(echo "$frontmatter" | grep '^debug:' | sed 's/debug: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG="$val"
-  val=$(echo "$frontmatter" | grep '^debug_file:' | sed 's/debug_file: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG_FILE="$val"
-
-  return 0
-}
-
-# Project-scoped settings take precedence over global settings.
-# Cursor sets the workspace as CWD when running hooks.
-PROJECT_SETTINGS=".cursor/dash0-agent-plugin.local.md"
-GLOBAL_SETTINGS="$HOME/.cursor/dash0-agent-plugin.local.md"
-
-load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
-
-# Where the downloaded binary lives. Mirrors the per-source scratch root
-# layout from cmd/cursor-on-event/main.go so users can clean up the whole
-# tree at once.
-BASE="${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor}"
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.24"
 
+# Git Bash, MSYS2 and Cygwin report kernel strings like MINGW64_NT-10.0-26200,
+# never "windows", so the release asset would be requested under a name that does
+# not exist. EXE carries the suffix GoReleaser appends for Windows builds through
+# to both the asset name and the cache filename; it stays empty elsewhere, so a
+# POSIX cache path is unchanged and nothing re-downloads.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+EXE=""
+case "$OS" in
+  mingw*|msys*|cygwin*) OS="windows"; EXE=".exe" ;;
+esac
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64)  ARCH="amd64" ;;
-  aarch64) ARCH="arm64" ;;
-  arm64)   ARCH="arm64" ;;
+  x86_64|amd64)  ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/cursor-on-event-${VERSION}-${OS}-${ARCH}"
+BINARY="$BIN_DIR/${AGENT}-on-event-${VERSION}-${OS}-${ARCH}${EXE}"
 
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
-  ASSET="cursor-on-event-${OS}-${ARCH}"
+  ASSET="${AGENT}-on-event-${OS}-${ARCH}${EXE}"
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
@@ -110,24 +67,38 @@ if [ ! -x "$BINARY" ]; then
     fail_open "neither curl nor wget found"
   fi
 
+  # Fail closed on integrity: a binary that cannot be verified is not run. Every
+  # supported platform ships a hash tool — shasum on macOS, sha256sum on glibc
+  # Linux and on busybox — so reaching either refusal below means the release is
+  # malformed or the host is not one we support. fail_open still exits 0, so the
+  # cost is this run's telemetry, never the user's session.
   EXPECTED=$(echo "$CHECKSUMS" | grep "  ${ASSET}$" | cut -d' ' -f1)
-  if [ -n "$EXPECTED" ]; then
-    if command -v sha256sum &>/dev/null; then
-      ACTUAL=$(sha256sum "$BINARY" | cut -d' ' -f1)
-    elif command -v shasum &>/dev/null; then
-      ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
-    else
-      ACTUAL=""
-    fi
-    if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-      rm -f "$BINARY"
-      fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
-    fi
+  if [ -z "$EXPECTED" ]; then
+    rm -f "$BINARY"
+    fail_open "no checksum for ${ASSET} — refusing to run an unverified binary"
+  fi
+  if command -v sha256sum &>/dev/null; then
+    ACTUAL=$(sha256sum "$BINARY" | cut -d' ' -f1)
+  elif command -v shasum &>/dev/null; then
+    ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
+  else
+    ACTUAL=""
+  fi
+  if [ -z "$ACTUAL" ]; then
+    rm -f "$BINARY"
+    fail_open "no sha256 tool (sha256sum/shasum) to verify ${ASSET} — refusing to run an unverified binary"
+  fi
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    rm -f "$BINARY"
+    fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
-  chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
+  if [ "$OS" != "windows" ]; then
+    chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
+  fi
 fi
 
-# Forward stdin to the binary. The binary itself exits 0 on telemetry errors
-# (see cmd/cursor-on-event/main.go) so we don't need to wrap this in a trap.
-exec "$BINARY"
+# Forward stdin, plus the event-name argument for the agents that pass one. The
+# binary exits 0 on telemetry errors, so no trap is needed around this.
+exec "$BINARY" "$@"
+# <<< shared bootstrap <<<

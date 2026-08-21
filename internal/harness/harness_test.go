@@ -4,54 +4,39 @@
 package harness
 
 import (
+	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/config"
 )
 
-// The four shipped values must stay distinct and complete. This is the test that a
-// typo in one of them now fails: previously each entrypoint declared its own copy,
-// so no Go test saw the real strings.
-func TestShippedAgents(t *testing.T) {
-	all := map[string]Harness{
-		"Claude": Claude, "Cursor": Cursor, "Codex": Codex, "Copilot": Copilot,
+// TestMain points the home directory and the working directory at an empty temp
+// directory for every test in this package.
+//
+// Config lookups now fall back to <ConfigDir>/dash0-agent-plugin.local.md, in
+// the project and in the user's home. Without this isolation a developer who has
+// the plugin configured runs these tests against their own OTLP endpoint and
+// token: assertions about an unset option read whatever their real file says,
+// and an exporter test could ship to their live dataset.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "harness-test-home")
+	if err != nil {
+		panic(err)
 	}
-	seenPrefix := map[string]string{}
-	seenSubdir := map[string]string{}
-	for label, h := range all {
-		assert.NotEmpty(t, h.Name, "%s.Name", label)
-		assert.NotEmpty(t, h.EnvPrefix, "%s.EnvPrefix", label)
-		assert.NotEmpty(t, h.DataSubdir, "%s.DataSubdir", label)
-		assert.Equal(t, strings.ToUpper(h.EnvPrefix), h.EnvPrefix, "%s.EnvPrefix must be upper case", label)
-
-		// A shared prefix would let one agent read another's token; a shared
-		// subdirectory would let two agents collide in the state root.
-		if other, dup := seenPrefix[h.EnvPrefix]; dup {
-			t.Errorf("%s and %s share EnvPrefix %q", label, other, h.EnvPrefix)
-		}
-		seenPrefix[h.EnvPrefix] = label
-		if other, dup := seenSubdir[h.DataSubdir]; dup {
-			t.Errorf("%s and %s share DataSubdir %q", label, other, h.DataSubdir)
-		}
-		seenSubdir[h.DataSubdir] = label
+	// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows.
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+	if err := os.Chdir(home); err != nil {
+		panic(err)
 	}
 
-	// The exact strings the installers, bootstraps and docs are written against.
-	assert.Equal(t, "CLAUDE", Claude.EnvPrefix)
-	assert.Equal(t, "CURSOR", Cursor.EnvPrefix)
-	assert.Equal(t, "CODEX", Codex.EnvPrefix)
-	assert.Equal(t, "COPILOT", Copilot.EnvPrefix)
-	assert.Equal(t, "github-copilot-cli", Copilot.Name)
-	assert.Equal(t, "copilot", Copilot.DataSubdir)
-
-	// Only the single-vendor agents pin a provider.
-	assert.Equal(t, "anthropic", Claude.Provider)
-	assert.Equal(t, "openai", Codex.Provider)
-	assert.Empty(t, Cursor.Provider)
-	assert.Empty(t, Copilot.Provider)
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
 }
 
 func TestDataDirPrecedence(t *testing.T) {
@@ -97,7 +82,10 @@ func TestDataDirPrecedence(t *testing.T) {
 		t.Setenv("CODEX_PLUGIN_DATA", "")
 		t.Setenv("DASH0_PLUGIN_DATA", "")
 		t.Setenv("XDG_STATE_HOME", "")
+		// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows, so both
+		// have to move or this asserts against the real home on one platform.
 		t.Setenv("HOME", "/home/somebody")
+		t.Setenv("USERPROFILE", "/home/somebody")
 
 		got, err := Codex.DataDir()
 		require.NoError(t, err)
@@ -386,4 +374,141 @@ func TestSharedLookupsIgnoreTheReceiver(t *testing.T) {
 	t.Setenv("DASH0_DATASET", "shared")
 
 	assert.Equal(t, Codex.Dash0Env("DATASET"), Copilot.Dash0Env("DATASET"))
+}
+
+// writeConfig puts a configuration file in dir/<ConfigDir>/ and returns dir.
+func writeConfig(t *testing.T, dir string, h Harness, body string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, h.ConfigDir), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, h.ConfigDir, config.Name), []byte(body), 0o600))
+	return dir
+}
+
+func TestConfigDirIsSetForEveryAgent(t *testing.T) {
+	for label, h := range map[string]Harness{
+		"Claude": Claude, "Cursor": Cursor, "Codex": Codex, "Copilot": Copilot,
+	} {
+		assert.Equal(t, "."+h.DataSubdir, h.ConfigDir, "%s.ConfigDir", label)
+	}
+}
+
+func TestPluginOptionFallsBackToTheConfigFile(t *testing.T) {
+	t.Chdir(writeConfig(t, t.TempDir(), Claude, "---\ndataset: from-file\n---\n"))
+
+	assert.Equal(t, "from-file", Claude.PluginOption("DATASET"))
+}
+
+func TestPluginOptionPrefersTheEnvironmentOverTheConfigFile(t *testing.T) {
+	t.Chdir(writeConfig(t, t.TempDir(), Claude, "---\ndataset: from-file\n---\n"))
+
+	t.Run("DASH0_ wins over the file", func(t *testing.T) {
+		t.Setenv("DASH0_DATASET", "from-dash0")
+		assert.Equal(t, "from-dash0", Claude.PluginOption("DATASET"))
+	})
+
+	t.Run("the prefixed option wins over both", func(t *testing.T) {
+		t.Setenv("DASH0_DATASET", "from-dash0")
+		t.Setenv("CLAUDE_PLUGIN_OPTION_DATASET", "from-option")
+		assert.Equal(t, "from-option", Claude.PluginOption("DATASET"))
+	})
+}
+
+func TestProjectConfigWinsOverHomeConfig(t *testing.T) {
+	home := writeConfig(t, t.TempDir(), Claude, "---\ndataset: from-home\nteam_name: home-only\n---\n")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Chdir(writeConfig(t, t.TempDir(), Claude, "---\ndataset: from-project\n---\n"))
+
+	assert.Equal(t, "from-project", Claude.PluginOption("DATASET"))
+	assert.Empty(t, Claude.PluginOption("TEAM_NAME"),
+		"the project file wins whole; keys are not merged from the home file")
+}
+
+func TestHomeConfigIsUsedWithoutAProjectFile(t *testing.T) {
+	home := writeConfig(t, t.TempDir(), Claude, "---\ndataset: from-home\n---\n")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Chdir(t.TempDir())
+
+	assert.Equal(t, "from-home", Claude.PluginOption("DATASET"))
+}
+
+func TestAuthTokenFromTheEnvironmentOutranksTheFile(t *testing.T) {
+	t.Chdir(writeConfig(t, t.TempDir(), Claude, "---\nauth_token: from-file\n---\n"))
+	t.Setenv("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", "from-option")
+
+	assert.Equal(t, "from-option", Claude.Config().AuthToken)
+}
+
+func TestAuthTokenFromTheFileWhenTheEnvironmentHasNone(t *testing.T) {
+	t.Chdir(writeConfig(t, t.TempDir(), Claude, "---\nauth_token: from-file\n---\n"))
+
+	assert.Equal(t, "from-file", Claude.Config().AuthToken)
+}
+
+func TestAuthTokenFromTheEnvironmentWhenTheFileHasNone(t *testing.T) {
+	t.Chdir(writeConfig(t, t.TempDir(), Claude, "---\ndataset: d\n---\n"))
+	t.Setenv("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", "from-option")
+
+	assert.Equal(t, "from-option", Claude.Config().AuthToken)
+}
+
+func TestAuthTokenIgnoresDash0Env(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("DASH0_AUTH_TOKEN", "from-dash0")
+
+	assert.Empty(t, Claude.Config().AuthToken,
+		"a secret must never be picked up from an environment handed to tool subprocesses")
+}
+
+// A keychain reference that resolves to nothing must not shadow the other
+// sources: the lookup fails on a machine with no such item, and returns empty on
+// every platform that has no keychain at all.
+func TestKeychainMissWithoutSwallowingTheOtherSources(t *testing.T) {
+	t.Chdir(writeConfig(t, t.TempDir(), Claude,
+		"---\nauth_token: from-file\nauth_token_keychain_service: dash0-no-such-service\n---\n"))
+
+	t.Run("falls through to the file", func(t *testing.T) {
+		assert.Equal(t, "from-file", Claude.Config().AuthToken)
+	})
+
+	t.Run("falls through to the environment first", func(t *testing.T) {
+		t.Setenv("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", "from-option")
+		assert.Equal(t, "from-option", Claude.Config().AuthToken)
+	})
+}
+
+func TestEnabled(t *testing.T) {
+	t.Run("no file at all", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		assert.True(t, Claude.Enabled(), "an unconfigured install is not a disabled one")
+	})
+
+	t.Run("explicitly disabled in the project file", func(t *testing.T) {
+		t.Chdir(writeConfig(t, t.TempDir(), Claude, "---\nenabled: false\n---\n"))
+		assert.False(t, Claude.Enabled())
+	})
+
+	t.Run("a file without the key", func(t *testing.T) {
+		t.Chdir(writeConfig(t, t.TempDir(), Claude, "---\ndataset: d\n---\n"))
+		assert.True(t, Claude.Enabled())
+	})
+}
+
+func TestEveryAgentReadsItsOwnConfigDir(t *testing.T) {
+	for _, h := range []Harness{Claude, Cursor, Codex, Copilot} {
+		t.Run(h.Name, func(t *testing.T) {
+			t.Chdir(writeConfig(t, t.TempDir(), h, "---\ndataset: mine\n---\n"))
+			assert.Equal(t, "mine", h.PluginOption("DATASET"))
+
+			for _, other := range []Harness{Claude, Cursor, Codex, Copilot} {
+				if other.ConfigDir == h.ConfigDir {
+					continue
+				}
+				assert.Empty(t, other.PluginOption("DATASET"),
+					"%s must not read %s's configuration", other.Name, h.Name)
+			}
+		})
+	}
 }

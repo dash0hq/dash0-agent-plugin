@@ -498,10 +498,16 @@ func TestE2ECopilotCredentialContracts(t *testing.T) {
 		placed := filepath.Join(binDir, fmt.Sprintf("copilot-on-event-%s-%s-%s", version, runtime.GOOS, runtime.GOARCH))
 		copyExecutable(t, bin, placed)
 
+		// The project file is resolved from the event's `cwd`, not from the
+		// directory the hook was spawned in — the binary chdirs into the payload's
+		// cwd first, because Copilot may spawn a hook from anywhere. So the event
+		// has to name the workspace, and cmd.Dir is deliberately left elsewhere to
+		// prove the spawn directory is not what decides it.
+		event := `{"sessionId":"` + copilotConvID + `","cwd":"` + workspace + `","source":"new"}`
+
 		cmd := exec.Command("bash", bootstrap, "sessionStart")
-		cmd.Dir = workspace // bootstrap resolves the project file relative to CWD
 		cmd.Env = append(os.Environ(), "HOME="+home, "COPILOT_PLUGIN_DATA="+pdata)
-		cmd.Stdin = strings.NewReader(sessionStart)
+		cmd.Stdin = strings.NewReader(event)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "bootstrap failed: %s", out)
 

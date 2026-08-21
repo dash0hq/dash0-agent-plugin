@@ -793,9 +793,13 @@ func TestChdirToEventCwd(t *testing.T) {
 	t.Run("changes to the event cwd", func(t *testing.T) {
 		original, err := filepath.Abs(".")
 		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
 
+		// Create the directory BEFORE registering the chdir back. Cleanups run in
+		// reverse, so this order returns to the original directory first and then
+		// deletes the temp one — Windows refuses to remove a directory that is any
+		// process's working directory.
 		target := t.TempDir()
+		t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
 		ChdirToEventCwd(map[string]any{"cwd": target})
 
 		got, err := filepath.Abs(".")

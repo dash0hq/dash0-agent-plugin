@@ -60,6 +60,15 @@ func run() error {
 	// so the pipeline sees the right working tree.
 	pipeline.ChdirToEventCwd(event)
 
+	// After the chdir: a project-level config file has to be looked up in the
+	// workspace the agent is working in, which is the directory hn.Config() below
+	// reads it from. Checking before the chdir looked for it in whatever
+	// directory the harness happened to spawn the hook from, so a project that
+	// set `enabled: false` kept emitting.
+	if !hn.Enabled() {
+		return nil
+	}
+
 	event = copilot.Normalize(eventName, event)
 	if event == nil {
 		return nil

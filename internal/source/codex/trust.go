@@ -137,7 +137,9 @@ func RenderManagedBlock(configPath, command, existingConfig string) (string, err
 
 	var b strings.Builder
 	b.WriteString(ManagedBlockBegin + "\n")
-	b.WriteString("# Managed by dash0-agent-plugin. Re-run install-codex.sh to update; run uninstall-codex.sh to remove.\n")
+	// Naming no script keeps the line right on every platform: the installer is
+	// install-codex.sh on macOS and Linux, install-codex.ps1 on Windows.
+	b.WriteString("# Managed by dash0-agent-plugin. Re-run the Dash0 Codex installer to update; run the uninstaller to remove.\n")
 
 	var state strings.Builder
 	for _, e := range HookEvents {

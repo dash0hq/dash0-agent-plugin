@@ -4,87 +4,29 @@
 
 set -euo pipefail
 
-# Load settings from a config file. Returns 1 if file doesn't exist.
-load_settings() {
-  local file="$1"
-  [[ -f "$file" ]] || return 1
-
-  local frontmatter
-  frontmatter=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$file")
-
-  # Check enabled flag (default: true if file exists but field is absent).
-  local enabled
-  enabled=$(echo "$frontmatter" | grep '^enabled:' | sed 's/enabled: *//' || true)
-  if [[ "$enabled" == "false" ]]; then
-    exit 0
-  fi
-
-  local val
-  val=$(echo "$frontmatter" | grep '^otlp_url:' | sed 's/otlp_url: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OTLP_URL="$val"
-  val=$(echo "$frontmatter" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$val"
-  val=$(echo "$frontmatter" | grep '^auth_token_keychain_service:' | sed 's/auth_token_keychain_service: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_AUTH_TOKEN_KEYCHAIN_SERVICE="$val"
-  val=$(echo "$frontmatter" | grep '^auth_token_keychain_account:' | sed 's/auth_token_keychain_account: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_AUTH_TOKEN_KEYCHAIN_ACCOUNT="$val"
-  val=$(echo "$frontmatter" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DATASET="$val"
-  val=$(echo "$frontmatter" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_AGENT_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^team_name:' | sed 's/team_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_TEAM_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^omit_io:' | sed 's/omit_io: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_identity_fallback:' | sed 's/omit_identity_fallback: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IDENTITY_FALLBACK="$val"
-  val=$(echo "$frontmatter" | grep '^debug:' | sed 's/debug: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG="$val"
-  val=$(echo "$frontmatter" | grep '^debug_file:' | sed 's/debug_file: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG_FILE="$val"
-
-  return 0
-}
-
-# Load settings: project-level takes precedence, then global.
-PROJECT_SETTINGS=".claude/dash0-agent-plugin.local.md"
-GLOBAL_SETTINGS="$HOME/.claude/dash0-agent-plugin.local.md"
-
-load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
-
-# Resolve the auth token from the macOS keychain when a keychain reference is
-# configured. This lets managed/MDM rollouts ship only a pointer (safe to place
-# in managed-settings.json) while the secret is provisioned separately via
-# `security add-generic-password`. A successful lookup takes precedence over an
-# inline AUTH_TOKEN. Silently no-ops on non-macOS or when `security` is absent.
-KEYCHAIN_SERVICE="${CLAUDE_PLUGIN_OPTION_AUTH_TOKEN_KEYCHAIN_SERVICE:-${DASH0_AUTH_TOKEN_KEYCHAIN_SERVICE:-}}"
-KEYCHAIN_ACCOUNT="${CLAUDE_PLUGIN_OPTION_AUTH_TOKEN_KEYCHAIN_ACCOUNT:-${DASH0_AUTH_TOKEN_KEYCHAIN_ACCOUNT:-}}"
-if [[ -n "$KEYCHAIN_SERVICE" ]] && command -v security &>/dev/null; then
-  if [[ -n "$KEYCHAIN_ACCOUNT" ]]; then
-    keychain_token=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$KEYCHAIN_ACCOUNT" -w 2>/dev/null || true)
-  else
-    keychain_token=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)
-  fi
-  [[ -n "$keychain_token" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$keychain_token"
-fi
-
 PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
 VERSION="0.1.24"
 
-# Detect OS and architecture.
+# Detect OS and architecture. Git Bash, MSYS2 and Cygwin report kernel strings
+# like MINGW64_NT-10.0-26200, never "windows", so without this the release asset
+# would be requested under a name that does not exist. EXE carries the suffix
+# GoReleaser appends for Windows builds through to both the asset name and the
+# cache filename; it stays empty elsewhere, so a POSIX cache path is unchanged and
+# nothing re-downloads.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+EXE=""
+case "$OS" in
+  mingw*|msys*|cygwin*) OS="windows"; EXE=".exe" ;;
+esac
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64)  ARCH="amd64" ;;
-  aarch64) ARCH="arm64" ;;
-  arm64)   ARCH="arm64" ;;
+  x86_64|amd64)  ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}"
+BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}${EXE}"
 
 # Download the binary on first run.
 if [ ! -x "$BINARY" ]; then
@@ -110,7 +52,7 @@ if [ ! -x "$BINARY" ]; then
   # with no release-timing coordination: before the rename ships the first
   # candidate 404s and the second succeeds, and after it ships the first one hits.
   ASSET=""
-  for CANDIDATE in "claude-on-event-${OS}-${ARCH}" "on-event-${OS}-${ARCH}"; do
+  for CANDIDATE in "claude-on-event-${OS}-${ARCH}${EXE}" "on-event-${OS}-${ARCH}${EXE}"; do
     # stderr is dropped: a miss on the first candidate is expected until the
     # rename ships, and the message below covers the case where none is found.
     if fetch "${BASE_URL}/${CANDIDATE}" "$BINARY" 2>/dev/null; then
@@ -143,17 +85,22 @@ if [ ! -x "$BINARY" ]; then
   elif command -v shasum &>/dev/null; then
     ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
   else
-    # Neither tool present. The READMEs list one of them as a requirement; the
-    # binary is still used, as before, so a minimal host is not broken by this.
     ACTUAL=""
   fi
-  if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+  if [ -z "$ACTUAL" ]; then
+    echo "on-event: no sha256 tool (sha256sum/shasum) to verify ${ASSET} — refusing to run an unverified binary" >&2
+    rm -f "$BINARY"
+    exit 1
+  fi
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
     echo "on-event: checksum mismatch (expected $EXPECTED, got $ACTUAL)" >&2
     rm -f "$BINARY"
     exit 1
   fi
 
-  chmod +x "$BINARY"
+  if [ "$OS" != "windows" ]; then
+    chmod +x "$BINARY"
+  fi
 fi
 
 # Forward stdin and arguments to the binary.

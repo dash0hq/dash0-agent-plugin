@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/config"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
@@ -22,18 +23,18 @@ import (
 var (
 	// Claude DataSubdir is set for correctness but unused. Claude Code supplies the data
 	// directory as CLAUDE_PLUGIN_DATA, which run() requires rather than falling back.
-	Claude = Harness{Name: "claude-code", EnvPrefix: "CLAUDE", DataSubdir: "claude", Provider: "anthropic"}
+	Claude = Harness{Name: "claude-code", EnvPrefix: "CLAUDE", DataSubdir: "claude", ConfigDir: ".claude", Provider: "anthropic"}
 	// Cursor Provider is intentionally empty.It proxies many vendors, so
 	// the provider is derived per-event from the model name
-	Cursor = Harness{Name: "cursor", EnvPrefix: "CURSOR", DataSubdir: "cursor"}
+	Cursor = Harness{Name: "cursor", EnvPrefix: "CURSOR", DataSubdir: "cursor", ConfigDir: ".cursor"}
 	// Codex Provider is set to openai (Codex is single-vendor). The GenAI layer still
 	// resolves provider per-event from the model name (e.g. gpt-*/o*/codex-* → openai)
 	// and only falls back to this value when a model is absent.
-	Codex = Harness{Name: "codex", EnvPrefix: "CODEX", DataSubdir: "codex", Provider: "openai"}
+	Codex = Harness{Name: "codex", EnvPrefix: "CODEX", DataSubdir: "codex", ConfigDir: ".codex", Provider: "openai"}
 	// Copilot Provider is intentionally empty. It serves several vendors,
 	// so the provider is resolved per-event from the model name rather than
 	// forced to one value.
-	Copilot = Harness{Name: "github-copilot-cli", EnvPrefix: "COPILOT", DataSubdir: "copilot"}
+	Copilot = Harness{Name: "github-copilot-cli", EnvPrefix: "COPILOT", DataSubdir: "copilot", ConfigDir: ".copilot"}
 )
 
 // Harness names one coding agent's environment conventions.
@@ -50,6 +51,10 @@ type Harness struct {
 	EnvPrefix string
 	// DataSubdir is this agent's directory under the shared state root.
 	DataSubdir string
+	// ConfigDir is the agent's own dot-directory, which may hold a
+	// config.Name file. It is looked for twice: relative to the project the
+	// agent runs in, then inside the user's home directory.
+	ConfigDir string
 	// Provider is the fallback gen_ai.provider.name for events whose model
 	// cannot be inferred (SessionStart, PreToolUse, ...). Leave it empty for an
 	// agent that proxies several vendors.
@@ -64,7 +69,7 @@ type Harness struct {
 func (h Harness) Config() otlp.Config {
 	cfg := otlp.Config{
 		OTLPUrl:              h.PluginOption("OTLP_URL"),
-		AuthToken:            h.PluginOptionSecure("AUTH_TOKEN"),
+		AuthToken:            h.authToken(),
 		Dataset:              h.PluginOption("DATASET"),
 		AgentName:            h.AgentName(),
 		HarnessName:          h.HarnessName(),
@@ -136,14 +141,65 @@ func (h Harness) PluginOptionSecure(key string) string {
 }
 
 // PluginOption reads <EnvPrefix>_PLUGIN_OPTION_<key>, falling back to
-// DASH0_<key>. Use it for ordinary configuration; secrets must use
-// PluginOptionSecure, which has no DASH0_* fallback so a token cannot be picked
-// up from an environment the agent hands to tool subprocesses.
+// DASH0_<key> and then to the lower-cased key in the configuration file. Use it
+// for ordinary configuration; secrets must use PluginOptionSecure, which has no
+// DASH0_* fallback so a token cannot be picked up from an environment the agent
+// hands to tool subprocesses.
 func (h Harness) PluginOption(key string) string {
 	if v := h.PluginOptionSecure(key); v != "" {
 		return v
 	}
-	return h.Dash0Env(key)
+	if v := h.Dash0Env(key); v != "" {
+		return v
+	}
+	return h.configFile().Get(strings.ToLower(key))
+}
+
+// configFile reads this agent's configuration file, preferring the copy in the
+// project the agent is running in over the one in the user's home directory.
+//
+// Entrypoints chdir into the event's cwd before reading configuration (see
+// ChdirToEventCwd), so the relative path resolves against the user's project
+// rather than wherever the agent spawned the binary.
+func (h Harness) configFile() *config.File {
+	paths := []string{filepath.Join(h.ConfigDir, config.Name)}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, h.ConfigDir, config.Name))
+	}
+	return config.Load(paths...)
+}
+
+// Enabled reports whether the configuration file permits this agent to emit
+// telemetry. Only `enabled: false` disables it; an absent file or key means yes.
+func (h Harness) Enabled() bool {
+	return h.configFile().Enabled()
+}
+
+// authToken resolves the Dash0 token. Highest precedence first:
+//
+//  1. the macOS keychain, when a keychain service is configured and the lookup
+//     succeeds;
+//  2. <EnvPrefix>_PLUGIN_OPTION_AUTH_TOKEN;
+//  3. auth_token in the configuration file.
+//
+// Steps 2 and 3 are PluginOption's order — environment before file — minus the
+// DASH0_* fallback, which a secret must never have: that variable reaches the
+// environments the agent hands to tool subprocesses.
+//
+// The keychain outranks both on purpose, and it is the one documented ordering
+// here: plugin.json and the Claude README both promise that a successful lookup
+// takes precedence over AUTH_TOKEN. It is what makes a managed rollout able to
+// ship a pointer, safe to put in managed-settings.json, instead of the secret.
+func (h Harness) authToken() string {
+	if service := h.PluginOption("AUTH_TOKEN_KEYCHAIN_SERVICE"); service != "" {
+		if token := keychainToken(service, h.PluginOption("AUTH_TOKEN_KEYCHAIN_ACCOUNT")); token != "" {
+			return token
+		}
+	}
+	if token := h.PluginOptionSecure("AUTH_TOKEN"); token != "" {
+		return token
+	}
+	return h.configFile().Get("auth_token")
 }
 
 // PluginOptionBool is PluginOption as a boolean, false when unset.

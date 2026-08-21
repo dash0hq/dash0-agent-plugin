@@ -109,6 +109,15 @@ func run() error {
 	// so vcs.Detect()'s git commands see the right working tree.
 	pipeline.ChdirToEventCwd(event)
 
+	// After the chdir: a project-level config file has to be looked up in the
+	// workspace the agent is working in, which is the directory hn.Config() below
+	// reads it from. Checking before the chdir looked for it in whatever
+	// directory the harness happened to spawn the hook from, so a project that
+	// set `enabled: false` kept emitting.
+	if !hn.Enabled() {
+		return nil
+	}
+
 	// Normalization needs the per-session scratch dir to back-calculate tool-call
 	// duration from the matching PreToolUse it logged earlier. Compute it the same
 	// way pipeline.Process does so both agree on the path.

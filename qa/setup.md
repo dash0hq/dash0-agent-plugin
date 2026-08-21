@@ -116,6 +116,7 @@ sessions.
 ```sh
 qa/tools/qa-session.sh "<prompt>" [run-id]
 qa/tools/qa-compare.py qa/runs/<run-id>
+qa/tools/qa-attrs.py qa/runs/<run-id>     # attribute surface, not counts
 ```
 
 Knobs: `QA_MODEL` (`haiku` for probes), `QA_ALLOWED_TOOLS`, `QA_SWAP_BINARY`.
@@ -160,6 +161,16 @@ legitimately point at nothing, and `internal/transcript` sees the same absence.
    at cost, which no span carries. Bad at sub-agents: it reports the main
    session's usage only, so a session with a sub-agent shows numbers far below
    both Dash0 and the transcript. That gap is expected and is not a finding.
+
+Both channels above compare *numbers*. Neither can see an attribute nobody
+expected: a surplus key changes no span count, so `qa-compare.py` exits `0`
+whether or not it is there. `qa/tools/qa-attrs.py` reads the same Dash0 spans
+against the attribute tables in `DEVELOPMENT.md`, which is a hand-maintained
+contract the pipeline never reads. It is a second question asked of channel one,
+not a third channel. Note that it reads what Dash0 *stored*: ingest adds
+attributes the plugin never sent, and the tool separates those by grepping the
+plugin source, which is deductive and used only to excuse a key, never to
+accuse one.
 
 The recording is not a third observation channel. It is the input, and treating
 it as an observation is the one mistake that would make a run circular.
@@ -220,7 +231,7 @@ for t in go python3 claude dash0 uuidgen; do command -v "$t" >/dev/null || echo 
 
 ```sh
 git check-ignore -q qa/runs && echo ignored || echo "NOT ignored"
-for p in qa/tools/qa-session.sh qa/tools/qa-compare.py; do
+for p in qa/tools/qa-session.sh qa/tools/qa-compare.py qa/tools/qa-attrs.py; do
   git check-ignore -q "$p" && echo "IGNORED: $p" || echo "tracked: $p"
 done
 ```

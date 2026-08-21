@@ -60,6 +60,88 @@ Then two manual steps the installer would otherwise handle for you:
 
 Start a new Codex session. The `curl … install-codex.sh` flow above does both of these for you, so it's the simpler path unless you specifically want the plugin managed by `codex plugin`.
 
+## Organization-wide deployment
+
+Two ways to deploy this fleet-wide. Pick by whether your policy sets `allow_managed_hooks_only`.
+
+| Path | Use when | Effort |
+|---|---|---|
+| **Installer from MDM** | your fleet does not set `allow_managed_hooks_only` | one unattended command |
+| **Managed hook** | it does, or might | a policy file plus two files per machine |
+
+> `allow_managed_hooks_only = true` skips hooks from user, project, session, and plugin sources — every install path except `requirements.toml`. The installer writes to `~/.codex/config.toml`, a user source, and the marketplace contributes plugin hooks, so neither survives. If your fleet sets this flag, only the managed hook works.
+
+### Installer from MDM
+
+Run the [headless installer](#headless--non-interactive-ci-containers-fleet-rollout) unattended with `--endpoint`, `--token`, and `--dataset`. It registers the hooks, pre-trusts them by writing a `trusted_hash` into `~/.codex/config.toml`, fetches the binary, and writes credentials in one step. No policy work needed.
+
+Run it **as the logged-in user** — everything it writes lives under `~/.codex/`.
+
+> Don't substitute `codex plugin add` in an MDM script. That installs the plugin but leaves its hooks untrusted, and there is no non-interactive way to trust them: only the interactive `/hooks` browser, per developer, and again after every upgrade because trust is keyed to the hook's hash. Pre-trusting is the whole reason the installer works unattended.
+
+### Managed hook
+
+**1. Create an ingest-only Dash0 token** scoped to your dataset, and note your OTLP endpoint. See [Configuration](#configuration).
+
+**2. Have MDM place two files on every machine.** The bootstrap script, fetched at the tag you intend to run:
+
+```bash
+mkdir -p /enterprise/hooks
+curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/v0.1.22/scripts/codex-on-event.sh \
+  -o /enterprise/hooks/codex-on-event.sh
+chmod 0755 /enterprise/hooks/codex-on-event.sh
+```
+
+…and the credentials, at `~/.codex/dash0-agent-plugin.local.md` with mode 600. That is a per-user path, so place it in each user's home, not once per machine (see [Config file](#config-file) for every key):
+
+```yaml
+---
+otlp_url: "https://ingress.<region>.aws.dash0.com"
+auth_token: "<your-dash0-auth-token>"
+dataset: "default"
+---
+```
+
+**3. Create `requirements.toml`:**
+
+```toml
+[features]
+hooks = true
+
+[hooks]
+managed_dir = "/enterprise/hooks"
+
+[[hooks.SessionStart]]
+matcher = "*"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/enterprise/hooks/codex-on-event.sh"
+
+# Repeat for UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStart,
+# SubagentStop, PreCompact, PostCompact, and PermissionRequest — the same set
+# declared in codex/hooks.json.
+```
+
+Deliver it by whichever channel you already use:
+
+| Channel | Where it goes |
+|---|---|
+| File on disk | `/etc/codex/requirements.toml` (Linux, macOS), `%ProgramData%\OpenAI\Codex\requirements.toml` (Windows) |
+| macOS MDM | `com.openai.codex` domain, key `requirements_toml_base64`, value base64-encoded TOML |
+| Cloud, per user group | [Managed configs console](https://chatgpt.com/codex/settings/managed-configs) |
+
+**4. Open egress** to `github.com` and to your Dash0 ingress. The script fetches its binary from GitHub Releases on first run and checksum-verifies it. Without that egress the hook **fails open silently** — exit 0, no stderr surfaced, sessions look normal, nothing exported.
+
+**5. Verify one machine first.** Start a session, run `/hooks`, and confirm the Dash0 hooks show as managed rather than awaiting trust. Then check traces under [Verify](#verify). Stage the wider rollout with a per-user-group cloud policy.
+
+To upgrade, re-deliver the script at a newer tag — the version is pinned inside it, so the policy file never changes. Credentials go in the file rather than the hook command because hook handlers accept no `env` field.
+
+### Don't swap this for Codex's own OpenTelemetry
+
+Codex can export `codex.*` log records and metrics, but there is no agent span tree ([openai/codex#17687](https://github.com/openai/codex/discussions/17687)), so unlike GitHub Copilot's native export it does not replace this plugin. The two are complementary: running both is additive, not duplicative.
+
+Reference: [managed configuration](https://developers.openai.com/codex/enterprise/managed-configuration), [hooks](https://developers.openai.com/codex/hooks), [configuration reference](https://developers.openai.com/codex/config-reference).
+
 ## Upgrading
 
 Re-run the installer:

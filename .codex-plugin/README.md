@@ -42,7 +42,7 @@ DASH0_DATASET=default \
 
 Each flag (and its env-var equivalent) skips the corresponding prompt, so the installer runs fully unattended. The team-name prompt has no flag — set `DASH0_TEAM_NAME` to provide it. `DASH0_VERSION` pins a specific release; the default is the latest. With no credentials supplied, the installer still completes but stays inactive until you fill in `~/.codex/dash0-agent-plugin.local.md`.
 
-> **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.codex/dash0-agent-plugin.local.md` (which the bootstrap script passes to the hook as `CODEX_PLUGIN_OPTION_AUTH_TOKEN`). This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
+> **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.codex/dash0-agent-plugin.local.md`. This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
 
 ### Via the Codex plugin marketplace
 
@@ -93,7 +93,7 @@ team_name: "<your-team>"      # optional — tagged as dash0.team.name on every 
 
 The installer writes this file for you. To reconfigure later, edit the file directly — see [Options](#options) for every key. Changes take effect on the next hook fire — no restart needed.
 
-Per-project overrides work: drop a `.codex/dash0-agent-plugin.local.md` inside your repo and it takes precedence over the global file (the bootstrap script checks the workspace CWD first, then `$HOME/.codex/`).
+Per-project overrides work: drop a `.codex/dash0-agent-plugin.local.md` inside your repo and it takes precedence over the global file (the binary checks the workspace CWD first, then `$HOME/.codex/`).
 
 ### Verify
 
@@ -146,7 +146,7 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 | `DASH0_DEBUG` | Print OTel payloads to stderr (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Write debug output to this file path |
 
-> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field (the bootstrap passes it to the hook as `CODEX_PLUGIN_OPTION_AUTH_TOKEN`).
+> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field.
 
 ## Privacy defaults
 

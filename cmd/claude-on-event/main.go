@@ -32,6 +32,10 @@ func main() {
 }
 
 func run() error {
+	if !hn.Enabled() {
+		return nil
+	}
+
 	dotenv.Load(".env")
 
 	// Claude Code always sets this. Treat a missing value as a hard error rather

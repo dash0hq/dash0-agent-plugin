@@ -49,7 +49,28 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	os.Exit(m.Run())
+	// Point the home and working directories at empty temp directories. Config
+	// lookups fall back to .claude/dash0-agent-plugin.local.md in the project and
+	// in the user's home, and the tests below call run() in-process, so without
+	// this a developer who has the plugin configured runs them against their own
+	// endpoint and token.
+	home, err := os.MkdirTemp("", "on-event-test-home-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create temp home: %v\n", err)
+		os.Exit(1)
+	}
+	// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows.
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+	if err := os.Chdir(home); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to chdir to temp home: %v\n", err)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	_ = os.RemoveAll(tmpDir)
+	os.Exit(code)
 }
 
 // execBinary runs the compiled binary with the given JSON event on stdin

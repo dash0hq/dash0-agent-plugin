@@ -87,7 +87,7 @@ func TestRenderManagedBlockFreshConfig(t *testing.T) {
 	// A block + trust key for every event; fresh config → group index 0.
 	for _, e := range HookEvents {
 		assert.Contains(t, out, "[[hooks."+e.ConfigName+"]]")
-		assert.Contains(t, out, fmt.Sprintf("[hooks.state.%q]", cfg+":"+e.KeyLabel+":0:0"))
+		assert.Contains(t, out, fmt.Sprintf("[hooks.state.'%s']", cfg+":"+e.KeyLabel+":0:0"))
 	}
 	// The emitted hash matches TrustHash for the same command.
 	want, err := TrustHash("session_start", true, cmd, codexHookStatusMessage)
@@ -104,14 +104,68 @@ func TestRenderManagedBlockIndexesAfterExistingGroups(t *testing.T) {
 	out, err := RenderManagedBlock(cfg, `bash "x"`, existing)
 	require.NoError(t, err)
 	// Our PreToolUse group is the SECOND group for that event → index 1.
-	assert.Contains(t, out, fmt.Sprintf("[hooks.state.%q]", cfg+":pre_tool_use:1:0"))
+	assert.Contains(t, out, fmt.Sprintf("[hooks.state.'%s']", cfg+":pre_tool_use:1:0"))
 	// An event the user didn't touch stays at index 0.
-	assert.Contains(t, out, fmt.Sprintf("[hooks.state.%q]", cfg+":stop:0:0"))
+	assert.Contains(t, out, fmt.Sprintf("[hooks.state.'%s']", cfg+":stop:0:0"))
 }
 
-func TestRenderManagedBlockRejectsSingleQuote(t *testing.T) {
-	_, err := RenderManagedBlock("/c.toml", `bash "/home/o'brien/x.sh"`, "")
-	assert.Error(t, err)
+// The same, with the CRLF a Windows config.toml normally has. The installer keeps
+// that file's own line endings, so the group count has to survive them: counting
+// zero here would key every hook on group 0, leaving ours untrusted and claiming
+// a hash for the user's own group.
+func TestRenderManagedBlockIndexesAfterExistingGroupsCRLF(t *testing.T) {
+	cfg := `C:\Users\dev\.codex\config.toml`
+	existing := "[[hooks.PreToolUse]]\r\nmatcher = \"*\"\r\n[[hooks.PreToolUse.hooks]]\r\ntype = \"command\"\r\ncommand = 'echo user'\r\n"
+	out, err := RenderManagedBlock(cfg, `bash "x"`, existing)
+	require.NoError(t, err)
+	assert.Contains(t, out, fmt.Sprintf("[hooks.state.'%s']", cfg+":pre_tool_use:1:0"))
+	assert.Contains(t, out, fmt.Sprintf("[hooks.state.'%s']", cfg+":stop:0:0"))
+}
+
+// A home directory with an apostrophe used to stop the installer outright, because
+// neither value can be written as a TOML literal string. Both fall back to a basic
+// string instead, so O'Brien gets telemetry rather than a failed install. The
+// command carries double quotes around the script path, so it needs both escapes.
+func TestRenderManagedBlockApostropheFallsBackToBasicString(t *testing.T) {
+	cfg := `/home/o'brien/.codex/config.toml`
+	out, err := RenderManagedBlock(cfg, `bash "/home/o'brien/x.sh"`, "")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, `command = "bash \"/home/o'brien/x.sh\""`)
+	assert.Contains(t, out, `[hooks.state."/home/o'brien/.codex/config.toml:session_start:0:0"]`)
+}
+
+// The same on Windows, where the fallback also has to escape every backslash: a
+// basic string reads \U and \l as (invalid) escapes, which is why the literal form
+// is preferred whenever the value allows it.
+func TestRenderManagedBlockApostropheWindowsPath(t *testing.T) {
+	cfg := `C:\Users\O'Brien\.codex\config.toml`
+	out, err := RenderManagedBlock(cfg, `powershell -File "C:\Users\O'Brien\codex-on-event.ps1"`, "")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, `[hooks.state."C:\\Users\\O'Brien\\.codex\\config.toml:stop:0:0"]`)
+	assert.Contains(t, out, `command = "powershell -File \"C:\\Users\\O'Brien\\codex-on-event.ps1\""`)
+}
+
+// A value with no apostrophe keeps the literal form, so the common Windows path
+// stays free of backslash escaping.
+func TestRenderManagedBlockPrefersLiteralStrings(t *testing.T) {
+	cfg := `C:\Users\dev\.codex\config.toml`
+	out, err := RenderManagedBlock(cfg, `powershell -File "C:\dash0\codex-on-event.ps1"`, "")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, `command = 'powershell -File "C:\dash0\codex-on-event.ps1"'`)
+	assert.Contains(t, out, `[hooks.state.'C:\Users\dev\.codex\config.toml:stop:0:0']`)
+}
+
+// TestRenderManagedBlockWindowsPath documents why the state key must be a TOML
+// literal (single-quoted) string: a Windows path's backslashes would otherwise
+// be read as basic-string escapes (\U, \l, ...) and fail to parse.
+func TestRenderManagedBlockWindowsPath(t *testing.T) {
+	cfg := `C:\Users\dev\.codex\config.toml`
+	out, err := RenderManagedBlock(cfg, `powershell -File "C:\dash0\codex-on-event.ps1"`, "")
+	require.NoError(t, err)
+	assert.Contains(t, out, fmt.Sprintf("[hooks.state.'%s']", cfg+":session_start:0:0"))
 }
 
 func TestStripManagedBlock(t *testing.T) {

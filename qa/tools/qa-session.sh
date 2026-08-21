@@ -125,7 +125,15 @@ echo "qa: claude exited $CLAUDE_RC"
 
 # The final transcript, separate from the per-hook snapshots: the Stop hook fires
 # before Claude Code writes the last entries, so no snapshot is the whole session.
-TRANSCRIPT=$(ls -t "$HOME/.claude/projects/"*/"$SESSION_ID.jsonl" 2>/dev/null | head -1 || true)
+# A glob rather than `find`, because the first match is the only match: the name is
+# a session UUID, so no second project directory holds a file of that name.
+TRANSCRIPT=""
+for candidate in "$HOME/.claude/projects/"*/"$SESSION_ID.jsonl"; do
+  if [[ -f "$candidate" ]]; then
+    TRANSCRIPT="$candidate"
+    break
+  fi
+done
 [[ -n "$TRANSCRIPT" ]] && cp "$TRANSCRIPT" "$RUN/transcript.jsonl"
 
 python3 claude/tools/claude-code-usage-audit.py "$SESSION_ID" >"$RUN/audit.txt" 2>&1 || true

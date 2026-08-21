@@ -41,10 +41,13 @@ MODEL_ARGS=()
 RUN="$ROOT/qa/runs/$RUN_ID"
 PROJECT="$RUN/project"
 RECORD="$RUN/record"
-# The recorder appends, so reusing a run id used to leave two sessions in one
-# record/. qa-compare.py then counted hooks across both while querying Dash0 for
-# one, and reported the difference as missing telemetry. Start the record empty.
-rm -rf "$RECORD"
+# The recorder appends, so reusing a run id leaves two sessions in one record/.
+# That is fine, and deliberately not cleaned up here. qa-compare.py filters the
+# index by the manifest's session_id, which is what actually fixed the bug where
+# it counted hooks across both sessions and reported the surplus as missing
+# telemetry. Deleting record/ would additionally throw away the evidence every
+# spec asks to keep, and a delete built from an unvalidated $RUN_ID can reach
+# outside the run tree.
 mkdir -p "$PROJECT/.claude" "$RECORD"
 
 go build -o "$RUN/recorder" ./qa/recorder
@@ -127,6 +130,14 @@ TRANSCRIPT=$(ls -t "$HOME/.claude/projects/"*/"$SESSION_ID.jsonl" 2>/dev/null | 
 
 python3 claude/tools/claude-code-usage-audit.py "$SESSION_ID" >"$RUN/audit.txt" 2>&1 || true
 
+# Counted here rather than inside the heredoc. A command substitution that fails
+# there yields an empty string, `set -e` does not abort a heredoc expansion, and
+# the result is a manifest reading `"hooks_recorded": ,` that no tool can parse.
+HOOKS_RECORDED=0
+if [[ -f "$RECORD/index.jsonl" ]]; then
+  HOOKS_RECORDED=$(wc -l <"$RECORD/index.jsonl" | tr -d ' ')
+fi
+
 cat >"$RUN/manifest.json" <<EOF
 {
   "run_id": "$RUN_ID",
@@ -141,11 +152,11 @@ cat >"$RUN/manifest.json" <<EOF
   "plugin_version": "$VERSION",
   "plugin_commit": "$(git rev-parse HEAD)",
   "plugin_dirty": $(git diff --quiet && echo false || echo true),
-  "hooks_recorded": $(wc -l <"$RECORD/index.jsonl" | tr -d ' '),
+  "hooks_recorded": $HOOKS_RECORDED,
   "transcript_source": "${TRANSCRIPT:-none}"
 }
 EOF
 
-echo "qa: recorded $(wc -l <"$RECORD/index.jsonl" | tr -d ' ') hook invocations"
+echo "qa: recorded $HOOKS_RECORDED hook invocations"
 echo "qa: run written to $RUN"
 echo "qa: verify with  qa/tools/qa-compare.py $RUN"

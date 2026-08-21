@@ -39,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -110,14 +111,24 @@ def documented_keys(root):
 
 
 def plugin_writes(key):
-    """Whether any non-test Go file under internal/ writes this key as a literal.
+    """Whether any non-test Go file writes this key as a literal.
 
     The separator between "we exported something undeclared" and "Dash0 derived
     it at ingest". Tests are excluded because a test asserting a key must *not*
     be emitted would otherwise class it as an export.
+
+    cmd/ is searched as well as internal/. The entrypoints write attributes of
+    their own -- cmd/copilot-on-event/main.go sets dash0.gen_ai.tool.task.name --
+    and a search that misses them files a real undeclared export under "added at
+    ingest", which is the one class this tool never reports.
+
+    Still a floor, not a proof: a key assembled from parts (prefix+suffix, or
+    fmt.Sprintf) matches no literal and is classed as ingest-added. So a key in
+    that class is weak evidence, which is why it is informational only.
     """
     proc = subprocess.run(
-        ["grep", "-rlF", f'"{key}"', "--include=*.go", os.path.join(ROOT, "internal")],
+        ["grep", "-rlF", f'"{key}"', "--include=*.go",
+         os.path.join(ROOT, "internal"), os.path.join(ROOT, "cmd")],
         capture_output=True, text=True, check=False)
     hits = [p for p in proc.stdout.splitlines() if not p.endswith("_test.go")]
     return bool(hits)
@@ -176,13 +187,28 @@ def main():
         print(doc_error, file=sys.stderr)
         return 2
 
+    session_id = manifest.get("session_id")
+    if not session_id:
+        print(f"{manifest_path} has no session_id; the query cannot be scoped.",
+              file=sys.stderr)
+        return 2
+
     dataset = args.dataset or config["dataset"]
+    limit = 100
     spans, query_error = compare.query_dash0(
-        config, manifest["session_id"], dataset,
+        config, session_id, dataset,
         compare.widen(manifest.get("started_at") or "now-1h", -60),
-        compare.widen(manifest.get("ended_at") or "now", 120), 100)
+        compare.widen(manifest.get("ended_at") or "now", 120), limit)
     if query_error:
         print(query_error, file=sys.stderr)
+        return 2
+    if len(spans or []) >= limit:
+        # The documented cap. A truncated span set is a truncated attribute set,
+        # so "every attribute is in the contract" would be a claim about a
+        # prefix of the session. Exit 2 rather than 0: unknown, not clean.
+        print(f"the query returned {len(spans)} spans, its limit of {limit}. The"
+              " attribute surface is truncated,\nso a pass here would only cover"
+              " part of the session. Query it in time slices.", file=sys.stderr)
         return 2
     if not spans:
         print("0 spans for this session. That is usually ingest lag; re-run"
@@ -191,7 +217,7 @@ def main():
 
     where = observe(spans)
     result = classify(set(where), documented)
-    result.update(session=manifest["session_id"], spans=len(spans),
+    result.update(session=session_id, spans=len(spans),
                   documented=len(documented), observed=len(where),
                   carried_by={k: sorted(v) for k, v in where.items()})
 
@@ -228,4 +254,15 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Exit 1 is the documented "surplus attributes found", and Python gives an
+    # uncaught exception that same code. Without this, a crash reads as a
+    # finding: the spec's oracle would report undeclared attributes that were
+    # never observed. 2 is "this check could not run", which is what a crash is.
+    try:
+        sys.exit(main())
+    except Exception:  # noqa: BLE001 -- the exit code matters more than the type
+        traceback.print_exc()
+        print("\nqa-attrs.py failed before it could judge anything. This is exit 2"
+              " (check did not run),\nnot exit 1 (attributes outside the"
+              " contract).", file=sys.stderr)
+        sys.exit(2)

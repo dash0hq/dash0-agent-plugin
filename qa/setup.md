@@ -172,6 +172,18 @@ attributes the plugin never sent, and the tool separates those by grepping the
 plugin source, which is deductive and used only to excuse a key, never to
 accuse one.
 
+Both tools separate a verdict from a non-reading, and the exit code is how they
+say which:
+
+| Exit | `qa-compare.py` | `qa-attrs.py` |
+| --- | --- | --- |
+| `0` | Every count reconciles | Every observed key is in the contract |
+| `1` | A count disagrees | A key is outside the contract |
+| `2` | The check could not run: no config, no record, a failed query, or a truncated result | Same, plus a moved `DEVELOPMENT.md` heading |
+
+Never read `2` as either verdict. It means the run was not measured, so the
+answer is re-run, not pass and not fail.
+
 The recording is not a third observation channel. It is the input, and treating
 it as an observation is the one mistake that would make a run circular.
 

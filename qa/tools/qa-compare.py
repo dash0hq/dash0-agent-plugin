@@ -161,6 +161,15 @@ def hooks_summary(run_dir, session_id):
     # Counting it separately keeps a recording failure visible instead of
     # dropping it as somebody else's session.
     unattributed = sum(1 for r in all_rows if not r.get("session_id"))
+    if not rows:
+        # Without this the filter turns a total recording failure into a pass:
+        # zero hooks imply zero spans, Dash0 holds zero spans, and the three
+        # records "agree" at zero. Whatever went wrong, it is not agreement.
+        return {"error": (f"no recorded hook belongs to session {session_id}."
+                          f" {len(all_rows)} row(s) in the index, of which"
+                          f" {unattributed} could not be attributed. Either the"
+                          " recorder never fired for this session or the"
+                          " manifest names the wrong one.")}
     by_event = collections.Counter(r["hook_event_name"] for r in rows)
 
     tools = collections.Counter()

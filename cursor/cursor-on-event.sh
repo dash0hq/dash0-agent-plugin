@@ -8,31 +8,29 @@
 #
 #   stdin (JSON) → cursor-on-event.sh → cursor-on-event binary → OTLP
 #
-# Responsibilities:
-#   - Detect OS/arch and download the matching cursor-on-event binary from
-#     GitHub Releases on first run, verifying the checksum.
-#   - exec the binary, forwarding stdin.
-#
-# Fail-open: any error before exec'ing the binary logs to stderr and exits 0
-# so a broken installer never breaks the user's Cursor session.
-
-# Note: we deliberately do NOT use `set -e`; the trap below converts any
-# failure into a stderr log and a clean exit so Cursor's agent loop is never
-# blocked by telemetry plumbing.
+# Fail-open: any error before exec'ing the binary logs to stderr and exits 0 so
+# a broken installer never breaks the user's Cursor session. `set -e` is
+# deliberately absent; fail_open does that job.
 set -u
 
+AGENT="cursor"
+VERSION="0.1.24"
+
+# Where the downloaded binary lives. Mirrors the per-source scratch root layout
+# from internal/harness so a user can clean up the whole tree at once.
+BASE="${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor}"
+
+# >>> shared bootstrap — byte-identical across cursor, codex and copilot >>>
+# test/consistency asserts these three regions match, so a fix lands in all of
+# them or in none. Everything agent-specific is declared above.
+
 fail_open() {
-  echo "cursor-on-event: $*" >&2
+  echo "${AGENT}-on-event: $*" >&2
   exit 0
 }
 
-# Where the downloaded binary lives. Mirrors the per-source scratch root
-# layout from cmd/cursor-on-event/main.go so users can clean up the whole
-# tree at once.
-BASE="${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor}"
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.24"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -42,12 +40,12 @@ case "$ARCH" in
   arm64)   ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/cursor-on-event-${VERSION}-${OS}-${ARCH}"
+BINARY="$BIN_DIR/${AGENT}-on-event-${VERSION}-${OS}-${ARCH}"
 
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
-  ASSET="cursor-on-event-${OS}-${ARCH}"
+  ASSET="${AGENT}-on-event-${OS}-${ARCH}"
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
@@ -61,24 +59,36 @@ if [ ! -x "$BINARY" ]; then
     fail_open "neither curl nor wget found"
   fi
 
+  # Fail closed on integrity: a binary that cannot be verified is not run. Every
+  # supported platform ships a hash tool — shasum on macOS, sha256sum on glibc
+  # Linux and on busybox — so reaching either refusal below means the release is
+  # malformed or the host is not one we support. fail_open still exits 0, so the
+  # cost is this run's telemetry, never the user's session.
   EXPECTED=$(echo "$CHECKSUMS" | grep "  ${ASSET}$" | cut -d' ' -f1)
-  if [ -n "$EXPECTED" ]; then
-    if command -v sha256sum &>/dev/null; then
-      ACTUAL=$(sha256sum "$BINARY" | cut -d' ' -f1)
-    elif command -v shasum &>/dev/null; then
-      ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
-    else
-      ACTUAL=""
-    fi
-    if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-      rm -f "$BINARY"
-      fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
-    fi
+  if [ -z "$EXPECTED" ]; then
+    rm -f "$BINARY"
+    fail_open "no checksum for ${ASSET} — refusing to run an unverified binary"
+  fi
+  if command -v sha256sum &>/dev/null; then
+    ACTUAL=$(sha256sum "$BINARY" | cut -d' ' -f1)
+  elif command -v shasum &>/dev/null; then
+    ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
+  else
+    ACTUAL=""
+  fi
+  if [ -z "$ACTUAL" ]; then
+    rm -f "$BINARY"
+    fail_open "no sha256 tool (sha256sum/shasum) to verify ${ASSET} — refusing to run an unverified binary"
+  fi
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    rm -f "$BINARY"
+    fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
   chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
 fi
 
-# Forward stdin to the binary. The binary itself exits 0 on telemetry errors
-# (see cmd/cursor-on-event/main.go) so we don't need to wrap this in a trap.
-exec "$BINARY"
+# Forward stdin, plus the event-name argument for the agents that pass one. The
+# binary exits 0 on telemetry errors, so no trap is needed around this.
+exec "$BINARY" "$@"
+# <<< shared bootstrap <<<

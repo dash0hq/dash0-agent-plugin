@@ -77,11 +77,14 @@ if [ ! -x "$BINARY" ]; then
   elif command -v shasum &>/dev/null; then
     ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
   else
-    # Neither tool present. The READMEs list one of them as a requirement; the
-    # binary is still used, as before, so a minimal host is not broken by this.
     ACTUAL=""
   fi
-  if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+  if [ -z "$ACTUAL" ]; then
+    echo "on-event: no sha256 tool (sha256sum/shasum) to verify ${ASSET} — refusing to run an unverified binary" >&2
+    rm -f "$BINARY"
+    exit 1
+  fi
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
     echo "on-event: checksum mismatch (expected $EXPECTED, got $ACTUAL)" >&2
     rm -f "$BINARY"
     exit 1

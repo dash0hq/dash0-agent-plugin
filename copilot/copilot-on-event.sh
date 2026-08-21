@@ -8,34 +8,35 @@
 #
 #   stdin (JSON) → copilot-on-event.sh <eventName> → copilot-on-event binary → OTLP
 #
-# Responsibilities:
-#   - Download the matching binary from GitHub Releases on first run (checksum-verified).
-#   - exec the binary, FORWARDING the event-name argument and stdin.
-#
 # Per-turn token/cost/model telemetry additionally requires Copilot's native
-# OTel to be enabled to a per-session file — set up by the `dash0-configure`
-# skill as a shell function that shadows `copilot`. Without it, spans are still
-# emitted, just without usage.
+# OTel written to a per-session file, set up by the `dash0-configure` skill as a
+# shell function that shadows `copilot`. Without it, spans are still emitted,
+# just without usage.
 #
 # Fail-open: any error before exec logs to stderr and exits 0 so a broken
-# installer never breaks the user's Copilot session. (The binary itself is also
-# strictly fail-open — mandatory, since Copilot's tool hooks are fail-closed.)
-
+# installer never breaks the user's Copilot session. Mandatory here, since
+# Copilot's tool hooks are fail-closed. `set -e` is deliberately absent;
+# fail_open does that job.
 set -u
 
+AGENT="copilot"
+VERSION="0.1.24"
+
+# Where the downloaded binary lives. Copilot sets COPILOT_PLUGIN_DATA for a
+# marketplace install; the XDG path is the fallback for a manual one.
+BASE="${COPILOT_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/copilot}"
+
+# >>> shared bootstrap — byte-identical across cursor, codex and copilot >>>
+# test/consistency asserts these three regions match, so a fix lands in all of
+# them or in none. Everything agent-specific is declared above.
+
 fail_open() {
-  echo "copilot-on-event: $*" >&2
+  echo "${AGENT}-on-event: $*" >&2
   exit 0
 }
 
-if [ -n "${COPILOT_PLUGIN_DATA:-}" ]; then
-  BASE="$COPILOT_PLUGIN_DATA"
-else
-  BASE="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/copilot"
-fi
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.24"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -45,12 +46,12 @@ case "$ARCH" in
   arm64)   ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/copilot-on-event-${VERSION}-${OS}-${ARCH}"
+BINARY="$BIN_DIR/${AGENT}-on-event-${VERSION}-${OS}-${ARCH}"
 
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
-  ASSET="copilot-on-event-${OS}-${ARCH}"
+  ASSET="${AGENT}-on-event-${OS}-${ARCH}"
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
@@ -64,9 +65,11 @@ if [ ! -x "$BINARY" ]; then
     fail_open "neither curl nor wget found"
   fi
 
-  # Fail CLOSED on integrity: if we can't verify the download (no checksum line,
-  # or no sha256 tool), refuse to run it. fail_open still exits 0 so the user's
-  # session isn't broken — we just skip telemetry this run and re-download next.
+  # Fail closed on integrity: a binary that cannot be verified is not run. Every
+  # supported platform ships a hash tool — shasum on macOS, sha256sum on glibc
+  # Linux and on busybox — so reaching either refusal below means the release is
+  # malformed or the host is not one we support. fail_open still exits 0, so the
+  # cost is this run's telemetry, never the user's session.
   EXPECTED=$(echo "$CHECKSUMS" | grep "  ${ASSET}$" | cut -d' ' -f1)
   if [ -z "$EXPECTED" ]; then
     rm -f "$BINARY"
@@ -91,5 +94,7 @@ if [ ! -x "$BINARY" ]; then
   chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
 fi
 
-# Forward the event-name argument(s) and stdin to the binary.
+# Forward stdin, plus the event-name argument for the agents that pass one. The
+# binary exits 0 on telemetry errors, so no trap is needed around this.
 exec "$BINARY" "$@"
+# <<< shared bootstrap <<<

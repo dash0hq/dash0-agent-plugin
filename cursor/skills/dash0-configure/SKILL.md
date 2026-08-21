@@ -13,7 +13,9 @@ The user wants to configure (or reconfigure) the Dash0 plugin: provide their OTL
 
 ## Workflow
 
-1. If `~/.cursor/dash0-agent-plugin.local.md` already exists, read it and show the user the current values with the `auth_token` masked (show only the last 4 chars). Ask whether to overwrite. If they decline, stop.
+The config file is `~/.cursor/dash0-agent-plugin.local.md`, or `%USERPROFILE%\.cursor\dash0-agent-plugin.local.md` on Windows. Below, `<target>` is whichever applies.
+
+1. If `<target>` already exists, read it and show the user the current values with the `auth_token` masked (show only the last 4 chars). Ask whether to overwrite. If they decline, stop.
 
 2. Ask the user for these values one at a time. Do not assume any defaults beyond the ones listed.
 
@@ -23,7 +25,7 @@ The user wants to configure (or reconfigure) the Dash0 plugin: provide their OTL
    - **Agent name** (optional, default `cursor`)
    - **Team name** (optional, blank = unset)
 
-3. Write `~/.cursor/dash0-agent-plugin.local.md` with this exact structure. Omit optional lines whose value is blank.
+3. Write `<target>` with this exact structure. Omit optional lines whose value is blank.
 
    ```
    ---
@@ -35,7 +37,10 @@ The user wants to configure (or reconfigure) the Dash0 plugin: provide their OTL
    ---
    ```
 
-4. Run `chmod 600 ~/.cursor/dash0-agent-plugin.local.md` so the token isn't world-readable.
+4. Restrict the file to its owner, so the token isn't readable by other accounts.
+
+   - macOS and Linux: `chmod 600 <target>`
+   - Windows: `icacls "<target>" /inheritance:r /grant:r "%USERNAME%:(F)" "SYSTEM:(F)"`
 
 5. Tell the user:
 

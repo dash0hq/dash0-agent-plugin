@@ -83,7 +83,6 @@ func main() {
 	// truncated line reads as a protocol error rather than as a big message.
 	in.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	out := bufio.NewWriter(os.Stdout)
-	defer out.Flush()
 
 	for in.Scan() {
 		line := in.Bytes()
@@ -106,11 +105,16 @@ func main() {
 			fmt.Fprintf(os.Stderr, "qa-mcp-fixture: unencodable reply: %v\n", err)
 			continue
 		}
-		out.Write(encoded)
-		out.WriteByte('\n')
+		_, _ = out.Write(encoded)
+		_ = out.WriteByte('\n')
 		// Flushed per message: the client blocks on the reply, so a buffered
-		// one deadlocks the session rather than slowing it down.
-		out.Flush()
+		// one deadlocks the session rather than slowing it down. A flush error
+		// means stdout is gone, and every later reply would be written into the
+		// void while the client waited on it. Stop, loudly.
+		if err := out.Flush(); err != nil {
+			fmt.Fprintf(os.Stderr, "qa-mcp-fixture: stdout: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	if err := in.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "qa-mcp-fixture: stdin: %v\n", err)

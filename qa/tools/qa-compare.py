@@ -121,6 +121,29 @@ def query_dash0(config, session_id, dataset, since, until, limit):
     return spans, None
 
 
+def mcp_tool_name(raw):
+    """The tool name a hook payload carries, reduced to the one a span carries.
+
+    An MCP call arrives at the hook as mcp__<server>__<tool>, and the plugin
+    exports gen_ai.tool.name as <tool> with the server on its own attribute. The
+    two sides of the tool table are therefore named differently for the same
+    call, and without this every MCP call printed two rows, both flagged as
+    differing, and the tool exited 1 on a healthy run.
+
+    This mirrors NormalizeMCPToolName in internal/pipeline/pipeline.go, which
+    makes the tool table's MCP rows deductive rather than independent: it is the
+    harness agreeing with a documented rule so that the counts, ids and
+    durations either side of it stay comparable. The rule itself is asserted by
+    qa/specs/mcp/, against the raw name in the payload.
+    """
+    if not raw.startswith("mcp__"):
+        return raw
+    parts = raw.split("__", 2)
+    if len(parts) < 3 or not parts[2]:
+        return raw
+    return parts[2]
+
+
 def dash0_summary(spans):
     counts = collections.Counter()
     usage = {}
@@ -179,7 +202,8 @@ def hooks_summary(run_dir, session_id):
         path = os.path.join(run_dir, "record", row.get("event_file") or "")
         try:
             with open(path) as handle:
-                tools[json.load(handle).get("tool_name") or "<no name>"] += 1
+                raw = json.load(handle).get("tool_name") or "<no name>"
+                tools[mcp_tool_name(raw)] += 1
         except (OSError, json.JSONDecodeError):
             tools["<unparseable>"] += 1
 

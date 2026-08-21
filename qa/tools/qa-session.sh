@@ -24,6 +24,7 @@
 #   QA_MODEL=haiku qa/tools/qa-session.sh "..."        # cheap probe
 #   QA_SWAP_BINARY=1 qa/tools/qa-session.sh "..."      # test the working tree
 #   QA_ALLOWED_TOOLS="Bash Read Write" qa/tools/qa-session.sh "..."
+#   QA_MCP=1 qa/tools/qa-session.sh "..."               # two stub MCP servers
 
 set -euo pipefail
 
@@ -33,8 +34,14 @@ cd "$ROOT"
 PROMPT=${1:?usage: qa-session.sh "<prompt>" [run-id]}
 RUN_ID=${2:-$(date -u +%Y%m%dT%H%M%SZ)}
 SWAP_BINARY=${QA_SWAP_BINARY:-0}
+USE_MCP=${QA_MCP:-0}
 # Word-split on purpose: --allowed-tools takes a variadic list.
-read -r -a ALLOWED_TOOLS <<<"${QA_ALLOWED_TOOLS:-Bash Read}"
+# With QA_MCP=1 the default flips to the two stub servers, because the native
+# tools are not what such a run is measuring and every extra permitted tool is
+# another call the model might make instead.
+DEFAULT_TOOLS="Bash Read"
+[[ "$USE_MCP" == "1" ]] && DEFAULT_TOOLS="mcp__qa_fixture_alpha mcp__qa_fixture_beta"
+read -r -a ALLOWED_TOOLS <<<"${QA_ALLOWED_TOOLS:-$DEFAULT_TOOLS}"
 MODEL_ARGS=()
 [[ -n ${QA_MODEL:-} ]] && MODEL_ARGS=(--model "$QA_MODEL")
 
@@ -51,6 +58,34 @@ RECORD="$RUN/record"
 mkdir -p "$PROJECT/.claude" "$RECORD"
 
 go build -o "$RUN/recorder" ./qa/recorder
+
+# Two stub MCP servers, one binary, two config keys. Claude Code derives the
+# mcp__<server>__<tool> name a hook sees from the key, so two keys are what make
+# "the server attribute is per call, not per session" answerable at all.
+#
+# --strict-mcp-config is not optional here. Without it the session also loads the
+# developer's real connectors — Slack, Linear, Drive — and a QA prompt could
+# reach a production system. With it, the only MCP servers in the session are
+# these two local processes.
+MCP_ARGS=()
+if [[ "$USE_MCP" == "1" ]]; then
+  go build -o "$RUN/mcp-fixture" ./qa/mcp-fixture
+  python3 - "$RUN/mcp-fixture" "$RUN/mcp-config.json" <<'PY'
+import json, sys
+binary, out = sys.argv[1], sys.argv[2]
+servers = {
+    f"qa_fixture_{name}": {
+        "command": binary,
+        "args": [],
+        "env": {"QA_MCP_SERVER_NAME": name},
+    }
+    for name in ("alpha", "beta")
+}
+json.dump({"mcpServers": servers}, open(out, "w"), indent=2)
+print(f"qa: {len(servers)} stub MCP servers: {', '.join(sorted(servers))}")
+PY
+  MCP_ARGS=(--mcp-config "$RUN/mcp-config.json" --strict-mcp-config)
+fi
 
 # Optionally put this working tree's binary where the INSTALLED plugin's
 # bootstrap resolves it, so a session tests an unreleased change. This overwrites
@@ -115,6 +150,7 @@ set +e
       --session-id "$SESSION_ID" \
       --output-format json \
       "${MODEL_ARGS[@]}" \
+      ${MCP_ARGS[@]+"${MCP_ARGS[@]}"} \
       --allowed-tools "${ALLOWED_TOOLS[@]}" \
       >"$RUN/claude-result.json" 2>"$RUN/claude-stderr.log"
 )
@@ -157,6 +193,7 @@ cat >"$RUN/manifest.json" <<EOF
   "claude_version": "$(claude --version | awk '{print $1}')",
   "binary_under_test": "$BINARY_UNDER_TEST",
   "swapped_binary": $([[ "$SWAP_BINARY" == "1" ]] && echo true || echo false),
+  "stub_mcp_servers": $([[ "$USE_MCP" == "1" ]] && echo true || echo false),
   "plugin_version": "$VERSION",
   "plugin_commit": "$(git rev-parse HEAD)",
   "plugin_dirty": $(git diff --quiet && echo false || echo true),

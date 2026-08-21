@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,11 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(tmpDir)
 
 	binaryPath = filepath.Join(tmpDir, "on-event")
+	if runtime.GOOS == "windows" {
+		// Windows needs the .exe, both to build to a name it will run and to name
+		// the file the tests then exec.
+		binaryPath += ".exe"
+	}
 	cmd := exec.Command("go", "build", "-o", binaryPath, ".")
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

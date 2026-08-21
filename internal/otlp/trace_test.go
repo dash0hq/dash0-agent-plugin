@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -377,12 +378,13 @@ func TestNewSessionSpanOmitUserInfoRedactsCwd(t *testing.T) {
 	event := map[string]any{
 		"hook_event_name": "SessionStart",
 		"session_id":      "sess-123",
-		"cwd":             home + "/source/dash0",
+		"cwd":             filepath.Join(home, "source", "dash0"),
 	}
 
 	span := NewSessionSpan("abc123traceabc123traceabc123tr", "span1234span1234", ts, event, Config{OmitUserInfo: true})
 
-	assertAttr(t, span.Attributes, "process.working_directory", "~/source/dash0")
+	sep := string(filepath.Separator)
+	assertAttr(t, span.Attributes, "process.working_directory", "~"+sep+"source"+sep+"dash0")
 	assertAttr(t, span.Attributes, "gen_ai.conversation.id", "sess-123")
 }
 

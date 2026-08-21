@@ -14,6 +14,9 @@ $(LOCALBIN):
 GOLANGCI_LINT := $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_VERSION ?= v2.9.0
 
+SHELLCHECK := $(LOCALBIN)/shellcheck
+SHELLCHECK_VERSION ?= v0.11.0
+
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -72,13 +75,24 @@ golangci-lint: golangci-lint-install ## Run golangci-lint (static analysis + for
 golangci-lint-fix: golangci-lint-install ## Run golangci-lint with --fix.
 	$(GOLANGCI_LINT) run --fix
 
+.PHONY: shellcheck-install
+shellcheck-install: $(LOCALBIN)
+	@[ -f $(SHELLCHECK) ] || { \
+	set -e ;\
+	os=$$(uname -s | tr '[:upper:]' '[:lower:]') ;\
+	arch=$$(uname -m) ;\
+	case "$$arch" in \
+	  x86_64|amd64)  arch=x86_64 ;; \
+	  arm64|aarch64) arch=aarch64 ;; \
+	  *) echo "shellcheck-install: unsupported architecture $$arch" >&2; exit 1 ;; \
+	esac ;\
+	curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/$(SHELLCHECK_VERSION)/shellcheck-$(SHELLCHECK_VERSION).$$os.$$arch.tar.gz" \
+	  | tar -xz -C $(LOCALBIN) --strip-components=1 "shellcheck-$(SHELLCHECK_VERSION)/shellcheck" ;\
+	}
+
 .PHONY: shellcheck-lint
-shellcheck-lint: ## Lint all shell scripts with shellcheck.
-	@command -v shellcheck >/dev/null 2>&1 || { echo "error: shellcheck is not installed"; exit 1; }
-	find . -name '*.sh' -not -path './bin/*' -print0 | xargs -0 shellcheck -x
+shellcheck-lint: shellcheck-install ## Lint all shell scripts with shellcheck.
+	find . -name '*.sh' -not -path './bin/*' -print0 | xargs -0 $(SHELLCHECK) -x
 
 .PHONY: lint
 lint: go-version-check golangci-lint shellcheck-lint ## Run all static analysis (Go, shell, version sync).
-
-.PHONY: ci
-ci: lint test ## Run the full CI check set locally.

@@ -11,25 +11,37 @@ on:
   workflow_dispatch:
 
 jobs:
-  lint:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
+      - name: Shellcheck
+        run: make shellcheck-lint
 
-      - name: shellcheck version
-        run: shellcheck --version
+      - name: Lint (GOOS=windows)
+        run: GOOS=windows make golangci-lint
 
-      - name: Lint
-        run: make lint
+      - name: Lint (GOOS=darwin)
+        run: GOOS=darwin make golangci-lint
 
-  build-and-test:
-    runs-on: ubuntu-latest
+      - name: Diagnostic scripts
+        run: make test-scripts
+
+  build-test:
+    needs: checks
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            test-flags: -race -coverprofile=cover.out
+          - os: macos-latest
+            test-flags: -race
+          - os: windows-latest
+            test-flags: ""
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,10 +52,19 @@ jobs:
           go-version-file: go.mod
 
       - name: Build
-        run: make build
+        run: go build ./...
 
       - name: Test
-        run: make test
+        run: go test ${{ matrix.test-flags }} ./...
+
+  # Marketplace install paths. Linux-only: they drive the real Claude Code CLI
+  # through three install routes, which is a property of the marketplaces and
+  # the CLI, not of the host OS.
+  marketplace-install:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
@@ -89,7 +110,7 @@ jobs:
   # CI, not a rollout. Logic lives in test/contracts/{claude,cursor,codex}.sh
   # (also runnable locally — see test/contracts/README.md), one script per agent.
   # Each covers install, credential delivery, and uninstall for its runtime.
-  # Marketplace installs are covered by the build-and-test job; the binary
+  # Marketplace installs are covered by the marketplace-install job; the binary
   # reading *_PLUGIN_OPTION_AUTH_TOKEN by Go unit tests.
   install-config-contract:
     runs-on: ubuntu-latest

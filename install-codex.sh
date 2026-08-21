@@ -110,7 +110,10 @@ if command -v sha256sum >/dev/null 2>&1; then
 elif command -v shasum >/dev/null 2>&1; then
   sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 else
-  sha256() { echo ""; }
+  # Fail closed on integrity: without a hash tool the download cannot be
+  # verified, and an unverified binary is not installed. Every supported platform
+  # ships one of these, so this is a stop rather than a fallback.
+  die "sha256sum or shasum is required to verify the download"
 fi
 
 # 3. Resolve VERSION.
@@ -147,15 +150,21 @@ if [ -x "$BIN_PATH" ]; then
 else
   info "downloading codex-on-event v${VERSION}..."
   fetch "$BASE_URL/$BIN_ASSET" "$BIN_PATH" || die "failed to download binary: $BASE_URL/$BIN_ASSET"
-  CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt" || true)
-  if [ -n "$CHECKSUMS" ]; then
-    EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
-    if [ -n "$EXPECTED" ]; then
-      ACTUAL=$(sha256 "$BIN_PATH")
-      if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-        rm -f "$BIN_PATH"; die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
-      fi
-    fi
+  CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt") \
+    || die "failed to download $BASE_URL/checksums.txt"
+
+  # Fail closed on integrity, matching the bootstraps: a binary that cannot be
+  # verified is deleted rather than installed. A missing entry means the release
+  # is malformed, which is not a reason to trust the download.
+  EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
+  if [ -z "$EXPECTED" ]; then
+    rm -f "$BIN_PATH"
+    die "no checksum for $BIN_ASSET in v${VERSION} — refusing to install an unverified binary"
+  fi
+  ACTUAL=$(sha256 "$BIN_PATH")
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    rm -f "$BIN_PATH"
+    die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
   fi
   chmod +x "$BIN_PATH"
   ok "installed binary → $BIN_PATH"
@@ -170,9 +179,13 @@ else
   # The bootstrap moved from scripts/ to codex/ after v0.1.24, so fall back to
   # the old path when an older release is pinned via DASH0_VERSION. Drop the
   # fallback once v0.1.24 is unsupported.
+  # rm on failure: curl and wget both create the file before they learn the
+  # request failed, and the skip above would call an empty one present on every
+  # later run — leaving the hook pointed at a bootstrap that does nothing while
+  # the connectivity check, which runs the binary directly, still passes.
   fetch "$RAW_BASE/codex/codex-on-event.sh" "$SCRIPT_PATH" \
     || fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_PATH" \
-    || die "failed to download: $RAW_BASE/codex/codex-on-event.sh"
+    || { rm -f "$SCRIPT_PATH"; die "failed to download: $RAW_BASE/codex/codex-on-event.sh"; }
   chmod +x "$SCRIPT_PATH"
   ok "installed bootstrap → $SCRIPT_PATH"
 fi

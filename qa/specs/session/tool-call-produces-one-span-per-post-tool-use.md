@@ -93,11 +93,11 @@ is asserted only because the input is in the record.
 `gen_ai.input.messages`. Presence is checkable, value is not. A spec that needs the value belongs in
 `test/e2e/`, which sees the payload before it leaves the machine.
 
-**The model attribute is present on some tool spans and absent on others, and that is not asserted
-here.** In the measured run the `Bash` span carried `gen_ai.request.model` and the `Read` span did
-not. `sendToolTrace` fills the model from the saved trace context, or failing that by re-reading the
-transcript, so whether it resolves depends on what the turn had written by then. It is a real
-inconsistency and it deserves its own spec; treating it as a deviation here would hide it.
+**The model attribute is expected on every tool span, but is not asserted here.** An earlier run of
+this prompt put `gen_ai.request.model` on the `Bash` span and not on the `Read` span, because
+`sendToolTrace` re-read the transcript per call and the first call lost the race with its flush. The
+model is now resolved once per turn and cached for that turn, and the re-run carried it on both
+spans. It deserves its own spec rather than a clause here; see the coverage map.
 
 **Which tools the model picks is the model's choice.** The prompt names both tools explicitly, but a
 run that produces a different tool set, an extra `ToolSearch`, or two turns instead of one is not a

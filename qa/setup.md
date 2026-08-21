@@ -32,6 +32,7 @@ transcript logic nor the audit script transfers to them. `test/contracts/` and
 
 - specs:     qa/specs/<area>/
 - learnings: qa/learnings/
+- findings:  qa/findings/        (open spec failures only; a fixed one is deleted)
 - runs:      qa/runs/            (gitignored)
 - fixtures:  qa/recorder/, qa/tools/
 - config:    qa/config.local.json (gitignored), qa/config.local.json.example

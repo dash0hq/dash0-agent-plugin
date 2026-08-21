@@ -152,11 +152,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer index.Close()
 	// One write of one line: O_APPEND makes it atomic against the other hook
 	// processes writing the same file.
-	_, err = index.Write(append(line, '\n'))
-	return err
+	_, writeErr := index.Write(append(line, '\n'))
+	closeErr := index.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 // snapshot copies path into dir under the hex sha256 of its contents, and

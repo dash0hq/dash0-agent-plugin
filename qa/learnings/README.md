@@ -29,6 +29,7 @@ below cost a full redesign of the harness before they were understood.
 - [The first hooks of a session carry a transcript path that does not exist yet](hooks-transcript-does-not-exist-at-session-start.md) — absent, not broken, and the pipeline sees the same thing.
 - [Per-session plugin state is deleted at SessionEnd, so it cannot be inspected afterwards](hooks-session-state-is-deleted-at-sessionend.md) — poll during the run or get a confident wrong answer.
 - [The Task tool returns in milliseconds, so a sub-agent outlives the turn that spawned it](hooks-the-task-tool-returns-before-its-sub-agent-runs.md) — two `chat` spans per prompt is correct, and a one-tool-call sub-agent probe tests almost nothing.
+- [Some slash commands fire no UserPromptSubmit and no Stop, so they cannot be probed](hooks-some-slash-commands-fire-no-hooks-at-all.md) — `/help` produces no turn at all, so it cannot serve as a negative control.
 
 ## What is actually under test
 

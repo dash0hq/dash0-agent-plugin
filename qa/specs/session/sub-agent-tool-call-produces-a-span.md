@@ -2,137 +2,123 @@
 id: sub-agent-tool-call-produces-a-span
 area: session
 status: draft
-input: qa/tools/qa-session.sh, one prompt that delegates a tool call to a sub-agent
+input: qa/tools/qa-session.sh, one prompt that delegates several tool calls to a sub-agent
 duration: ~25s
 settling: 10s
 cleanup: keep
 covers:
   - internal/pipeline/pipeline.go
   - internal/otlp/tracecontext.go
-known_failure: not filed
 ---
 
 ## Given
 
 The same session as [sub-agent-usage-is-counted-once](sub-agent-usage-is-counted-once.md), read for a
 different invariant. A tool call made inside a sub-agent fires its own `PostToolUse`, carrying
-`agent_id` and `agent_type` alongside the main session's `session_id`. It should produce an
-`execute_tool` span like any other tool call.
+`agent_id` and `agent_type` alongside the main session's `session_id`. It must produce an
+`execute_tool` span like any other tool call, parented under the `Agent` tool span that launched the
+sub-agent.
 
-It does not always. This spec documents the failure and the condition that triggers it, so a fix can
-be recognized as a fix.
+It did not, for every call that landed after the spawning turn's `Stop`, which is most of them. That
+is fixed; this spec keeps the ordering that broke it in the run, because a run that does not
+reproduce the ordering proves nothing.
 
 ## When
 
 ```sh
-QA_MODEL=haiku QA_ALLOWED_TOOLS="Task Agent Bash" qa/tools/qa-session.sh \
-  'Use the Task tool (subagent_type general-purpose) to ask a sub-agent to run the bash command: echo qa-sub-probe. When it returns, reply with exactly the word done.' \
-  spec-subagent
+QA_SWAP_BINARY=1 QA_MODEL=haiku QA_ALLOWED_TOOLS="Task Agent Bash" qa/tools/qa-session.sh \
+  'Use the Task tool (subagent_type general-purpose) to ask a sub-agent to run these three bash commands one after another, each as a separate Bash call: "sleep 1; echo one", then "sleep 1; echo two", then "sleep 1; echo three". When it returns, reply with exactly the word done.' \
+  fix-subagent-tools
 sleep 10
 ```
 
-A second prompt makes the sub-agent do more than one thing, which is the representative case:
+**The Task tool is asynchronous.** Its `PostToolUse` reports `duration_ms` of 2 or 3: the call
+returns immediately and the sub-agent runs on in the background. The spawning turn's `Stop` fires 2.2
+to 3.1 seconds later, and the sub-agent's result arrives afterwards as a `<task-notification>`
+injected as a fresh `UserPromptSubmit`, which opens a second turn. So a sub-agent doing real work
+always outlives the turn that spawned it.
 
-```sh
-QA_MODEL=haiku QA_ALLOWED_TOOLS="Task Agent Bash" qa/tools/qa-session.sh \
-  'Use the Task tool (subagent_type general-purpose) to ask a sub-agent to run these three bash commands one after another, each as a separate Bash call: "sleep 1; echo one", then "sleep 1; echo two", then "sleep 1; echo three". When it returns, reply with exactly the word done.' \
-  spec-subagent-multi
+The three one-second `Bash` calls put every sub-agent tool call on the far side of that `Stop`. From
+`record/index.jsonl` of the verifying run:
+
+```
++12.23s SubagentStart
++14.31s Stop                 session trace context cleared here
++16.29s PostToolUse   Bash [in sub-agent]
++19.26s PostToolUse   Bash [in sub-agent]
++21.64s PostToolUse   Bash [in sub-agent]
++23.51s SubagentStop
 ```
 
-**The Task tool is asynchronous.** Its `PostToolUse` reports `duration_ms` of 2 or 3, measured on
-four runs: the call returns immediately and the sub-agent runs on in the background. The spawning
-turn's `Stop` then fires 2.2 to 3.1 seconds later, and the sub-agent's result arrives afterwards as a
-`<task-notification>` injected as a fresh `UserPromptSubmit`, which opens a second turn.
-
-So the window in which a sub-agent's tool call can still find a trace context is about two and a half
-seconds wide, and it opens the moment the sub-agent is launched. Measured across four sessions:
-
-| Sub-agent's work | Tool calls | Spans |
-| --- | --- | --- |
-| one `Bash`, done 0.3 s before the turn's `Stop` | 1 | 1 |
-| one `Bash`, done 0.4 s before the turn's `Stop` | 1 | 1 |
-| one `Bash`, done 0.7 s after the turn's `Stop` | 1 | 0 |
-| three `Bash` calls over 10 s, all after the turn's `Stop` | 3 | 0 |
-
-This is not a coin flip. A sub-agent that finishes inside two and a half seconds is the only one that
-keeps its spans, and a sub-agent exists to do work that takes longer. The two passing runs each had a
-single one-second tool call that happened to land just inside the window.
+A single fast tool call is not a substitute. It can finish before the `Stop` and pass without
+exercising anything.
 
 ## Expectation
 
 From `record/` alone. `record/events/*PostToolUse*.json` names each tool in `tool_name`, and a call
 made inside a sub-agent additionally carries `agent_id` and `agent_type`. The mapping in
 `internal/pipeline/pipeline.go` gives one `execute_tool` per `PostToolUse` regardless of who made the
-call, so the expectation is one span per payload, and each sub-agent call's span is parented under
-the `invoke_agent` span. On `spec-subagent-multi` that is 4 tool spans: `Agent` from the main session
-and three `Bash` from inside the sub-agent.
+call, so the expectation is one span per payload. On this prompt that is 4 tool spans at minimum:
+`Agent` from the main session and three `Bash` from inside the sub-agent. The model may also call
+`ToolSearch` or `TaskCreate` first, which is why the assertion is per-tool-name against that run's
+own payload count, never an absolute total.
 
 `record/index.jsonl` also gives the ordering, in wall-clock order, which is what decides whether the
-run reproduces the failure.
+run exercised the fix.
 
 **The mechanism.** `Stop` calls `otlp.ClearTraceContext(sessionDir)` after exporting the turn's
-`chat` span. `sendToolTrace` opens with `otlp.LoadTraceContext(dataDir)` and returns `no trace
-context available for tool span` when it is gone, so the span is never built. Because the Task tool
-returns in milliseconds, a sub-agent always outlives the turn that spawned it, and everything it does
-after that `Stop` is invisible.
+`chat` span, so by the time a sub-agent's `PostToolUse` arrives the session context is gone.
+`SubagentStart` snapshots the trace context per agent for exactly this reason, and `sendLLMTrace`
+reads that snapshot through `otlp.LoadAgentTraceContext(dataDir, agentID)` when the event carries an
+`agent_id`. `sendToolTrace` now does the same, which is why `execute_tool` survives the ordering that
+`invoke_agent` always survived.
 
-`sendLLMTrace` does not have this problem, because `SubagentStart` snapshots the trace context per
-agent and `sendLLMTrace` falls back to `otlp.LoadAgentTraceContext(dataDir, agentID)` when the event
-carries an `agent_id`. The comment on that snapshot names this exact hazard: the `SubagentStop`
-"still finds the spawning turn's trace even when it arrives after Stop (context cleared)". The
-snapshot exists, `sendToolTrace` just never reads it. That asymmetry is the defect, and it is why
-`invoke_agent` survives the ordering and `execute_tool` does not.
+Parenting comes from `otlp.SpanIDFromAgentID(agent_id)`, the same derivation the `Agent` tool span
+uses for its own span id, so the two meet without shared state.
 
 ## Oracle
 
-- Channel one, Dash0: `qa/tools/qa-compare.py qa/runs/spec-subagent-multi`. Its "Tool spans" table is
-  span count against `PostToolUse` count per tool name, and it exits `1`.
-- Channel two, ordering: `record/index.jsonl`, to establish whether this run reproduced the failure
-  at all. A run whose sub-agent tool calls all preceded the `Stop` passes and proves nothing.
+- Channel one, Dash0: `qa/tools/qa-compare.py qa/runs/fix-subagent-tools`. Its "Tool spans" table is
+  span count against `PostToolUse` count per tool name.
+- Channel two, ordering: `record/index.jsonl`, to establish that the run put sub-agent tool calls
+  after the turn's `Stop`. A run without that ordering is silent, not passing.
+- Channel three, parenting: the span tree read back from Dash0, since `qa-compare.py` counts spans
+  and does not check who their parent is.
 
 ## Then
 
-While the defect stands, on `spec-subagent-multi`:
+Measured on the verifying run:
 
-- `record/events/` holds three `PostToolUse` payloads with `tool_name: Bash` and `agent_id` set.
-- Dash0 holds no `execute_tool Bash` span at all for the session, and 1 `execute_tool` in total.
-- `qa-compare.py` exits `1` and reports `tool Bash: Dash0 has 0, PostToolUse fired 3`.
+- `record/events/` holds three `PostToolUse` payloads with `tool_name: Bash` and `agent_id` set, all
+  after the turn's `Stop`.
+- Dash0 holds three `execute_tool Bash` spans, and `qa-compare.py` reports `9 in Dash0` against `9`
+  from the hooks and `9` from the transcript, exiting `0`.
+- Each `Bash` span's parent is the `execute_tool Agent` span, making them siblings of the
+  `invoke_agent` span rather than children of it.
+- Each `Bash` span's duration matches its own payload: 2043 ms, 1030 ms, 1024 ms. Three distinct
+  spans, not one counted three times.
 - Every other assertion in [sub-agent-usage-is-counted-once](sub-agent-usage-is-counted-once.md)
-  still holds. The dropped spans carry no usage, so no token count moves. Both `chat` spans and the
-  `invoke_agent` span are present, so the loss is invisible in any total.
-
-Once fixed, the same run must give:
-
-- 4 `execute_tool` spans: `Agent`, and three `Bash`.
-- Each `Bash` span's parent is the `invoke_agent` span, reached through
-  `otlp.SpanIDFromAgentID(agent_id)`, which is the same derivation the `invoke_agent` span's own
-  parent uses.
-- Each `Bash` span's duration equals its payload's `duration_ms`, so the three are distinguishable
-  rather than one span counted three times.
-- `qa-compare.py` exits `0`.
+  still holds, and no token count moved: the previously dropped spans carry no usage.
 
 ## Tolerance
 
-**A passing run does not clear the defect.** A sub-agent that finishes inside the window keeps its
-spans today, so a green run on a single fast tool call proves nothing. Use the `spec-subagent-multi`
-prompt, and read `record/index.jsonl` first to confirm at least one sub-agent `PostToolUse` landed
-after the spawning turn's `Stop`. A green run without that ordering is silent, not negative.
+**A passing run means nothing without the ordering.** Read `record/index.jsonl` first and confirm at
+least one sub-agent `PostToolUse` landed after the spawning turn's `Stop`. A sub-agent that finished
+inside the window would have passed before the fix too.
 
-**`known_failure` has no ticket id yet.** The field reads `not filed`, which keeps the runner from
-re-reporting it every pass but is not a real reference. The finding is written up in
-[../../findings/subagent-tool-spans-are-dropped-after-stop.md](../../findings/subagent-tool-spans-are-dropped-after-stop.md);
-replace this field with the ticket id once one exists, and record it there too.
+**The tool inventory varies.** The model may reach for `ToolSearch` or `TaskCreate` before
+delegating, so the span total moves between runs. Assert per tool name against that run's own
+payloads, which is what `qa-compare.py` does.
 
-**The count in the summary line is expected to disagree.** `qa-compare.py` will report
-`execute_tool: Dash0 has 1, the hooks imply 4`, `total: Dash0 has 4, the hooks imply 7`, and
-`tool Bash: Dash0 has 0, PostToolUse fired 3` on the same run. Those are one finding counted three
-ways, not three findings.
+**A tool call arriving after `SubagentStop` is still dropped, deliberately.** `SubagentStop` clears
+the per-agent snapshot, and nothing observed produces a tool call after it. The alternative —
+falling back to whatever turn is current — would attach a sub-agent's work to an unrelated trace,
+which is worse than losing it. Covered by a unit test, not by this spec.
 
-**How many spans are lost depends on how long the sub-agent works, so no absolute count is
-asserted.** The assertion is span count against that run's own `PostToolUse` count. A longer
-sub-agent loses more, which is the wrong direction for a product: the more work is delegated, the
-less of it is observable.
+**Nested sub-agents.** An `Agent` call made by a sub-agent keeps its derived span id and parents
+under the outer agent. A top-level `Agent` call carries no `agent_id` at all, so it parents under the
+turn's `chat` span. Both are unit-tested; no live prompt in this suite produces nesting.
 
-**Scope.** This is about tool calls inside a sub-agent. A tool call in the main session that somehow
-landed after its own turn's `Stop` would hit the same code path, but nothing observed so far produces
-that ordering, and it is not asserted here.
+**Scope.** This is about tool calls inside a sub-agent. A main-session tool call that somehow landed
+after its own turn's `Stop` hits the same code path but nothing observed produces that ordering, so
+it is not asserted here.

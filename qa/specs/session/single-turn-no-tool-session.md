@@ -122,10 +122,13 @@ the span name reads `chat claude-haiku-4-5-20251001`. Dash0 stores the canonical
 depend on how warm the prompt cache was, so no absolute number is asserted here. Every assertion
 compares the span against the transcript for the same run.
 
-**No thinking breakdown, and that is not asserted.** The reply contains a thinking block, and its
-tokens are inside `gen_ai.usage.output_tokens` with no attribute separating them. Claude Code
-reports `output_tokens_details.thinking_tokens` and no span carries it. That is a gap, not a
-deviation, and it belongs in its own spec.
+**The thinking breakdown is present but not asserted here.** The reply contains a thinking block, and
+`gen_ai.usage.reasoning.output_tokens` now reports its share of `gen_ai.usage.output_tokens` — 191 of
+238 on the verifying run, matching `output_tokens_details.thinking_tokens` in `claude-result.json`
+exactly. It is a subset, so it moves no total and changes no cost. The key is emitted only when the
+turn did some thinking, matching what the Copilot source does with the same key, so a spec asserting
+it must drive a prompt that actually thinks — absence is the correct output for a turn that did not.
+Asserting it needs its own spec; see the coverage map.
 
 **No conversation name.** A headless `claude -p` session gets no title, so the span has no
 `gen_ai.conversation.name`. An interactive session does. Do not assert a name here.

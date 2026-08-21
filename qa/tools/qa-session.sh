@@ -41,6 +41,10 @@ MODEL_ARGS=()
 RUN="$ROOT/qa/runs/$RUN_ID"
 PROJECT="$RUN/project"
 RECORD="$RUN/record"
+# The recorder appends, so reusing a run id used to leave two sessions in one
+# record/. qa-compare.py then counted hooks across both while querying Dash0 for
+# one, and reported the difference as missing telemetry. Start the record empty.
+rm -rf "$RECORD"
 mkdir -p "$PROJECT/.claude" "$RECORD"
 
 go build -o "$RUN/recorder" ./qa/recorder

@@ -28,7 +28,6 @@ Usage:
 
 import argparse
 import collections
-import glob
 import json
 import os
 import subprocess
@@ -143,27 +142,45 @@ def dash0_summary(spans):
             "tools": dict(tools), "services": sorted(s for s in services if s)}
 
 
-def hooks_summary(run_dir):
-    """The expectation the plugin's own input implies, with no plugin involved."""
+def hooks_summary(run_dir, session_id):
+    """The expectation the plugin's own input implies, with no plugin involved.
+
+    Scoped to one session, because the recorder appends and a reused run id
+    therefore holds every session ever recorded into it. The Dash0 side is
+    filtered to `session_id`, so counting hooks across all of them reported the
+    surplus as telemetry the plugin failed to send. Payloads come from each row's
+    own `event_file` rather than from a glob over the directory, which is what
+    keeps the two halves in step.
+    """
     index = os.path.join(run_dir, "record", "index.jsonl")
     if not os.path.exists(index):
         return {"error": "no record/index.jsonl; was the recorder registered?"}
-    rows = [json.loads(line) for line in open(index)]
+    all_rows = [json.loads(line) for line in open(index)]
+    rows = [r for r in all_rows if r.get("session_id") == session_id]
+    # A payload that did not parse has no session id, so it cannot be attributed.
+    # Counting it separately keeps a recording failure visible instead of
+    # dropping it as somebody else's session.
+    unattributed = sum(1 for r in all_rows if not r.get("session_id"))
     by_event = collections.Counter(r["hook_event_name"] for r in rows)
 
     tools = collections.Counter()
-    for path in glob.glob(os.path.join(run_dir, "record", "events", "*PostToolUse*.json")):
-        with open(path) as handle:
-            try:
+    for row in rows:
+        if "PostToolUse" not in row["hook_event_name"]:
+            continue
+        path = os.path.join(run_dir, "record", row.get("event_file") or "")
+        try:
+            with open(path) as handle:
                 tools[json.load(handle).get("tool_name") or "<no name>"] += 1
-            except json.JSONDecodeError:
-                tools["<unparseable>"] += 1
+        except (OSError, json.JSONDecodeError):
+            tools["<unparseable>"] += 1
 
     expected = {span: sum(by_event[h] for h in hooks)
                 for span, hooks in SPAN_FROM_HOOK.items()}
     snapshots = {r.get("transcript_sha256") for r in rows if r.get("transcript_sha256")}
     return {
         "invocations": len(rows),
+        "other_sessions": len(all_rows) - len(rows) - unattributed,
+        "unattributed": unattributed,
         "by_event": dict(by_event),
         "expected_spans": dict(expected, total=sum(expected.values())),
         "tools": dict(tools),
@@ -242,6 +259,14 @@ def report(data):
     print(f"hooks     : {hooks['invocations']} invocations recorded, "
           f"{hooks['transcript_snapshots']} distinct transcript snapshots, "
           f"{hooks['absent']} before the transcript existed")
+    if hooks["other_sessions"]:
+        print(f"            {hooks['other_sessions']} invocation(s) from an earlier"
+              " session in this directory, ignored.\n            The run id was"
+              " reused; use a fresh one so the record holds one session.")
+    if hooks["unattributed"]:
+        print(f"            {hooks['unattributed']} invocation(s) carry no session id,"
+              " so they cannot be attributed.\n            A payload that did not"
+              " parse is a recording failure, not another session.")
 
     print("\nSpan counts")
     print(f"  {'type':<14}{'dash0':>8}{'hooks':>8}{'transcript':>12}")
@@ -353,7 +378,7 @@ def main():
         "manifest": manifest,
         "dash0": dash0_summary(spans or []),
         "dash0_error": error,
-        "hooks": hooks_summary(run_dir),
+        "hooks": hooks_summary(run_dir, manifest["session_id"]),
         "transcript": transcript_summary(root, manifest["session_id"]),
         "claude": claude_summary(run_dir),
     }

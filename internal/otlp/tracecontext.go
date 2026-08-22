@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // TraceContext holds the active trace and root span IDs for a session,
@@ -18,16 +19,6 @@ type TraceContext struct {
 	SpanID    string `json:"span_id"`
 	SessionID string `json:"session_id"`
 	Model     string `json:"model,omitempty"`
-	// ToolModel is the model resolved from the transcript for THIS turn, cached so
-	// the turn's later tool spans do not each race the transcript flush.
-	//
-	// It is deliberately separate from Model. Model comes from the SessionStart
-	// payload and is copied forward across turns, so writing a transcript-derived
-	// value there would pin the first model a session resolved onto every later
-	// turn, and a mid-session model switch would be reported as the old model.
-	// ToolModel is not copied forward, so it expires with the turn that wrote it.
-	// Only tool spans read it; an LLM span reads its own turn's transcript.
-	ToolModel string `json:"tool_model,omitempty"`
 	// StartTime is set only in per-agent snapshots (written at SubagentStart)
 	// and records the RFC3339Nano timestamp of the hook fire. It anchors the
 	// subagent span's start so a late-arriving SubagentStop does not inherit
@@ -56,6 +47,10 @@ func writeContextFile(path string, ctx TraceContext) error {
 	if err != nil {
 		return err
 	}
+	return writeFileAtomically(path, data)
+}
+
+func writeFileAtomically(path string, data []byte) error {
 	// Same directory as the target, so the rename cannot cross a filesystem
 	// boundary. The pid keeps concurrent writers off each other's temp file.
 	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
@@ -102,6 +97,9 @@ func SaveAgentTraceContext(ctx TraceContext, dataDir, agentID string) error {
 	if err != nil {
 		return err
 	}
+	// Agent IDs identify one invocation. A consumed marker is deliberately not
+	// cleared here: unexpected ID reuse must stay fail-closed so a stale hook
+	// cannot attach to a later invocation's snapshot.
 	return writeContextFile(path, ctx)
 }
 
@@ -120,6 +118,125 @@ func LoadAgentTraceContext(dataDir, agentID string) (*TraceContext, error) {
 func ClearAgentTraceContext(dataDir, agentID string) {
 	if path, err := agentTraceContextFile(dataDir, agentID); err == nil {
 		_ = os.Remove(path)
+	}
+}
+
+func agentTraceContextConsumedFile(dataDir, agentID string) (string, error) {
+	if !agentIDPattern.MatchString(agentID) {
+		return "", fmt.Errorf("invalid agent ID %q", agentID)
+	}
+	return filepath.Join(dataDir, "agent_trace_context_"+agentID+".consumed"), nil
+}
+
+// MarkAgentTraceContextConsumed records that SubagentStop was observed for an
+// agent. A later tool hook with no snapshot must then fail closed instead of
+// falling back to whichever session turn is current.
+func MarkAgentTraceContextConsumed(dataDir, agentID string) error {
+	path, err := agentTraceContextConsumedFile(dataDir, agentID)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomically(path, nil)
+}
+
+// AgentTraceContextConsumed reports whether SubagentStop has consumed the
+// agent's snapshot. Invalid agent IDs return an error so callers can fail
+// closed rather than using them to bypass the marker.
+func AgentTraceContextConsumed(dataDir, agentID string) (bool, error) {
+	path, err := agentTraceContextConsumedFile(dataDir, agentID)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+var traceIDPattern = regexp.MustCompile(`^[A-Fa-f0-9]{32}$`)
+
+func toolModelFile(dataDir, traceID, actorID string) (string, error) {
+	if !traceIDPattern.MatchString(traceID) {
+		return "", fmt.Errorf("invalid trace ID %q", traceID)
+	}
+	actor := "main"
+	if actorID != "" {
+		if !agentIDPattern.MatchString(actorID) {
+			return "", fmt.Errorf("invalid actor ID %q", actorID)
+		}
+		actor = "agent_" + actorID
+	}
+	return filepath.Join(dataDir, "tool_model_"+traceID+"_"+actor+".json"), nil
+}
+
+type toolModel struct {
+	Model string `json:"model"`
+}
+
+// SaveToolModel caches a transcript-resolved model under the turn's trace ID
+// and actor ID. The empty actor identifies the main turn; a subagent uses its
+// agent ID so actors with different transcripts cannot contaminate each other.
+// It never rewrites trace_context.json, so a late writer cannot restore or
+// replace another turn's context.
+func SaveToolModel(dataDir, traceID, actorID, model string) error {
+	path, err := toolModelFile(dataDir, traceID, actorID)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(toolModel{Model: model})
+	if err != nil {
+		return err
+	}
+	return writeFileAtomically(path, data)
+}
+
+// LoadToolModel reads the model cached for one trace actor. A missing cache
+// returns an empty model.
+func LoadToolModel(dataDir, traceID, actorID string) (string, error) {
+	path, err := toolModelFile(dataDir, traceID, actorID)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	var cached toolModel
+	if err := json.Unmarshal(data, &cached); err != nil {
+		return "", err
+	}
+	return cached.Model, nil
+}
+
+// ClearToolModel removes one actor's cache for a turn.
+func ClearToolModel(dataDir, traceID, actorID string) {
+	if path, err := toolModelFile(dataDir, traceID, actorID); err == nil {
+		_ = os.Remove(path)
+	}
+}
+
+// ClearToolModels removes every actor cache for a completed or superseded turn.
+func ClearToolModels(dataDir, traceID string) {
+	if !traceIDPattern.MatchString(traceID) {
+		return
+	}
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return
+	}
+	prefix := "tool_model_" + traceID + "_"
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".json") {
+			_ = os.Remove(filepath.Join(dataDir, name))
+		}
 	}
 }
 

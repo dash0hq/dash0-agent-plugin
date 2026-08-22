@@ -153,8 +153,10 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		event["chat_span_id"] = chatSpanID
 
 		model := ""
+		previousTraceID := ""
 		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil {
 			model = ctx.Model
+			previousTraceID = ctx.TraceID
 		}
 
 		if err := otlp.SaveTraceContext(otlp.TraceContext{
@@ -164,6 +166,9 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 			Model:     model,
 		}, sessionDir); err != nil {
 			return res, err
+		}
+		if previousTraceID != "" {
+			otlp.ClearToolModels(sessionDir, previousTraceID)
 		}
 	}
 
@@ -203,6 +208,9 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		if err := sendLLMTrace(event, cfg, now, sessionDir, hookEvent == "StopFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
+		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil {
+			otlp.ClearToolModels(sessionDir, ctx.TraceID)
+		}
 		otlp.ClearTraceContext(sessionDir)
 	case "SubagentStart":
 		// Snapshot the current trace context for this agent so its
@@ -220,10 +228,18 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 			}
 		}
 	case "SubagentStop":
+		markedConsumed := false
+		if agentID != "" {
+			if err := otlp.MarkAgentTraceContextConsumed(sessionDir, agentID); err != nil {
+				fmt.Fprintf(os.Stderr, "on-event: marking agent trace context consumed: %v\n", err)
+			} else {
+				markedConsumed = true
+			}
+		}
 		if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
 		}
-		if agentID != "" {
+		if markedConsumed {
 			otlp.ClearAgentTraceContext(sessionDir, agentID)
 		}
 	case "SessionEnd":
@@ -260,6 +276,10 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	// which is most of them.
 	var ctx *otlp.TraceContext
 	if agentID != "" {
+		consumed, err := otlp.AgentTraceContextConsumed(dataDir, agentID)
+		if err != nil || consumed {
+			return fmt.Errorf("no trace context available for tool span")
+		}
 		ctx, _ = otlp.LoadAgentTraceContext(dataDir, agentID)
 	}
 	if ctx == nil || ctx.TraceID == "" {
@@ -273,14 +293,13 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	traceID := ctx.TraceID
 	parentSpanID := ctx.SpanID
 
-	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
-		event["model"] = ctx.Model
-	}
-
-	// ToolModel is this turn's transcript-resolved model, cached by an earlier tool
-	// call in the same turn. It is read after Model and before the transcript.
-	if _, hasModel := event["model"]; !hasModel && ctx.ToolModel != "" {
-		event["model"] = ctx.ToolModel
+	// An actor-scoped turn model wins over the session's startup model. Keeping
+	// parent and subagent caches separate avoids mixing models between actors
+	// that share a trace but read different transcripts.
+	if _, hasModel := event["model"]; !hasModel {
+		if model, err := otlp.LoadToolModel(dataDir, traceID, agentID); err == nil && model != "" {
+			event["model"] = model
+		}
 	}
 
 	if _, hasModel := event["model"]; !hasModel {
@@ -296,9 +315,13 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 			// calls each read the transcript, which is correct but not free.
 			if m := waitForModel(tp); m != "" {
 				event["model"] = m
-				rememberModel(dataDir, traceID, m)
+				rememberModel(dataDir, traceID, agentID, m)
 			}
 		}
+	}
+
+	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
+		event["model"] = ctx.Model
 	}
 
 	startTime := ts
@@ -421,10 +444,6 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	traceID := ctx.TraceID
 	spanID := ctx.SpanID
 
-	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
-		event["model"] = ctx.Model
-	}
-
 	startTime := ts
 	if ctx.StartTime != "" {
 		// Agent snapshot carries the SubagentStart hook timestamp: use it so the
@@ -539,6 +558,10 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		}
 	}
 
+	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
+		event["model"] = ctx.Model
+	}
+
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
 }
@@ -562,8 +585,8 @@ const turnCompletePollInterval = 50 * time.Millisecond
 // that requested a tool to reach the transcript. A turn's first tool call can
 // fire before that flush lands — measured at ~900ms behind the PreToolUse hook —
 // and without the wait the model is absent from that one span and present on
-// every later one. A resolved model is then cached on the turn's trace context,
-// so the wait is normally paid once per turn rather than per tool call.
+// every later one. A resolved model is then cached in a trace-and-actor-keyed
+// sidecar, so the wait is normally paid once per actor per turn.
 const modelWaitBudget = 1 * time.Second
 
 // waitForModel returns the model named by the transcript, waiting only while an
@@ -581,39 +604,33 @@ func waitForModel(transcriptPath string) string {
 	}
 	deadline := time.Now().Add(modelWaitBudget)
 	for {
-		if m := transcript.ReadModel(transcriptPath); m != "" {
-			return m
+		model, hasAssistant := transcript.ReadCurrentTurnModel(transcriptPath)
+		if model != "" {
+			return model
 		}
-		if transcript.HasAssistantEntry(transcriptPath) || time.Now().After(deadline) {
+		if hasAssistant || time.Now().After(deadline) {
 			return ""
 		}
 		time.Sleep(turnCompletePollInterval)
 	}
 }
 
-// rememberModel caches a transcript-resolved model on the turn's trace context,
-// so the turn's later tool spans read it from there instead of each racing the
-// transcript flush.
-//
-// It writes ToolModel and never Model. Model is carried forward from turn to
-// turn (see the UserPromptSubmit branch in Process), so a transcript-derived
-// value written there would pin the first model a session resolved onto every
-// later turn, and a /model switch mid-session would keep reporting the old one.
-//
-// Two guards, both about writing to the wrong turn. The context must still exist:
-// recreating one that Stop cleared would resurrect a trace already reported. And
-// its TraceID must still match the span this model was resolved for — a
-// sub-agent's tool call can land after the next prompt has already replaced the
-// context, and caching this turn's model onto the next turn is the same bug as
-// pinning it for the session, just smaller.
-func rememberModel(dataDir, traceID, model string) {
+// rememberModel caches a transcript-resolved model in a trace-and-actor-keyed
+// sidecar only while that trace is the active session turn. The second context
+// check closes the Stop/new-prompt race around the sidecar write without ever
+// rewriting trace_context.json.
+func rememberModel(dataDir, traceID, actorID, model string) {
 	ctx, err := otlp.LoadTraceContext(dataDir)
-	if err != nil || ctx == nil || ctx.TraceID != traceID || ctx.ToolModel == model {
+	if err != nil || ctx == nil || ctx.TraceID != traceID {
 		return
 	}
-	ctx.ToolModel = model
-	if err := otlp.SaveTraceContext(*ctx, dataDir); err != nil {
+	if err := otlp.SaveToolModel(dataDir, traceID, actorID, model); err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: remembering model: %v\n", err)
+		return
+	}
+	ctx, err = otlp.LoadTraceContext(dataDir)
+	if err != nil || ctx == nil || ctx.TraceID != traceID {
+		otlp.ClearToolModel(dataDir, traceID, actorID)
 	}
 }
 

@@ -732,6 +732,42 @@ func TestProcess_SubagentStop_CleansUpSnapshot(t *testing.T) {
 	assert.Nil(t, snap, "snapshot must be removed after SubagentStop")
 }
 
+// If persisting the consumed marker fails, the snapshot must remain available.
+// Otherwise a late tool hook can fall back to a newer turn's live context and
+// attach the span to the wrong trace.
+func TestProcess_SubagentStopMarkerFailure_RetainsSnapshot(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "delegate it"})
+
+	spawningCtx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
+	require.NoError(t, err)
+	require.NotNil(t, spawningCtx)
+
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	markerTemp := filepath.Join(s.sessionDir("sess-1"),
+		"agent_trace_context_agent1.consumed.tmp."+strconv.Itoa(os.Getpid()))
+	require.NoError(t, os.Mkdir(markerTemp, 0o755), "block only the marker's atomic temp write")
+
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "next turn"})
+	s.feed(t, map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "sess-1",
+		"agent_id":        "agent1",
+		"tool_name":       "Bash",
+		"tool_use_id":     "tu-late",
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 2, "SubagentStop and the late tool hook both emit spans")
+	assert.Equal(t, spawningCtx.TraceID, (*spans)[1].TraceID,
+		"the retained snapshot prevents fallback to the next turn")
+}
+
 func TestReadEvent(t *testing.T) {
 	t.Run("decodes a hook payload", func(t *testing.T) {
 		event, err := ReadEvent(strings.NewReader(
@@ -892,6 +928,10 @@ func TestProcess_PostToolUseAfterSubagentStop_IsNotReparented(t *testing.T) {
 	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
 	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
 	s.feed(t, map[string]any{"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "next turn"})
+	// Agent IDs are invocation-unique. Even if an unexpected reuse publishes a
+	// replacement snapshot, the consumed tombstone keeps a stale hook fail-closed.
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
 
 	before := len(*spans)
 	s.feed(t, map[string]any{
@@ -929,8 +969,10 @@ func TestProcess_PostToolUse_RemembersResolvedModel(t *testing.T) {
 	ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
 	require.NoError(t, err)
 	require.NotNil(t, ctx)
-	assert.Equal(t, "claude-haiku-4-5-20251001", ctx.ToolModel, "resolved once, then remembered")
-	assert.Empty(t, ctx.Model, "cached as ToolModel, never as Model: Model is carried across turns")
+	cachedModel, err := otlp.LoadToolModel(s.sessionDir("sess-1"), ctx.TraceID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "claude-haiku-4-5-20251001", cachedModel, "resolved once, then remembered")
+	assert.Empty(t, ctx.Model, "turn model stays out of the session-level Model field")
 
 	// Second call cannot read the transcript at all. It must still report the
 	// model, which is the whole point of remembering it.
@@ -949,6 +991,76 @@ func TestProcess_PostToolUse_RemembersResolvedModel(t *testing.T) {
 	for _, span := range *spans {
 		assert.True(t, hasStringAttr(span.Attributes, "gen_ai.request.model", "claude-haiku-4-5-20251001"),
 			"every tool span of the session carries the same model: %s", span.Name)
+	}
+}
+
+func TestRememberModelDoesNotCacheAnInactiveTrace(t *testing.T) {
+	dir := t.TempDir()
+	inactiveTraceID := "aaaabbbbccccddddaaaabbbbccccdddd"
+	active := otlp.TraceContext{
+		TraceID:   "11112222333344441111222233334444",
+		SpanID:    "1111222233334444",
+		SessionID: "sess-1",
+	}
+	require.NoError(t, otlp.SaveTraceContext(active, dir))
+
+	rememberModel(dir, inactiveTraceID, "", "claude-opus-4-8")
+
+	cached, err := otlp.LoadToolModel(dir, inactiveTraceID, "")
+	require.NoError(t, err)
+	assert.Empty(t, cached, "a late hook must not leave a cache for a completed trace")
+
+	current, err := otlp.LoadTraceContext(dir)
+	require.NoError(t, err)
+	require.NotNil(t, current)
+	assert.Equal(t, active, *current, "remembering a model never rewrites the active trace context")
+}
+
+func TestProcess_PostToolUse_CachesModelsPerTraceActor(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		agentFirst bool
+	}{
+		{name: "parent first"},
+		{name: "subagent first", agentFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			url, spans, mu := mockOTLPServer(t)
+			s := newSetup(t, url)
+			dir := t.TempDir()
+			parentTranscript := writeModelTranscript(t, dir, "parent.jsonl", "claude-sonnet-4-6")
+			agentTranscript := writeModelTranscript(t, dir, "agent.jsonl", "claude-opus-4-8")
+
+			s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
+			s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "delegate"})
+			s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+
+			parentTool := map[string]any{
+				"hook_event_name": "PostToolUse", "session_id": "sess-1",
+				"tool_name": "Read", "tool_use_id": "tu-parent", "transcript_path": parentTranscript,
+			}
+			agentTool := map[string]any{
+				"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
+				"tool_name": "Grep", "tool_use_id": "tu-agent", "transcript_path": agentTranscript,
+			}
+			if tc.agentFirst {
+				s.feed(t, agentTool)
+				s.feed(t, parentTool)
+			} else {
+				s.feed(t, parentTool)
+				s.feed(t, agentTool)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, *spans, 2)
+			models := map[string]string{}
+			for _, span := range *spans {
+				models[span.Name] = stringAttrOf(t, span, "gen_ai.request.model")
+			}
+			assert.Equal(t, "claude-sonnet-4-6", models["execute_tool Read"])
+			assert.Equal(t, "claude-opus-4-8", models["execute_tool Grep"])
+		})
 	}
 }
 
@@ -994,6 +1106,48 @@ func TestProcess_PostToolUse_WaitsForTheFirstAssistantEntry(t *testing.T) {
 	assert.True(t, hasStringAttr((*spans)[0].Attributes, "gen_ai.request.model", "claude-opus-5"))
 }
 
+// A later turn must not reuse the preceding turn's model while its own
+// assistant entry is still being flushed. The tool hook should wait for the
+// current turn instead of treating any earlier assistant entry as ready.
+func TestProcess_PostToolUse_WaitsForTheCurrentTurnAssistantEntry(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	transcriptPath := filepath.Join(t.TempDir(), "transcript.jsonl")
+	record := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"first turn"}}`,
+		`{"type":"assistant","message":{"id":"m1","role":"assistant","model":"claude-haiku-4-5","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"second turn"}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(record), 0o644))
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "second turn"})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(150 * time.Millisecond)
+		f, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return
+		}
+		_, _ = f.WriteString(`{"type":"assistant","message":{"id":"m2","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","name":"Bash"}]}}` + "\n")
+		_ = f.Close()
+	}()
+
+	s.feed(t, map[string]any{
+		"hook_event_name": "PostToolUse", "session_id": "sess-1",
+		"tool_name": "Bash", "tool_use_id": "tu-current", "transcript_path": transcriptPath,
+	})
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	assert.Equal(t, "claude-opus-4-8", stringAttrOf(t, (*spans)[0], "gen_ai.request.model"))
+}
+
 // A transcript that records assistant entries without a model belongs to a
 // source that does not report one. Waiting on it would add the full budget to
 // every tool call and change nothing.
@@ -1034,7 +1188,9 @@ func TestProcess_PostToolUse_KeepsModelSuppliedByTheSource(t *testing.T) {
 	url, spans, mu := mockOTLPServer(t)
 	s := newSetup(t, url)
 
-	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
+	s.feed(t, map[string]any{
+		"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "claude-sonnet-4-6",
+	})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do thing"})
 	s.feed(t, map[string]any{
 		"hook_event_name": "PostToolUse",
@@ -1219,7 +1375,9 @@ func TestProcess_ToolSpanFollowsAMidSessionModelSwitch(t *testing.T) {
 	dir := t.TempDir()
 
 	first := writeModelTranscript(t, dir, "turn1.jsonl", "claude-haiku-4-5")
-	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
+	s.feed(t, map[string]any{
+		"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "claude-sonnet-4-6",
+	})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "one"})
 	s.feed(t, map[string]any{
 		"hook_event_name": "PostToolUse", "session_id": "sess-1",
@@ -1234,19 +1392,28 @@ func TestProcess_ToolSpanFollowsAMidSessionModelSwitch(t *testing.T) {
 		"hook_event_name": "PostToolUse", "session_id": "sess-1",
 		"tool_name": "Bash", "tool_use_id": "tu2", "transcript_path": second,
 	})
+	s.feed(t, map[string]any{
+		"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": second,
+	})
 
 	mu.Lock()
 	defer mu.Unlock()
 	var tools []otlp.Span
+	var chats []otlp.Span
 	for _, sp := range *spans {
 		if strings.HasPrefix(sp.Name, "execute_tool") {
 			tools = append(tools, sp)
+		} else if strings.HasPrefix(sp.Name, "chat ") {
+			chats = append(chats, sp)
 		}
 	}
 	require.Len(t, tools, 2)
+	require.Len(t, chats, 1)
 	assert.Equal(t, "claude-haiku-4-5", stringAttrOf(t, tools[0], "gen_ai.request.model"))
 	assert.Equal(t, "claude-opus-4-8", stringAttrOf(t, tools[1], "gen_ai.request.model"),
 		"the second turn reports the model it actually ran, not the first turn's")
+	assert.Equal(t, "claude-opus-4-8", stringAttrOf(t, chats[0], "gen_ai.request.model"),
+		"the chat span agrees with the tool span for the switched turn")
 }
 
 // A transcript_path that names no file is not a flush in progress — nothing is

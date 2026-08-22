@@ -322,19 +322,12 @@ func ReadSessionTitle(transcriptPath string) string {
 	return aiTitle
 }
 
-// HasAssistantEntry reports whether the transcript holds any assistant entry.
-// It separates "the model has not answered yet" from "this transcript does not
-// record models", which is the difference between a wait that will pay off and
-// one that will time out. A missing or unreadable file counts as no entry.
+// HasAssistantEntry reports whether the current turn holds an assistant entry.
+// It separates "the model has not answered this turn yet" from "this transcript
+// does not record models", which is the difference between a wait that will pay
+// off and one that will time out. A missing or unreadable file counts as no entry.
 func HasAssistantEntry(transcriptPath string) bool {
-	var found bool
-	_ = forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
-		if entry.Type == "assistant" && entry.Message != nil {
-			found = true
-			return false
-		}
-		return true
-	})
+	_, found := ReadCurrentTurnModel(transcriptPath)
 	return found
 }
 
@@ -397,16 +390,34 @@ func ReadTurnSkillCommand(transcriptPath string) string {
 }
 
 // ReadModel reads the transcript file and returns the model from the most
-// recent assistant message, or empty string if none is found.
+// recent assistant message in the current turn, or empty string if none is
+// found. A new real user message resets the result so a tool hook that beats
+// the current assistant flush waits instead of reusing the previous turn.
 func ReadModel(transcriptPath string) string {
-	var model string
+	model, _ := ReadCurrentTurnModel(transcriptPath)
+	return model
+}
+
+// ReadCurrentTurnModel returns the latest model and assistant-presence state
+// from one transcript snapshot. Keeping both answers in one scan prevents a
+// transcript append between separate model and readiness checks from making a
+// caller treat the wrong turn as ready.
+func ReadCurrentTurnModel(transcriptPath string) (model string, hasAssistant bool) {
 	_ = forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
-		if entry.Type == "assistant" && entry.Message != nil && entry.Message.Model != "" {
-			model = entry.Message.Model
+		if isRealUserMessage(entry) {
+			model = ""
+			hasAssistant = false
+			return true
+		}
+		if entry.Type == "assistant" && entry.Message != nil {
+			hasAssistant = true
+			if entry.Message.Model != "" {
+				model = entry.Message.Model
+			}
 		}
 		return true
 	})
-	return model
+	return model, hasAssistant
 }
 
 // forEachEntry decodes the transcript's JSON entries in order and passes each to

@@ -640,6 +640,32 @@ func TestReadModelUsesLatest(t *testing.T) {
 	assert.Equal(t, "claude-opus-4-7", ReadModel(path))
 }
 
+func TestReadModelWaitsForTheCurrentTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first turn"}}`,
+		`{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"second turn"}}`,
+	})
+
+	assert.Empty(t, ReadModel(path))
+	assert.False(t, HasAssistantEntry(path))
+}
+
+func TestReadCurrentTurnModelReturnsOneSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first turn"}}`,
+		`{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"second turn"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"streaming"}]}}`,
+	})
+
+	model, hasAssistant := ReadCurrentTurnModel(path)
+	assert.Empty(t, model)
+	assert.True(t, hasAssistant, "model and readiness come from the same current-turn scan")
+}
+
 func TestReadModelMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	writeTranscript(t, path, []string{

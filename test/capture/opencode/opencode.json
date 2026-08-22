@@ -1,0 +1,46 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "mock/mock-model",
+  "plugin": [
+    "SET_BY_CAPTURE_SH"
+  ],
+  "provider": {
+    "mock": {
+      "id": "mock",
+      "name": "Mock",
+      "api": "openai",
+      "options": {
+        "baseURL": "http://127.0.0.1:8817/v1",
+        "apiKey": "dummy-key"
+      },
+      "models": {
+        "mock-model": {
+          "id": "mock-model",
+          "name": "Mock Model",
+          "tool_call": true,
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "capture": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "node",
+        "SET_BY_CAPTURE_SH"
+      ]
+    }
+  },
+  "permission": {
+    "external_directory": "allow",
+    "bash": "allow",
+    "edit": "allow",
+    "webfetch": "allow",
+    "read": "allow"
+  }
+}

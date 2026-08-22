@@ -3,13 +3,13 @@
 Design decisions 3, 4 and 10 rest on assumptions taken from the SDK types rather
 than observation. Resolve them before writing anything that depends on them.
 
-- [ ] 1.1 Add `test/capture/opencode/` (mirroring `test/capture/cursor/`) with a throwaway plugin that appends every bus event and hook call to a JSONL file; verify by running one real `opencode` session and confirming the file contains events for a prompt, a tool call, an MCP tool call, and a delegated sub-agent
-- [ ] 1.2 Record the capture as `internal/source/opencode/testdata/captured_events.jsonl`; verify it contains at least one root session, one child session with `parentID`, one failing tool call, and one multi-step turn
-- [ ] 1.3 Confirm whether `session.idle` fires for child sessions and record the finding in `opencode/README.md`; if it does not, fall back to the child's last completed assistant message as the `SubagentStop` trigger and record that
-- [ ] 1.4 Confirm how OpenCode names MCP-provided tools in `ToolPart.tool`; verify by locating an MCP call in the capture and recording the exact string, so the normalizer can rewrite it to the canonical `mcp__<server>__<tool>` form the shared extractor expects
-- [ ] 1.5 Confirm whether a terminal `message.part.updated` for one `callID` can arrive more than once; verify by counting terminal-status occurrences per call id in the capture
-- [ ] 1.6 Confirm where OpenCode stores session messages on disk (for the `audit-usage` port) and record the path and format in `opencode/README.md`
-- [ ] 1.7 Confirm OpenCode accepts a custom OpenAI-compatible provider via `provider.<id>.options.baseURL` with a dummy `apiKey`; verify by pointing `opencode run` at a throwaway localhost server and observing the request arrive. This gates the whole live-test layer — if it fails, apply the fallback in design.md Risks before building task group 7
+- [x] 1.1 Add `test/capture/opencode/` (mirroring `test/capture/cursor/`) with a throwaway plugin that appends every bus event and hook call to a JSONL file; verify by running one real `opencode` session and confirming the file contains events for a prompt, a tool call, an MCP tool call, and a delegated sub-agent
+- [x] 1.2 Record the capture as `internal/source/opencode/testdata/captured_events.jsonl`; verify it contains at least one root session, one child session with `parentID`, one failing tool call, and one multi-step turn
+- [x] 1.3 Confirm whether `session.idle` fires for child sessions and record the finding in `opencode/README.md`; if it does not, fall back to the child's last completed assistant message as the `SubagentStop` trigger and record that
+- [x] 1.4 Confirm how OpenCode names MCP-provided tools in `ToolPart.tool`; verify by locating an MCP call in the capture and recording the exact string, so the normalizer can rewrite it to the canonical `mcp__<server>__<tool>` form the shared extractor expects
+- [x] 1.5 Confirm whether a terminal `message.part.updated` for one `callID` can arrive more than once; verify by counting terminal-status occurrences per call id in the capture
+- [x] 1.6 Confirm where OpenCode stores session messages on disk (for the `audit-usage` port) and record the path and format in `opencode/README.md`
+- [x] 1.7 Confirm OpenCode accepts a custom OpenAI-compatible provider via `provider.<id>.options.baseURL` with a dummy `apiKey`; verify by pointing `opencode run` at a throwaway localhost server and observing the request arrive. This gates the whole live-test layer — if it fails, apply the fallback in design.md Risks before building task group 7
 
 ## 2. Go side: harness, entrypoint, normalizer
 

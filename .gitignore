@@ -4,9 +4,12 @@
 .idea/
 .conductor/
 events.jsonl
+trace_context.json
+node_modules/
 dist/
 bin/
 test/capture/cursor/captured/
 test/capture/copilot/captured/
+test/capture/opencode/captured/
 cover.out
 __pycache__/

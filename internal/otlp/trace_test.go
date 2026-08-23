@@ -507,3 +507,29 @@ func TestSpanNoTeamNameAttributeWhenUnset(t *testing.T) {
 	session := NewSessionSpan("abc123traceabc123traceabc123tr", "span1234span1234", ts, event, Config{})
 	assertNoAttr(t, session.Attributes, "dash0.team.name")
 }
+
+// TestChatSpanRedactsConversationName pins gen_ai.conversation.name to omit_io.
+//
+// It is the one content-bearing attribute that does not arrive as a hook payload
+// field: pipeline.go reads the session title out of the transcript and sets it
+// under its final, already-dotted name. So it reached the span through the same
+// default-copy path as background_tasks did, and for the same reason: nothing
+// listed it. The title is derived from the user's first prompt, so a customer who
+// turns content off was shipping a summary of that prompt on every chat span.
+func TestChatSpanRedactsConversationName(t *testing.T) {
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	event := map[string]any{
+		"hook_event_name":          "Stop",
+		"session_id":               "sess-123",
+		"gen_ai.conversation.name": "Fix the OTLP exporter's cost rounding",
+	}
+
+	kept := NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "",
+		ts, ts, event, false, Config{})
+	assertAttr(t, kept.Attributes, "gen_ai.conversation.name",
+		"Fix the OTLP exporter's cost rounding")
+
+	omitted := NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "",
+		ts, ts, event, false, Config{OmitIO: true})
+	assertAttr(t, omitted.Attributes, "gen_ai.conversation.name", "<REDACTED>")
+}

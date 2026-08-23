@@ -285,6 +285,71 @@ func TestSendLogOmitIO(t *testing.T) {
 	assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `REDACTED`)
 }
 
+// TestSendLogDropsSessionBookkeeping pins the fields that reached production
+// spans because eventAttributes exports anything it does not recognize. The
+// payload below is a real Stop event from qa/runs, trimmed to the fields at
+// issue: background_tasks carries the Task tool's description, so it also leaked
+// content on a key omit_io does not cover.
+func TestSendLogDropsSessionBookkeeping(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "sess-123",
+		"prompt_id":       "1cfb5631-fc7b-4362-baab-be39d2e6b800",
+		"session_crons":   "[]",
+		"background_tasks": `[{"agent_type":"general-purpose",` +
+			`"description":"Run three sequential bash commands",` +
+			`"id":"acf70f365e7ac82ca","status":"running","type":"subagent"}]`,
+	}
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "sess-123")
+	for _, key := range []string{"prompt_id", "session_crons", "background_tasks"} {
+		assertNoAttr(t, lr.Attributes, key)
+	}
+}
+
+// TestSendLogDropsUnmappedBookkeeping covers the fields that do not reach a span
+// today because InstructionsLoaded maps to no span. Denying them is only useful
+// if it holds when that changes, which is what this asserts. "reason" is in the
+// same list but was not in the same position: SessionEnd does produce a chat span
+// when a trace context is open, so that one was live.
+func TestSendLogDropsUnmappedBookkeeping(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "InstructionsLoaded",
+		"session_id":      "sess-123",
+		"file_path":       "/Users/someone/.claude/CLAUDE.md",
+		"load_reason":     "startup",
+		"memory_type":     "user",
+		"reason":          "other",
+	}
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "sess-123")
+	for _, key := range []string{"file_path", "load_reason", "memory_type", "reason"} {
+		assertNoAttr(t, lr.Attributes, key)
+	}
+}
+
 func TestTruncateContent(t *testing.T) {
 	t.Run("short content is not truncated", func(t *testing.T) {
 		result := truncateContent("hello world")

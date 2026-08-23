@@ -91,7 +91,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 | Span name | `chat <model>`, `invoke_agent <agent_type>` (sub-agent), or `execute_tool <tool_name>` |
 | Span kind | `Internal` (always) |
 | Status | `Unset` normally; `Error` (with `exception.message`) on `StopFailure` / `PostToolUseFailure` |
-| Trace / parent IDs | random per turn, allocated at prompt submit; tool spans and sub-agents parent to the turn's chat span |
+| Trace / parent IDs | random per turn, allocated at prompt submit; tool spans and sub-agents parent to the turn's chat span, except that a tool call carrying `agent_id` parents to the span derived from that id — the `execute_tool Agent` span that launched it — so a sub-agent's work keeps its depth instead of being flattened onto the turn |
 
 ### Resource attributes
 
@@ -132,13 +132,16 @@ omitted when its value is empty.
 |---|---|--------------------------------|
 | `gen_ai.operation.name` | `chat` or `invoke_agent`                                             |                                |
 | `gen_ai.request.model` | `claude-…`, `gpt-…`, `cursor-auto`, …                                |                                |
-| `gen_ai.conversation.name` | Session title                                                        | Claude only (from transcript). |
+| `gen_ai.conversation.name` | Session title                                                        | Claude only (from transcript). Content-gated by `omit_io`: the title is derived from the first prompt. |
 | `gen_ai.usage.input_tokens` | integer                                                              |                                |
 | `gen_ai.usage.output_tokens` | integer                                                              |                                |
 | `gen_ai.usage.cache_read.input_tokens` | integer                                                              |                                |
 | `gen_ai.usage.cache_creation.input_tokens` | integer                                                              | Not emitted by Codex.          |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens` | integer                                                              | Claude only. |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
+| `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript) and Copilot, both only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
+| `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude only, and only on the chat span of a turn a slash command started. See below. |
+| `dash0.gen_ai.tool.skill.source` | `command`                                                            | Same rows as above. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On`invoke_agent` spans.        |
@@ -152,6 +155,27 @@ omitted when its value is empty.
 | `dash0.gen_ai.credits.available` | boolean                                                              | Codex only. CLI ≥ ~14 Jul 2026. |
 | `dash0.gen_ai.credits.unlimited` | boolean                                                              | Codex only. |
 | `dash0.gen_ai.credits.balance` | float                                                                | Codex only. Omitted when unreported. |
+
+#### Skill invocations come by two routes
+
+A skill can be invoked two ways, and they are recorded on different spans.
+
+- **The model chooses it.** Claude Code makes a `Skill` tool call, so there is a
+  `PostToolUse` hook and an `execute_tool Skill` span. `dash0.gen_ai.tool.skill.source` is
+  `model`.
+- **A person types the slash command.** Claude Code expands `/writing:unslop …` before any
+  tool runs, so no tool hook fires and no tool span exists. The invocation is reported on
+  the turn's `chat` span instead, with `dash0.gen_ai.tool.skill.source` set to `command`.
+
+Both carry `dash0.gen_ai.tool.skill.name` with the same plugin-qualified value, so one query
+counts every invocation and `source` splits it by who decided.
+
+The command route is read from the transcript, which is the only place it is recorded:
+Claude Code writes a `<command-name>` tag into the turn's user entry, and a skill load
+appends an `isMeta` entry naming the skill's base directory. Both are required, and the
+command's last colon-separated segment must match that directory's name. That conjunction is
+what keeps `/compact` and `/plugin` out of the count — they write the same tag but load no
+skill — and what stops a prompt that merely mentions a slash command from counting.
 
 #### Billing mode and rate limits
 
@@ -217,6 +241,7 @@ Codex-scoped as a reader diagnostic.
 | `dash0.gen_ai.tool.mcp_server` | MCP server name (placeholder `cursor` on Cursor) | MCP tools only. |
 | `dash0.gen_ai.tool.bash.command_family` | Binary name, e.g. `git`, `npm` | Bash tool. |
 | `dash0.gen_ai.tool.skill.name` | Skill name | Skill tool. |
+| `dash0.gen_ai.tool.skill.source` | `model` | Skill tool. Constant here — the tool call *is* the model choosing. |
 | `dash0.gen_ai.code.lines_added` | integer | Claude Code only — from the Edit/Write/MultiEdit `structuredPatch`. |
 | `dash0.gen_ai.code.lines_removed` | integer | Claude Code only — from the Edit/Write/MultiEdit `structuredPatch`. |
 | `dash0.gen_ai.vcs.pull_request.url` | PR / MR URL | Survives `omit_io`. |

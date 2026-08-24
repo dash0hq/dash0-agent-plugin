@@ -154,6 +154,15 @@ func toolPart(envelope, payload map[string]any) map[string]any {
 		event["agent_id"] = sessionID
 	}
 
+	// The pipeline carries a model onto tool spans only from the session's trace
+	// context, which OpenCode cannot fill: session.created fires before any model
+	// is resolved. The requesting session's last assistant message is the model
+	// that asked for this call.
+	setNonEmpty(event, "model", firstNonEmpty(
+		str(assistantOf(envelope, sessionID)["modelID"]),
+		str(assistantOf(envelope, rootID)["modelID"]),
+	))
+
 	setNonEmpty(event, "tool_use_id", str(part["callID"]))
 	if input, ok := state["input"]; ok {
 		event["tool_input"] = input

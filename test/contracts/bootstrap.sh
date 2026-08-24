@@ -24,6 +24,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 SCRIPTS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
          codex/codex-on-event.sh copilot/copilot-on-event.sh)
 
+RENAME_SCRIPTS=("${SCRIPTS[@]}" opencode/opencode-on-event.sh)
+
 echo "== Every bootstrap writes the binary only by rename =="
 # Static, so it holds regardless of whether a race reproduces on this machine or
 # this runner. Inside the download block the final path may appear only in the
@@ -37,7 +39,7 @@ echo "== Every bootstrap writes the binary only by rename =="
 # already in place before it reports a failure. A test cannot damage the file the
 # way a write or a redirect can.
 fail=0
-for s in "${SCRIPTS[@]}"; do
+for s in "${RENAME_SCRIPTS[@]}"; do
   block=$(awk '/^if \[ ! -x "\$BINARY" \]/,/^fi$/' "$REPO/$s" | sed 's/#.*//')
   if [ -z "$block" ]; then
     echo "  FAIL $s: could not locate the download block — update this parser"
@@ -59,7 +61,7 @@ for s in "${SCRIPTS[@]}"; do
   echo "  ok $s"
 done
 [ "$fail" -eq 0 ] || exit 1
-echo "PASS: all ${#SCRIPTS[@]} bootstraps stage downloads in a temp and rename"
+echo "PASS: all ${#RENAME_SCRIPTS[@]} bootstraps stage downloads in a temp and rename"
 
 echo "== No bootstrap ends a hook with a non-zero exit =="
 # Behavioural, not textual: a grep for `exit [1-9]` cannot see a `set -e` exit, a
@@ -123,8 +125,14 @@ curl -fsSL -o /dev/null "$CHECKSUMS_URL" 2>/dev/null && published=1
 # All four, not just claude. The block is duplicated in each bootstrap, so a
 # fix applied to one and missed in another is exactly the drift worth catching —
 # and three of them were carrying this untested.
-for s in "${SCRIPTS[@]}"; do
+for s in "${RENAME_SCRIPTS[@]}"; do
   spinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/$s")
+  asset_published=$published
+  case "$s" in
+    opencode/*)
+      curl -fsSL "https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${spinned}/checksums.txt" 2>/dev/null \
+        | grep -q ' opencode-on-event-' || asset_published=0 ;;
+  esac
   for bad in '../../../../attacker/repo/releases/download/v9' '../../etc' 'v0.1.25' '0.1.25; id'; do
     bdata=$(mktemp -d)
     out=$(cd "$vdata" && HOME="$vdata/home" DASH0_VERSION="$bad" \
@@ -138,7 +146,7 @@ for s in "${SCRIPTS[@]}"; do
     # the pinned version — the message says "ignoring", and for a long time the
     # code exited instead, turning a typo like v0.1.25 into a session with no
     # telemetry at all. Asserting only on the message could not tell them apart.
-    if [ "$published" -eq 1 ]; then
+    if [ "$asset_published" -eq 1 ]; then
       cached=$(find "$bdata" -type f -name "*-${spinned}-*" 2>/dev/null | head -1) || true
       [ -n "$cached" ] \
         || { echo "  FAIL $s: '$bad' stopped the hook instead of falling back to $spinned"; fail=1; }
@@ -164,7 +172,7 @@ done
 # version appears. Confirmed by stripping the guard from each bootstrap in turn.
 rm -rf "$vdata"
 [ "$fail" -eq 0 ] || exit 1
-echo "PASS: all ${#SCRIPTS[@]} bootstraps refuse traversal and keep the pinned version"
+echo "PASS: all ${#RENAME_SCRIPTS[@]} bootstraps refuse traversal and keep the pinned version"
 
 echo "== The binary itself never ends a hook non-zero =="
 # The check above poisons the *shell's* environment, so it never gets as far as

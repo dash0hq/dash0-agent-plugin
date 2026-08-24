@@ -10,19 +10,20 @@ installer) and in CI (the `install-config-contract` job just calls these).
 | `claude.sh` | settings.json ≠ install · `--config` credential storage · creds → OTLP | `claude` CLI, network, go/jq/curl | mostly anywhere; the credential-storage contract is **Linux-only** (see below) |
 | `cursor.sh` | creds → OTLP · install layout + hooks merge · uninstall strip | network (install/uninstall resolve the latest release), go/jq/curl | yes |
 | `codex.sh`  | creds → OTLP · install merge + pre-trust · uninstall strip | go/jq/python3/curl | yes (no codex CLI) |
+| `opencode.sh` | creds → OTLP · corrupted-binary discard · install layout · uninstall strip | network (install/uninstall resolve the latest release), go/jq/curl | yes (no opencode CLI) |
 | `bootstrap.sh` | all four `*-on-event.sh` stage the download in a temp and rename · neither the scripts nor the Claude binary ends a hook non-zero · `DASH0_VERSION` cannot retarget the download or escape `BIN_DIR` · an unrunnable cached binary neither errors nor re-downloads · concurrent cold-cache runs converge | curl, sha256sum/shasum, go; network for the contracts that download | yes |
 | `release.sh` | every Release dispatch resolves to the right version, tag and bump, and the guarded combinations are refused · the artifact list follows `.goreleaser.yaml` · a bump rewrites all thirteen pins | jq, git | yes |
 
 ## Run
 
 ```bash
-./test/contracts/run.sh            # all five
+./test/contracts/run.sh            # all six
 ./test/contracts/run.sh codex      # one agent
 ```
 
 Each script is hermetic — it uses throwaway `HOME`s under `/tmp` and a mock OTLP
 server on `:4319`, so it never touches your real `~/.claude` / `~/.cursor` /
-`~/.codex`.
+`~/.codex` / `~/.config/opencode`.
 
 ## Notes
 
@@ -36,6 +37,10 @@ server on `:4319`, so it never touches your real `~/.claude` / `~/.cursor` /
   and turning every one of those red would just train people to ignore it. The
   static contract in the same script runs unconditionally and is the one that
   actually holds the line.
+- **`opencode.sh` skips its install and uninstall contracts until
+  `install-opencode.sh` exists.** That is a plain skip, in CI too, because the
+  script is a required CI step and the installers are still to be written. Once
+  they land, turn that branch into `skip_or_fail` like the others.
 - The `cursor.sh` install/uninstall contracts download the latest published
   release's Cursor binary, so they need network and an existing release. If the
   release can't be resolved they **skip locally but fail in CI** (`$CI` set) —

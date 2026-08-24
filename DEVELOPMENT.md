@@ -236,9 +236,21 @@ API-based billing. Both report `api`. The subscription family
 
 The config file is consulted **only at rank 7**, because it describes who the user
 *is* rather than how this session bills. Reading it first is the bug this ordering
-exists to prevent. Env vars are checked for *presence* only — an API key's value is
-never read — and an empty variable counts as unset, since that is how shells leave
-unset values.
+exists to prevent.
+
+**Credentials are read for presence; the rank-1 flags are parsed as booleans.** An
+API key's value is never read, so any non-empty string counts, and an empty
+variable counts as unset since that is how shells leave one. The three
+`CLAUDE_CODE_USE_*` selectors are different: they carry a boolean, and Claude Code
+coerces each with `["1","true","yes","on"].includes(String(v).toLowerCase().trim())`,
+so we match that set exactly. Both ways of getting it wrong mislabel a customer's
+cost, in opposite directions:
+
+- Counting any non-empty value reports `metered_external` for
+  `CLAUDE_CODE_USE_BEDROCK=0`, telling a subscriber their figure is metered by AWS.
+  Setting a flag to `0` is an ordinary way to turn it off, and the CLI honours it.
+- Counting only `1` and `true` reports `subscription` for `=yes` or `=on`, telling a
+  real Bedrock session that its list-price figure is a rationed allowance.
 
 `settings.env` needs no special handling: Claude Code merges every settings scope's
 `env` block into the process environment (managed last), and hooks inherit it. So a

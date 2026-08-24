@@ -215,6 +215,75 @@ func TestBillingModePrecedenceOrder(t *testing.T) {
 	}
 }
 
+// The rank-1 selectors are boolean FLAGS, so their value decides whether they
+// count. Claude Code coerces each one with
+// `["1","true","yes","on"].includes(String(v).toLowerCase().trim())`, and this
+// table pins that exact set, because both ways of getting it wrong mislabel a
+// customer's cost:
+//
+//   - too loose (any non-empty value counts): CLAUDE_CODE_USE_BEDROCK=0 reports
+//     metered_external, telling a subscriber their figure is metered by AWS.
+//   - too strict (only 1 and true count): =yes reports subscription, telling a
+//     real Bedrock session its list-price figure is a rationed allowance.
+//
+// A subscription account sits underneath every case, so a flag that wrongly
+// counts is visible as metered_external and one that wrongly does not is visible
+// as subscription.
+func TestBillingModeCloudFlagsParseAsBooleans(t *testing.T) {
+	subscribed := &account{BillingType: "stripe_subscription"}
+
+	cases := []struct {
+		value string
+		on    bool
+	}{
+		{"1", true}, {"true", true}, {"yes", true}, {"on", true},
+		// Case and surrounding whitespace are normalised before the compare.
+		{"TRUE", true}, {"Yes", true}, {" 1 ", true}, {"ON", true},
+
+		// Ordinary ways to turn a flag off. Claude Code routes first-party for
+		// every one of these, so the account decides.
+		{"0", false}, {"false", false}, {"no", false}, {"off", false},
+		{"FALSE", false}, {"Off", false},
+		// Not a boolean at all: unrecognised means not enabled, matching the CLI.
+		{"disabled", false}, {"maybe", false}, {"2", false},
+		// Empty is how a shell leaves an exported-but-unset variable.
+		{"", false},
+	}
+	for _, tc := range cases {
+		for _, key := range []string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"} {
+			t.Run(key+"="+tc.value, func(t *testing.T) {
+				mode, _ := billing(envOf(map[string]string{key: tc.value}), subscribed)
+				if tc.on {
+					assert.Equal(t, "metered_external", mode, "the cloud vendor meters this session")
+					return
+				}
+				assert.Equal(t, "subscription", mode,
+					"the flag is off, so traffic is first-party and the account decides")
+			})
+		}
+	}
+}
+
+// A credential is NOT a boolean: its value is a secret we never read, so any
+// non-empty string counts. Guard that the flag parsing above did not leak onto
+// the credential tiers — a token that happens to read "0" or "false" is still a
+// token, and the session really is billed per token.
+func TestBillingModeCredentialsAreNotBooleans(t *testing.T) {
+	subscribed := &account{BillingType: "stripe_subscription"}
+
+	for _, value := range []string{"0", "false", "off", "no", "disabled"} {
+		t.Run("ANTHROPIC_API_KEY="+value, func(t *testing.T) {
+			mode, _ := billing(envOf(map[string]string{"ANTHROPIC_API_KEY": value}), subscribed)
+			assert.Equal(t, "api", mode, "a key with an odd value is still a key")
+		})
+		t.Run("ANTHROPIC_AUTH_TOKEN="+value, func(t *testing.T) {
+			mode, provider := billing(envOf(map[string]string{"ANTHROPIC_AUTH_TOKEN": value}), subscribed)
+			assert.Equal(t, "metered_external", mode)
+			assert.Equal(t, "gateway", provider)
+		})
+	}
+}
+
 // readAccount is best-effort: this is a cost annotation, never worth failing a
 // span over. It returns nil only when the file cannot be read or parsed at all,
 // which billingMode then reports as "unknown".

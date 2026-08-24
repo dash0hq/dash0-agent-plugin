@@ -515,7 +515,13 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "on-event: reading transcript: %v\n", err)
 			}
-			injectTurnUsage(event, usage)
+			if usage != nil {
+				injectTurnUsage(event, usage)
+				// Alongside the usage it qualifies: billing mode exists to say what
+				// a cost figure means, so on a turn that reported no tokens it would
+				// annotate nothing.
+				injectClaudeBilling(event, cfg)
+			}
 		}
 
 		if title := transcript.ReadSessionTitle(transcriptPath); title != "" {
@@ -546,24 +552,15 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 		event["model"] = ctx.Model
 	}
 
-	// Only when there is a cost figure to qualify: billing mode exists to say what
-	// that number means, so on a turn that reported no tokens it would annotate
-	// nothing.
-	if _, hasUsage := event["gen_ai.usage.input_tokens"]; hasUsage {
-		injectClaudeBilling(event, cfg)
-	}
-
 	span := otlp.NewLLMSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
 }
 
 // injectTurnUsage writes the turn's token counts onto the event as gen_ai.usage.*
-// attributes, which the span builder emits verbatim. No-op when the transcript
-// yielded nothing, so the span is emitted without token attributes.
+// attributes, which the span builder emits verbatim. Callers skip it when the
+// transcript yielded nothing, so the span carries no token attributes at all
+// rather than a row of zeros.
 func injectTurnUsage(event map[string]any, usage *transcript.Usage) {
-	if usage == nil {
-		return
-	}
 	event["gen_ai.usage.input_tokens"] = usage.InputTokens
 	event["gen_ai.usage.output_tokens"] = usage.OutputTokens
 	event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens

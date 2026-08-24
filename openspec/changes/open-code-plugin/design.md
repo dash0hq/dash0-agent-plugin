@@ -364,6 +364,7 @@ other runtimes do.
 - Minimum supported OpenCode version. Resolve against the oldest release whose
   `@opencode-ai/plugin` types carry the fields the mapping needs; it changes the
   `peerDependencies` range and a README line, nothing else.
-- Whether the toast should also carry the "telemetry is not active" message the
-  pipeline produces when no OTLP URL is configured, or whether that is noise for
-  a user who has not opted in. Affects one branch in the notification handler.
+Resolved: the toast does **not** carry the "telemetry is not active" message the
+pipeline produces when no OTLP URL is configured. The spec's "Not configured"
+scenario already requires that an unconfigured session show no notification, so
+the notification handler drops that one prefixed line.

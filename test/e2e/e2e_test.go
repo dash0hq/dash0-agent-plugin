@@ -124,8 +124,13 @@ func TestE2EFullFlowWithClaude(t *testing.T) {
 	if err != nil {
 		t.Fatal("claude CLI not found in PATH — install with: npm install -g @anthropic-ai/claude-code")
 	}
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		t.Fatal("ANTHROPIC_API_KEY not set — required for e2e test")
+	// Either credential works: the CLI reads both from the environment cmd.Env
+	// forwards below. CI supplies ANTHROPIC_API_KEY; CLAUDE_CODE_OAUTH_TOKEN is
+	// the local path, so a developer with a Pro/Max subscription can run this
+	// without holding an API key. When both are set the API key wins, matching the
+	// CLI's own precedence.
+	if os.Getenv("ANTHROPIC_API_KEY") == "" && os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") == "" {
+		t.Fatal("no Claude auth available — set ANTHROPIC_API_KEY (CI), or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token` (local)")
 	}
 
 	pluginDir := findPluginDir(t)

@@ -339,7 +339,15 @@ var commandNamePattern = regexp.MustCompile(`<command-name>\s*/([^<\s]+)\s*</com
 // skillBaseDirPattern matches the preamble of the skill-instructions relay that
 // Claude Code injects as an isMeta user entry when a skill loads. The captured
 // path ends in the skill's own directory, which names the skill.
-var skillBaseDirPattern = regexp.MustCompile(`Base directory for this skill: ([^\s"\\]+)`)
+//
+// The match runs on the raw JSON bytes of the entry's content, so the path is
+// terminated by the backslash of the "\n\n" that follows it, or by the quote
+// closing the JSON string. Whitespace is deliberately not a terminator: a real
+// newline cannot appear inside a JSON string, so the only whitespace this could
+// stop at is a space that belongs to the path. Excluding it dropped every
+// command-invoked skill for anyone whose skills live under a path containing a
+// space, which a home directory alone is enough to produce.
+var skillBaseDirPattern = regexp.MustCompile(`Base directory for this skill: ([^"\\]+)`)
 
 // ReadTurnSkillCommand returns the skill invoked by a slash command in the most
 // recent turn, as the plugin-qualified name the user typed (e.g.
@@ -374,7 +382,9 @@ func ReadTurnSkillCommand(transcriptPath string) string {
 			return true
 		}
 		if m := skillBaseDirPattern.FindSubmatch(entry.Message.Content); len(m) > 1 {
-			skillDir = path.Base(string(m[1]))
+			// TrimSpace covers a trailing space between the path and the newline,
+			// which the pattern now keeps rather than treating as the end.
+			skillDir = path.Base(strings.TrimSpace(string(m[1])))
 		}
 		return true
 	})

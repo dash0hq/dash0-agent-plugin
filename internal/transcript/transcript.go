@@ -341,13 +341,10 @@ var commandNamePattern = regexp.MustCompile(`<command-name>\s*/([^<\s]+)\s*</com
 // Claude Code injects as an isMeta user entry when a skill loads. The captured
 // path ends in the skill's own directory, which names the skill.
 //
-// The match runs on the raw JSON bytes of the entry's content, so the path is
-// terminated by the backslash of the "\n\n" that follows it, or by the quote
-// closing the JSON string. Whitespace is deliberately not a terminator: a real
-// newline cannot appear inside a JSON string, so the only whitespace this could
-// stop at is a space that belongs to the path. Excluding it dropped every
-// command-invoked skill for anyone whose skills live under a path containing a
-// space, which a home directory alone is enough to produce.
+// The match runs on the raw JSON bytes, where the path ends at the backslash of
+// the following "\n\n" or at the closing quote. Whitespace is not a terminator:
+// a real newline cannot appear inside a JSON string, so the only whitespace here
+// is a space belonging to the path — a home directory is enough to produce one.
 var skillBaseDirPattern = regexp.MustCompile(`Base directory for this skill: ([^"\\]+)`)
 
 // ReadTurnSkillCommand returns the skill invoked by a slash command in the most
@@ -383,8 +380,6 @@ func ReadTurnSkillCommand(transcriptPath string) string {
 			return true
 		}
 		if m := skillBaseDirPattern.FindSubmatch(entry.Message.Content); len(m) > 1 {
-			// TrimSpace covers a trailing space between the path and the newline,
-			// which the pattern now keeps rather than treating as the end.
 			skillDir = path.Base(strings.TrimSpace(string(m[1])))
 		}
 		return true
@@ -400,24 +395,14 @@ func ReadTurnSkillCommand(transcriptPath string) string {
 	return command
 }
 
-// SubagentPath returns the transcript Claude Code writes for one sub-agent,
-// derived from the main session's transcript path, the session ID, and the
-// agent ID:
+// SubagentPath returns the transcript Claude Code writes for one sub-agent:
 //
 //	<dir of the session transcript>/<session id>/subagents/agent-<agent id>.jsonl
 //
-// It has to be derived because the payload does not carry it. Only SubagentStop
-// reports agent_transcript_path; a sub-agent's own PostToolUse carries
-// transcript_path alone, which names the *main* session's file. A reader that
-// takes that at face value answers questions about the sub-agent using the
-// parent's transcript.
-//
+// It is derived because only SubagentStop reports agent_transcript_path — every
+// other sub-agent event carries the main session's path instead.
 // claude/tools/claude-code-usage-audit.py builds the same path from the same
-// three parts, so this layout is already relied on elsewhere in the repo.
-//
-// Returns empty string when any part is missing or when the derived file does
-// not exist. Absent is the right answer for a caller that would otherwise read
-// the wrong transcript.
+// parts. Empty when a part is missing or the file does not exist yet.
 func SubagentPath(sessionTranscriptPath, sessionID, agentID string) string {
 	if sessionTranscriptPath == "" || sessionID == "" || agentID == "" {
 		return ""

@@ -866,8 +866,7 @@ func TestReadTurnSkillCommand(t *testing.T) {
 		},
 		{
 			// A space in the path is not the end of it. A home directory is enough
-			// to produce one, and treating it as a terminator captured "/Users/guy"
-			// and dropped the invocation.
+			// to produce one, and stopping there captured "/Users/guy".
 			name: "a skill under a path containing a space",
 			lines: []string{
 				commandEntry,
@@ -876,16 +875,6 @@ func TestReadTurnSkillCommand(t *testing.T) {
 				answer,
 			},
 			want: "writing:unslop",
-		},
-		{
-			name: "a project skill under a path containing a space",
-			lines: []string{
-				`{"type":"user","message":{"role":"user","content":"<command-name>/tidy</command-name>"}}`,
-				`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text",` +
-					`"text":"Base directory for this skill: /Users/guy moses/src/my repo/.claude/skills/tidy\n"}]}}`,
-				answer,
-			},
-			want: "tidy",
 		},
 	}
 

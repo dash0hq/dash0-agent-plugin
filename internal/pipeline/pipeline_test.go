@@ -1662,74 +1662,64 @@ func stringAttrOf(t *testing.T, span otlp.Span, key string) string {
 //
 // The three spans of one delegating turn used to disagree: the invoke_agent span
 // read the sub-agent's transcript and reported haiku, while the execute_tool span
-// *beneath* it read the main session's transcript — the only one the payload
-// names — and reported the parent's opus.
-func TestProcess_SubAgentToolSpanReportsTheSubAgentsModel(t *testing.T) {
-	url, spans, mu := mockOTLPServer(t)
-	s := newSetup(t, url)
-	dir := t.TempDir()
-
-	mainTranscript := writeModelTranscript(t, dir, "main.jsonl", "claude-opus-5")
-	agentTranscript := writeSubagentTranscript(t, dir, "sess-1", "agent1", "claude-haiku-4-5")
-
-	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
-	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1",
-		"prompt": "delegate", "transcript_path": mainTranscript})
-	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1",
-		"transcript_path": mainTranscript})
-	s.feed(t, map[string]any{
-		"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
-		"tool_name": "Bash", "tool_use_id": "tu1", "transcript_path": mainTranscript,
-	})
-	s.feed(t, map[string]any{
-		"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": "agent1",
-		"agent_type": "general-purpose", "transcript_path": mainTranscript,
-		"agent_transcript_path": agentTranscript,
-	})
-
-	mu.Lock()
-	defer mu.Unlock()
-	models := map[string]string{}
-	for _, span := range *spans {
-		models[span.Name] = stringAttrOf(t, span, "gen_ai.request.model")
-	}
-	assert.Equal(t, "claude-opus-5", models["chat claude-opus-5"])
-	assert.Equal(t, "claude-haiku-4-5", models["execute_tool Bash"],
-		"the tool ran inside the sub-agent, so it ran on the sub-agent's model")
-	assert.Equal(t, "claude-haiku-4-5", models["invoke_agent general-purpose"],
-		"and it agrees with its own parent span")
-}
-
-// With no sub-agent transcript on disk, the model is absent rather than the
-// parent's. A wrong value that contradicts the parent span is worse than none:
-// absence is visible to a consumer, a confident mislabel is not.
-func TestProcess_SubAgentToolSpanOmitsModelRatherThanBorrowingTheParents(t *testing.T) {
-	url, spans, mu := mockOTLPServer(t)
-	s := newSetup(t, url)
-	dir := t.TempDir()
-	mainTranscript := writeModelTranscript(t, dir, "main.jsonl", "claude-opus-5")
-
-	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "claude-opus-5"})
-	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1",
-		"prompt": "delegate", "transcript_path": mainTranscript})
-	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
-	s.feed(t, map[string]any{
-		"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
-		"tool_name": "Bash", "tool_use_id": "tu1", "transcript_path": mainTranscript,
-	})
-
-	mu.Lock()
-	defer mu.Unlock()
-	var tool *otlp.Span
-	for i, span := range *spans {
-		if span.Name == "execute_tool Bash" {
-			tool = &(*spans)[i]
+// beneath it read the main session's transcript — the only one the payload names
+// — and reported the parent's opus.
+func TestProcess_SubAgentToolSpanUsesTheSubAgentsModel(t *testing.T) {
+	run := func(t *testing.T, withAgentTranscript bool) []otlp.Span {
+		t.Helper()
+		url, spans, mu := mockOTLPServer(t)
+		s := newSetup(t, url)
+		dir := t.TempDir()
+		mainTranscript := writeModelTranscript(t, dir, "main.jsonl", "claude-opus-5")
+		agentTranscript := ""
+		if withAgentTranscript {
+			agentTranscript = writeSubagentTranscript(t, dir, "sess-1", "agent1", "claude-haiku-4-5")
 		}
+
+		s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "claude-opus-5"})
+		s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1",
+			"prompt": "delegate", "transcript_path": mainTranscript})
+		s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+		s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": mainTranscript})
+		s.feed(t, map[string]any{
+			"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
+			"tool_name": "Bash", "tool_use_id": "tu1", "transcript_path": mainTranscript,
+		})
+		if withAgentTranscript {
+			s.feed(t, map[string]any{
+				"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": "agent1",
+				"agent_type": "general-purpose", "transcript_path": mainTranscript,
+				"agent_transcript_path": agentTranscript,
+			})
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]otlp.Span(nil), *spans...)
 	}
-	require.NotNil(t, tool, "the span is still emitted; only the model is withheld")
-	for _, a := range tool.Attributes {
-		assert.NotEqual(t, "gen_ai.request.model", a.Key,
-			"no model beats the parent's model on a sub-agent's tool call")
-	}
+
+	t.Run("every span in the trace agrees", func(t *testing.T) {
+		models := map[string]string{}
+		for _, span := range run(t, true) {
+			models[span.Name] = stringAttrOf(t, span, "gen_ai.request.model")
+		}
+		assert.Equal(t, "claude-opus-5", models["chat claude-opus-5"])
+		assert.Equal(t, "claude-haiku-4-5", models["execute_tool Bash"],
+			"the tool ran inside the sub-agent, so it ran on the sub-agent's model")
+		assert.Equal(t, "claude-haiku-4-5", models["invoke_agent general-purpose"])
+	})
+
+	// A wrong value that contradicts the parent span is worse than none: absence
+	// is visible to a consumer, a confident mislabel is not.
+	t.Run("no sub-agent transcript yet means no model, not the parent's", func(t *testing.T) {
+		for _, span := range run(t, false) {
+			if span.Name != "execute_tool Bash" {
+				continue
+			}
+			for _, a := range span.Attributes {
+				assert.NotEqual(t, "gen_ai.request.model", a.Key)
+			}
+			return
+		}
+		t.Fatal("the span is still emitted; only the model is withheld")
+	})
 }

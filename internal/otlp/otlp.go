@@ -403,24 +403,13 @@ var attrTransformMap = map[string]struct {
 	},
 }
 
-// transformReasoningLevel reduces Claude Code's effort payload field to the
-// level it names.
+// transformReasoningLevel reduces Claude Code's effort field, {"level":"high"},
+// to the level alone.
 //
-// Claude Code sends an object, {"level":"high"}, on every event that produces a
-// span. Copied verbatim the way an unrecognized field is, it arrived as a raw
-// key holding a JSON blob, which a consumer had to parse before it could group
-// by it. The level alone is the value the semantic convention asks for.
-//
-// The key is gen_ai.request.reasoning.level, which is the OTel GenAI attribute
-// for exactly this — "the reasoning or thinking effort level requested for a
-// GenAI model" — and the counterpart to gen_ai.usage.reasoning.output_tokens,
-// which reports what that level cost. low, medium and high are the well-known
-// values, but the convention asks for the string the provider was actually sent,
-// so Claude Code's xhigh passes through unmapped rather than being rounded down
-// to high.
-//
-// An empty result drops the attribute, which is what a shape this does not
-// recognize should do.
+// gen_ai.request.reasoning.level is a free-form string, and the convention asks
+// for "the exact string value sent to the provider", so xhigh passes through
+// rather than being rounded down to high. An empty result drops the attribute,
+// which is the right answer for a shape this does not recognize.
 func transformReasoningLevel(v any) string {
 	switch level := v.(type) {
 	case string:

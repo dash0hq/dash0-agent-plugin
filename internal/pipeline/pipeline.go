@@ -321,11 +321,8 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		}
 	}
 
-	// ctx.Model is the model the *session* started with, so it answers for the
-	// main actor only. Handing it to a sub-agent's tool call is how that span
-	// came to contradict its own invoke_agent parent, which reads the sub-agent's
-	// transcript and reports the model that actually ran. No model at all is the
-	// honest answer when the sub-agent's transcript has not reached disk yet.
+	// ctx.Model is the model the session started with, so it answers for the main
+	// actor only — a sub-agent gets no model rather than the parent's.
 	if _, hasModel := event["model"]; !hasModel && agentID == "" && ctx.Model != "" {
 		event["model"] = ctx.Model
 	}
@@ -637,19 +634,11 @@ const turnCompletePollInterval = 50 * time.Millisecond
 // sidecar, so the wait is normally paid once per actor per turn.
 const modelWaitBudget = 1 * time.Second
 
-// modelTranscript names the transcript that answers "which model is this actor
-// running", for one tool event.
-//
-// A sub-agent runs its own model — an agent definition may pin one, and the
-// Agent tool takes an override — and records it in its own transcript. The hook
-// payload does not name that file: a sub-agent's PostToolUse carries
-// transcript_path, which is the main session's. Reading it gives the parent's
-// model, so the sub-agent's tool spans reported one model while the
-// invoke_agent span above them reported another.
-//
-// The sub-agent's path is derived instead. A sub-agent whose transcript is not
-// on disk yet resolves to no path, and the caller leaves the model absent rather
-// than falling back to the main transcript, which is the wrong actor.
+// modelTranscript names the transcript that says which model this actor is
+// running. A sub-agent runs its own — an agent definition may pin one and the
+// Agent tool takes an override — but its PostToolUse carries only
+// transcript_path, which is the main session's, so its own file is derived.
+// Returning "" leaves the model absent, which beats reading the wrong actor's.
 func modelTranscript(event map[string]any, agentID string) string {
 	sessionTranscript, _ := event["transcript_path"].(string)
 	if agentID == "" {

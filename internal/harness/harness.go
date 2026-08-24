@@ -34,6 +34,10 @@ var (
 	// so the provider is resolved per-event from the model name rather than
 	// forced to one value.
 	Copilot = Harness{Name: "github-copilot-cli", EnvPrefix: "COPILOT", DataSubdir: "copilot"}
+	// OpenCode Provider is intentionally empty. OpenCode is bring-your-own-key
+	// across many vendors, so the provider is resolved per-event from the model
+	// id rather than forced to one value.
+	OpenCode = Harness{Name: "opencode", EnvPrefix: "OPENCODE", DataSubdir: "opencode"}
 )
 
 // Harness names one coding agent's environment conventions.

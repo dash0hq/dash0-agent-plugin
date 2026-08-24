@@ -128,7 +128,8 @@ end of the session and loses everything on a crash.
 | `message.part.updated`, `part.type=tool`, `state.status` ∈ {`completed`,`error`} | `PostToolUse` / `PostToolUseFailure` | Deduped by `callID`. `duration_ms` from `state.time.end - state.time.start`. |
 | `session.idle`, root session | `Stop` | Emits the chat span with the turn's aggregated usage. |
 | `session.idle`, child session | `SubagentStop` | `agent_id` + `agent_type`. |
-| `session.error` | `StopFailure` | `error` from the reported message. |
+| `session.error`, root session | `StopFailure` | `error` from the reported message. |
+| `session.error`, child session | `SubagentStop` | `error` on the sub-agent's span only; a `StopFailure` would clear the parent turn's trace context. |
 | plugin shutdown | `SessionEnd` | Frees the scratch dir. |
 | everything else | dropped | Including all streaming part updates. |
 

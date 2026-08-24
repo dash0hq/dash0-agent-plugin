@@ -208,7 +208,7 @@ the one in use.
 
 | Rank | Signal | Mode | Provider | Why |
 |---|---|---|---|---|
-| 1 | `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` | `metered_external` | `bedrock` / `vertex` / `foundry` | AWS / Google / Microsoft bills, at a rate we cannot see |
+| 1 | `CLAUDE_CODE_USE_BEDROCK` / `_FOUNDRY` / `_ANTHROPIC_AWS` / `_ANTHROPIC_GOOGLE_CLOUD` / `_MANTLE` / `_VERTEX`, in that order | `metered_external` | `bedrock` / `foundry` / `bedrock` / `vertex` / `bedrock` / `vertex` | AWS / Microsoft / Google bills, at a rate we cannot see |
 | 2 | `ANTHROPIC_AUTH_TOKEN` | `metered_external` | `gateway` | bearer token — an LLM gateway or proxy sits in front |
 | 3 | `ANTHROPIC_API_KEY` | `api` | — | direct per-token at list price; the figure **is** spend |
 | 4 | `apiKeyHelper` | — | — | **undetectable**, see below |
@@ -239,18 +239,19 @@ The config file is consulted **only at rank 7**, because it describes who the us
 exists to prevent.
 
 **Credentials are read for presence; the rank-1 flags are parsed as booleans.** An
-API key's value is never read, so any non-empty string counts, and an empty
-variable counts as unset since that is how shells leave one. The three
-`CLAUDE_CODE_USE_*` selectors are different: they carry a boolean, and Claude Code
-coerces each with `["1","true","yes","on"].includes(String(v).toLowerCase().trim())`,
-so we match that set exactly. Both ways of getting it wrong mislabel a customer's
-cost, in opposite directions:
+API key's value is never read, so any non-empty string counts and an empty variable
+counts as unset. The `CLAUDE_CODE_USE_*` selectors carry a boolean instead, and the
+CLI coerces each with
+`["1","true","yes","on"].includes(String(v).toLowerCase().trim())`, so we match that
+set exactly. Both ways of getting it wrong mislabel a cost figure: counting any
+non-empty value reports `metered_external` for `CLAUDE_CODE_USE_BEDROCK=0`, and
+counting only `1`/`true` reports `subscription` for `=yes`.
 
-- Counting any non-empty value reports `metered_external` for
-  `CLAUDE_CODE_USE_BEDROCK=0`, telling a subscriber their figure is metered by AWS.
-  Setting a flag to `0` is an ordinary way to turn it off, and the CLI honours it.
-- Counting only `1` and `true` reports `subscription` for `=yes` or `=on`, telling a
-  real Bedrock session that its list-price figure is a rationed allowance.
+The rank-1 order and the six selectors come from the CLI's provider resolver
+(2.1.238), which is why `_FOUNDRY` precedes `_VERTEX`. Two AWS-family selectors
+report `bedrock` and the Google one reports `vertex`: the provider says who meters
+the session, and a finer vendor name would grow the value set without changing the
+answer to that question.
 
 `settings.env` needs no special handling: Claude Code merges every settings scope's
 `env` block into the process environment (managed last), and hooks inherit it. So a

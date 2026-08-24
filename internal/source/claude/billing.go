@@ -30,9 +30,13 @@ const (
 	envConfigDir = "CLAUDE_CONFIG_DIR"
 
 	// Rank 1 — cloud providers. Billing moves to the cloud vendor entirely.
-	envBedrock = "CLAUDE_CODE_USE_BEDROCK"
-	envVertex  = "CLAUDE_CODE_USE_VERTEX"
-	envFoundry = "CLAUDE_CODE_USE_FOUNDRY"
+	// Listed in the CLI's own resolution order; see authTiers.
+	envBedrock              = "CLAUDE_CODE_USE_BEDROCK"
+	envFoundry              = "CLAUDE_CODE_USE_FOUNDRY"
+	envAnthropicAWS         = "CLAUDE_CODE_USE_ANTHROPIC_AWS"
+	envAnthropicGoogleCloud = "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD"
+	envMantle               = "CLAUDE_CODE_USE_MANTLE"
+	envVertex               = "CLAUDE_CODE_USE_VERTEX"
 	// Rank 2 — bearer token, used when routing through an LLM gateway or proxy.
 	envAuthToken = "ANTHROPIC_AUTH_TOKEN"
 	// Rank 3 — direct API key.
@@ -101,74 +105,65 @@ type authTier struct {
 	mode string
 	// provider names the intermediary when mode is BillingMeteredExternal.
 	provider string
-	// set reports whether this tier's credential selects the session's provider.
-	set func(l lookup) bool
-}
-
-// lookup answers the two different questions the tiers ask of the environment.
-// They are not interchangeable, and using one for the other produces a wrong
-// billing mode in one direction or the other.
-type lookup struct {
-	// present reports that a credential exists. Its value is a secret we never
-	// read, so any non-empty string counts.
-	present func(key string) bool
-	// enabled parses a boolean provider flag the way Claude Code parses it.
-	enabled func(key string) bool
+	// set reports whether this tier selects the session's provider. Built by
+	// flag or presence, which read the environment two different ways.
+	set func(getenv func(string) string) bool
 }
 
 // authTiers is the documented precedence, highest first. Rank 4 (apiKeyHelper) is
 // absent because a hook cannot observe it; see DEVELOPMENT.md.
 var authTiers = []authTier{
-	// The three cloud selectors are boolean FLAGS, not credentials: see flag.
+	// Rank 1, in the CLI's own order (2.1.238 provider resolver). All six are
+	// boolean FLAGS rather than credentials: see flag. The provider is who meters
+	// the session, so the two AWS-family selectors share ProviderBedrock and the
+	// Google one shares ProviderVertex — a more precise vendor name would expand
+	// the attribute's value set without changing who bills.
 	{name: "bedrock", mode: BillingMeteredExternal, provider: ProviderBedrock, set: flag(envBedrock)},
-	{name: "vertex", mode: BillingMeteredExternal, provider: ProviderVertex, set: flag(envVertex)},
 	{name: "foundry", mode: BillingMeteredExternal, provider: ProviderFoundry, set: flag(envFoundry)},
+	{name: "anthropic on aws", mode: BillingMeteredExternal, provider: ProviderBedrock, set: flag(envAnthropicAWS)},
+	{name: "anthropic on google cloud", mode: BillingMeteredExternal, provider: ProviderVertex, set: flag(envAnthropicGoogleCloud)},
+	{name: "mantle", mode: BillingMeteredExternal, provider: ProviderBedrock, set: flag(envMantle)},
+	{name: "vertex", mode: BillingMeteredExternal, provider: ProviderVertex, set: flag(envVertex)},
 	{name: "bearer token", mode: BillingMeteredExternal, provider: ProviderGateway, set: presence(envAuthToken)},
 	{name: "api key", mode: BillingAPI, set: presence(envAPIKey)},
 	// Plan-backed: mode comes from the account, not from the tier.
 	{name: "setup token", mode: "", set: presence(envOAuthToken)},
-	{name: "profile/federation", mode: BillingMeteredExternal, provider: ProviderGateway, set: func(l lookup) bool {
+	{name: "profile/federation", mode: BillingMeteredExternal, provider: ProviderGateway, set: func(getenv func(string) string) bool {
 		// Only the env-driven forms: a named profile, or the federation pair. The
 		// docs also describe an "active profile" chosen by a file in the Anthropic
 		// config directory, whose rank against /login depends on an auth mode
 		// recorded inside it — more depth than a cost annotation warrants, so it
 		// falls through to the account.
-		return l.present(envProfile) || (l.present(envFederationRule) && l.present(envFederationOrgID))
+		return getenv(envProfile) != "" ||
+			(getenv(envFederationRule) != "" && getenv(envFederationOrgID) != "")
 	}},
 }
 
-// presence selects a tier on a credential existing. Its value is a secret and is
-// never read.
-func presence(key string) func(lookup) bool {
-	return func(l lookup) bool { return l.present(key) }
+// presence selects a tier on a credential existing. Its value is a secret we
+// never read, so any non-empty string counts; an empty one is how a shell leaves
+// an exported-but-unset variable.
+func presence(key string) func(func(string) string) bool {
+	return func(getenv func(string) string) bool { return getenv(key) != "" }
 }
 
-// flag selects a tier on a boolean provider flag being on, per truthy.
-func flag(key string) func(lookup) bool {
-	return func(l lookup) bool { return l.enabled(key) }
-}
-
-// truthy parses a provider flag exactly as Claude Code does. Taken from the
-// shipped CLI (2.1.238), where every CLAUDE_CODE_USE_* selector is declared as
-// `Ge.bool()` and coerced with:
+// flag selects a tier on a boolean provider flag, parsed exactly as Claude Code
+// parses it: the shipped CLI (2.1.238) declares every CLAUDE_CODE_USE_* selector
+// as `Ge.bool()`, coerced with
+// `["1","true","yes","on"].includes(String(v).toLowerCase().trim())`.
 //
-//	["1","true","yes","on"].includes(String(v).toLowerCase().trim())
-//
-// Matching that set exactly matters in BOTH directions, and neither error is
-// hypothetical:
-//
-//   - Treating any non-empty value as on reports metered_external for
-//     CLAUDE_CODE_USE_BEDROCK=0, so a subscriber is told their cost figure is
-//     metered by AWS at a rate we cannot see. Setting a flag to 0 is an ordinary
-//     way to turn it off, and Claude Code honours that.
-//   - Accepting only "1" and "true" reports subscription for =yes or =on, so a
-//     real Bedrock session is told its list-price figure is its allowance.
-func truthy(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on":
-		return true
+// Matching that set exactly matters in both directions. Counting any non-empty
+// value reports metered_external for CLAUDE_CODE_USE_BEDROCK=0, telling a
+// subscriber their figure is metered by AWS; counting only "1" and "true" reports
+// subscription for =yes, telling a real Bedrock session its list-price figure is
+// its allowance.
+func flag(key string) func(func(string) string) bool {
+	return func(getenv func(string) string) bool {
+		switch strings.ToLower(strings.TrimSpace(getenv(key))) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+		return false
 	}
-	return false
 }
 
 // billing applies Claude Code's documented authentication precedence — the
@@ -179,15 +174,8 @@ func truthy(value string) bool {
 // The config file is consulted last, deliberately: it describes who the user is,
 // not how this session bills. Consulting it first is the bug this order prevents.
 func billing(getenv func(string) string, acct *account) (mode, provider string) {
-	l := lookup{
-		// An exported-but-empty variable is how shells leave unset values; treating
-		// it as present would report api for a subscriber.
-		present: func(key string) bool { return getenv(key) != "" },
-		enabled: func(key string) bool { return truthy(getenv(key)) },
-	}
-
 	for _, tier := range authTiers {
-		if !tier.set(l) {
+		if !tier.set(getenv) {
 			continue
 		}
 		if tier.mode != "" {

@@ -176,10 +176,11 @@ func TestBillingModePrecedenceOrder(t *testing.T) {
 	// lower tier win fails here. Rank 4 (apiKeyHelper) is undetectable and so
 	// cannot appear.
 	all := map[string]string{
-		"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_VERTEX": "1",
-		"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_AUTH_TOKEN": "t",
-		"ANTHROPIC_API_KEY": "k", "CLAUDE_CODE_OAUTH_TOKEN": "o",
-		"ANTHROPIC_PROFILE": "p",
+		"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_FOUNDRY": "1",
+		"CLAUDE_CODE_USE_ANTHROPIC_AWS": "1", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "1",
+		"CLAUDE_CODE_USE_MANTLE": "1", "CLAUDE_CODE_USE_VERTEX": "1",
+		"ANTHROPIC_AUTH_TOKEN": "t", "ANTHROPIC_API_KEY": "k",
+		"CLAUDE_CODE_OAUTH_TOKEN": "o", "ANTHROPIC_PROFILE": "p",
 	}
 	drop := func(keys ...string) map[string]string {
 		m := map[string]string{}
@@ -199,10 +200,13 @@ func TestBillingModePrecedenceOrder(t *testing.T) {
 		wantProv string
 	}{
 		{"rank 1 bedrock outranks all", all, "metered_external", "bedrock"},
-		{"rank 1 vertex", drop("CLAUDE_CODE_USE_BEDROCK"), "metered_external", "vertex"},
-		{"rank 1 foundry", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"), "metered_external", "foundry"},
-		{"rank 2 bearer token beats the api key", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"), "metered_external", "gateway"},
-		{"rank 3 api key beats the oauth token", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_AUTH_TOKEN"), "api", ""},
+		{"rank 1 foundry beats vertex", drop("CLAUDE_CODE_USE_BEDROCK"), "metered_external", "foundry"},
+		{"rank 1 anthropic on aws", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY"), "metered_external", "bedrock"},
+		{"rank 1 anthropic on google cloud", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS"), "metered_external", "vertex"},
+		{"rank 1 mantle", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD"), "metered_external", "bedrock"},
+		{"rank 1 vertex is last of the flags", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_MANTLE"), "metered_external", "vertex"},
+		{"rank 2 bearer token beats the api key", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_VERTEX"), "metered_external", "gateway"},
+		{"rank 3 api key beats the oauth token", drop("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_AUTH_TOKEN"), "api", ""},
 		{"rank 5 oauth token beats a profile", map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "o", "ANTHROPIC_PROFILE": "p"}, "subscription", ""},
 		{"rank 6 profile beats the login credential", map[string]string{"ANTHROPIC_PROFILE": "p"}, "metered_external", "gateway"},
 	}
@@ -215,71 +219,79 @@ func TestBillingModePrecedenceOrder(t *testing.T) {
 	}
 }
 
-// The rank-1 selectors are boolean FLAGS, so their value decides whether they
-// count. Claude Code coerces each one with
-// `["1","true","yes","on"].includes(String(v).toLowerCase().trim())`, and this
-// table pins that exact set, because both ways of getting it wrong mislabel a
-// customer's cost:
-//
-//   - too loose (any non-empty value counts): CLAUDE_CODE_USE_BEDROCK=0 reports
-//     metered_external, telling a subscriber their figure is metered by AWS.
-//   - too strict (only 1 and true count): =yes reports subscription, telling a
-//     real Bedrock session its list-price figure is a rationed allowance.
-//
-// A subscription account sits underneath every case, so a flag that wrongly
-// counts is visible as metered_external and one that wrongly does not is visible
-// as subscription.
+// The rank-1 selectors are boolean FLAGS, so the value decides whether they
+// count. Both ways of getting the accept-set wrong mislabel a customer's cost:
+// too loose and CLAUDE_CODE_USE_BEDROCK=0 reports metered_external, telling a
+// subscriber their figure is metered by AWS; too strict and =yes reports
+// subscription, telling a real Bedrock session its list-price figure is an
+// allowance. A subscription account sits underneath, so either error is visible.
 func TestBillingModeCloudFlagsParseAsBooleans(t *testing.T) {
 	subscribed := &account{BillingType: "stripe_subscription"}
 
-	cases := []struct {
-		value string
-		on    bool
-	}{
-		{"1", true}, {"true", true}, {"yes", true}, {"on", true},
-		// Case and surrounding whitespace are normalised before the compare.
-		{"TRUE", true}, {"Yes", true}, {" 1 ", true}, {"ON", true},
-
-		// Ordinary ways to turn a flag off. Claude Code routes first-party for
-		// every one of these, so the account decides.
-		{"0", false}, {"false", false}, {"no", false}, {"off", false},
-		{"FALSE", false}, {"Off", false},
-		// Not a boolean at all: unrecognised means not enabled, matching the CLI.
-		{"disabled", false}, {"maybe", false}, {"2", false},
-		// Empty is how a shell leaves an exported-but-unset variable.
-		{"", false},
+	cases := map[string]bool{
+		"1": true, "true": true, "yes": true, "on": true,
+		// Case and surrounding whitespace are normalised first.
+		"TRUE": true, " 1 ": true,
+		// Ordinary ways to turn a flag off — the CLI routes first-party for these.
+		"0": false, "false": false, "no": false, "off": false, "Off": false,
+		// Not a boolean at all, and empty is an exported-but-unset variable.
+		"disabled": false, "2": false, "": false,
 	}
-	for _, tc := range cases {
-		for _, key := range []string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"} {
-			t.Run(key+"="+tc.value, func(t *testing.T) {
-				mode, _ := billing(envOf(map[string]string{key: tc.value}), subscribed)
-				if tc.on {
-					assert.Equal(t, "metered_external", mode, "the cloud vendor meters this session")
-					return
-				}
-				assert.Equal(t, "subscription", mode,
-					"the flag is off, so traffic is first-party and the account decides")
-			})
-		}
+	for value, on := range cases {
+		t.Run("CLAUDE_CODE_USE_BEDROCK="+value, func(t *testing.T) {
+			mode, _ := billing(envOf(map[string]string{"CLAUDE_CODE_USE_BEDROCK": value}), subscribed)
+			if on {
+				assert.Equal(t, "metered_external", mode)
+				return
+			}
+			assert.Equal(t, "subscription", mode, "flag off, so the account decides")
+		})
+	}
+
+	// Every rank-1 selector goes through the same parse, so one disable-style
+	// value per flag is enough to catch one wired up as a credential instead.
+	for _, key := range []string{
+		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX",
+		"CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+		"CLAUDE_CODE_USE_MANTLE",
+	} {
+		t.Run(key+"=0", func(t *testing.T) {
+			mode, _ := billing(envOf(map[string]string{key: "0"}), subscribed)
+			assert.Equal(t, "subscription", mode)
+		})
 	}
 }
 
-// A credential is NOT a boolean: its value is a secret we never read, so any
-// non-empty string counts. Guard that the flag parsing above did not leak onto
-// the credential tiers — a token that happens to read "0" or "false" is still a
-// token, and the session really is billed per token.
+// A credential is not a boolean: its value is a secret we never read, so a token
+// that happens to read "0" is still a token and the session really is per-token.
+// Guards the flag parse from leaking onto the credential tiers.
 func TestBillingModeCredentialsAreNotBooleans(t *testing.T) {
 	subscribed := &account{BillingType: "stripe_subscription"}
 
-	for _, value := range []string{"0", "false", "off", "no", "disabled"} {
-		t.Run("ANTHROPIC_API_KEY="+value, func(t *testing.T) {
-			mode, _ := billing(envOf(map[string]string{"ANTHROPIC_API_KEY": value}), subscribed)
-			assert.Equal(t, "api", mode, "a key with an odd value is still a key")
-		})
-		t.Run("ANTHROPIC_AUTH_TOKEN="+value, func(t *testing.T) {
-			mode, provider := billing(envOf(map[string]string{"ANTHROPIC_AUTH_TOKEN": value}), subscribed)
+	mode, _ := billing(envOf(map[string]string{"ANTHROPIC_API_KEY": "0"}), subscribed)
+	assert.Equal(t, "api", mode, "a key with an odd value is still a key")
+
+	mode, provider := billing(envOf(map[string]string{"ANTHROPIC_AUTH_TOKEN": "false"}), subscribed)
+	assert.Equal(t, "metered_external", mode)
+	assert.Equal(t, "gateway", provider)
+}
+
+// The three selectors added after 2.1.81 are the same bug class this reader
+// exists to prevent: without them a Claude Platform on AWS / Google Cloud or
+// Mantle session falls through to the config and reports the stale subscription.
+func TestBillingModeCoversTheNewerCloudSelectors(t *testing.T) {
+	subscribed := &account{BillingType: "stripe_subscription"}
+
+	cases := map[string]string{
+		"CLAUDE_CODE_USE_ANTHROPIC_AWS":          "bedrock",
+		"CLAUDE_CODE_USE_MANTLE":                 "bedrock",
+		"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "vertex",
+	}
+	for key, wantProvider := range cases {
+		t.Run(key, func(t *testing.T) {
+			mode, provider := billing(envOf(map[string]string{key: "1"}), subscribed)
 			assert.Equal(t, "metered_external", mode)
-			assert.Equal(t, "gateway", provider)
+			assert.Equal(t, wantProvider, provider, "the provider names who meters it")
 		})
 	}
 }

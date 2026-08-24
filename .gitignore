@@ -10,3 +10,5 @@ test/capture/cursor/captured/
 test/capture/copilot/captured/
 cover.out
 __pycache__/
+qa/runs/
+qa/config.local.json

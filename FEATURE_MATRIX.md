@@ -2,9 +2,10 @@
 
 Four runtimes ship today — **Claude Code**, **Cursor**, **OpenAI Codex**, and
 **GitHub Copilot CLI** — on one shared Go pipeline (`cmd/*/main.go` →
-`internal/pipeline` → `internal/otlp`). They differ in how they're installed, how
-config reaches the hook, what the host exposes to a hook, and (consequently) which
-span properties can be populated.
+`internal/pipeline` → `internal/otlp`), with each agent's configuration resolved
+by `internal/harness`. They differ in how they're installed, how config reaches
+the hook, what the host exposes to a hook, and (consequently) which span
+properties can be populated.
 
 ## Runtimes at a glance
 
@@ -15,11 +16,17 @@ span properties can be populated.
 | Default `service.name` / agent name | `claude-code` | `cursor` | `codex` | `github-copilot-cli` |
 | Entrypoint | `cmd/claude-on-event` | `cmd/cursor-on-event` | `cmd/codex-on-event` | `cmd/copilot-on-event` |
 | Config file | `~/.claude/dash0-agent-plugin.local.md` (or `.claude/…`) | `~/.cursor/dash0-agent-plugin.local.md` (or `.cursor/…`) | `~/.codex/dash0-agent-plugin.local.md` (or `.codex/…`) | `~/.copilot/dash0-agent-plugin.local.md` (global only) |
-| Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `~/.local/state/dash0-agent-plugin/cursor` | `~/.local/state/dash0-agent-plugin/codex` | `~/.local/state/dash0-agent-plugin/copilot` |
+| Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `$CURSOR_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/cursor` | `$CODEX_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/codex` | `$COPILOT_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/copilot` |
 | Hooks registered in | plugin manifest `claude/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |
 | Wired hook events | 24 | 9 | 10 | 4 |
 | Supported OS/arch | `darwin`,`linux` × `amd64`,`arm64` | same | same | same |
 | Unsupported platform | hook fails | hook fails | hook fails | fails open (untraced) |
+
+`›` reads as "else". Of the three prefixed variables only `COPILOT_PLUGIN_DATA` is
+set by an agent today, and Copilot's bootstrap reads the same one, so its binary
+cache and session state share a root. Codex sets bare `PLUGIN_DATA` instead:
+`codex/codex-on-event.sh` caches the binary under it but never exports it, so for a
+marketplace install the cache and the session state sit in different roots.
 
 ## Configuration options
 
@@ -80,7 +87,7 @@ demo generator uses them).
 | Input / output tokens | Yes | Yes | Yes | Yes | |
 | `cache_read.input_tokens` | Yes | Yes | Yes | Yes | |
 | `cache_creation.input_tokens` | Yes | Yes | No | No | Codex/Copilot don't report it. |
-| Reasoning tokens | No | No | No | Yes | Codex parses but doesn't emit; Copilot emits `reasoning.output_tokens` (when > 0). |
+| Reasoning tokens | Yes | No | No | Yes | Claude reads `output_tokens_details.thinking_tokens`; Codex parses but doesn't emit; Copilot reads its own field. Claude and Copilot share the key `gen_ai.usage.reasoning.output_tokens` and both emit it only when > 0, so one query covers both and absence means no thinking. |
 | Sub-agent `invoke_agent` span + parenting | Yes | Partial | Yes | Partial | Cursor: `subagentStart` dropped; the stop span dangles under the chat span. Copilot: sub-agent chat rounds fold into the parent turn (flat token attribution); their tool calls re-parent under the spawning `task` span. |
 | MCP server attribute (`dash0.gen_ai.tool.mcp_server`) | Yes (real server) | Partial (placeholder `cursor`) | Yes (real server) | Yes (real server) | |
 | Tool-call duration | Native | Native | Reconstructed from `PreToolUse` | Native (from OTel file) | |

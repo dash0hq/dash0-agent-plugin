@@ -262,9 +262,35 @@ jobs:
 
       - name: userConfig covers all plugin options
         run: |
-          # Extract option keys used in Go code via pluginOption/pluginOptionSecure/pluginOptionBool/pluginOptionBoolDefault
-          USED_KEYS=$(grep -ohE 'pluginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' cmd/claude-on-event/main.go | \
-            sed 's/pluginOption[^"]*"//' | sed 's/"$//' | sort -u)
+          # Extract option keys read in Go code via the harness accessors. The
+          # leading letter is matched in both cases, because some accessors are
+          # unexported. internal/harness is scanned too: the config is built there,
+          # so most keys appear in that file and not at the call site. Only quoted
+          # literals match, so generic key parameters contribute nothing.
+          USED_KEYS=$(grep -ohE '\.[pP]luginOption(Secure|Bool|BoolDefault)?\("([^"]+)"' \
+            cmd/claude-on-event/main.go internal/harness/harness.go | \
+            sed 's/.*[pP]luginOption[^"]*"//' | sed 's/"$//' | sort -u)
+          # This grep is coupled to how the accessors are spelled, so it has
+          # already gone blind twice during refactors. An empty result, or a
+          # declared option that no longer appears, means the pattern stopped
+          # matching — not that the code is fine. Both fail below.
+          if [ -z "$USED_KEYS" ]; then
+            echo "::error::No plugin-option keys found — update this grep to match the current accessor names"
+            exit 1
+          fi
+          # Every declared option must be read somewhere, except the two keychain
+          # references, which only the bootstrap script reads.
+          UNREAD=""
+          for key in $(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json); do
+            case "$key" in AUTH_TOKEN_KEYCHAIN_ACCOUNT|AUTH_TOKEN_KEYCHAIN_SERVICE) continue ;; esac
+            if ! echo "$USED_KEYS" | grep -qx "$key"; then
+              UNREAD="$UNREAD $key"
+            fi
+          done
+          if [ -n "$UNREAD" ]; then
+            echo "::error::Declared options that no Go code appears to read:$UNREAD (either they are unused, or this grep no longer matches the accessors)"
+            exit 1
+          fi
           # Extract keys declared in plugin.json userConfig
           DECLARED_KEYS=$(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json | sort -u)
           echo "Used in code: $USED_KEYS"

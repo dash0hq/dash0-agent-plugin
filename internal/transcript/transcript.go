@@ -5,8 +5,12 @@ package transcript
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path"
+	"regexp"
+	"strings"
 )
 
 // Usage holds aggregated token usage for a turn.
@@ -23,6 +27,14 @@ type Usage struct {
 	// A source that omits the breakdown leaves both at 0, which costs nothing.
 	CacheCreation5mInputTokens int64
 	CacheCreation1hInputTokens int64
+	// ReasoningOutputTokens is the share of OutputTokens spent on extended
+	// thinking. It is a subset, not an addition: thinking tokens are billed at
+	// the output rate and are already inside OutputTokens, so cost does not
+	// change — but without the split a long deliberation is indistinguishable
+	// from a long answer. Named for the OTel key it is exported under
+	// (gen_ai.usage.reasoning.output_tokens), which Copilot already reports, so
+	// one query covers both runtimes. Zero when the turn did no thinking.
+	ReasoningOutputTokens int64
 }
 
 // add folds one API call's effective usage into the aggregate. A nil
@@ -35,6 +47,9 @@ func (u *Usage) add(eff usageData) {
 	if eff.CacheCreation != nil {
 		u.CacheCreation5mInputTokens += eff.CacheCreation.Ephemeral5mInputTokens
 		u.CacheCreation1hInputTokens += eff.CacheCreation.Ephemeral1hInputTokens
+	}
+	if eff.OutputTokensDetails != nil {
+		u.ReasoningOutputTokens += eff.OutputTokensDetails.ThinkingTokens
 	}
 }
 
@@ -62,18 +77,25 @@ type messageEnvelope struct {
 }
 
 type usageData struct {
-	InputTokens              int64          `json:"input_tokens"`
-	OutputTokens             int64          `json:"output_tokens"`
-	CacheCreationInputTokens int64          `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64          `json:"cache_read_input_tokens"`
-	CacheCreation            *cacheCreation `json:"cache_creation"`
-	Iterations               []usageData    `json:"iterations"`
+	InputTokens              int64                `json:"input_tokens"`
+	OutputTokens             int64                `json:"output_tokens"`
+	CacheCreationInputTokens int64                `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64                `json:"cache_read_input_tokens"`
+	CacheCreation            *cacheCreation       `json:"cache_creation"`
+	OutputTokensDetails      *outputTokensDetails `json:"output_tokens_details"`
+	Iterations               []usageData          `json:"iterations"`
 }
 
 // cacheCreation splits cache-creation tokens by TTL.
 type cacheCreation struct {
 	Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
 	Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
+}
+
+// outputTokensDetails breaks the output token count down by kind. Only thinking
+// tokens are reported today.
+type outputTokensDetails struct {
+	ThinkingTokens int64 `json:"thinking_tokens"`
 }
 
 // effective returns the token counts to attribute to this API call. When a
@@ -86,11 +108,24 @@ func (u *usageData) effective() usageData {
 		return *u
 	}
 	var sum usageData
+	var thinking int64
 	for _, it := range u.Iterations {
 		sum.InputTokens += it.InputTokens
 		sum.OutputTokens += it.OutputTokens
 		sum.CacheCreationInputTokens += it.CacheCreationInputTokens
 		sum.CacheReadInputTokens += it.CacheReadInputTokens
+		if it.OutputTokensDetails != nil {
+			thinking += it.OutputTokensDetails.ThinkingTokens
+		}
+	}
+	// Thinking tokens are a subset of the summed OutputTokens, so they are summed
+	// from the iterations too. When no iteration reports the detail, fall back to
+	// the top-level value, which mirrors the final attempt.
+	switch {
+	case thinking > 0:
+		sum.OutputTokensDetails = &outputTokensDetails{ThinkingTokens: thinking}
+	case u.OutputTokensDetails != nil:
+		sum.OutputTokensDetails = u.OutputTokensDetails
 	}
 	// CacheCreation lives only on the top-level usage object, not on
 	// individual iterations, so carry it through unchanged. On a fallback turn it
@@ -136,14 +171,6 @@ type contentType struct {
 // the next prompt (see TurnComplete), and billing them one turn late keeps the
 // session total whole — the lesser error for a cost view than dropping them.
 func ReadTurnUsage(transcriptPath string) (*Usage, error) {
-	f, err := os.Open(transcriptPath)
-	if err != nil {
-		return nil, fmt.Errorf("opening transcript: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	dec := json.NewDecoder(f)
-
 	// perCall tracks usage per API call, keeping only the last entry for each.
 	// Streaming splits a single call into multiple transcript entries (thinking
 	// block, then text block), each repeating that call's usage; the last entry
@@ -161,12 +188,7 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	// distinct calls are still counted separately rather than merged.
 	entryCount := 0
 
-	for dec.More() {
-		var entry transcriptEntry
-		if err := dec.Decode(&entry); err != nil {
-			continue // skip malformed entries
-		}
-
+	err := forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
 		if isRealUserMessage(entry) {
 			// New turn — the calls counted so far belong to the turn that just
 			// ended, so a replay of them later in the file must not count again.
@@ -176,11 +198,11 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 			perCall = make(map[string]*usageData)
 			callOrder = nil
 			hasUsage = false
-			continue
+			return true
 		}
 
 		if entry.Type != "assistant" || entry.Message == nil || entry.Message.Usage == nil {
-			continue
+			return true
 		}
 
 		entryCount++
@@ -197,13 +219,17 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 		if counted[key] {
 			// Replayed history: this call was already reported on an earlier
 			// turn's span.
-			continue
+			return true
 		}
 		hasUsage = true
 		if _, seen := perCall[key]; !seen {
 			callOrder = append(callOrder, key)
 		}
 		perCall[key] = entry.Message.Usage
+		return true
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if !hasUsage {
@@ -238,30 +264,23 @@ var terminalStopReasons = map[string]bool{
 // not yet on disk. Callers poll this before reading usage so the last call is
 // not dropped. Returns false when the current turn has no assistant entry yet.
 func TurnComplete(transcriptPath string) (bool, error) {
-	f, err := os.Open(transcriptPath)
-	if err != nil {
-		return false, fmt.Errorf("opening transcript: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	dec := json.NewDecoder(f)
 	var lastReason string
 	var sawAssistant bool
-	for dec.More() {
-		var entry transcriptEntry
-		if err := dec.Decode(&entry); err != nil {
-			continue // skip malformed entries
-		}
+	err := forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
 		if isRealUserMessage(entry) {
 			// New turn — only the current turn's terminal state matters.
 			lastReason = ""
 			sawAssistant = false
-			continue
+			return true
 		}
 		if entry.Type == "assistant" && entry.Message != nil {
 			sawAssistant = true
 			lastReason = entry.Message.StopReason
 		}
+		return true
+	})
+	if err != nil {
+		return false, err
 	}
 	if !sawAssistant {
 		return false, nil
@@ -283,19 +302,8 @@ type titleEntry struct {
 // to the most recent auto-generated title. Returns empty string if neither is
 // found. This mirrors the precedence Claude Code uses in the UI (/status).
 func ReadSessionTitle(transcriptPath string) string {
-	f, err := os.Open(transcriptPath)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-
-	dec := json.NewDecoder(f)
 	var customTitle, aiTitle string
-	for dec.More() {
-		var entry titleEntry
-		if err := dec.Decode(&entry); err != nil {
-			continue
-		}
+	_ = forEachEntry(transcriptPath, func(entry titleEntry) bool {
 		switch entry.Type {
 		case "custom-title":
 			if entry.CustomTitle != "" {
@@ -306,34 +314,152 @@ func ReadSessionTitle(transcriptPath string) string {
 				aiTitle = entry.AITitle
 			}
 		}
-	}
+		return true
+	})
 	if customTitle != "" {
 		return customTitle
 	}
 	return aiTitle
 }
 
+// HasAssistantEntry reports whether the current turn holds an assistant entry.
+// It separates "the model has not answered this turn yet" from "this transcript
+// does not record models", which is the difference between a wait that will pay
+// off and one that will time out. A missing or unreadable file counts as no entry.
+func HasAssistantEntry(transcriptPath string) bool {
+	_, found := ReadCurrentTurnModel(transcriptPath)
+	return found
+}
+
+// commandNamePattern matches the command tag Claude Code writes into the user
+// entry when it expands a slash command, e.g.
+// <command-name>/writing:unslop</command-name>.
+var commandNamePattern = regexp.MustCompile(`<command-name>\s*/([^<\s]+)\s*</command-name>`)
+
+// skillBaseDirPattern matches the preamble of the skill-instructions relay that
+// Claude Code injects as an isMeta user entry when a skill loads. The captured
+// path ends in the skill's own directory, which names the skill.
+var skillBaseDirPattern = regexp.MustCompile(`Base directory for this skill: ([^\s"\\]+)`)
+
+// ReadTurnSkillCommand returns the skill invoked by a slash command in the most
+// recent turn, as the plugin-qualified name the user typed (e.g.
+// "writing:unslop"), or empty string when the turn began no such invocation.
+//
+// A slash command is expanded client-side, before any tool runs, so it fires no
+// PreToolUse/PostToolUse pair and produces no tool span. The transcript is the
+// only place the invocation is recorded, in two parts: the turn's user entry
+// carries a <command-name> tag, and a skill load appends an isMeta entry naming
+// the skill's base directory.
+//
+// Both parts are required, and the command's last colon-separated segment must
+// match the skill directory's name. That conjunction is what keeps a built-in
+// command out of the count: /compact writes a <command-name> tag too, but loads
+// no skill. A prompt that merely mentions a slash command is likewise ignored,
+// because the tag is written by the expansion, not by the user's text.
+func ReadTurnSkillCommand(transcriptPath string) string {
+	var command, skillDir string
+	_ = forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
+		if isRealUserMessage(entry) {
+			// New turn — only the current turn's invocation counts. The entry that
+			// carries the command tag IS the turn's user message, so read it here.
+			command, skillDir = "", ""
+			if entry.Message != nil {
+				if m := commandNamePattern.FindSubmatch(entry.Message.Content); len(m) > 1 {
+					command = string(m[1])
+				}
+			}
+			return true
+		}
+		if command == "" || skillDir != "" || entry.Type != "user" || !entry.IsMeta || entry.Message == nil {
+			return true
+		}
+		if m := skillBaseDirPattern.FindSubmatch(entry.Message.Content); len(m) > 1 {
+			skillDir = path.Base(string(m[1]))
+		}
+		return true
+	})
+
+	if command == "" || skillDir == "" {
+		return ""
+	}
+	segments := strings.Split(command, ":")
+	if segments[len(segments)-1] != skillDir {
+		return ""
+	}
+	return command
+}
+
 // ReadModel reads the transcript file and returns the model from the most
-// recent assistant message, or empty string if none is found.
+// recent assistant message in the current turn, or empty string if none is
+// found. A new real user message resets the result so a tool hook that beats
+// the current assistant flush waits instead of reusing the previous turn.
 func ReadModel(transcriptPath string) string {
+	model, _ := ReadCurrentTurnModel(transcriptPath)
+	return model
+}
+
+// ReadCurrentTurnModel returns the latest model and assistant-presence state
+// from one transcript snapshot. Keeping both answers in one scan prevents a
+// transcript append between separate model and readiness checks from making a
+// caller treat the wrong turn as ready.
+func ReadCurrentTurnModel(transcriptPath string) (model string, hasAssistant bool) {
+	_ = forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
+		if isRealUserMessage(entry) {
+			model = ""
+			hasAssistant = false
+			return true
+		}
+		if entry.Type == "assistant" && entry.Message != nil {
+			hasAssistant = true
+			if entry.Message.Model != "" {
+				model = entry.Message.Model
+			}
+		}
+		return true
+	})
+	return model, hasAssistant
+}
+
+// forEachEntry decodes the transcript's JSON entries in order and passes each to
+// fn, stopping early when fn returns false. It reports an error only when the
+// file cannot be opened.
+//
+// Entries are decoded from the stream rather than read line by line, because
+// Claude Code has written pretty-printed entries spanning several lines and a
+// line-based reader silently drops those.
+//
+// The error handling is the load-bearing part. A decoder recovers from a type
+// mismatch: it has consumed the value, so the stream stays intact and the entry
+// can be skipped. It cannot recover from a syntax error — it does not advance,
+// so More() stays true and the same broken bytes decode forever. Every reader
+// here used to `continue` on either kind, which turned a half-written final entry
+// into an infinite loop that pinned a core until the host's hook timeout killed
+// the process. A half-written final entry is the normal case rather than
+// corruption, because these hooks read a transcript Claude Code is still
+// appending to. So a type error skips one entry and a syntax error ends the
+// read, which is the most a decoder can honestly do.
+func forEachEntry[T any](transcriptPath string, fn func(entry T) bool) error {
 	f, err := os.Open(transcriptPath)
 	if err != nil {
-		return ""
+		return fmt.Errorf("opening transcript: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
 	dec := json.NewDecoder(f)
-	var model string
 	for dec.More() {
-		var entry transcriptEntry
+		var entry T
 		if err := dec.Decode(&entry); err != nil {
-			continue
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &typeErr) {
+				continue
+			}
+			return nil
 		}
-		if entry.Type == "assistant" && entry.Message != nil && entry.Message.Model != "" {
-			model = entry.Message.Model
+		if !fn(entry) {
+			return nil
 		}
 	}
-	return model
+	return nil
 }
 
 // isRealUserMessage returns true if the entry is a user message that is NOT

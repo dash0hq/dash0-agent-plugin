@@ -640,6 +640,32 @@ func TestReadModelUsesLatest(t *testing.T) {
 	assert.Equal(t, "claude-opus-4-7", ReadModel(path))
 }
 
+func TestReadModelWaitsForTheCurrentTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first turn"}}`,
+		`{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"second turn"}}`,
+	})
+
+	assert.Empty(t, ReadModel(path))
+	assert.False(t, HasAssistantEntry(path))
+}
+
+func TestReadCurrentTurnModelReturnsOneSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"first turn"}}`,
+		`{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"second turn"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"streaming"}]}}`,
+	})
+
+	model, hasAssistant := ReadCurrentTurnModel(path)
+	assert.Empty(t, model)
+	assert.True(t, hasAssistant, "model and readiness come from the same current-turn scan")
+}
+
 func TestReadModelMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	writeTranscript(t, path, []string{
@@ -703,4 +729,228 @@ func TestReadTurnUsageSumsDistinctMessageIDsWithoutRequestID(t *testing.T) {
 	assert.Equal(t, int64(12), usage.OutputTokens)
 	assert.Equal(t, int64(300), usage.CacheCreationInputTokens)
 	assert.Equal(t, int64(3000), usage.CacheReadInputTokens)
+}
+
+func TestReadTurnUsageReasoningTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"think"}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":116,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens_details":{"thinking_tokens":104}}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(116), usage.OutputTokens)
+	assert.Equal(t, int64(104), usage.ReasoningOutputTokens, "a subset of OutputTokens, never added to it")
+}
+
+func TestReadTurnUsageReasoningTokensAbsent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"say hi"}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(0), usage.ReasoningOutputTokens, "no detail means no thinking, which is a real zero")
+}
+
+func TestReadTurnUsageReasoningTokensSumAcrossCalls(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"do it"}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens_details":{"thinking_tokens":30}}}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"relay"}]}}`,
+		`{"type":"assistant","message":{"id":"msg_b","role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":10,"output_tokens":40,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens_details":{"thinking_tokens":11}}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(90), usage.OutputTokens)
+	assert.Equal(t, int64(41), usage.ReasoningOutputTokens)
+}
+
+func TestReadTurnUsageReasoningTokensSumsFallbackIterations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"do it"}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":5,"output_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens_details":{"thinking_tokens":9},"iterations":[{"input_tokens":5,"output_tokens":4,"output_tokens_details":{"thinking_tokens":4}},{"input_tokens":5,"output_tokens":9,"output_tokens_details":{"thinking_tokens":9}}]}}}`,
+	})
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(13), usage.OutputTokens, "both billed attempts")
+	assert.Equal(t, int64(13), usage.ReasoningOutputTokens, "the split follows the same summing rule")
+}
+
+// A slash command is expanded client-side, so the transcript is the only record
+// that a skill was invoked at all.
+func TestReadTurnSkillCommand(t *testing.T) {
+	const commandEntry = `{"type":"user","message":{"role":"user","content":"<command-message>writing:unslop</command-message>\n<command-name>/writing:unslop</command-name>\n<command-args>text</command-args>"}}`
+	const skillRelay = `{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /home/me/.claude/plugins/cache/mp/writing/0.3.0/skills/unslop\n\n# Unslop\n"}]}}`
+	const answer = `{"type":"assistant","message":{"id":"msg_a","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":1}}}`
+
+	tests := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{
+			name:  "command and skill relay",
+			lines: []string{commandEntry, skillRelay, answer},
+			want:  "writing:unslop",
+		},
+		{
+			name: "project skill without a plugin prefix",
+			lines: []string{
+				`{"type":"user","message":{"role":"user","content":"<command-name>/tidy</command-name>"}}`,
+				`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /repo/.claude/skills/tidy\n"}]}}`,
+				answer,
+			},
+			want: "tidy",
+		},
+		{
+			name: "built-in command loads no skill",
+			lines: []string{
+				`{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-args></command-args>"}}`,
+				answer,
+			},
+			want: "",
+		},
+		{
+			name: "a skill the model loaded mid-turn is not a command invocation",
+			lines: []string{
+				`{"type":"user","message":{"role":"user","content":"please unslop this"}}`,
+				skillRelay,
+				answer,
+			},
+			want: "",
+		},
+		{
+			name: "a command whose relay names a different skill is not counted",
+			lines: []string{
+				`{"type":"user","message":{"role":"user","content":"<command-name>/writing:unslop</command-name>"}}`,
+				`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /home/me/.claude/skills/other\n"}]}}`,
+				answer,
+			},
+			want: "",
+		},
+		{
+			name:  "only the current turn counts",
+			lines: []string{commandEntry, skillRelay, answer, `{"type":"user","message":{"role":"user","content":"and now something else"}}`, answer},
+			want:  "",
+		},
+		{
+			// The relay is re-injected on every invocation, so a command whose own
+			// turn has none did not load a skill — an earlier turn's relay must not
+			// stand in for it.
+			name: "an earlier turn's relay does not satisfy a later command",
+			lines: []string{
+				`{"type":"user","message":{"role":"user","content":"please unslop this"}}`,
+				skillRelay,
+				answer,
+				commandEntry,
+				answer,
+			},
+			want: "",
+		},
+		{
+			name:  "a second invocation is read from its own turn",
+			lines: []string{commandEntry, skillRelay, answer, commandEntry, skillRelay, answer},
+			want:  "writing:unslop",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "transcript.jsonl")
+			writeTranscript(t, path, tc.lines)
+			assert.Equal(t, tc.want, ReadTurnSkillCommand(path))
+		})
+	}
+}
+
+func TestReadTurnSkillCommandMissingFile(t *testing.T) {
+	assert.Equal(t, "", ReadTurnSkillCommand(filepath.Join(t.TempDir(), "nope.jsonl")))
+}
+
+// A transcript whose final entry is only half-written is the normal state, not a
+// corrupted one: every reader here runs inside a hook while Claude Code is still
+// appending. Each of these calls used to spin forever on that input, because a
+// json.Decoder does not advance past a syntax error and the readers' `continue`
+// re-read the same bytes. The assertions below are secondary — the test's real
+// claim is that it terminates at all, which is why each reader is exercised and
+// why the whole package runs under a timeout in CI.
+func TestReadersTerminateOnATornFinalEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	content := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"<command-name>/writing:unslop</command-name>"}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /p/skills/unslop"}]}}`,
+		`{"type":"assistant","requestId":"req_1","message":{"role":"assistant","model":"claude-opus-4-8","stop_reason":"end_turn","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":20}}}`,
+		`{"type":"assistant","requestId":"req_2","message":{"role":"assis`,
+	}, "\n")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	// Everything before the torn entry is still reported: a syntax error ends the
+	// read, it does not discard what was already decoded.
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(10), usage.InputTokens)
+	assert.Equal(t, int64(20), usage.OutputTokens)
+
+	assert.Equal(t, "claude-opus-4-8", ReadModel(path))
+	assert.True(t, HasAssistantEntry(path))
+	assert.Equal(t, "writing:unslop", ReadTurnSkillCommand(path))
+
+	complete, err := TurnComplete(path)
+	require.NoError(t, err)
+	assert.True(t, complete)
+}
+
+// A torn entry in the MIDDLE of the file ends the read, so later entries are not
+// reported. That is the honest limit of a stream decoder: once it hits a syntax
+// error it cannot resynchronize, so the alternative to stopping was the infinite
+// loop, not recovery. Pinned here so the trade-off is visible if it ever changes.
+func TestATornEntryMidFileEndsTheRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	content := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","requestId":"req_1","message":{"role":"assistant","model":"first-model","stop_reason":"end_turn","content":[],"usage":{"input_tokens":10,"output_tokens":20}}}`,
+		`{"type":"assistant","requestId":"broken","message":{"role":"assis`,
+		`{"type":"assistant","requestId":"req_2","message":{"role":"assistant","model":"later-model","stop_reason":"end_turn","content":[],"usage":{"input_tokens":99,"output_tokens":99}}}`,
+	}, "\n")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	assert.Equal(t, "first-model", ReadModel(path), "the entry after the torn one is not reached")
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(10), usage.InputTokens, "only the entries before the tear are counted")
+}
+
+// A type mismatch is different from a syntax error: the decoder has consumed the
+// value, so the stream is intact and that one entry can be skipped. Entries after
+// it must still be read.
+func TestATypeMismatchSkipsOnlyThatEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	content := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","requestId":42,"message":{"role":"assistant","model":"skipped-model"}}`,
+		`{"type":"assistant","requestId":"req_1","message":{"role":"assistant","model":"later-model","stop_reason":"end_turn","content":[],"usage":{"input_tokens":7,"output_tokens":3}}}`,
+	}, "\n")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	assert.Equal(t, "later-model", ReadModel(path), "the stream survives a type error")
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(7), usage.InputTokens)
 }

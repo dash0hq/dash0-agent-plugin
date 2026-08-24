@@ -88,6 +88,7 @@ demo generator uses them).
 | `cache_read.input_tokens` | Yes | Yes | Yes | Yes | |
 | `cache_creation.input_tokens` | Yes | Yes | No | No | Codex/Copilot don't report it. |
 | Reasoning tokens | Yes | No | No | Yes | Claude reads `output_tokens_details.thinking_tokens`; Codex parses but doesn't emit; Copilot reads its own field. Claude and Copilot share the key `gen_ai.usage.reasoning.output_tokens` and both emit it only when > 0, so one query covers both and absence means no thinking. |
+| Reasoning level (`gen_ai.request.reasoning.level`) | Yes | No | No | No | Claude Code puts `effort` on every span-producing payload. The request-side counterpart to the row above: which setting bought that thinking. No other runtime reports a level to the hook — Codex's rollout carries reasoning *tokens* but no effort field. |
 | Sub-agent `invoke_agent` span + parenting | Yes | Partial | Yes | Partial | Cursor: `subagentStart` dropped; the stop span dangles under the chat span. Copilot: sub-agent chat rounds fold into the parent turn (flat token attribution); their tool calls re-parent under the spawning `task` span. |
 | MCP server attribute (`dash0.gen_ai.tool.mcp_server`) | Yes (real server) | Partial (placeholder `cursor`) | Yes (real server) | Yes (real server) | |
 | Tool-call duration | Native | Native | Reconstructed from `PreToolUse` | Native (from OTel file) | |

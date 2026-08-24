@@ -533,3 +533,73 @@ func TestChatSpanRedactsConversationName(t *testing.T) {
 		ts, ts, event, false, Config{OmitIO: true})
 	assertAttr(t, omitted.Attributes, "gen_ai.conversation.name", "<REDACTED>")
 }
+
+// TestSpanReportsReasoningLevel pins the effort payload field to the OTel
+// attribute for it.
+//
+// Claude Code sends effort on every span-producing event. Before it was named,
+// eventAttributes copied it the way it copies anything unrecognized: under the
+// raw key "effort", holding the JSON object rather than the level. It is the
+// request-side counterpart to gen_ai.usage.reasoning.output_tokens — the setting
+// that produced the thinking those tokens paid for.
+func TestSpanReportsReasoningLevel(t *testing.T) {
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	chat := func(effort any) Span {
+		event := map[string]any{
+			"hook_event_name": "Stop",
+			"session_id":      "sess-123",
+		}
+		if effort != nil {
+			event["effort"] = effort
+		}
+		return NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "",
+			ts, ts, event, false, Config{})
+	}
+
+	t.Run("the level is reported, not the object", func(t *testing.T) {
+		span := chat(map[string]any{"level": "high"})
+		assertAttr(t, span.Attributes, "gen_ai.request.reasoning.level", "high")
+		assertNoAttr(t, span.Attributes, "effort")
+	})
+
+	t.Run("a level outside the well-known set passes through", func(t *testing.T) {
+		// The convention asks for the string the provider was sent. xhigh is not
+		// one of low/medium/high, and rounding it down would lose the distinction
+		// that explains the largest thinking-token counts.
+		span := chat(map[string]any{"level": "xhigh"})
+		assertAttr(t, span.Attributes, "gen_ai.request.reasoning.level", "xhigh")
+	})
+
+	t.Run("a bare string is accepted", func(t *testing.T) {
+		span := chat("medium")
+		assertAttr(t, span.Attributes, "gen_ai.request.reasoning.level", "medium")
+	})
+
+	t.Run("an unrecognized shape emits nothing", func(t *testing.T) {
+		span := chat(map[string]any{"unexpected": 1})
+		assertNoAttr(t, span.Attributes, "gen_ai.request.reasoning.level")
+		assertNoAttr(t, span.Attributes, "effort")
+	})
+
+	t.Run("absent when the payload omits it", func(t *testing.T) {
+		span := chat(nil)
+		assertNoAttr(t, span.Attributes, "gen_ai.request.reasoning.level")
+	})
+}
+
+// A tool span carries the level too: the payload has it on PostToolUse, and the
+// tool call was executed under that setting.
+func TestToolSpanReportsReasoningLevel(t *testing.T) {
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	event := map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "sess-123",
+		"tool_name":       "Bash",
+		"effort":          map[string]any{"level": "high"},
+	}
+	span := NewToolSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444",
+		"5555666677778888", ts, ts, event, false, Config{})
+	assertAttr(t, span.Attributes, "gen_ai.request.reasoning.level", "high")
+	assertNoAttr(t, span.Attributes, "effort")
+}

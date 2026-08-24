@@ -117,6 +117,29 @@ func TestE2EReasoningTokensOnTheWire(t *testing.T) {
 	assert.Equal(t, int64(104), spanIntAttr(t, *chat, "gen_ai.usage.reasoning.output_tokens"))
 }
 
+// The effort payload field reaches the wire as gen_ai.request.reasoning.level,
+// holding the level rather than the JSON object Claude Code sends, and never
+// under its raw payload key.
+func TestE2EReasoningLevelOnTheWire(t *testing.T) {
+	h := newHookHarness(t)
+	const sessionID = "e2e-reasoning-level"
+
+	h.feed(fmt.Sprintf(`{"hook_event_name":"UserPromptSubmit","session_id":%q,"prompt":"go"}`, sessionID))
+	h.feed(fmt.Sprintf(`{"hook_event_name":"PostToolUse","session_id":%q,"tool_name":"Bash",`+
+		`"tool_use_id":"tu1","effort":{"level":"xhigh"}}`, sessionID))
+	h.feed(fmt.Sprintf(`{"hook_event_name":"Stop","session_id":%q,"effort":{"level":"xhigh"}}`, sessionID))
+
+	spans := h.spans()
+	for _, prefix := range []string{"chat", "execute_tool"} {
+		span := findSpanPrefix(t, spans, prefix)
+		assert.Equal(t, "xhigh", spanStringAttr(t, *span, "gen_ai.request.reasoning.level"),
+			"%s span carries the level", prefix)
+		for _, a := range span.Attributes {
+			assert.NotEqual(t, "effort", a.Key, "%s span still carries the raw payload key", prefix)
+		}
+	}
+}
+
 // hookHarness builds the claude-on-event binary once and feeds it hook payloads
 // against a mock OTLP endpoint that keeps every traces request.
 type hookHarness struct {

@@ -140,6 +140,7 @@ omitted when its value is empty.
 | `dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens` | integer                                                              | Claude only. |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
 | `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript) and Copilot, both only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
+| `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh`                                     | Claude only, from the payload's `effort` field. The request-side counterpart to `reasoning.output_tokens`: the setting that produced the thinking those tokens paid for. Reported as the level Claude Code was actually set to, so `xhigh` is emitted verbatim even though the convention's well-known set stops at `high`. |
 | `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude only, and only on the chat span of a turn a slash command started. See below. |
 | `dash0.gen_ai.tool.skill.source` | `command`                                                            | Same rows as above. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |

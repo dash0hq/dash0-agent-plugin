@@ -1157,7 +1157,7 @@ func TestProcess_PostToolUse_CachesModelsPerTraceActor(t *testing.T) {
 			s := newSetup(t, url)
 			dir := t.TempDir()
 			parentTranscript := writeModelTranscript(t, dir, "parent.jsonl", "claude-sonnet-4-6")
-			agentTranscript := writeModelTranscript(t, dir, "agent.jsonl", "claude-opus-4-8")
+			writeSubagentTranscript(t, dir, "sess-1", "agent1", "claude-opus-4-8")
 
 			s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
 			s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "delegate"})
@@ -1167,9 +1167,12 @@ func TestProcess_PostToolUse_CachesModelsPerTraceActor(t *testing.T) {
 				"hook_event_name": "PostToolUse", "session_id": "sess-1",
 				"tool_name": "Read", "tool_use_id": "tu-parent", "transcript_path": parentTranscript,
 			}
+			// Both actors are handed the same transcript_path, because that is what
+			// Claude Code sends: a sub-agent's PostToolUse names the main session's
+			// file and nothing else. The sub-agent's own transcript is derived.
 			agentTool := map[string]any{
 				"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
-				"tool_name": "Grep", "tool_use_id": "tu-agent", "transcript_path": agentTranscript,
+				"tool_name": "Grep", "tool_use_id": "tu-agent", "transcript_path": parentTranscript,
 			}
 			if tc.agentFirst {
 				s.feed(t, agentTool)
@@ -1473,6 +1476,17 @@ func TestProcess_PostToolUse_TopLevelAgentParentsUnderTheChatSpan(t *testing.T) 
 	assert.Equal(t, ctx.SpanID, span.ParentSpanID)
 }
 
+// writeSubagentTranscript writes a sub-agent's transcript where Claude Code puts
+// it, so a test resolves it the way the pipeline has to: by derivation from the
+// main transcript's directory, the session ID and the agent ID. No hook payload
+// names this file.
+func writeSubagentTranscript(t *testing.T, sessionTranscriptDir, sessionID, agentID, model string) string {
+	t.Helper()
+	dir := filepath.Join(sessionTranscriptDir, sessionID, "subagents")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	return writeModelTranscript(t, dir, "agent-"+agentID+".jsonl", model)
+}
+
 // writeModelTranscript writes a one-turn transcript naming a specific model, so
 // a test can change the model between turns.
 func writeModelTranscript(t *testing.T, dir, name, model string) string {
@@ -1642,4 +1656,80 @@ func stringAttrOf(t *testing.T, span otlp.Span, key string) string {
 	}
 	t.Fatalf("attribute %s not found on span %q", key, span.Name)
 	return ""
+}
+
+// A sub-agent's tool span reports the sub-agent's model, not the parent's.
+//
+// The three spans of one delegating turn used to disagree: the invoke_agent span
+// read the sub-agent's transcript and reported haiku, while the execute_tool span
+// *beneath* it read the main session's transcript — the only one the payload
+// names — and reported the parent's opus.
+func TestProcess_SubAgentToolSpanReportsTheSubAgentsModel(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	dir := t.TempDir()
+
+	mainTranscript := writeModelTranscript(t, dir, "main.jsonl", "claude-opus-5")
+	agentTranscript := writeSubagentTranscript(t, dir, "sess-1", "agent1", "claude-haiku-4-5")
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1",
+		"prompt": "delegate", "transcript_path": mainTranscript})
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1",
+		"transcript_path": mainTranscript})
+	s.feed(t, map[string]any{
+		"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
+		"tool_name": "Bash", "tool_use_id": "tu1", "transcript_path": mainTranscript,
+	})
+	s.feed(t, map[string]any{
+		"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": "agent1",
+		"agent_type": "general-purpose", "transcript_path": mainTranscript,
+		"agent_transcript_path": agentTranscript,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	models := map[string]string{}
+	for _, span := range *spans {
+		models[span.Name] = stringAttrOf(t, span, "gen_ai.request.model")
+	}
+	assert.Equal(t, "claude-opus-5", models["chat claude-opus-5"])
+	assert.Equal(t, "claude-haiku-4-5", models["execute_tool Bash"],
+		"the tool ran inside the sub-agent, so it ran on the sub-agent's model")
+	assert.Equal(t, "claude-haiku-4-5", models["invoke_agent general-purpose"],
+		"and it agrees with its own parent span")
+}
+
+// With no sub-agent transcript on disk, the model is absent rather than the
+// parent's. A wrong value that contradicts the parent span is worse than none:
+// absence is visible to a consumer, a confident mislabel is not.
+func TestProcess_SubAgentToolSpanOmitsModelRatherThanBorrowingTheParents(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	dir := t.TempDir()
+	mainTranscript := writeModelTranscript(t, dir, "main.jsonl", "claude-opus-5")
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "claude-opus-5"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1",
+		"prompt": "delegate", "transcript_path": mainTranscript})
+	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+	s.feed(t, map[string]any{
+		"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
+		"tool_name": "Bash", "tool_use_id": "tu1", "transcript_path": mainTranscript,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	var tool *otlp.Span
+	for i, span := range *spans {
+		if span.Name == "execute_tool Bash" {
+			tool = &(*spans)[i]
+		}
+	}
+	require.NotNil(t, tool, "the span is still emitted; only the model is withheld")
+	for _, a := range tool.Attributes {
+		assert.NotEqual(t, "gen_ai.request.model", a.Key,
+			"no model beats the parent's model on a sub-agent's tool call")
+	}
 }

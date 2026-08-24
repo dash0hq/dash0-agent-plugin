@@ -295,8 +295,8 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	parentSpanID := ctx.SpanID
 
 	// An actor-scoped turn model wins over the session's startup model. Keeping
-	// parent and subagent caches separate avoids mixing models between actors
-	// that share a trace but read different transcripts.
+	// parent and subagent caches separate avoids mixing models between actors,
+	// which read different transcripts: see modelTranscript.
 	if _, hasModel := event["model"]; !hasModel {
 		if model, err := otlp.LoadToolModel(dataDir, traceID, agentID); err == nil && model != "" {
 			event["model"] = model
@@ -304,7 +304,7 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	}
 
 	if _, hasModel := event["model"]; !hasModel {
-		if tp, _ := event["transcript_path"].(string); tp != "" {
+		if tp := modelTranscript(event, agentID); tp != "" {
 			// Resolve once per turn, then remember it for the rest of the turn. The
 			// transcript flushes asynchronously, so reading it per tool call put the
 			// model on some of a turn's tool spans and not others, decided by which
@@ -321,7 +321,12 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		}
 	}
 
-	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
+	// ctx.Model is the model the *session* started with, so it answers for the
+	// main actor only. Handing it to a sub-agent's tool call is how that span
+	// came to contradict its own invoke_agent parent, which reads the sub-agent's
+	// transcript and reports the model that actually ran. No model at all is the
+	// honest answer when the sub-agent's transcript has not reached disk yet.
+	if _, hasModel := event["model"]; !hasModel && agentID == "" && ctx.Model != "" {
 		event["model"] = ctx.Model
 	}
 
@@ -631,6 +636,32 @@ const turnCompletePollInterval = 50 * time.Millisecond
 // every later one. A resolved model is then cached in a trace-and-actor-keyed
 // sidecar, so the wait is normally paid once per actor per turn.
 const modelWaitBudget = 1 * time.Second
+
+// modelTranscript names the transcript that answers "which model is this actor
+// running", for one tool event.
+//
+// A sub-agent runs its own model — an agent definition may pin one, and the
+// Agent tool takes an override — and records it in its own transcript. The hook
+// payload does not name that file: a sub-agent's PostToolUse carries
+// transcript_path, which is the main session's. Reading it gives the parent's
+// model, so the sub-agent's tool spans reported one model while the
+// invoke_agent span above them reported another.
+//
+// The sub-agent's path is derived instead. A sub-agent whose transcript is not
+// on disk yet resolves to no path, and the caller leaves the model absent rather
+// than falling back to the main transcript, which is the wrong actor.
+func modelTranscript(event map[string]any, agentID string) string {
+	sessionTranscript, _ := event["transcript_path"].(string)
+	if agentID == "" {
+		return sessionTranscript
+	}
+	// SubagentStop is the one event that carries it outright.
+	if atp, _ := event["agent_transcript_path"].(string); atp != "" {
+		return atp
+	}
+	sessionID, _ := event["session_id"].(string)
+	return transcript.SubagentPath(sessionTranscript, sessionID, agentID)
+}
 
 // waitForModel returns the model named by the transcript, waiting only while an
 // assistant entry could still be on its way.

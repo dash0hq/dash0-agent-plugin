@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -397,6 +398,41 @@ func ReadTurnSkillCommand(transcriptPath string) string {
 		return ""
 	}
 	return command
+}
+
+// SubagentPath returns the transcript Claude Code writes for one sub-agent,
+// derived from the main session's transcript path, the session ID, and the
+// agent ID:
+//
+//	<dir of the session transcript>/<session id>/subagents/agent-<agent id>.jsonl
+//
+// It has to be derived because the payload does not carry it. Only SubagentStop
+// reports agent_transcript_path; a sub-agent's own PostToolUse carries
+// transcript_path alone, which names the *main* session's file. A reader that
+// takes that at face value answers questions about the sub-agent using the
+// parent's transcript.
+//
+// claude/tools/claude-code-usage-audit.py builds the same path from the same
+// three parts, so this layout is already relied on elsewhere in the repo.
+//
+// Returns empty string when any part is missing or when the derived file does
+// not exist. Absent is the right answer for a caller that would otherwise read
+// the wrong transcript.
+func SubagentPath(sessionTranscriptPath, sessionID, agentID string) string {
+	if sessionTranscriptPath == "" || sessionID == "" || agentID == "" {
+		return ""
+	}
+	// Both are single path segments in the derived name, so a separator in
+	// either would escape the session directory.
+	if strings.ContainsAny(sessionID, `/\`) || strings.ContainsAny(agentID, `/\`) {
+		return ""
+	}
+	candidate := filepath.Join(filepath.Dir(sessionTranscriptPath), sessionID,
+		"subagents", "agent-"+agentID+".jsonl")
+	if _, err := os.Stat(candidate); err != nil {
+		return ""
+	}
+	return candidate
 }
 
 // ReadModel reads the transcript file and returns the model from the most

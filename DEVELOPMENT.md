@@ -347,6 +347,8 @@ Codex-scoped as a reader diagnostic.
 | Key | Value / example | Notes |
 |---|---|---|
 | `gen_ai.operation.name` | `execute_tool` | |
+| `gen_ai.request.model` | `claude-…`, `gpt-…`, … | The model of the actor that made the call. A tool call carrying `agent_id` is resolved from that sub-agent's own transcript, so it agrees with the `invoke_agent` span above it; omitted rather than filled from the session's model when that transcript is not on disk yet. |
+| `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh` | Claude only. Same source and meaning as on the chat span. |
 | `gen_ai.tool.type` | `function` | Constant. |
 | `gen_ai.tool.name` | `Bash`, `Read`, … | MCP tool names are stripped of their `mcp__<server>__` prefix; the server goes to `dash0.gen_ai.tool.mcp_server`. |
 | `gen_ai.tool.call.id` | Tool-use ID | |

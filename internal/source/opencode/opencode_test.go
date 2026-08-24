@@ -203,6 +203,60 @@ func TestChildToolSpanCarriesAgentID(t *testing.T) {
 	assert.Equal(t, childSession, event["agent_id"])
 }
 
+// childToolEnvelope is a completed tool call made inside the child session, with
+// the given per-session assistant entries.
+func childToolEnvelope(assistants map[string]any) map[string]any {
+	return map[string]any{
+		"kind": "event", "name": "message.part.updated",
+		"root_session_id": rootSession,
+		"assistants":      assistants,
+		"payload": map[string]any{"properties": map[string]any{"part": map[string]any{
+			"type": "tool", "tool": "read", "callID": "call_x", "sessionID": childSession,
+			"state": map[string]any{"status": "completed"},
+		}}},
+	}
+}
+
+// The pipeline carries no model onto a tool span, so the normalizer reports the
+// model of the session that asked for the call.
+func TestToolSpanCarriesRootModel(t *testing.T) {
+	context := withAssistants(rootContext(), map[string]any{
+		rootSession: map[string]any{"modelID": "root-model"},
+	})
+	event := Normalize(captured(t, 75, context))
+
+	require.NotNil(t, event)
+	assert.Equal(t, "root-model", event["model"])
+}
+
+func TestChildToolSpanCarriesChildModel(t *testing.T) {
+	event := Normalize(childToolEnvelope(map[string]any{
+		rootSession:  map[string]any{"modelID": "root-model"},
+		childSession: map[string]any{"modelID": "child-model"},
+	}))
+
+	require.NotNil(t, event)
+	assert.Equal(t, "child-model", event["model"])
+}
+
+// A sub-agent's first tool call happens before its own assistant message
+// completes, so the child has no entry yet and the root's model stands in.
+func TestChildToolSpanFallsBackToRootModel(t *testing.T) {
+	event := Normalize(childToolEnvelope(map[string]any{
+		rootSession: map[string]any{"modelID": "root-model"},
+	}))
+
+	require.NotNil(t, event)
+	assert.Equal(t, "root-model", event["model"])
+}
+
+func TestToolSpanModelOmittedWhenUnreported(t *testing.T) {
+	event := Normalize(childToolEnvelope(nil))
+
+	require.NotNil(t, event)
+	assert.NotContains(t, event, "model")
+}
+
 func TestStop(t *testing.T) {
 	context := rootContext()
 	context["session_title"] = "Read files and delegate"

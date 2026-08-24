@@ -86,7 +86,7 @@ jobs:
   # Contract tests mapping to the documented install/credential/uninstall paths
   # (each runtime README's "Installation" + "Configuration"). They pin the
   # behavior the docs depend on, so a CLI change or a wrong doc assumption fails
-  # CI, not a rollout. Logic lives in test/contracts/{claude,cursor,codex}.sh
+  # CI, not a rollout. Logic lives in test/contracts/{claude,cursor,codex,opencode}.sh
   # (also runnable locally — see test/contracts/README.md), one script per agent.
   # Each covers install, credential delivery, and uninstall for its runtime.
   # Marketplace installs are covered by the build-and-test job; the binary
@@ -113,6 +113,9 @@ jobs:
 
       - name: Codex install/config contracts
         run: ./test/contracts/codex.sh
+
+      - name: OpenCode install/config contracts
+        run: ./test/contracts/opencode.sh
 
   e2e:
     runs-on: ubuntu-latest

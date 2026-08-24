@@ -37,12 +37,19 @@ vet: ## Run go vet.
 	go vet ./...
 
 .PHONY: test
-test: test-scripts ## Run Go unit + integration tests with the race detector.
+test: test-scripts test-opencode-plugin ## Run Go unit + integration tests with the race detector.
 	go test -race -coverprofile=cover.out ./...
 
 .PHONY: test-scripts
 test-scripts: ## Run the unit tests for the Python diagnostic scripts.
 	python3 -m unittest discover -s claude/tools -p '*_test.py'
+
+# The tests are plain TypeScript run through Node's type stripping, so they need
+# no install step — but they do need a Node new enough to strip types.
+.PHONY: test-opencode-plugin
+test-opencode-plugin: ## Run the unit tests for the OpenCode TypeScript plugin.
+	@command -v node >/dev/null 2>&1 || { echo "skipping: node is not installed"; exit 0; }; \
+	cd opencode && node --test 'test/*.test.ts'
 
 .PHONY: test-e2e
 test-e2e: ## Run the build-tagged end-to-end tests.

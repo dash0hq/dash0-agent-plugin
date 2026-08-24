@@ -31,14 +31,14 @@ than observation. Resolve them before writing anything that depends on them.
 The plugin translates events and writes JSON to the wrapper's stdin. It parses no
 config, resolves no secrets, and downloads nothing (design.md Decision 6).
 
-- [ ] 4.1 Scaffold `opencode/` as a dependency-free TS package with `@opencode-ai/plugin` as a peer/dev dependency and a bundle step producing a single `dash0-opencode-plugin.js`; verify the bundle imports nothing outside Node builtins
-- [ ] 4.2 Implement the event filter and translator per the Decision 3 table, including the root-session resolution and cache from Decision 4 and the call-id dedupe set; verify a test replays `captured_events.jsonl` and asserts the exact sequence of canonical events produced
-- [ ] 4.3 Implement the per-turn usage accumulator from Decision 5, flushed and reset on `Stop`; verify a test over a multi-step captured turn asserts the summed counts
-- [ ] 4.4 Spawn `opencode-on-event.sh` fire-and-forget per canonical event, never awaited, stdin closed after the payload; verify a test asserts the handler resolves without waiting for the child and that a non-zero child exit is swallowed
-- [ ] 4.5 Wrap every hook handler so an unrecognized event shape drops that event only; verify a test feeds malformed events and asserts subsequent well-formed events still translate
-- [ ] 4.6 Render the wrapper's session-start message through `client.tui.showToast`, swallowing failure in headless mode; verify by running `opencode run` with telemetry configured and confirming no error surfaces
-- [ ] 4.7 Emit `SessionEnd` on plugin shutdown so the scratch directory is freed; verify the session directory under the data root is gone after a session exits
-- [ ] 4.8 Assert the spawn count for a recorded session in a test, so a future filter regression that spawns per streaming delta fails CI
+- [x] 4.1 Scaffold `opencode/` as a dependency-free TS package with `@opencode-ai/plugin` as a peer/dev dependency and a bundle step producing a single `dash0-opencode-plugin.js`; verify the bundle imports nothing outside Node builtins
+- [x] 4.2 Implement the event filter and translator per the Decision 3 table, including the root-session resolution and cache from Decision 4 and the call-id dedupe set; verify a test replays `captured_events.jsonl` and asserts the exact sequence of canonical events produced
+- [x] 4.3 Implement the per-turn usage accumulator from Decision 5, flushed and reset on `Stop`; verify a test over a multi-step captured turn asserts the summed counts
+- [x] 4.4 Spawn `opencode-on-event.sh` fire-and-forget per canonical event, never awaited, stdin closed after the payload; verify a test asserts the handler resolves without waiting for the child and that a non-zero child exit is swallowed
+- [x] 4.5 Wrap every hook handler so an unrecognized event shape drops that event only; verify a test feeds malformed events and asserts subsequent well-formed events still translate
+- [x] 4.6 Render the wrapper's session-start message through `client.tui.showToast`, swallowing failure in headless mode; verify by running `opencode run` with telemetry configured and confirming no error surfaces
+- [x] 4.7 Emit `SessionEnd` on plugin shutdown so the scratch directory is freed; verify the session directory under the data root is gone after a session exits
+- [x] 4.8 Assert the spawn count for a recorded session in a test, so a future filter regression that spawns per streaming delta fails CI
 
 ## 5. Test layers that already exist
 

@@ -13,11 +13,11 @@ than observation. Resolve them before writing anything that depends on them.
 
 ## 2. Go side: harness, entrypoint, normalizer
 
-- [ ] 2.1 Add `harness.OpenCode` (`Name: "opencode"`, `EnvPrefix: "OPENCODE"`, `DataSubdir: "opencode"`, empty `Provider`) and verify `go test ./internal/harness/` passes with a case asserting the constants and the `DataDir` precedence chain
-- [ ] 2.2 Create `internal/source/opencode/opencode.go` implementing the Decision 3 mapping table, including the `agent_id` / `agent_type` fields from Decision 4 and the MCP tool-name rewrite from 1.4; verify with unit tests per mapped event kind
-- [ ] 2.3 Map OpenCode's token fields onto `gen_ai.usage.input_tokens`, `output_tokens`, `cache_read.input_tokens`, `cache_creation.input_tokens` and, when greater than zero, `gen_ai.usage.reasoning.output_tokens`; verify unit tests assert the reasoning key is absent at zero
-- [ ] 2.4 Set `gen_ai.conversation.name` from the OpenCode session title on chat events; verify a unit test asserts it is absent for an untitled session
-- [ ] 2.5 Create `cmd/opencode-on-event/main.go` following `cmd/cursor-on-event/main.go`: read stdin, chdir to the event cwd, normalize, `pipeline.Process`, log messages to stderr, exit 0 on error; verify `go build ./...` and a `main_test.go` that feeds a captured event and asserts a clean exit
+- [x] 2.1 Add `harness.OpenCode` (`Name: "opencode"`, `EnvPrefix: "OPENCODE"`, `DataSubdir: "opencode"`, empty `Provider`) and verify `go test ./internal/harness/` passes with a case asserting the constants and the `DataDir` precedence chain
+- [x] 2.2 Create `internal/source/opencode/opencode.go` implementing the Decision 3 mapping table, including the `agent_id` / `agent_type` fields from Decision 4 and the MCP tool-name rewrite from 1.4; verify with unit tests per mapped event kind
+- [x] 2.3 Map OpenCode's token fields onto `gen_ai.usage.input_tokens`, `output_tokens`, `cache_read.input_tokens`, `cache_creation.input_tokens` and, when greater than zero, `gen_ai.usage.reasoning.output_tokens`; verify unit tests assert the reasoning key is absent at zero
+- [x] 2.4 Set `gen_ai.conversation.name` from the OpenCode session title on chat events; verify a unit test asserts it is absent for an untitled session
+- [x] 2.5 Create `cmd/opencode-on-event/main.go` following `cmd/cursor-on-event/main.go`: read stdin, chdir to the event cwd, normalize, `pipeline.Process`, log messages to stderr, exit 0 on error; verify `go build ./...` and a `main_test.go` that feeds a captured event and asserts a clean exit
 
 ## 3. Shell wrapper
 

@@ -36,6 +36,10 @@ var (
 	// so the provider is resolved per-event from the model name rather than
 	// forced to one value.
 	Copilot = Harness{Name: "github-copilot-cli", EnvPrefix: "COPILOT", DataSubdir: "copilot", ConfigDir: ".copilot"}
+	// OpenCode Provider is intentionally empty. OpenCode is bring-your-own-key
+	// across many vendors, so the provider is resolved per-event from the model
+	// id rather than forced to one value.
+	OpenCode = Harness{Name: "opencode", EnvPrefix: "OPENCODE", DataSubdir: "opencode", ConfigDir: ".opencode", UserConfigDir: ".config/opencode"}
 )
 
 // Harness names one coding agent's environment conventions.
@@ -56,6 +60,9 @@ type Harness struct {
 	// config.Name file. It is looked for twice: relative to the project the
 	// agent runs in, then inside the user's home directory.
 	ConfigDir string
+	// UserConfigDir is where the config file lives under the user's home
+	// directory when that differs from ConfigDir. Empty means ConfigDir.
+	UserConfigDir string
 	// Provider is the fallback gen_ai.provider.name for events whose model
 	// cannot be inferred (SessionStart, PreToolUse, ...). Leave it empty for an
 	// agent that proxies several vendors.
@@ -199,7 +206,11 @@ func (h Harness) configFile() *config.File {
 
 	paths := []string{filepath.Join(h.ConfigDir, config.Name)}
 	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, h.ConfigDir, config.Name))
+		userDir := h.UserConfigDir
+		if userDir == "" {
+			userDir = h.ConfigDir
+		}
+		paths = append(paths, filepath.Join(home, userDir, config.Name))
 	}
 	loaded := config.Load(paths...)
 	configCache[h.Name] = loaded

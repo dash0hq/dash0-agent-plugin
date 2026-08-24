@@ -7,15 +7,13 @@
 //
 //  1. Reads the event name from argv (camelCase Copilot payloads carry no
 //     hook_event_name field) and the payload from stdin.
-//  2. Normalizes it to the pipeline's canonical vocabulary (internal/source/copilot).
+//  2. Normalizes it to the pipeline's canonical vocabulary.
 //  3. On a turn boundary (agentStop→Stop), recovers the whole turn from
 //     Copilot's native-OTel file: token/cost/model/response (attached to the
 //     Stop event for the pipeline's chat span) AND the turn's tool executions.
 //  4. Hands off to pipeline.Process for the chat span, then emits one
 //     execute_tool span per recovered tool call — real durations, sub-agent
-//     tools nested under their spawning `task` span. (Copilot's postToolUse
-//     hooks are NOT used for tool spans: they carry no duration and never fire
-//     inside sub-agents; the native-OTel file is the authoritative source.)
+//     tools nested under their spawning `task` span.
 //
 // Telemetry failures never break the user's session: errors go to stderr and
 // the process always exits 0. This fail-open contract is mandatory (Copilot's
@@ -25,17 +23,18 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/dotenv"
+	"github.com/dash0hq/dash0-agent-plugin/internal/harness"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
 	"github.com/dash0hq/dash0-agent-plugin/internal/source/copilot"
 )
+
+var hn = harness.Copilot
 
 func main() {
 	if err := run(); err != nil {
@@ -51,58 +50,34 @@ func run() error {
 		eventName = os.Args[1]
 	}
 
-	raw, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return fmt.Errorf("reading stdin: %w", err)
-	}
-	var event map[string]any
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return fmt.Errorf("parsing JSON from stdin: %w", err)
-	}
-
-	// Every Copilot payload (camelCase and pascalCase alike) carries the
-	// workspace as `cwd`, but Copilot spawns the hook with a process CWD that
-	// isn't the workspace root — so vcs.Detect()'s `git rev-parse --git-dir`
-	// fails and spans lose repo/branch metadata (only the global git identity
-	// survives). chdir into the payload's cwd before anything git-dependent runs
-	// so the pipeline sees the right working tree. This precedes Normalize, which
-	// consumes the raw case-variant keys.
-	chdirToCwd(event)
-
-	event = copilot.Normalize(eventName, event)
-	if event == nil {
-		return nil // event the pipeline doesn't consume — exit cleanly
-	}
-
-	dataDir, err := resolveDataDir()
+	event, err := pipeline.ReadEvent(os.Stdin)
 	if err != nil {
 		return err
 	}
 
-	cfg := otlp.Config{
-		OTLPUrl:      dash0Env("OTLP_URL"),
-		AuthToken:    pluginOptionSecure("AUTH_TOKEN"),
-		Dataset:      dash0Env("DATASET"),
-		AgentName:    agentName(),
-		HarnessName:  "github-copilot-cli",
-		TeamName:     dash0Env("TEAM_NAME"),
-		OmitUserInfo: dash0EnvBool("OMIT_USER_INFO", false),
-		OmitIO:       dash0EnvBool("OMIT_IO", true),
-		Debug:        dash0EnvBool("DEBUG", false),
-		DebugFile:    dash0Env("DEBUG_FILE"),
-	}
-	pipeline.ValidateOTLPURL(&cfg)
+	// Every Copilot payload (camelCase and pascalCase alike) carries the
+	// workspace as `cwd`. chdir into the payload's cwd before anything git-dependent runs
+	// so the pipeline sees the right working tree.
+	pipeline.ChdirToEventCwd(event)
 
+	event = copilot.Normalize(eventName, event)
+	if event == nil {
+		return nil
+	}
+
+	dataDir, err := hn.DataDir()
+	if err != nil {
+		return err
+	}
+
+	cfg := hn.Config()
 	hookEvent, _ := event["hook_event_name"].(string)
 
 	// Copilot fires sessionStart and userPromptSubmitted at session startup in a
-	// NONDETERMINISTIC order (unlike Claude/Cursor, where sessionStart is always
-	// first). pipeline.Process handles this generally: its SessionStart branch
-	// MERGES into any existing trace context rather than overwriting it, so the
+	// NONDETERMINISTIC order. pipeline.Process handles this generally: its SessionStart
+	// branch MERGES into any existing trace context rather than overwriting it, so the
 	// trace/span IDs an already-delivered userPromptSubmitted established survive.
 	// SessionStart can therefore flow through the pipeline like every other event
-	// (connectivity check + "started" marker included) — the only Copilot-specific
-	// need here is sweeping stale native-OTel files.
 	if hookEvent == "SessionStart" {
 		// Sweep native-OTel files left behind by prior unclean exits (where the
 		// launcher's rm never ran) so the convention dir doesn't grow unbounded.
@@ -121,7 +96,6 @@ func run() error {
 	if hookEvent == "Stop" {
 		sessionID, _ := event["session_id"].(string)
 		sessionDir := pipeline.SessionDir(dataDir, sessionID)
-		_ = os.MkdirAll(sessionDir, 0o755)
 		if t, newCursor := copilot.ReadTurn(sessionID, sessionDir); t != nil {
 			turn = t
 			if t.Usage != nil {
@@ -157,8 +131,7 @@ func run() error {
 	return nil
 }
 
-// attachUsage sets the per-turn token/cost/model attributes on the Stop event
-// as int64 (so the OTLP layer encodes them as integer attributes).
+// attachUsage sets the per-turn token/cost/model attributes on the Stop event.
 func attachUsage(event map[string]any, u *copilot.Usage) {
 	event["gen_ai.usage.input_tokens"] = u.InputTokens
 	event["gen_ai.usage.output_tokens"] = u.OutputTokens
@@ -176,8 +149,7 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 	}
 	// The agentStop payload carries no response text (only stopReason), so the
 	// turn's final assistant message comes from the native-OTel chat span. The
-	// pipeline renders last_assistant_message as gen_ai.output.messages — the
-	// same path Claude/Cursor/Codex use — so OmitIO redaction stays uniform.
+	// pipeline renders last_assistant_message as gen_ai.output.messages.
 	if u.ResponseText != "" {
 		if _, has := event["last_assistant_message"]; !has {
 			event["last_assistant_message"] = u.ResponseText
@@ -193,8 +165,7 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 // tools under the turn's chat span. Events are synthesized in the pipeline's
 // canonical shape and run through the same extractor enrichments as
 // hook-sourced tool events on the other runtimes, so OmitIO redaction and the
-// dash0.gen_ai.* details stay uniform. Export failures log and continue —
-// fail-open, and one lost span must not block the rest.
+// dash0.gen_ai.* details stay uniform.
 func emitToolSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) {
 	for _, tc := range turn.Tools {
 		event := map[string]any{
@@ -225,9 +196,7 @@ func emitToolSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) 
 		pipeline.EnrichToolEvent(event)
 
 		// Label a sub-agent spawn with its instance name (e.g. "echo-runner") so
-		// task spans are tellable apart; a non-content field, so not OmitIO-gated.
-		// Set directly under its wire key (the pipeline passes unmapped keys
-		// through verbatim), keeping this Copilot-specific detail local.
+		// task spans are tellable apart.
 		if strings.EqualFold(tc.Name, "task") && args != nil {
 			if name, _ := args["name"].(string); name != "" {
 				event["dash0.gen_ai.tool.task.name"] = name
@@ -243,61 +212,4 @@ func emitToolSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) 
 			fmt.Fprintf(os.Stderr, "copilot-on-event: tool span export: %v\n", err)
 		}
 	}
-}
-
-// resolveDataDir picks the per-session scratch root. Precedence:
-// COPILOT_PLUGIN_DATA (Copilot's writable per-plugin dir) > DASH0_PLUGIN_DATA >
-// XDG_STATE_HOME > ~/.local/state — all under dash0-agent-plugin/copilot.
-func resolveDataDir() (string, error) {
-	if v := os.Getenv("COPILOT_PLUGIN_DATA"); v != "" {
-		return v, nil
-	}
-	if v := os.Getenv("DASH0_PLUGIN_DATA"); v != "" {
-		return v, nil
-	}
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolving HOME: %w", err)
-		}
-		base = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(base, "dash0-agent-plugin", "copilot"), nil
-}
-
-func agentName() string {
-	if v := os.Getenv("DASH0_AGENT_NAME"); v != "" {
-		return v
-	}
-	return "github-copilot-cli"
-}
-
-func dash0Env(key string) string {
-	return os.Getenv("DASH0_" + key)
-}
-
-// pluginOptionSecure reads only COPILOT_PLUGIN_OPTION_<key> (never DASH0_<key>),
-// so the auth token doesn't leak into tool-spawned shells.
-func pluginOptionSecure(key string) string {
-	return os.Getenv("COPILOT_PLUGIN_OPTION_" + key)
-}
-
-// chdirToCwd moves the process into the hook payload's cwd. Best-effort: if the
-// field is missing or chdir fails, we keep the original CWD and let vcs.Detect
-// produce what it can.
-func chdirToCwd(event map[string]any) {
-	cwd, ok := event["cwd"].(string)
-	if !ok || cwd == "" {
-		return
-	}
-	_ = os.Chdir(cwd)
-}
-
-func dash0EnvBool(key string, defaultVal bool) bool {
-	v := strings.ToLower(strings.TrimSpace(dash0Env(key)))
-	if v == "" {
-		return defaultVal
-	}
-	return v == "true" || v == "1"
 }

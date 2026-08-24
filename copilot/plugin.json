@@ -1,6 +1,6 @@
 {
   "name": "dash0-agent-plugin",
-  "version": "0.1.22",
+  "version": "0.1.24",
   "description": "OpenTelemetry observability for GitHub Copilot CLI sessions. Emits canonical per-turn spans (tool calls, chat turns with token/cost/model usage) as OTel traces to Dash0 — the same span shape as the Claude Code and Cursor runtimes.",
   "author": {
     "name": "Dash0"

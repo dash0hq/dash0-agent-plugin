@@ -48,7 +48,7 @@ Notes:
 
 ## How it works
 
-- The plugin's `scripts/on-event.sh` only downloads the release binary if one
+- The plugin's `claude/claude-on-event.sh` only downloads the release binary if one
   isn't already present at
   `~/.claude/plugins/data/<plugin>-<marketplace>/bin/on-event-<version>-<os>-<arch>`.
   The Dockerfile pre-places the locally built binary there, so the download is

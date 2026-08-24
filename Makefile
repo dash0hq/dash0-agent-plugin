@@ -25,7 +25,7 @@ build: ## Build all Go packages.
 	go build ./...
 
 .PHONY: build-binary
-build-binary: ## Build one command to $(OUT). Example: make build-binary PKG=./cmd/on-event OUT=bin/on-event
+build-binary: ## Build one command to $(OUT). Example: make build-binary PKG=./cmd/claude-on-event OUT=bin/on-event
 	go build -o $(OUT) $(PKG)
 
 .PHONY: fmt
@@ -37,8 +37,12 @@ vet: ## Run go vet.
 	go vet ./...
 
 .PHONY: test
-test: ## Run Go unit + integration tests with the race detector.
+test: test-scripts ## Run Go unit + integration tests with the race detector.
 	go test -race -coverprofile=cover.out ./...
+
+.PHONY: test-scripts
+test-scripts: ## Run the unit tests for the Python diagnostic scripts.
+	python3 -m unittest discover -s claude/tools -p '*_test.py'
 
 .PHONY: test-e2e
 test-e2e: ## Run the build-tagged end-to-end tests.

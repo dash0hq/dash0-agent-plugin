@@ -93,6 +93,65 @@ func TestClearAgentTraceContext(t *testing.T) {
 	assert.Nil(t, loaded)
 }
 
+func TestAgentTraceContextConsumedMarker(t *testing.T) {
+	dir := t.TempDir()
+	ctx := TraceContext{TraceID: "aaaabbbbccccddddaaaabbbbccccdddd"}
+	require.NoError(t, SaveAgentTraceContext(ctx, dir, "agent1"))
+
+	require.NoError(t, MarkAgentTraceContextConsumed(dir, "agent1"))
+	consumed, err := AgentTraceContextConsumed(dir, "agent1")
+	require.NoError(t, err)
+	assert.True(t, consumed)
+
+	ClearAgentTraceContext(dir, "agent1")
+	consumed, err = AgentTraceContextConsumed(dir, "agent1")
+	require.NoError(t, err)
+	assert.True(t, consumed, "clearing the snapshot keeps the fail-closed marker")
+
+	require.NoError(t, SaveAgentTraceContext(ctx, dir, "agent1"))
+	consumed, err = AgentTraceContextConsumed(dir, "agent1")
+	require.NoError(t, err)
+	assert.True(t, consumed, "agent IDs are invocation-unique, so unexpected reuse stays fail-closed")
+}
+
+func TestSaveAndLoadToolModel(t *testing.T) {
+	dir := t.TempDir()
+	traceID := "aaaabbbbccccddddaaaabbbbccccdddd"
+
+	require.NoError(t, SaveToolModel(dir, traceID, "", "claude-opus-4-8"))
+	require.NoError(t, SaveToolModel(dir, traceID, "agent1", "claude-haiku-4-5"))
+
+	model, err := LoadToolModel(dir, traceID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "claude-opus-4-8", model)
+	agentModel, err := LoadToolModel(dir, traceID, "agent1")
+	require.NoError(t, err)
+	assert.Equal(t, "claude-haiku-4-5", agentModel)
+
+	other, err := LoadToolModel(dir, "11112222333344441111222233334444", "")
+	require.NoError(t, err)
+	assert.Empty(t, other, "a later turn cannot read another trace's cached model")
+
+	ClearToolModels(dir, traceID)
+	model, err = LoadToolModel(dir, traceID, "")
+	require.NoError(t, err)
+	assert.Empty(t, model)
+	agentModel, err = LoadToolModel(dir, traceID, "agent1")
+	require.NoError(t, err)
+	assert.Empty(t, agentModel)
+}
+
+func TestToolModelRejectsUnsafeActorID(t *testing.T) {
+	dir := t.TempDir()
+	traceID := "aaaabbbbccccddddaaaabbbbccccdddd"
+
+	for _, actorID := range []string{"../escape", "a/b", "a.b", "a b"} {
+		assert.Error(t, SaveToolModel(dir, traceID, actorID, "claude-opus-4-8"), "actor %q", actorID)
+		_, err := LoadToolModel(dir, traceID, actorID)
+		assert.Error(t, err, "actor %q", actorID)
+	}
+}
+
 func TestAgentTraceContextRejectsUnsafeAgentID(t *testing.T) {
 	dir := t.TempDir()
 

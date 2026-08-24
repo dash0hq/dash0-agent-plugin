@@ -317,7 +317,8 @@ func TestE2ECopilotVCSAttributes(t *testing.T) {
 	got := map[string]string{}
 	for _, s := range spans {
 		for _, a := range s.Attributes {
-			if !strings.HasPrefix(a.Key, "dash0.gen_ai.vcs.") && a.Key != "user.name" && a.Key != "user.email" {
+			if !strings.HasPrefix(a.Key, "dash0.gen_ai.vcs.") && !strings.HasPrefix(a.Key, "user.") &&
+				a.Key != "dash0.gen_ai.user.identity.source" {
 				continue
 			}
 			if a.Value.StringValue != nil {
@@ -338,6 +339,8 @@ func TestE2ECopilotVCSAttributes(t *testing.T) {
 	// the payload cwd. OMIT_USER_INFO=false, so it's the plain value, not a hash.
 	assert.Equal(t, "Copilot E2E", got["user.name"])
 	assert.Equal(t, "copilot-e2e@dash0.com", got["user.email"])
+	assert.Equal(t, "git", got["dash0.gen_ai.user.identity.source"],
+		"a configured git identity must declare itself as such, not as the OS fallback")
 }
 
 // TestE2ECopilotDropsSubAgentSessions feeds a full sub-agent lifecycle under a

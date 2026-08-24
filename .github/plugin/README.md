@@ -2,7 +2,13 @@
 
 Emit GitHub Copilot CLI agent activity as OpenTelemetry spans to your Dash0 endpoint — prompts and responses, tool calls, MCP calls, and sub-agent activity, with shared trace context across each turn.
 
-**Requirements:** the GitHub Copilot CLI, on macOS or Linux.
+## Requirements
+
+- **Agent:** the GitHub Copilot CLI.
+- **Operating system:** macOS or Linux (Windows is not supported).
+- **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
+- **Shell tooling:** `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
+  bootstrap downloads and checksum-verifies the hook binary on first run.
 
 ## Installation
 
@@ -123,7 +129,14 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 | Setting | Default | Behavior |
 |---|---|---|
 | `omit_user_info` | `false` | Real `user.name` and `user.email` are sent. When `true`, `user.name` is a SHA-256 hash, `user.email` is omitted, working directory is redacted. |
+| `omit_identity_fallback` | `false` | The OS account is used when `git config user.name` is unset. When `true`, only a git identity is reported and the fallback is dropped. |
 | `omit_io` | `true` | Prompt content and tool call inputs/outputs are stripped from spans. |
+
+### User identity
+
+`user.name` comes from `git config user.name`. When that is unset, the plugin falls back to the OS account (display name, then username) so the session is still attributable instead of arriving anonymous. `user.email` has no fallback — it is only ever the git value.
+
+Every span carrying a name also carries `dash0.gen_ai.user.identity.source`, either `git` or `os`, so a fallback is never mistaken for a configured identity. The fallback is skipped in CI and for shared accounts (`root`, `runner`, ...), where the OS account names a machine rather than a person; those sessions report no name at all. Set `OMIT_IDENTITY_FALLBACK` to require a real git identity and drop the fallback entirely.
 
 ## Telemetry attributes
 
@@ -132,7 +145,15 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 
 ## Troubleshooting
 
-If no traces arrive:
+### No telemetry, and the debug log shows a failed binary download
+
+The hook is trying to download a binary for an unsupported platform (the plugin
+fails open, so `copilot` itself keeps working). Run `uname -s -m` — anything
+other than `Darwin` or `Linux` on `x86_64`/`arm64`/`aarch64` is unsupported, in
+particular `MINGW64_NT-…` or `MSYS_NT-…`, which is Windows under Git Bash. See
+[Requirements](#requirements).
+
+### No traces arrive
 
 - Confirm you **restarted `copilot`** after installing (hooks load at startup).
 - Confirm you opened a **new shell** after `/dash0-configure` so the launch function is active — without it, `chat` spans emit but carry no usage or tool spans.

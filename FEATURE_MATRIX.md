@@ -2,9 +2,10 @@
 
 Four runtimes ship today — **Claude Code**, **Cursor**, **OpenAI Codex**, and
 **GitHub Copilot CLI** — on one shared Go pipeline (`cmd/*/main.go` →
-`internal/pipeline` → `internal/otlp`). They differ in how they're installed, how
-config reaches the hook, what the host exposes to a hook, and (consequently) which
-span properties can be populated.
+`internal/pipeline` → `internal/otlp`), with each agent's configuration resolved
+by `internal/harness`. They differ in how they're installed, how config reaches
+the hook, what the host exposes to a hook, and (consequently) which span
+properties can be populated.
 
 ## Runtimes at a glance
 
@@ -13,15 +14,23 @@ span properties can be populated.
 | `gen_ai.harness.name` | `claude-code` | `cursor` | `codex` | `github-copilot-cli` |
 | `gen_ai.provider.name` | `anthropic` fallback + per-model | per-model only | `openai` fallback + per-model | per-model only |
 | Default `service.name` / agent name | `claude-code` | `cursor` | `codex` | `github-copilot-cli` |
-| Entrypoint | `cmd/on-event` | `cmd/cursor-on-event` | `cmd/codex-on-event` | `cmd/copilot-on-event` |
+| Entrypoint | `cmd/claude-on-event` | `cmd/cursor-on-event` | `cmd/codex-on-event` | `cmd/copilot-on-event` |
 | Config file | `~/.claude/dash0-agent-plugin.local.md` (or `.claude/…`) | `~/.cursor/dash0-agent-plugin.local.md` (or `.cursor/…`) | `~/.codex/dash0-agent-plugin.local.md` (or `.codex/…`) | `~/.copilot/dash0-agent-plugin.local.md` (global only) |
-| Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `~/.local/state/dash0-agent-plugin/cursor` | `~/.local/state/dash0-agent-plugin/codex` | `~/.local/state/dash0-agent-plugin/copilot` |
-| Hooks registered in | plugin manifest `hooks/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |
+| Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `$CURSOR_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/cursor` | `$CODEX_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/codex` | `$COPILOT_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/copilot` |
+| Hooks registered in | plugin manifest `claude/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |
 | Wired hook events | 24 | 9 | 10 | 4 |
+| Supported OS/arch | `darwin`,`linux` × `amd64`,`arm64` | same | same | same |
+| Unsupported platform | hook fails | hook fails | hook fails | fails open (untraced) |
+
+`›` reads as "else". Of the three prefixed variables only `COPILOT_PLUGIN_DATA` is
+set by an agent today, and Copilot's bootstrap reads the same one, so its binary
+cache and session state share a root. Codex sets bare `PLUGIN_DATA` instead:
+`codex/codex-on-event.sh` caches the binary under it but never exports it, so for a
+marketplace install the cache and the session state sit in different roots.
 
 ## Configuration options
 
-Frontmatter keys in the `.local.md` file. The shell wrapper (`scripts/*-on-event.sh`)
+Frontmatter keys in the `.local.md` file. The shell wrapper (`<runtime>/<runtime>-on-event.sh`)
 parses them and exports the env vars the binary reads. "No (env only)" means the
 wrapper doesn't parse that key from the file, so it must be set as an environment
 variable instead.
@@ -30,14 +39,16 @@ variable instead.
 |---|---|---|---|---|---|
 | `otlp_url` | Yes | Yes | Yes | Yes | Dash0 OTLP ingress. Empty ⇒ telemetry off. |
 | `auth_token` | Yes | Yes | Yes | Yes | Secure var only, no `DASH0_*` fallback: `{CLAUDE,CURSOR,CODEX,COPILOT}_PLUGIN_OPTION_AUTH_TOKEN`. |
+| `auth_token_keychain_service` (+ `_account`) | Yes | No | No | No | macOS only. Reads the token from a named keychain item instead of storing it, so managed rollouts ship a pointer rather than the secret. Does not restrict same-user process access. Other runtimes read `auth_token` in plaintext ([SIG-261](https://linear.app/dash0/issue/SIG-261)). |
 | `dataset` | Yes | Yes | Yes | Yes | `Dash0-Dataset` header. |
 | `agent_name` | Yes | Yes | Yes | Yes | → `service.name` / `gen_ai.agent.name`. |
 | `team_name` | Yes | Yes | Yes | Yes | → `dash0.team.name`. |
 | `omit_io` | Yes | Yes | Yes | Yes | Binary default `true` (redact prompts + tool I/O).¹ |
 | `omit_user_info` | Yes | Yes | Yes | Yes | Default `false`. |
+| `omit_identity_fallback` | Yes | Yes | Yes | Yes | Default `false`. When `true`, only a real `git config user.name` is reported; the OS-account fallback is dropped. |
 | `enabled` | Yes | Yes | Yes | Yes | `false` ⇒ wrapper exits, plugin off for that scope. |
-| `debug` | No (env only) | Yes | Yes | Yes | Claude: use `DASH0_DEBUG`. |
-| `debug_file` | No (env only) | Yes | Yes | Yes | Claude: use `DASH0_DEBUG_FILE`. |
+| `debug` | Yes | Yes | Yes | Yes | |
+| `debug_file` | Yes | Yes | Yes | Yes | |
 | `show_session_link` | Yes (plugin option / env) | No | No | No | Claude-only feature; not parsed from `.local.md` — set via `/plugin → Configure` or `DASH0_SHOW_SESSION_LINK`. Cursor/Codex/Copilot binaries don't consume it. |
 
 ¹ The Cursor and Codex README example configs show `omit_io: false`, but the installers
@@ -76,13 +87,17 @@ demo generator uses them).
 | Input / output tokens | Yes | Yes | Yes | Yes | |
 | `cache_read.input_tokens` | Yes | Yes | Yes | Yes | |
 | `cache_creation.input_tokens` | Yes | Yes | No | No | Codex/Copilot don't report it. |
-| Reasoning tokens | No | No | No | Yes | Codex parses but doesn't emit; Copilot emits `reasoning.output_tokens` (when > 0). |
+| Reasoning tokens | Yes | No | No | Yes | Claude reads `output_tokens_details.thinking_tokens`; Codex parses but doesn't emit; Copilot reads its own field. Claude and Copilot share the key `gen_ai.usage.reasoning.output_tokens` and both emit it only when > 0, so one query covers both and absence means no thinking. |
 | Sub-agent `invoke_agent` span + parenting | Yes | Partial | Yes | Partial | Cursor: `subagentStart` dropped; the stop span dangles under the chat span. Copilot: sub-agent chat rounds fold into the parent turn (flat token attribution); their tool calls re-parent under the spawning `task` span. |
 | MCP server attribute (`dash0.gen_ai.tool.mcp_server`) | Yes (real server) | Partial (placeholder `cursor`) | Yes (real server) | Yes (real server) | |
 | Tool-call duration | Native | Native | Reconstructed from `PreToolUse` | Native (from OTel file) | |
 | Session title (`gen_ai.conversation.name`) | Yes | No | No | No | Only Claude has a transcript reader. |
 | Prompt / response content (`gen_ai.input/output.messages`) | Yes | Yes | Yes | Yes | Gated by `omit_io`, truncated at 16 KB. Copilot response text comes from the native-OTel file. |
 | VCS + code enrichment (repo / branch / PR / issue / commit / lines / bash-family / skill) | Yes | Yes | Yes | Yes | Shared pipeline extractors. Copilot has no per-edit line counts (`apply_patch` carries no `structuredPatch`). |
+| User identity (`user.name` / `user.email` / `dash0.gen_ai.user.identity.source`) | Yes | Yes | Yes | Yes | `git config user.name`, falling back to the OS account (`identity.source=os`). Emitted outside a git repo too. |
+| Billing mode (`dash0.gen_ai.billing_mode`, `dash0.gen_ai.plan_type`) | No | No | Yes | No | Cost is list price × tokens, which is not spend on a subscription. All four are predominantly sold as subscriptions, so absence means "undetermined", never "billed per token". Claude Code is next. |
+| Rate-limit windows (`dash0.gen_ai.rate_limit.{primary,secondary}.*`, `.reached_type`) | No | No | Yes | No | Only Codex persists an allowance snapshot locally. Claude Code enforces windows but does not write them to disk; a 429 in its transcript is the only after-the-fact signal. |
+| Overage credits (`dash0.gen_ai.credits.*`) | No | No | Yes | No | Codex CLI ≥ ~14 Jul 2026. Claude Code's `overageCreditGrantCache` is grant *eligibility*, a different concept, and must not reuse these keys. |
 | Usage source | Claude JSONL transcript | `afterAgentResponse` hook | Codex rollout file | Native-OTel file (per turn) | |
 
 ## Installation options
@@ -95,17 +110,18 @@ demo generator uses them).
 | Local dev | `claude --plugin-dir …` ([guide](claude/README.md)) | symlink into `~/.cursor/plugins/local/` ([guide](cursor/README.md)) | `emit-codex-hooks` ([guide](codex/README.md#build--run-locally)) | `copilot-local-dev` skill ([guide](copilot/README.md#build--run-locally)) |
 | Binary delivery | download + checksum (`on-event.sh`) | download + checksum (`cursor-on-event.sh`) | download + checksum (`codex-on-event.sh`) | download + checksum (`copilot-on-event.sh`) |
 | Hook trust step | None | None | Yes — reproduced trust-hash in `config.toml` (installer) or manual `/hooks` (marketplace path) | None (restart `copilot`) |
-| Extra requirement | — | `jq` | `jq` | launch function (native OTel) via `dash0-configure` |
+| Extra requirement | — | `jq` | — | launch function (native OTel) via `dash0-configure` |
 
 ## Debugging
 
 | | Claude Code | Cursor | Codex | Copilot CLI |
 |---|---|---|---|---|
-| Enable via config file | No | `debug` / `debug_file` | `debug` / `debug_file` | `debug` / `debug_file` |
+| Enable via config file | `debug` / `debug_file` | same | same | same |
 | Enable via env | `DASH0_DEBUG` / `DASH0_DEBUG_FILE` | same | same | same |
 | Output | `[dash0:trace\|log\|metric]` to stderr and/or file | same | same | same |
+| stderr actually visible | No — hooks exit 0 and Claude Code only surfaces hook stderr under `claude --debug`, so `debug_file` is required to see anything | Yes | Yes | Yes |
 | Runs pipeline without a backend (empty `otlp_url`) | Yes (when debug on) | Yes | Yes | Yes |
-| Primary path | env vars | config file | config file | config file |
+| Primary path | config file | config file | config file | config file |
 
 ## Error handling
 

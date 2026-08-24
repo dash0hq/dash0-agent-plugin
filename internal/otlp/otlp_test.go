@@ -285,6 +285,71 @@ func TestSendLogOmitIO(t *testing.T) {
 	assertAttrContains(t, lr.Attributes, "gen_ai.input.messages", `REDACTED`)
 }
 
+// TestSendLogDropsSessionBookkeeping pins the fields that reached production
+// spans because eventAttributes exports anything it does not recognize. The
+// payload below is a real Stop event from qa/runs, trimmed to the fields at
+// issue: background_tasks carries the Task tool's description, so it also leaked
+// content on a key omit_io does not cover.
+func TestSendLogDropsSessionBookkeeping(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "sess-123",
+		"prompt_id":       "1cfb5631-fc7b-4362-baab-be39d2e6b800",
+		"session_crons":   "[]",
+		"background_tasks": `[{"agent_type":"general-purpose",` +
+			`"description":"Run three sequential bash commands",` +
+			`"id":"acf70f365e7ac82ca","status":"running","type":"subagent"}]`,
+	}
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "sess-123")
+	for _, key := range []string{"prompt_id", "session_crons", "background_tasks"} {
+		assertNoAttr(t, lr.Attributes, key)
+	}
+}
+
+// TestSendLogDropsUnmappedBookkeeping covers the fields that do not reach a span
+// today because InstructionsLoaded maps to no span. Denying them is only useful
+// if it holds when that changes, which is what this asserts. "reason" is in the
+// same list but was not in the same position: SessionEnd does produce a chat span
+// when a trace context is open, so that one was live.
+func TestSendLogDropsUnmappedBookkeeping(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "InstructionsLoaded",
+		"session_id":      "sess-123",
+		"file_path":       "/Users/someone/.claude/CLAUDE.md",
+		"load_reason":     "startup",
+		"memory_type":     "user",
+		"reason":          "other",
+	}
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "sess-123")
+	for _, key := range []string{"file_path", "load_reason", "memory_type", "reason"} {
+		assertNoAttr(t, lr.Attributes, key)
+	}
+}
+
 func TestTruncateContent(t *testing.T) {
 	t.Run("short content is not truncated", func(t *testing.T) {
 		result := truncateContent("hello world")
@@ -502,4 +567,49 @@ func TestHashIdentity(t *testing.T) {
 		result := hashIdentity("")
 		assert.Len(t, result, 16)
 	})
+}
+
+func TestConfigValidateURL(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		url     string
+		want    bool
+		wantURL string // the value left in the Config afterwards
+	}{
+		{"valid https host", "https://ingress.eu-west-1.aws.dash0.com", true, "https://ingress.eu-west-1.aws.dash0.com"},
+		{"valid with port and path", "http://localhost:4318/v1/traces", true, "http://localhost:4318/v1/traces"},
+		{"empty stays empty", "", false, ""},
+		{"no scheme is cleared", "ingress.dash0.com:4318", false, ""},
+		{"no host is cleared", "https://", false, ""},
+		{"malformed is cleared", "http://%zz", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{OTLPUrl: tc.url}
+			assert.Equal(t, tc.want, cfg.ValidateURL())
+			// Clearing is the mechanism that disables export, so the resulting
+			// value matters as much as the bool.
+			assert.Equal(t, tc.wantURL, cfg.OTLPUrl)
+		})
+	}
+}
+
+// A cleared URL must actually stop the exporters, which is the whole point of
+// clearing it rather than only reporting false.
+func TestConfigValidateURLClearingStopsExport(t *testing.T) {
+	var got int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	good := Config{OTLPUrl: srv.URL, AuthToken: "t"}
+	require.True(t, good.ValidateURL())
+	require.NoError(t, SendLog(map[string]any{"hook_event_name": "SessionStart"}, good))
+	require.Equal(t, 1, got, "a valid URL must reach the endpoint")
+
+	bad := Config{OTLPUrl: "not a url", AuthToken: "t"}
+	require.False(t, bad.ValidateURL())
+	require.NoError(t, SendLog(map[string]any{"hook_event_name": "SessionStart"}, bad))
+	assert.Equal(t, 1, got, "a cleared URL must send nothing")
 }

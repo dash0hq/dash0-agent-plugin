@@ -13,7 +13,7 @@ start_mock_otlp   # http://localhost:4319
 
 echo "== Cursor credential delivery reaches a real OTLP request =="
 export DASH0_PLUGIN_DATA=/tmp/cursor-pdata
-VERSION=$(grep '^VERSION=' "$REPO/scripts/cursor-on-event.sh" | sed 's/VERSION="//;s/"//')
+VERSION=$(grep '^VERSION=' "$REPO/cursor/cursor-on-event.sh" | sed 's/VERSION="//;s/"//')
 rm -rf "$DASH0_PLUGIN_DATA"; mkdir -p "$DASH0_PLUGIN_DATA/bin"
 make -C "$REPO" build-binary PKG=./cmd/cursor-on-event OUT="$DASH0_PLUGIN_DATA/bin/cursor-on-event-${VERSION}-$(os_arch)"
 
@@ -29,7 +29,7 @@ MD
 # Clean cwd so the repo's own .cursor/ can't shadow the global config.
 ( cd "$(mktemp -d)" \
   && echo '{"hook_event_name":"sessionStart","session_id":"contract-d1","conversation_id":"contract-d1","model":"default"}' \
-     | bash "$REPO/scripts/cursor-on-event.sh" )
+     | bash "$REPO/cursor/cursor-on-event.sh" )
 
 # credentials from env vars only, no config file present.
 export HOME=/tmp/cursor-home-env; rm -rf "$HOME"; mkdir -p "$HOME/.cursor"
@@ -38,7 +38,7 @@ export HOME=/tmp/cursor-home-env; rm -rf "$HOME"; mkdir -p "$HOME/.cursor"
      | DASH0_OTLP_URL=http://localhost:4319 \
        CURSOR_PLUGIN_OPTION_AUTH_TOKEN=cursor-env-token \
        DASH0_DATASET=cursor-env-ds \
-       bash "$REPO/scripts/cursor-on-event.sh" )
+       bash "$REPO/cursor/cursor-on-event.sh" )
 
 sleep 2
 RESULT=$(curl -s http://localhost:4319/requests)
@@ -54,9 +54,11 @@ echo "PASS: config-file and env-var credentials flow through cursor-on-event.sh 
 echo "== install-cursor.sh lays out the plugin dir + merges into ~/.cursor/hooks.json =="
 # Capture curl output first, then parse — piping directly into `grep -m1` closes
 # the pipe early and makes curl exit 23 (write error) under `set -o pipefail`.
-latest_json=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest) || true
+latest_json=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest) \
+  || skip_or_fail "could not reach the GitHub releases API (network or rate limit)"
 DASH0_VERSION=$(printf '%s' "$latest_json" | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//' || true)
-[ -n "$DASH0_VERSION" ] || { echo "WARNING: could not resolve latest release, skipping the install/uninstall contracts"; exit 0; }
+[ -n "$DASH0_VERSION" ] \
+  || skip_or_fail "the releases API returned no tag_name — no published release to test the installer against"
 echo "testing installer against v$DASH0_VERSION artifacts"
 
 export HOME=/tmp/cursor-installer-home XDG_STATE_HOME=/tmp/cursor-installer-state
@@ -80,21 +82,21 @@ DASH0_AUTH_TOKEN=e2e-token \
 fail=0
 EXPECTED_PATHS=(
   "$HOME/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json"
-  "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/plugin-hooks.json"
+  "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/hooks.json"
   "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/skills/dash0-configure/SKILL.md"
-  "$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh"
+  "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh"
   "$HOME/.cursor/dash0-agent-plugin.local.md"
   "$HOME/.cursor/hooks.json"
 )
 for p in "${EXPECTED_PATHS[@]}"; do
   [ -f "$p" ] || { echo "ERROR: installer did not create expected file: $p"; fail=1; }
 done
-[ -x "$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh" ] \
+[ -x "$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh" ] \
   || { echo "ERROR: bootstrap script is not executable"; fail=1; }
 cat "$HOME/.cursor/hooks.json"
 
 # shellcheck disable=SC2016  # literal $HOME — Cursor expands it at hook invocation time
-EXPECTED_CMD='$HOME/.cursor/plugins/local/dash0-agent-plugin/scripts/cursor-on-event.sh'
+EXPECTED_CMD='$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh'
 for ev in sessionStart sessionEnd beforeSubmitPrompt afterAgentResponse preToolUse postToolUse postToolUseFailure subagentStart subagentStop; do
   got=$(jq -r --arg ev "$ev" '.hooks[$ev] // [] | map(select(.command | contains("cursor-on-event.sh"))) | .[0].command // ""' "$HOME/.cursor/hooks.json")
   [ "$got" = "$EXPECTED_CMD" ] || { echo "ERROR: hooks.json missing or wrong command for $ev (got: $got)"; fail=1; }

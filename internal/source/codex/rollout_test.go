@@ -144,3 +144,250 @@ func TestReadTurnUsageMissingFileErrors(t *testing.T) {
 	_, err := ReadTurnUsage(filepath.Join("testdata", "rollouts", "no-such-rollout.jsonl"))
 	assert.Error(t, err)
 }
+
+// rate_limits rides on the same token_count records as usage, but as a SIBLING
+// of info rather than a child of it. It reports account-level allowance state
+// (which plan, how much of it is consumed, when it resets) — not token counts.
+func TestReadRolloutParsesRateLimits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := "" +
+		`{"type":"event_msg","payload":{"type":"user_message","message":"hi"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":10,"output_tokens":5}},"rate_limits":{"limit_id":"codex","primary":{"used_percent":29,"window_minutes":43200,"resets_at":1786008501},"plan_type":"plus"}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	r, err := ReadRollout(path)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	require.NotNil(t, r.Limits)
+	assert.Equal(t, "plus", r.Limits.PlanType)
+	require.NotNil(t, r.Limits.Primary)
+	assert.Equal(t, 29.0, r.Limits.Primary.UsedPercent)
+	assert.Equal(t, int64(43200), r.Limits.Primary.WindowMinutes)
+	assert.Equal(t, int64(1786008501), r.Limits.Primary.ResetsAt)
+
+	// The same pass still yields the turn's token usage.
+	require.NotNil(t, r.Usage)
+	assert.Equal(t, int64(100), r.Usage.InputTokens)
+}
+
+// Usage and limits have different lifetimes. A user_message starts a new turn and
+// resets the token counts, but the allowance state describes the account, so the
+// latest value seen survives the boundary rather than being discarded with it.
+func TestReadRolloutLimitsSurviveTurnBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := "" +
+		`{"type":"event_msg","payload":{"type":"user_message","message":"turn 1"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"output_tokens":40}},"rate_limits":{"primary":{"used_percent":5},"plan_type":"free"}}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"user_message","message":"turn 2"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300,"output_tokens":10}},"rate_limits":{"primary":{"used_percent":40},"plan_type":"plus"}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	r, err := ReadRollout(path)
+	require.NoError(t, err)
+
+	// Usage is scoped to the last turn only.
+	require.NotNil(t, r.Usage)
+	assert.Equal(t, int64(300), r.Usage.InputTokens)
+
+	// Limits are the most recent seen, not reset by the turn boundary.
+	require.NotNil(t, r.Limits)
+	assert.Equal(t, "plus", r.Limits.PlanType)
+	require.NotNil(t, r.Limits.Primary)
+	assert.Equal(t, 40.0, r.Limits.Primary.UsedPercent)
+}
+
+// A turn that reports usage but no rate_limits (Codex CLI before the field
+// landed, ~mid-July 2026) must leave Limits nil rather than zero-valued — 0%
+// consumed on an empty plan is a meaningful-looking lie.
+func TestReadRolloutNoRateLimitsLeavesLimitsNil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := "" +
+		`{"type":"event_msg","payload":{"type":"user_message","message":"hi"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":5}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	r, err := ReadRollout(path)
+	require.NoError(t, err)
+	require.NotNil(t, r.Usage)
+	assert.Nil(t, r.Limits)
+}
+
+// The rate_limits block routinely carries null sub-objects — `secondary` and
+// `individual_limit` are null in every captured record — so `primary` being
+// absent is a shape the schema permits. Flattening it would report "0% of your
+// allowance consumed", which reads as a measurement rather than missing data.
+func TestReadRolloutRateLimitsWithoutPrimaryWindow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}},"rate_limits":{"plan_type":"plus","primary":null}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	r, err := ReadRollout(path)
+	require.NoError(t, err)
+	require.NotNil(t, r.Limits)
+
+	// The plan is still known — only the window is missing.
+	assert.Equal(t, "plus", r.Limits.PlanType)
+	assert.Nil(t, r.Limits.Primary)
+}
+
+// primary and secondary are both RateLimitWindow in the Codex source, so they
+// parse identically. Which duration lands in which slot is NOT fixed — read
+// window_minutes to tell them apart rather than assuming one is the short one.
+//
+// secondary was null in all 76 captured events (a free-plan account), so the
+// populated shape here comes from the type names embedded in the codex 0.142.5
+// binary, not from observed data.
+func TestReadRolloutParsesSecondaryWindow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}},` +
+		`"rate_limits":{"plan_type":"pro",` +
+		`"primary":{"used_percent":29,"window_minutes":43200,"resets_at":1786008501},` +
+		`"secondary":{"used_percent":80,"window_minutes":300,"resets_at":1786000000}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	r, err := ReadRollout(path)
+	require.NoError(t, err)
+	require.NotNil(t, r.Limits)
+
+	require.NotNil(t, r.Limits.Primary)
+	assert.Equal(t, 29.0, r.Limits.Primary.UsedPercent)
+	assert.Equal(t, int64(43200), r.Limits.Primary.WindowMinutes)
+
+	require.NotNil(t, r.Limits.Secondary)
+	assert.Equal(t, 80.0, r.Limits.Secondary.UsedPercent)
+	assert.Equal(t, int64(300), r.Limits.Secondary.WindowMinutes)
+	assert.Equal(t, int64(1786000000), r.Limits.Secondary.ResetsAt)
+}
+
+// The common real shape: a plan reporting one window and leaving the other null.
+func TestReadRolloutNullSecondaryLeavesItNil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}},` +
+		`"rate_limits":{"plan_type":"free","primary":{"used_percent":5,"window_minutes":43200,"resets_at":1},"secondary":null}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	r, err := ReadRollout(path)
+	require.NoError(t, err)
+	require.NotNil(t, r.Limits)
+	require.NotNil(t, r.Limits.Primary)
+	assert.Nil(t, r.Limits.Secondary)
+}
+
+// credits is version-gated: rollouts before ~14 Jul 2026 report it as null.
+// Balance is nullable independently of that, so "no balance reported" and "a
+// balance of zero" must stay distinguishable — hence a pointer, not a float.
+func TestReadRolloutParsesCredits(t *testing.T) {
+	cases := []struct {
+		name        string
+		rateLimits  string
+		wantNil     bool
+		wantHas     bool
+		wantUnlim   bool
+		wantBalance *float64
+	}{
+		{
+			name:       "credits null (pre-July CLI)",
+			rateLimits: `{"plan_type":"free","credits":null}`,
+			wantNil:    true,
+		},
+		{
+			name:       "no credits held",
+			rateLimits: `{"plan_type":"free","credits":{"has_credits":false,"unlimited":false,"balance":null}}`,
+			wantHas:    false,
+		},
+		{
+			name:        "credits held with a balance",
+			rateLimits:  `{"plan_type":"pro","credits":{"has_credits":true,"unlimited":false,"balance":12.5}}`,
+			wantHas:     true,
+			wantBalance: floatPtr(12.5),
+		},
+		{
+			name:        "zero balance is not the same as no balance",
+			rateLimits:  `{"plan_type":"pro","credits":{"has_credits":true,"unlimited":false,"balance":0}}`,
+			wantHas:     true,
+			wantBalance: floatPtr(0.0),
+		},
+		{
+			name:       "unlimited",
+			rateLimits: `{"plan_type":"business","credits":{"has_credits":true,"unlimited":true,"balance":null}}`,
+			wantHas:    true,
+			wantUnlim:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "rollout.jsonl")
+			content := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}},"rate_limits":` + tc.rateLimits + `}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+			r, err := ReadRollout(path)
+			require.NoError(t, err)
+			require.NotNil(t, r.Limits)
+
+			if tc.wantNil {
+				assert.Nil(t, r.Limits.Credits)
+				return
+			}
+			require.NotNil(t, r.Limits.Credits)
+			assert.Equal(t, tc.wantHas, r.Limits.Credits.HasCredits)
+			assert.Equal(t, tc.wantUnlim, r.Limits.Credits.Unlimited)
+			assert.Equal(t, tc.wantBalance, r.Limits.Credits.Balance)
+		})
+	}
+}
+
+// rate_limit_reached_type is null until a limit is actually hit, at which point
+// it names which window blocked. Never observed populated in captured sessions,
+// so the non-null shape here is the documented field, not a verified sample.
+func TestReadRolloutParsesReachedType(t *testing.T) {
+	cases := []struct{ name, rateLimits, want string }{
+		{"not reached", `{"plan_type":"free","rate_limit_reached_type":null}`, ""},
+		{"reached", `{"plan_type":"plus","rate_limit_reached_type":"primary"}`, "primary"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "rollout.jsonl")
+			content := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1}},"rate_limits":` + tc.rateLimits + `}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+			r, err := ReadRollout(path)
+			require.NoError(t, err)
+			require.NotNil(t, r.Limits)
+			assert.Equal(t, tc.want, r.Limits.ReachedType)
+		})
+	}
+}
+
+// Never returns "api": an absent plan is consistent with API-key auth but does
+// not prove it (SIG-189), and claiming "api" would assert the cost figure is
+// real spend — the exact error this work exists to stop.
+func TestBillingMode(t *testing.T) {
+	cases := []struct {
+		name   string
+		limits *Limits
+		want   string
+	}{
+		{"no rate_limits at all (pre-July CLI)", nil, "unknown"},
+		{"plan reported", &Limits{PlanType: "plus"}, "subscription"},
+		// Free pays nothing, but the marginal token is still not priced, so the
+		// cost figure is just as much a counterfactual as on a paid plan.
+		{"free is still not per-token billed", &Limits{PlanType: "free"}, "subscription"},
+		// Limits present but no plan named: consistent with API-key auth, unproven.
+		{"limits without a plan", &Limits{Primary: &Window{UsedPercent: 5}}, "unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.limits.BillingMode())
+		})
+	}
+}
+
+func floatPtr(v float64) *float64 { return &v }

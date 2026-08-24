@@ -1,6 +1,6 @@
 name: E2E Release Verification
 
-# Runs after a release is published. Tests the full flow: on-event.sh
+# Runs after a release is published. Tests the full flow: claude-on-event.sh
 # downloads the real binary from GitHub Releases, invokes it with events,
 # and verifies the mock OTLP server receives the expected requests.
 #
@@ -33,7 +33,7 @@ jobs:
           sleep 1
           echo "Mock OTLP server started on :4319"
 
-      - name: Run on-event.sh with SessionStart
+      - name: Run claude-on-event.sh with SessionStart
         env:
           CLAUDE_PLUGIN_DATA: /tmp/e2e-plugin-data
           DASH0_OTLP_URL: http://localhost:4319
@@ -42,10 +42,10 @@ jobs:
         run: |
           mkdir -p "$CLAUDE_PLUGIN_DATA"
           echo '{"hook_event_name":"SessionStart","session_id":"e2e-release-test","model":"opus"}' | \
-            bash scripts/on-event.sh
-          echo "on-event.sh completed"
+            bash claude/claude-on-event.sh
+          echo "claude-on-event.sh completed"
 
-      - name: Run on-event.sh with full turn
+      - name: Run claude-on-event.sh with full turn
         env:
           CLAUDE_PLUGIN_DATA: /tmp/e2e-plugin-data
           DASH0_OTLP_URL: http://localhost:4319
@@ -53,11 +53,11 @@ jobs:
           CLAUDE_PLUGIN_OPTION_AUTH_TOKEN: e2e-release-test-token
         run: |
           echo '{"hook_event_name":"UserPromptSubmit","session_id":"e2e-release-test","prompt":"hello"}' | \
-            bash scripts/on-event.sh
+            bash claude/claude-on-event.sh
           echo '{"hook_event_name":"PostToolUse","session_id":"e2e-release-test","tool_name":"Bash","tool_use_id":"tu1","duration_ms":100}' | \
-            bash scripts/on-event.sh
+            bash claude/claude-on-event.sh
           echo '{"hook_event_name":"Stop","session_id":"e2e-release-test","model":"opus","stop_reason":"end_turn"}' | \
-            bash scripts/on-event.sh
+            bash claude/claude-on-event.sh
           echo "Full turn completed"
 
       - name: Verify mock received requests
@@ -87,6 +87,6 @@ jobs:
           BINARY=$(ls "$CLAUDE_PLUGIN_DATA/bin/" | head -1)
           echo "Downloaded binary: $BINARY"
           if [ -z "$BINARY" ]; then
-            echo "::error::No binary found — on-event.sh failed to download"
+            echo "::error::No binary found — claude-on-event.sh failed to download"
             exit 1
           fi

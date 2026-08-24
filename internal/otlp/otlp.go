@@ -397,6 +397,28 @@ var attrTransformMap = map[string]struct {
 		key:       "gen_ai.input.messages",
 		transform: transformUserMessage,
 	},
+	"effort": {
+		key:       "gen_ai.request.reasoning.level",
+		transform: transformReasoningLevel,
+	},
+}
+
+// transformReasoningLevel reduces Claude Code's effort field, {"level":"high"},
+// to the level alone.
+//
+// gen_ai.request.reasoning.level is a free-form string, and the convention asks
+// for "the exact string value sent to the provider", so xhigh passes through
+// rather than being rounded down to high. An empty result drops the attribute,
+// which is the right answer for a shape this does not recognize.
+func transformReasoningLevel(v any) string {
+	switch level := v.(type) {
+	case string:
+		return level
+	case map[string]any:
+		s, _ := level["level"].(string)
+		return s
+	}
+	return ""
 }
 
 func transformMessage(role string, v any) string {

@@ -533,3 +533,46 @@ func TestChatSpanRedactsConversationName(t *testing.T) {
 		ts, ts, event, false, Config{OmitIO: true})
 	assertAttr(t, omitted.Attributes, "gen_ai.conversation.name", "<REDACTED>")
 }
+
+// TestSpanReportsReasoningLevel pins the effort payload field to the OTel
+// attribute for it. gen_ai.request.reasoning.level is a free-form string, so a
+// level outside the convention's examples is reported as sent, not mapped.
+func TestSpanReportsReasoningLevel(t *testing.T) {
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name   string
+		effort any
+		want   string
+	}{
+		{name: "the level, not the object", effort: map[string]any{"level": "high"}, want: "high"},
+		{name: "a level outside the examples", effort: map[string]any{"level": "xhigh"}, want: "xhigh"},
+		{name: "a bare string", effort: "medium", want: "medium"},
+		{name: "an unrecognized shape", effort: map[string]any{"unexpected": 1}},
+		{name: "absent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := map[string]any{"hook_event_name": "Stop", "session_id": "sess-123"}
+			if tc.effort != nil {
+				event["effort"] = tc.effort
+			}
+			span := NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "",
+				ts, ts, event, false, Config{})
+			if tc.want == "" {
+				assertNoAttr(t, span.Attributes, "gen_ai.request.reasoning.level")
+			} else {
+				assertAttr(t, span.Attributes, "gen_ai.request.reasoning.level", tc.want)
+			}
+			// Never under the raw payload key, on any of these.
+			assertNoAttr(t, span.Attributes, "effort")
+		})
+	}
+
+	// The payload carries effort on tool events too, and the call ran under it.
+	tool := NewToolSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "5555666677778888",
+		ts, ts, map[string]any{
+			"hook_event_name": "PostToolUse", "session_id": "sess-123", "tool_name": "Bash",
+			"effort": map[string]any{"level": "high"},
+		}, false, Config{})
+	assertAttr(t, tool.Attributes, "gen_ai.request.reasoning.level", "high")
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
+	"github.com/dash0hq/dash0-agent-plugin/internal/source/claude"
 	"github.com/dash0hq/dash0-agent-plugin/internal/transcript"
 	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
@@ -294,8 +295,8 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	parentSpanID := ctx.SpanID
 
 	// An actor-scoped turn model wins over the session's startup model. Keeping
-	// parent and subagent caches separate avoids mixing models between actors
-	// that share a trace but read different transcripts.
+	// parent and subagent caches separate avoids mixing models between actors,
+	// which read different transcripts: see modelTranscript.
 	if _, hasModel := event["model"]; !hasModel {
 		if model, err := otlp.LoadToolModel(dataDir, traceID, agentID); err == nil && model != "" {
 			event["model"] = model
@@ -303,7 +304,7 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	}
 
 	if _, hasModel := event["model"]; !hasModel {
-		if tp, _ := event["transcript_path"].(string); tp != "" {
+		if tp := modelTranscript(event, agentID); tp != "" {
 			// Resolve once per turn, then remember it for the rest of the turn. The
 			// transcript flushes asynchronously, so reading it per tool call put the
 			// model on some of a turn's tool spans and not others, decided by which
@@ -320,7 +321,9 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		}
 	}
 
-	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
+	// ctx.Model is the model the session started with, so it answers for the main
+	// actor only — a sub-agent gets no model rather than the parent's.
+	if _, hasModel := event["model"]; !hasModel && agentID == "" && ctx.Model != "" {
 		event["model"] = ctx.Model
 	}
 
@@ -515,22 +518,11 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 				fmt.Fprintf(os.Stderr, "on-event: reading transcript: %v\n", err)
 			}
 			if usage != nil {
-				event["gen_ai.usage.input_tokens"] = usage.InputTokens
-				event["gen_ai.usage.output_tokens"] = usage.OutputTokens
-				event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
-				event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
-				event["dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens"] = usage.CacheCreation5mInputTokens
-				event["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"] = usage.CacheCreation1hInputTokens
-				// Emitted only when the turn did some thinking, matching Copilot's
-				// emission of the same key (cmd/copilot-on-event/main.go). The two
-				// runtimes share the key so one query spans both, and a key that is
-				// always present in one and conditional in the other would defeat
-				// that. Unlike the counts above, a zero here carries no information:
-				// thinking tokens are a subset of output_tokens, so absence and zero
-				// mean the same thing for every total and every cost.
-				if usage.ReasoningOutputTokens > 0 {
-					event["gen_ai.usage.reasoning.output_tokens"] = usage.ReasoningOutputTokens
-				}
+				injectTurnUsage(event, usage)
+				// Alongside the usage it qualifies: billing mode exists to say what
+				// a cost figure means, so on a turn that reported no tokens it would
+				// annotate nothing.
+				injectClaudeBilling(event, cfg)
 			}
 		}
 
@@ -566,6 +558,59 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 	return otlp.SendTrace(span, event, cfg)
 }
 
+// injectTurnUsage writes the turn's token counts onto the event as gen_ai.usage.*
+// attributes, which the span builder emits verbatim. Callers skip it when the
+// transcript yielded nothing, so the span carries no token attributes at all
+// rather than a row of zeros.
+func injectTurnUsage(event map[string]any, usage *transcript.Usage) {
+	event["gen_ai.usage.input_tokens"] = usage.InputTokens
+	event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+	event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
+	event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+	event["dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens"] = usage.CacheCreation5mInputTokens
+	event["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"] = usage.CacheCreation1hInputTokens
+	// Emitted only when the turn did some thinking, matching Copilot's
+	// emission of the same key (cmd/copilot-on-event/main.go). The two
+	// runtimes share the key so one query spans both, and a key that is
+	// always present in one and conditional in the other would defeat
+	// that. Unlike the counts above, a zero here carries no information:
+	// thinking tokens are a subset of output_tokens, so absence and zero
+	// mean the same thing for every total and every cost.
+	if usage.ReasoningOutputTokens > 0 {
+		event["gen_ai.usage.reasoning.output_tokens"] = usage.ReasoningOutputTokens
+	}
+}
+
+// injectClaudeBilling records whether a Claude Code session is billed per token,
+// so the consumer knows whether the cost figure is spend or a list-price
+// equivalent. See DEVELOPMENT.md for the attribute contract.
+//
+// Harness-guarded because this function sits in the shared LLM-span path: Codex
+// derives its own billing mode from the rollout, and stamping Claude's account
+// state onto a Codex span would silently overwrite it with the wrong answer.
+//
+// Billing is account state rather than turn state, so it does not read the
+// transcript — but the caller gates it on usage being present, since the mode
+// exists to qualify a cost figure.
+func injectClaudeBilling(event map[string]any, cfg otlp.Config) {
+	if cfg.HarnessName != "claude-code" {
+		return
+	}
+
+	info := claude.ReadBilling()
+	// Who meters the session is a separate dimension from whether it is metered at
+	// all, so a consumer can read either attribute alone without being misled.
+	if info.Provider != "" {
+		event["dash0.gen_ai.billing_provider"] = info.Provider
+	}
+	// Stated even when "unknown": alongside a cost figure, recording that we
+	// looked and could not tell differs from never having looked.
+	event["dash0.gen_ai.billing_mode"] = info.BillingMode
+	if info.PlanType != "" {
+		event["dash0.gen_ai.plan_type"] = info.PlanType
+	}
+}
+
 // sessionIDPattern restricts session IDs to filename-safe characters. Session
 // IDs come from hook input and are used as directory names under dataDir, so
 // path separators or dots must not reach filepath.Join. Claude Code generates
@@ -588,6 +633,24 @@ const turnCompletePollInterval = 50 * time.Millisecond
 // every later one. A resolved model is then cached in a trace-and-actor-keyed
 // sidecar, so the wait is normally paid once per actor per turn.
 const modelWaitBudget = 1 * time.Second
+
+// modelTranscript names the transcript that says which model this actor is
+// running. A sub-agent runs its own — an agent definition may pin one and the
+// Agent tool takes an override — but its PostToolUse carries only
+// transcript_path, which is the main session's, so its own file is derived.
+// Returning "" leaves the model absent, which beats reading the wrong actor's.
+func modelTranscript(event map[string]any, agentID string) string {
+	sessionTranscript, _ := event["transcript_path"].(string)
+	if agentID == "" {
+		return sessionTranscript
+	}
+	// SubagentStop is the one event that carries it outright.
+	if atp, _ := event["agent_transcript_path"].(string); atp != "" {
+		return atp
+	}
+	sessionID, _ := event["session_id"].(string)
+	return transcript.SubagentPath(sessionTranscript, sessionID, agentID)
+}
 
 // waitForModel returns the model named by the transcript, waiting only while an
 // assistant entry could still be on its way.

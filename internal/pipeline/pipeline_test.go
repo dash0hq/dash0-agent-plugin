@@ -372,7 +372,7 @@ func TestProcess_Stop_EmitsChatSpanAndClearsContext(t *testing.T) {
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
 
 	mu.Lock()
 	require.Len(t, *spans, 1)
@@ -417,6 +417,134 @@ func TestProcess_Stop_PreservesUpstreamInjectedUsage(t *testing.T) {
 	assert.Equal(t, "999", intAttr(t, (*spans)[0], "gen_ai.usage.input_tokens"),
 		"upstream-injected usage preserved; Claude transcript not read")
 	assert.Equal(t, "111", intAttr(t, (*spans)[0], "gen_ai.usage.output_tokens"))
+}
+
+// Claude Code billing mode rides on the chat span. The config is redirected via
+// CLAUDE_CONFIG_DIR and the auth variables are pinned empty, so the test reads a
+// fixture rather than the developer's real account and cannot be perturbed by a
+// key that happens to be exported on the machine running it.
+func TestProcess_Stop_EmitsClaudeBillingMode(t *testing.T) {
+	pinClaudeAuthEnv(t, `{"claudeMaxTier":"not_max","oauthAccount":{"billingType":"stripe_subscription","seatTier":"team_standard"}}`)
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "claude-code"
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "subscription"))
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.plan_type", "team_standard"))
+}
+
+// The environment decides, not the config file: a subscription account on disk
+// plus Bedrock in the environment bills per token at an AWS rate. Emitting
+// "subscription" here would tell the customer their real spend is not real spend.
+func TestProcess_Stop_ClaudeBedrockOverridesSubscriptionConfig(t *testing.T) {
+	pinClaudeAuthEnv(t, `{"oauthAccount":{"billingType":"stripe_subscription","seatTier":"team_standard"}}`)
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "claude-code"
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "metered_external"))
+	assert.True(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_provider", "bedrock"))
+	assert.False(t, hasStringAttr((*spans)[0].Attributes, "dash0.gen_ai.billing_mode", "subscription"),
+		"the config must not win over the environment")
+}
+
+// This read is Claude-specific but sits in the shared LLM-span path, so it must be
+// harness-guarded: Codex emits its own billing mode from the rollout, and stamping
+// Claude's answer onto a Codex span would silently overwrite it with the wrong
+// account's state.
+func TestProcess_Stop_BillingModeNotEmittedForOtherHarnesses(t *testing.T) {
+	// A perfectly readable Claude config is present; the harness is what excludes it.
+	pinClaudeAuthEnv(t, `{"oauthAccount":{"billingType":"stripe_subscription","seatTier":"team_standard"}}`)
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "codex"
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "gpt-5.5"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	for _, a := range (*spans)[0].Attributes {
+		assert.NotEqual(t, "dash0.gen_ai.billing_mode", a.Key, "Claude's read leaked onto a %s span", "codex")
+		assert.NotEqual(t, "dash0.gen_ai.plan_type", a.Key)
+	}
+}
+
+// Billing mode qualifies a cost figure, so with no usage there is nothing to
+// qualify and the attributes stay off the span. Keeps a turn that reported no
+// tokens from carrying a label about a number it does not have.
+func TestProcess_Stop_NoUsageEmitsNoBillingMode(t *testing.T) {
+	pinClaudeAuthEnv(t, `{"oauthAccount":{"billingType":"stripe_subscription","seatTier":"team_standard"}}`)
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "claude-code"
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	// No transcript, so no token usage — an interrupted turn.
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *spans, 1)
+	for _, a := range (*spans)[0].Attributes {
+		assert.NotEqual(t, "dash0.gen_ai.billing_mode", a.Key, "no cost figure, so nothing to qualify")
+		assert.NotEqual(t, "dash0.gen_ai.plan_type", a.Key)
+	}
+}
+
+// claudeTranscript writes a minimal Claude-format transcript with one complete
+// turn, so a Stop event yields token usage. Billing mode is only emitted
+// alongside a cost figure, so a transcript is what makes these tests realistic —
+// a real Stop always has one.
+func claudeTranscript(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "transcript.jsonl")
+	require.NoError(t, os.WriteFile(p, []byte(
+		`{"type":"user","message":{"role":"user","content":"hi"}}`+"\n"+
+			`{"type":"assistant","requestId":"r1","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":5,"output_tokens":6}}}`+"\n"), 0o644))
+	return p
+}
+
+// pinClaudeAuthEnv points the Claude config lookup at a fixture and pins every
+// auth variable empty, so these tests neither read the developer's real account
+// nor inherit an exported key from the host.
+func pinClaudeAuthEnv(t *testing.T, configJSON string) {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude.json"), []byte(configJSON), 0o600))
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	// Every tier, not just the ones these cases exercise: a variable left
+	// unpinned is one the host can set, and a higher-ranked credential silently
+	// wins. The list must track the precedence table in DEVELOPMENT.md.
+	for _, key := range []string{
+		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+		"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+		"ANTHROPIC_PROFILE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
+	} {
+		t.Setenv(key, "")
+	}
 }
 
 // intAttr returns the intValue of the named span attribute, failing the test if
@@ -661,7 +789,7 @@ func TestProcess_SubagentStopAfterNextPrompt_KeepsSpawningTrace(t *testing.T) {
 	require.NotNil(t, turn1Ctx)
 
 	s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
-	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "turn 2"})
 
 	turn2Ctx, err := otlp.LoadTraceContext(s.sessionDir("sess-1"))
@@ -1029,7 +1157,7 @@ func TestProcess_PostToolUse_CachesModelsPerTraceActor(t *testing.T) {
 			s := newSetup(t, url)
 			dir := t.TempDir()
 			parentTranscript := writeModelTranscript(t, dir, "parent.jsonl", "claude-sonnet-4-6")
-			agentTranscript := writeModelTranscript(t, dir, "agent.jsonl", "claude-opus-4-8")
+			writeSubagentTranscript(t, dir, "sess-1", "agent1", "claude-opus-4-8")
 
 			s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
 			s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "delegate"})
@@ -1039,9 +1167,12 @@ func TestProcess_PostToolUse_CachesModelsPerTraceActor(t *testing.T) {
 				"hook_event_name": "PostToolUse", "session_id": "sess-1",
 				"tool_name": "Read", "tool_use_id": "tu-parent", "transcript_path": parentTranscript,
 			}
+			// Both actors are handed the same transcript_path, because that is what
+			// Claude Code sends: a sub-agent's PostToolUse names the main session's
+			// file and nothing else. The sub-agent's own transcript is derived.
 			agentTool := map[string]any{
 				"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
-				"tool_name": "Grep", "tool_use_id": "tu-agent", "transcript_path": agentTranscript,
+				"tool_name": "Grep", "tool_use_id": "tu-agent", "transcript_path": parentTranscript,
 			}
 			if tc.agentFirst {
 				s.feed(t, agentTool)
@@ -1345,6 +1476,17 @@ func TestProcess_PostToolUse_TopLevelAgentParentsUnderTheChatSpan(t *testing.T) 
 	assert.Equal(t, ctx.SpanID, span.ParentSpanID)
 }
 
+// writeSubagentTranscript writes a sub-agent's transcript where Claude Code puts
+// it, so a test resolves it the way the pipeline has to: by derivation from the
+// main transcript's directory, the session ID and the agent ID. No hook payload
+// names this file.
+func writeSubagentTranscript(t *testing.T, sessionTranscriptDir, sessionID, agentID, model string) string {
+	t.Helper()
+	dir := filepath.Join(sessionTranscriptDir, sessionID, "subagents")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	return writeModelTranscript(t, dir, "agent-"+agentID+".jsonl", model)
+}
+
 // writeModelTranscript writes a one-turn transcript naming a specific model, so
 // a test can change the model between turns.
 func writeModelTranscript(t *testing.T, dir, name, model string) string {
@@ -1514,4 +1656,70 @@ func stringAttrOf(t *testing.T, span otlp.Span, key string) string {
 	}
 	t.Fatalf("attribute %s not found on span %q", key, span.Name)
 	return ""
+}
+
+// A sub-agent's tool span reports the sub-agent's model, not the parent's.
+//
+// The three spans of one delegating turn used to disagree: the invoke_agent span
+// read the sub-agent's transcript and reported haiku, while the execute_tool span
+// beneath it read the main session's transcript — the only one the payload names
+// — and reported the parent's opus.
+func TestProcess_SubAgentToolSpanUsesTheSubAgentsModel(t *testing.T) {
+	run := func(t *testing.T, withAgentTranscript bool) []otlp.Span {
+		t.Helper()
+		url, spans, mu := mockOTLPServer(t)
+		s := newSetup(t, url)
+		dir := t.TempDir()
+		mainTranscript := writeModelTranscript(t, dir, "main.jsonl", "claude-opus-5")
+		agentTranscript := ""
+		if withAgentTranscript {
+			agentTranscript = writeSubagentTranscript(t, dir, "sess-1", "agent1", "claude-haiku-4-5")
+		}
+
+		s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "claude-opus-5"})
+		s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1",
+			"prompt": "delegate", "transcript_path": mainTranscript})
+		s.feed(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": "agent1"})
+		s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": mainTranscript})
+		s.feed(t, map[string]any{
+			"hook_event_name": "PostToolUse", "session_id": "sess-1", "agent_id": "agent1",
+			"tool_name": "Bash", "tool_use_id": "tu1", "transcript_path": mainTranscript,
+		})
+		if withAgentTranscript {
+			s.feed(t, map[string]any{
+				"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": "agent1",
+				"agent_type": "general-purpose", "transcript_path": mainTranscript,
+				"agent_transcript_path": agentTranscript,
+			})
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]otlp.Span(nil), *spans...)
+	}
+
+	t.Run("every span in the trace agrees", func(t *testing.T) {
+		models := map[string]string{}
+		for _, span := range run(t, true) {
+			models[span.Name] = stringAttrOf(t, span, "gen_ai.request.model")
+		}
+		assert.Equal(t, "claude-opus-5", models["chat claude-opus-5"])
+		assert.Equal(t, "claude-haiku-4-5", models["execute_tool Bash"],
+			"the tool ran inside the sub-agent, so it ran on the sub-agent's model")
+		assert.Equal(t, "claude-haiku-4-5", models["invoke_agent general-purpose"])
+	})
+
+	// A wrong value that contradicts the parent span is worse than none: absence
+	// is visible to a consumer, a confident mislabel is not.
+	t.Run("no sub-agent transcript yet means no model, not the parent's", func(t *testing.T) {
+		for _, span := range run(t, false) {
+			if span.Name != "execute_tool Bash" {
+				continue
+			}
+			for _, a := range span.Attributes {
+				assert.NotEqual(t, "gen_ai.request.model", a.Key)
+			}
+			return
+		}
+		t.Fatal("the span is still emitted; only the model is withheld")
+	})
 }

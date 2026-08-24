@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -339,7 +340,12 @@ var commandNamePattern = regexp.MustCompile(`<command-name>\s*/([^<\s]+)\s*</com
 // skillBaseDirPattern matches the preamble of the skill-instructions relay that
 // Claude Code injects as an isMeta user entry when a skill loads. The captured
 // path ends in the skill's own directory, which names the skill.
-var skillBaseDirPattern = regexp.MustCompile(`Base directory for this skill: ([^\s"\\]+)`)
+//
+// The match runs on the raw JSON bytes, where the path ends at the backslash of
+// the following "\n\n" or at the closing quote. Whitespace is not a terminator:
+// a real newline cannot appear inside a JSON string, so the only whitespace here
+// is a space belonging to the path — a home directory is enough to produce one.
+var skillBaseDirPattern = regexp.MustCompile(`Base directory for this skill: ([^"\\]+)`)
 
 // ReadTurnSkillCommand returns the skill invoked by a slash command in the most
 // recent turn, as the plugin-qualified name the user typed (e.g.
@@ -374,7 +380,7 @@ func ReadTurnSkillCommand(transcriptPath string) string {
 			return true
 		}
 		if m := skillBaseDirPattern.FindSubmatch(entry.Message.Content); len(m) > 1 {
-			skillDir = path.Base(string(m[1]))
+			skillDir = path.Base(strings.TrimSpace(string(m[1])))
 		}
 		return true
 	})
@@ -387,6 +393,31 @@ func ReadTurnSkillCommand(transcriptPath string) string {
 		return ""
 	}
 	return command
+}
+
+// SubagentPath returns the transcript Claude Code writes for one sub-agent:
+//
+//	<dir of the session transcript>/<session id>/subagents/agent-<agent id>.jsonl
+//
+// It is derived because only SubagentStop reports agent_transcript_path — every
+// other sub-agent event carries the main session's path instead.
+// claude/tools/claude-code-usage-audit.py builds the same path from the same
+// parts. Empty when a part is missing or the file does not exist yet.
+func SubagentPath(sessionTranscriptPath, sessionID, agentID string) string {
+	if sessionTranscriptPath == "" || sessionID == "" || agentID == "" {
+		return ""
+	}
+	// Both are single path segments in the derived name, so a separator in
+	// either would escape the session directory.
+	if strings.ContainsAny(sessionID, `/\`) || strings.ContainsAny(agentID, `/\`) {
+		return ""
+	}
+	candidate := filepath.Join(filepath.Dir(sessionTranscriptPath), sessionID,
+		"subagents", "agent-"+agentID+".jsonl")
+	if _, err := os.Stat(candidate); err != nil {
+		return ""
+	}
+	return candidate
 }
 
 // ReadModel reads the transcript file and returns the model from the most

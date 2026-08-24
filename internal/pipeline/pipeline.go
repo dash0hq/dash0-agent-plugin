@@ -295,8 +295,8 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	parentSpanID := ctx.SpanID
 
 	// An actor-scoped turn model wins over the session's startup model. Keeping
-	// parent and subagent caches separate avoids mixing models between actors
-	// that share a trace but read different transcripts.
+	// parent and subagent caches separate avoids mixing models between actors,
+	// which read different transcripts: see modelTranscript.
 	if _, hasModel := event["model"]; !hasModel {
 		if model, err := otlp.LoadToolModel(dataDir, traceID, agentID); err == nil && model != "" {
 			event["model"] = model
@@ -304,7 +304,7 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	}
 
 	if _, hasModel := event["model"]; !hasModel {
-		if tp, _ := event["transcript_path"].(string); tp != "" {
+		if tp := modelTranscript(event, agentID); tp != "" {
 			// Resolve once per turn, then remember it for the rest of the turn. The
 			// transcript flushes asynchronously, so reading it per tool call put the
 			// model on some of a turn's tool spans and not others, decided by which
@@ -321,7 +321,9 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 		}
 	}
 
-	if _, hasModel := event["model"]; !hasModel && ctx.Model != "" {
+	// ctx.Model is the model the session started with, so it answers for the main
+	// actor only — a sub-agent gets no model rather than the parent's.
+	if _, hasModel := event["model"]; !hasModel && agentID == "" && ctx.Model != "" {
 		event["model"] = ctx.Model
 	}
 
@@ -631,6 +633,24 @@ const turnCompletePollInterval = 50 * time.Millisecond
 // every later one. A resolved model is then cached in a trace-and-actor-keyed
 // sidecar, so the wait is normally paid once per actor per turn.
 const modelWaitBudget = 1 * time.Second
+
+// modelTranscript names the transcript that says which model this actor is
+// running. A sub-agent runs its own — an agent definition may pin one and the
+// Agent tool takes an override — but its PostToolUse carries only
+// transcript_path, which is the main session's, so its own file is derived.
+// Returning "" leaves the model absent, which beats reading the wrong actor's.
+func modelTranscript(event map[string]any, agentID string) string {
+	sessionTranscript, _ := event["transcript_path"].(string)
+	if agentID == "" {
+		return sessionTranscript
+	}
+	// SubagentStop is the one event that carries it outright.
+	if atp, _ := event["agent_transcript_path"].(string); atp != "" {
+		return atp
+	}
+	sessionID, _ := event["session_id"].(string)
+	return transcript.SubagentPath(sessionTranscript, sessionID, agentID)
+}
 
 // waitForModel returns the model named by the transcript, waiting only while an
 // assistant entry could still be on its way.

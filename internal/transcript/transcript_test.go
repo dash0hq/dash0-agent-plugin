@@ -864,6 +864,18 @@ func TestReadTurnSkillCommand(t *testing.T) {
 			lines: []string{commandEntry, skillRelay, answer, commandEntry, skillRelay, answer},
 			want:  "writing:unslop",
 		},
+		{
+			// A space in the path is not the end of it. A home directory is enough
+			// to produce one, and stopping there captured "/Users/guy".
+			name: "a skill under a path containing a space",
+			lines: []string{
+				commandEntry,
+				`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text",` +
+					`"text":"Base directory for this skill: /Users/guy moses/.claude/plugins/cache/mp/writing/0.3.0/skills/unslop\n\n# Unslop\n"}]}}`,
+				answer,
+			},
+			want: "writing:unslop",
+		},
 	}
 
 	for _, tc := range tests {
@@ -953,4 +965,36 @@ func TestATypeMismatchSkipsOnlyThatEntry(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.Equal(t, int64(7), usage.InputTokens)
+}
+
+func TestSubagentPath(t *testing.T) {
+	dir := t.TempDir()
+	sessionTranscript := filepath.Join(dir, "sess-1.jsonl")
+	require.NoError(t, os.WriteFile(sessionTranscript, []byte("{}\n"), 0o644))
+
+	agentDir := filepath.Join(dir, "sess-1", "subagents")
+	require.NoError(t, os.MkdirAll(agentDir, 0o755))
+	agentTranscript := filepath.Join(agentDir, "agent-a1.jsonl")
+	require.NoError(t, os.WriteFile(agentTranscript, []byte("{}\n"), 0o644))
+
+	t.Run("derives the sub-agent transcript beside the session's", func(t *testing.T) {
+		assert.Equal(t, agentTranscript, SubagentPath(sessionTranscript, "sess-1", "a1"))
+	})
+
+	t.Run("empty when the sub-agent has not written yet", func(t *testing.T) {
+		assert.Empty(t, SubagentPath(sessionTranscript, "sess-1", "a2"))
+	})
+
+	t.Run("empty when a part is missing", func(t *testing.T) {
+		assert.Empty(t, SubagentPath("", "sess-1", "a1"))
+		assert.Empty(t, SubagentPath(sessionTranscript, "", "a1"))
+		assert.Empty(t, SubagentPath(sessionTranscript, "sess-1", ""))
+	})
+
+	t.Run("a separator cannot escape the session directory", func(t *testing.T) {
+		// Both parts name one path segment. Without the guard, "../.." in either
+		// would resolve to a file outside the session's own directory.
+		assert.Empty(t, SubagentPath(sessionTranscript, "../sess-1", "a1"))
+		assert.Empty(t, SubagentPath(sessionTranscript, "sess-1", "../../a1"))
+	})
 }

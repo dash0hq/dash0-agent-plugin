@@ -140,6 +140,7 @@ omitted when its value is empty.
 | `dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens` | integer                                                              | Claude only. |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
 | `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript) and Copilot, both only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
+| `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh`                                     | Claude only, from the payload's `effort` field. The request-side counterpart to `reasoning.output_tokens`: the setting that produced the thinking those tokens paid for. The attribute is a free-form string — the convention asks for "the exact string value sent to the provider" and gives `low`/`medium`/`high` only as examples — so Claude Code's `xhigh` is reported as-is. |
 | `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude only, and only on the chat span of a turn a slash command started. See below. |
 | `dash0.gen_ai.tool.skill.source` | `command`                                                            | Same rows as above. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
@@ -346,6 +347,8 @@ Codex-scoped as a reader diagnostic.
 | Key | Value / example | Notes |
 |---|---|---|
 | `gen_ai.operation.name` | `execute_tool` | |
+| `gen_ai.request.model` | `claude-…`, `gpt-…`, … | The model of the actor that made the call. A tool call carrying `agent_id` is resolved from that sub-agent's own transcript, so it agrees with the `invoke_agent` span above it; omitted rather than filled from the session's model when that transcript is not on disk yet. |
+| `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh` | Claude only. Same source and meaning as on the chat span. |
 | `gen_ai.tool.type` | `function` | Constant. |
 | `gen_ai.tool.name` | `Bash`, `Read`, … | MCP tool names are stripped of their `mcp__<server>__` prefix; the server goes to `dash0.gen_ai.tool.mcp_server`. |
 | `gen_ai.tool.call.id` | Tool-use ID | |

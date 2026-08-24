@@ -44,11 +44,11 @@ config, resolves no secrets, and downloads nothing (design.md Decision 6).
 
 Each of these clones an established pattern rather than inventing one.
 
-- [ ] 5.1 Add `internal/source/opencode/golden_test.go` replaying `captured_events.jsonl` into `golden_spans.json`, following `internal/source/codex/golden_test.go`; verify `make test` passes and that editing one attribute in the normalizer fails the golden
-- [ ] 5.2 Add `test/consistency/opencode_test.go` asserting the OpenCode golden spans carry the same attribute keys as the Claude Code spans for equivalent events, following the existing consistency tests; verify it fails when an attribute is dropped from the normalizer
-- [ ] 5.3 Add `test/e2e/opencode_e2e_test.go` (build tag `e2e`) following `test/e2e/copilot_e2e_test.go`: build the binary, feed canonical events, assert span shape against the `httptest` collector; verify `make test-e2e` passes
-- [ ] 5.4 Add `test/contracts/opencode.sh` using `test/contracts/lib.sh` (`start_mock_otlp`, `skip_or_fail`, throwaway `HOME`) covering creds → OTLP, install layout, and uninstall strip, following `cursor.sh`; verify `./test/contracts/run.sh opencode` passes
-- [ ] 5.5 Register `opencode` in `test/contracts/run.sh`'s target list and in the CI `install-config-contract` job; verify `./test/contracts/run.sh` runs all five
+- [x] 5.1 Add `internal/source/opencode/golden_test.go` replaying `captured_events.jsonl` into `golden_spans.json`, following `internal/source/codex/golden_test.go`; verify `make test` passes and that editing one attribute in the normalizer fails the golden
+- [x] 5.2 Add `test/consistency/opencode_test.go` asserting the OpenCode golden spans carry the same attribute keys as the Claude Code spans for equivalent events, following the existing consistency tests; verify it fails when an attribute is dropped from the normalizer
+- [x] 5.3 Add `test/e2e/opencode_e2e_test.go` (build tag `e2e`) following `test/e2e/copilot_e2e_test.go`: build the binary, feed canonical events, assert span shape against the `httptest` collector; verify `make test-e2e` passes
+- [x] 5.4 Add `test/contracts/opencode.sh` using `test/contracts/lib.sh` (`start_mock_otlp`, `skip_or_fail`, throwaway `HOME`) covering creds → OTLP, install layout, and uninstall strip, following `cursor.sh`; verify `./test/contracts/run.sh opencode` passes
+- [x] 5.5 Register `opencode` in `test/contracts/run.sh`'s target list and in the CI `install-config-contract` job; verify `./test/contracts/run.sh` runs all five
 
 ## 6. Installation and release
 

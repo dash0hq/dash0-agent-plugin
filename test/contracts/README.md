@@ -11,11 +11,12 @@ installer) and in CI (the `install-config-contract` job just calls these).
 | `cursor.sh` | creds → OTLP · install layout + hooks merge · uninstall strip | network (install/uninstall resolve the latest release), go/jq/curl | yes |
 | `codex.sh`  | creds → OTLP · install merge + pre-trust · uninstall strip | go/jq/python3/curl | yes (no codex CLI) |
 | `bootstrap.sh` | all four `*-on-event.sh` stage the download in a temp and rename · concurrent cold-cache runs converge | curl, sha256sum/shasum; network for the concurrency contract | yes |
+| `release-plan.sh` | every Release dispatch resolves to the right mode/tag/prerelease flag · the next version is counted correctly · the guarded combinations are refused | jq, git | yes |
 
 ## Run
 
 ```bash
-./test/contracts/run.sh            # all four
+./test/contracts/run.sh            # all five
 ./test/contracts/run.sh codex      # one agent
 ```
 

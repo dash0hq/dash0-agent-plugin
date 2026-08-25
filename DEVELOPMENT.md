@@ -2,53 +2,92 @@
 
 ## Releasing
 
-> `scripts/release.sh <version>` executes the following release steps in one go.
->
-Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release, update the version in:
+Two buttons in the **Actions** tab. They are separate because `main` requires a
+review and a code owner's approval, so no workflow can push the bump itself.
 
-- `.claude-plugin/plugin.json` — `version` field
-- `.cursor-plugin/plugin.json` — `version` field
-- `copilot/plugin.json` — `version` field
-- `.github/plugin/marketplace.json` — `metadata.version` and the plugin entry `version` (Copilot marketplace)
-- `claude/claude-on-event.sh` — `VERSION=` line (Claude Code binary downloader)
-- `cursor/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
-- `codex/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
-- `copilot/copilot-on-event.sh` — `VERSION=` line (Copilot binary downloader; vendored inside the `copilot/` subpath-install package)
+1. **Release prepare** — pick `patch` (default), `minor` or `major`. It counts
+   from the newest published release, writes the result into every file that
+   pins it, and pushes `release/v<version>`. The summary links the PR; open it
+   and get it merged.
+2. **Release** — run from `main`, channel `stable`. Tags, builds, verifies,
+   publishes.
 
-> **Renaming a published asset.** The Claude marketplace lists this repo with no
-> ref, so `claude plugin install` and `update` take the default branch. A
-> checked-in bootstrap is therefore paired with the *last published* release, and a
-> script that asks for a name that release does not carry breaks every fresh
-> install until the next tag.
->
-> `claude/claude-on-event.sh` handles this by trying each name it may have been
-> published under, newest first, and using the first that resolves. Each installed
-> script asks its own pinned release, and that release carries whichever name it
-> was built with, so no commit on the default branch is ever inconsistent.
->
-> The Claude asset is already switched: releases from v0.1.25 on publish
-> `claude-on-event-<os>-<arch>`, and v0.1.24 and earlier carry the unprefixed
-> `on-event-<os>-<arch>`. Drop the `on-event-<os>-<arch>` candidate from the script
-> once no supported install can still be pinned to v0.1.24 or earlier. The local
-> cache filename stays `on-event-<version>-<os>-<arch>` on purpose, because
-> changing it would force every existing install to download again.
->
-> The CI job "Release assets exist for configured version" reads the candidates out
-> of each bootstrap and requires at least one to exist per platform, so a name that
-> nothing publishes cannot pass unnoticed.
+The version is derived rather than typed because nothing downstream compares a
+typed version against its predecessor: the format is checked and a duplicate tag
+is refused, but `0.1.27` when you meant `0.1.26` is accepted and permanent. Pass
+an exact version when you need one.
 
-`main` is protected, so the script commits the version bump on a `release/v<version>` branch and pushes it — it does **not** push a tag. Open a PR from that branch and merge it.
+> **Mind the gap.** Between the merge and step 2, `main` pins a version that has
+> no release. The Claude marketplace lists this repo with no ref, so `plugin
+> install` takes the default branch — an install landing in that window asks
+> GitHub for a tag that does not exist, and every hook fails until the release
+> lands. It self-heals, and has historically run 1–4 minutes, but do not merge
+> the bump and then go to lunch.
 
-After the PR is merged, tag the merged commit on `main` manually:
+### The other two modes
+
+**`dry_run`** — build and check, publish nothing. No tag, no release; the 16
+binaries are attached to the run for 7 days. Safe from any branch at any time.
+
+**`channel: dev`** — tags `v<pinned>-dev.<run number>` on the branch you dispatch
+from, as a prerelease. Bumps nothing, never touches `main`, and GitHub's *Latest*
+pointer stays on the newest stable. Point an install at one with:
 
 ```bash
-git checkout main && git pull
-git tag v<version>
-git push origin v<version>
+export DASH0_VERSION=0.2.0-dev.41
 ```
 
-The tag push triggers the release workflow which cross-compiles binaries for `darwin/linux × amd64/arm64` and publishes them to [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases).
-The `on-event-<agent>.sh` scripts download the matching binaries on first run.
+Every bootstrap reads it, and the cache filename embeds the version, so it never
+collides with the pinned build. Same repo, same checksum verification — only
+which release is asked for changes.
+
+### How it is wired
+
+- **`scripts/version.sh`** — `check`, `set`, `next`. The only list of the ten
+  places the version is pinned, so the bump and the check cannot disagree about
+  what needs bumping. `next` counts from the newest **tag**, not the manifests:
+  they diverge only when a bump merged whose release never published, and
+  counting from the manifests there would skip that version silently and
+  forever.
+- **One workflow run does everything.** A tag pushed with `GITHUB_TOKEN` starts
+  no workflow, and neither does GoReleaser's release event — the previous
+  end-to-end gate listened on `release: [published]` and ran zero times across 13
+  releases. So tag, build, verify and publish all live in `release.yml`.
+- **GoReleaser uploads into a draft**, published only once the artifact set is
+  complete and the linux binary has been run. It creates the release before
+  uploading and writes `checksums.txt` last, so publishing at creation leaves a
+  window — ~4s on v0.1.24 — where the tag resolves but a binary does not.
+- **`concurrency: release`** serializes runs, because `mode: replace` means two
+  runs on one tag delete each other's uploads.
+- **After publishing**, `scripts/verify-release-assets.sh --strict` checks every
+  asset name a bootstrap can ask for at its public URL, then the end-to-end job
+  installs the real binary through `claude-on-event.sh`. CI runs the same script
+  non-strict, where a missing release is a warning — the normal state of a bump
+  PR.
+
+### Renaming a published asset
+
+The Claude marketplace lists this repo with no ref, so `claude plugin install`
+and `update` take the default branch. A checked-in bootstrap is therefore paired
+with the *last published* release, and a script that asks for a name that release
+does not carry breaks every fresh install until the next tag.
+
+`claude/claude-on-event.sh` handles this by trying each name it may have been
+published under, newest first, and using the first that resolves. Each installed
+script asks its own pinned release, and that release carries whichever name it
+was built with, so no commit on the default branch is ever inconsistent.
+
+The Claude asset is already switched: releases from v0.1.25 on publish
+`claude-on-event-<os>-<arch>`, and v0.1.24 and earlier carry the unprefixed
+`on-event-<os>-<arch>`. Drop the `on-event-<os>-<arch>` candidate from the script
+once no supported install can still be pinned to v0.1.24 or earlier. The local
+cache filename stays `on-event-<version>-<os>-<arch>` on purpose, because
+changing it would force every existing install to download again.
+
+`scripts/verify-release-assets.sh` reads the candidates out of each bootstrap
+rather than hardcoding them, and requires at least one to resolve per platform,
+so a name that nothing publishes cannot pass unnoticed.
+
 
 ## Feature support matrix
 

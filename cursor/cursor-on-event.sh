@@ -83,6 +83,15 @@ BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
 VERSION="0.1.25"
 
+# Point this install at a different published release — a -dev prerelease cut
+# from a branch for QA, or a rollback — without editing this file. Same repo and
+# the same checksum verification; only which release is asked for changes. Kept
+# off the VERSION= line above so scripts/version.sh keeps reading the pinned
+# default.
+if [ -n "${DASH0_VERSION:-}" ]; then
+  VERSION="$DASH0_VERSION"
+fi
+
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 case "$ARCH" in

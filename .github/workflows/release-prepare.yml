@@ -1,0 +1,98 @@
+name: Release prepare
+
+# Step one of two: bump every pinned version and push release/vX off main.
+#
+# It stops at the branch. A PR opened with GITHUB_TOKEN does not raise the
+# pull_request event, so its required checks would never run and it could never
+# be merged. Opening it is one click; the link is in this run's summary.
+#
+# Then merge it and run Release from main. See DEVELOPMENT.md#releasing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Which part to increment, counted from the newest published release.'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: 'Optional: an exact version instead, e.g. 0.2.0 (no leading v).'
+        required: false
+        type: string
+
+concurrency:
+  group: release-prepare
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Prepare ${{ inputs.version || inputs.bump }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Always main, whatever ref this was dispatched from: the bump has to
+          # land on the branch `claude plugin install` reads.
+          ref: main
+          fetch-depth: 0
+
+      - name: Decide the version
+        env:
+          # Through env, not interpolation: `version` is free text.
+          IN_VERSION: ${{ inputs.version }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          # Derived by default: nothing downstream compares a typed version
+          # against its predecessor, so a typo that skips or jumps one is
+          # permanent. An explicit version still wins.
+          VERSION="${IN_VERSION:-$(./scripts/version.sh next "$BUMP")}"
+          echo "VERSION=$VERSION" >>"$GITHUB_ENV"
+          echo "Preparing v$VERSION"
+
+      - name: Nothing is in the way
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$1"; exit 1; }
+          BRANCH="release/v${VERSION}"
+          # `if`, not `cmd && die`: under `set -e` an AND-list whose first
+          # command fails exits the step, aborting the happy path.
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            die "tag v${VERSION} already exists"
+          fi
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            die "branch $BRANCH already exists — delete it or pick another version"
+          fi
+          ./scripts/version.sh check
+          echo "BRANCH=$BRANCH" >>"$GITHUB_ENV"
+
+      - name: Bump every pinned version
+        run: ./scripts/version.sh set "$VERSION"
+
+      - name: Push the release branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git commit -aqm "release: v${VERSION}"
+          git push -u origin "$BRANCH"
+
+      - name: Say what to do next
+        run: |
+          URL="https://github.com/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1"
+          {
+            echo "### Prepared v${VERSION}"
+            echo
+            echo "1. [Open the PR]($URL) and get it merged."
+            echo "2. Run **Release** from \`main\` with channel \`stable\`."
+            echo
+            echo "Between the merge and step 2, \`main\` advertises v${VERSION}"
+            echo "while no such release exists, and a fresh \`plugin install\`"
+            echo "in that window cannot download a binary. Keep it short."
+          } >>"$GITHUB_STEP_SUMMARY"

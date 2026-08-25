@@ -1,20 +1,36 @@
 name: E2E Release Verification
 
-# Runs after a release is published. Tests the full flow: claude-on-event.sh
-# downloads the real binary from GitHub Releases, invokes it with events,
-# and verifies the mock OTLP server receives the expected requests.
+# The full published-release flow: claude-on-event.sh downloads the real binary
+# from GitHub Releases, is invoked with events, and a mock OTLP server checks
+# what arrives. Does NOT run on push to main — the binary does not exist until a
+# release is cut.
 #
-# Does NOT run on push to main — the binary won't exist until a release
-# is cut. Use workflow_dispatch for manual testing.
+# Called by the Release workflow once it has published. It used to listen on
+# `release: [published]` instead, which never fired: GoReleaser creates the
+# release with GITHUB_TOKEN, and events raised by GITHUB_TOKEN do not start
+# workflow runs. Across 13 releases this job ran zero times on that trigger.
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: 'Release to exercise. Empty falls back to the version pinned in the checkout.'
+        type: string
+        required: false
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release to exercise, e.g. 0.1.25. Empty uses the pinned version.'
+        type: string
+        required: false
 
 jobs:
   e2e-release:
     runs-on: ubuntu-latest
+    env:
+      # Steers the bootstrap at the release under test. Empty leaves the pinned
+      # default in place, which is what a bare manual dispatch wants.
+      DASH0_VERSION: ${{ inputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

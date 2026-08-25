@@ -1,16 +1,89 @@
 name: Release
 
+# Tag, build, verify and publish, all in one run: a tag pushed with GITHUB_TOKEN
+# starts no workflow, and neither does the release event GoReleaser raises. The
+# old `on: release: [published]` gate never fired once across 13 releases for
+# exactly that reason.
+#
+# The tag trigger is kept so a hand-pushed tag still publishes rather than
+# leaving the draft behind. Step one is release-prepare — see DEVELOPMENT.md.
+
 on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'stable: publish the version main already pins. dev: tag a prerelease off this branch, bumping nothing.'
+        type: choice
+        options: [stable, dev]
+        default: stable
+      dry_run:
+        description: 'Build and check only — no tag, no release, nothing published.'
+        type: boolean
+        default: false
+      version:
+        description: 'Override the version. Defaults to the one pinned in this checkout.'
+        type: string
+        required: false
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+
+concurrency:
+  # GoReleaser runs in `mode: replace`, so two runs on one tag delete each
+  # other's uploads and leave a partial asset set.
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
-  goreleaser:
-    name: Release with GoReleaser
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      create_tag: ${{ steps.plan.outputs.create_tag }}
+      latest: ${{ steps.plan.outputs.latest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Every file pins the same version
+        run: ./scripts/version.sh check
+
+      - name: Resolve what to release
+        id: plan
+        env:
+          # Through env, not interpolation: two of these are free text.
+          EVENT: ${{ github.event_name }}
+          CHANNEL: ${{ inputs.channel }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          IN_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          # In a script so it can be shellchecked and contract-tested: this
+          # workflow cannot be dispatched from a PR, so it is never run before
+          # merge. See test/contracts/release-plan.sh.
+          PLAN=$(./scripts/release-plan.sh)
+          printf '%s\n' "$PLAN" | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### Release plan"
+            echo '```'
+            printf '%s\n' "$PLAN"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  dry-run:
+    name: Dry run
+    needs: plan
+    if: needs.plan.outputs.mode == 'dry-run'
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -22,7 +95,60 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run GoReleaser
+      - name: Build every artifact without publishing
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --snapshot --clean --skip=publish
+
+      - name: The build is complete
+        run: |
+          set -euo pipefail
+          ( cd dist && sha256sum -c checksums.txt )
+          N=$(find dist -maxdepth 1 -name '*-on-event-*' | wc -l)
+          [ "$N" -eq 16 ] || { echo "::error::built $N binaries, expected 16"; exit 1; }
+
+      - name: Upload the build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-${{ needs.plan.outputs.version }}
+          path: |
+            dist/*-on-event-*
+            dist/checksums.txt
+          retention-days: 7
+
+  release:
+    name: Release ${{ needs.plan.outputs.tag }}
+    needs: plan
+    if: needs.plan.outputs.mode == 'release'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Tag
+        if: needs.plan.outputs.create_tag == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          # GITHUB_TOKEN, so this does not re-enter via the tag trigger above.
+          git push origin "$TAG"
+
+      - name: Build and upload as a draft
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -30,3 +156,42 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: The build is complete and the binary runs
+        run: |
+          set -euo pipefail
+          # Still a draft, so nothing here can reach an install. Running the
+          # binary catches an artifact that is complete and correctly
+          # checksummed but not actually executable on its platform.
+          ( cd dist && sha256sum -c checksums.txt )
+          N=$(find dist -maxdepth 1 -name '*-on-event-*' | wc -l)
+          [ "$N" -eq 16 ] || { echo "::error::built $N binaries, expected 16"; exit 1; }
+          CLAUDE_PLUGIN_DATA=$(mktemp -d) \
+          DASH0_OTLP_URL=http://127.0.0.1:1 \
+            dist/claude-on-event-linux-amd64 \
+            <<<'{"hook_event_name":"SessionStart","session_id":"release-verify","model":"opus"}'
+
+      - name: Publish
+        env:
+          MAKE_LATEST: ${{ needs.plan.outputs.latest }}
+        run: |
+          set -euo pipefail
+          # By id, via the list: GET /releases/tags/{tag} does not return drafts.
+          # tail, not head — pipefail is on and head would SIGPIPE gh mid-paginate.
+          ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+                 --jq '.[] | select(.tag_name==env.TAG) | .id' | tail -n1)
+          [ -n "$ID" ] || { echo "::error::no release found for $TAG"; exit 1; }
+          # draft is a boolean (-F); make_latest is a string enum (-f).
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${ID}" \
+            -F draft=false -f make_latest="$MAKE_LATEST" >/dev/null
+          echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Every bootstrap resolves a binary at its public URL
+        run: ./scripts/verify-release-assets.sh --strict "$VERSION"
+
+  verify:
+    name: Verify
+    needs: [plan, release]
+    uses: ./.github/workflows/e2e-release.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}

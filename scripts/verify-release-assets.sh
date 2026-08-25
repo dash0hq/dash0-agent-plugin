@@ -35,8 +35,23 @@ PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
 BOOTSTRAPS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
             codex/codex-on-event.sh copilot/copilot-on-event.sh)
 
-status() { curl -sI -o /dev/null -w '%{http_code}' -L "$1"; }
-resolves() { [ "$(status "$1")" = "200" ]; }
+# `|| true` because a DNS or connection failure exits curl 6/7, which under
+# `set -e` would abort at the assignment below — skipping the classification that
+# distinguishes "not published" from "could not ask". curl still writes 000.
+status() { curl -sI -o /dev/null -w '%{http_code}' -L "$1" || true; }
+
+# 404 is a real miss and lets the next candidate name be tried. Anything else is
+# a failure to ask, which must not be reported as a missing asset — a strict
+# release run would otherwise fail claiming a binary is absent when it is there.
+resolves() {
+  local s
+  s=$(status "$1")
+  case "$s" in
+    200) return 0 ;;
+    404) return 1 ;;
+    *)   die "could not reach $1 (HTTP $s)" ;;
+  esac
+}
 
 CHECKSUMS_STATUS=$(status "${BASE}/checksums.txt")
 if [ "$CHECKSUMS_STATUS" != "200" ]; then

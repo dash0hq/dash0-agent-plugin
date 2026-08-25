@@ -135,6 +135,18 @@ plan_rejects "main having gone backwards" "gone backwards" -- \
   EVENT=push REF_TYPE=branch REF_NAME=main PINNED=0.1.24 \
   EXISTING_RELEASES="v0.1.24 v0.1.25"
 
+# The post-publish steps run after Publish, so re-dispatching stable is the
+# documented remedy for their failure — but `mode: replace` would delete and
+# re-upload a live release's assets, reopening the window the draft removed.
+plan_rejects "re-dispatching a version already published" "already published" -- \
+  EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
+  PINNED=0.1.25 EXISTING_RELEASES="v0.1.24 v0.1.25"
+
+plan_is "re-dispatching a version tagged but not yet published" \
+  "mode=release,version=0.1.26,tag=v0.1.26,create_tag=false,latest=true" -- \
+  EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
+  PINNED=0.1.26 EXISTING_RELEASES="v0.1.24 v0.1.25" TAG_STATE=here
+
 plan_rejects "a malformed explicit version" "is not a version" -- \
   EVENT=workflow_dispatch CHANNEL=dev DRY_RUN=false REF_NAME=branch \
   IN_VERSION=v0.2.0 TAG_STATE=absent
@@ -195,8 +207,11 @@ next_rejects "no stable release to count from" "no published stable release" -- 
 next_rejects "an unknown part" "expected patch, minor or major" -- \
   EXISTING_RELEASES="v0.1.25" PINNED=0.1.25 "$VER" next sideways
 
+# $PINNED, never a literal: `set` reads and writes the real files, so a stale
+# literal would stop being a no-op after the next release — and then this case
+# would rewrite all ten pins in the working tree instead of being refused.
 next_rejects "a bump to the version already pinned" "nothing to prepare" -- \
-  "$VER" set 0.1.25
+  "$VER" set "$PINNED"
 
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: the planner tags, names and flags every dispatch as documented, and picks the next version"

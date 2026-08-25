@@ -118,8 +118,14 @@ set_version() {
 # the diagnostic. Numeric sort per component, not `sort -V` (BSD and GNU
 # disagree) and not lexical, which ranks 0.1.9 above 0.1.25.
 latest() {
-  local v
-  v=$(released | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
+  local list v status=0
+  # Captured separately so a failed query is not reported as an empty one. Rolled
+  # into the pipeline, a missing GH_TOKEN or a 5xx surfaced as "no published
+  # stable release found" against a repo with 25 of them.
+  list=$(released) || status=$?
+  [ "$status" -eq 0 ] \
+    || die "could not list published releases (gh exited $status) — in Actions this usually means GH_TOKEN is not set on the step"
+  v=$(printf '%s\n' "$list" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
     | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1) || true
   [ -n "$v" ] || die "no published stable release found"
   printf '%s\n' "$v"

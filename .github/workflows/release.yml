@@ -68,6 +68,9 @@ jobs:
       - name: Resolve what to release
         id: plan
         env:
+          # release-plan.sh asks GitHub which releases are published, and `gh`
+          # refuses to run in Actions without a token.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_TYPE: ${{ github.ref_type }}
           # Through env, not interpolation: two of these are free text.
           EVENT: ${{ github.event_name }}

@@ -44,6 +44,9 @@ jobs:
 
       - name: Decide the version
         env:
+          # `version.sh next` asks GitHub for the newest published release, and
+          # `gh` refuses to run in Actions without a token.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Through env, not interpolation: `version` is free text.
           IN_VERSION: ${{ inputs.version }}
           BUMP: ${{ inputs.bump }}

@@ -98,6 +98,21 @@ else
   fi
 fi
 
+# The post-publish steps — the strict asset check and the end-to-end job — run
+# after Publish, so their failure is the documented reason to re-dispatch stable.
+# But GoReleaser runs in `mode: replace`, so a re-run against a LIVE release
+# deletes and re-uploads its assets and re-applies `draft: true` to it, reopening
+# the "tag resolves, binary does not" window for the length of a build rather
+# than the ~4s the draft was added to remove. Re-run the failed job instead.
+#
+# The push path already refuses this at line ~60 by resolving to mode=none; only
+# the dispatch path needs it, where the check is `VERSION = PINNED` and a
+# published version satisfies that happily.
+if [ "$MODE" = "release" ] && [ "$EVENT" = "workflow_dispatch" ]; then
+  [ "$VERSION" != "$(./scripts/version.sh latest)" ] \
+    || die "v$VERSION is already published — a re-run would replace its assets. Re-run the failed job from that run, or release a new version."
+fi
+
 if [ "$CREATE_TAG" = "true" ]; then
   case "$(tag_state "$TAG")" in
     elsewhere) die "tag $TAG already exists on another commit" ;;

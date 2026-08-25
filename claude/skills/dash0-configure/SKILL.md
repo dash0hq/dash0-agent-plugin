@@ -70,8 +70,6 @@ Ask whether to write user-level (`~/.claude/dash0-agent-plugin.local.md`, applie
    | `omit_io` | Omit prompt content and tool inputs/outputs | `true` |
    | `omit_user_info` | Hash `user.name` and drop `user.email` | `false` |
    | `omit_identity_fallback` | Report only a real `git config user.name`, never the OS account | `false` |
-   | `debug` | Print OTel payloads to stderr | `false` |
-   | `debug_file` | Append debug output to this path | — |
    | `enabled` | Set to `false` to turn the plugin off for this scope without uninstalling | `true` |
    | `auth_token_keychain_service` | macOS keychain service to read the token from instead of storing it | — |
    | `auth_token_keychain_account` | Optional account for that keychain item | — |

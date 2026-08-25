@@ -26,6 +26,23 @@ This repo ships one shared Go pipeline (`cmd/`, `internal/`) and runtime-specifi
 
 The dotted directories are fixed by each agent's plugin discovery and cannot move. Keeping every other runtime asset under `claude/`, `cursor/`, `codex/`, and `copilot/` stops one marketplace from auto-discovering another runtime's components. `scripts/` is repo tooling only (release, version checks, the Docker test harness) — nothing there is shipped to a user.
 
+## Releasing
+
+Two steps, and the second one is just merging:
+
+1. **Actions → Release prepare** → pick `patch`, `minor` or `major`. It writes the
+   new version into every file that pins it and pushes a `release/vX` branch. The
+   run summary links the PR.
+2. **Merge that PR.** Merging publishes the release — builds all 16 binaries,
+   verifies them, and uploads them to GitHub Releases. No second button.
+
+`Actions → Release` is still there for the things merging cannot express: a
+`dry_run` that builds and verifies without publishing anything, a `dev`
+prerelease cut from a branch, and re-running a release that failed halfway.
+
+Full detail, including how to install a dev build, is in
+[DEVELOPMENT.md](./DEVELOPMENT.md#releasing).
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).

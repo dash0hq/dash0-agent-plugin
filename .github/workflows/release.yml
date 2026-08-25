@@ -1,12 +1,21 @@
 name: Release
 
-# Tag, build, verify and publish, all in one run: a tag pushed with GITHUB_TOKEN
-# starts no workflow, and neither does the release event GoReleaser raises. The
-# old `on: release: [published]` gate never fired once across 13 releases for
-# exactly that reason.
+# A stable release publishes itself when its bump PR merges. `release: vX` on main
+# has one meaning, so merging it IS the decision — there is no second button to
+# press, and the window in which main advertises a version that has no release
+# closes to the length of the build.
 #
-# The tag trigger is kept so a hand-pushed tag still publishes rather than
-# leaving the draft behind. Step one is release-prepare — see DEVELOPMENT.md.
+# Tag, build, verify and publish all happen in this one run: a tag pushed with
+# GITHUB_TOKEN starts no workflow, and neither does the release event GoReleaser
+# raises. The old `on: release: [published]` gate never fired once across 13
+# releases for exactly that reason.
+#
+# workflow_dispatch covers what merging cannot: dry runs, dev cuts off a branch,
+# and re-running a release that failed halfway. The tag trigger is kept so a
+# hand-pushed tag still publishes rather than leaving a draft behind.
+#
+# Merging is a human action, so it does start a workflow — unlike a merge
+# performed by an app using GITHUB_TOKEN, which would silently do nothing.
 
 on:
   workflow_dispatch:
@@ -25,6 +34,7 @@ on:
         type: string
         required: false
   push:
+    branches: [main]
     tags: ['v*']
 
 concurrency:
@@ -58,6 +68,7 @@ jobs:
       - name: Resolve what to release
         id: plan
         env:
+          REF_TYPE: ${{ github.ref_type }}
           # Through env, not interpolation: two of these are free text.
           EVENT: ${{ github.event_name }}
           CHANNEL: ${{ inputs.channel }}
@@ -72,11 +83,17 @@ jobs:
           # merge. See test/contracts/release-plan.sh.
           PLAN=$(./scripts/release-plan.sh)
           printf '%s\n' "$PLAN" | tee -a "$GITHUB_OUTPUT"
+          # Deliberately no `paths` filter on the push trigger: `paths` and `tags`
+          # do not combine predictably, so every push to main reaches here and
+          # resolves to mode=none unless it moved the pinned version.
           {
             echo "### Release plan"
             echo '```'
             printf '%s\n' "$PLAN"
             echo '```'
+            case "$PLAN" in
+              *mode=none*) echo "No version bump in this push — nothing to release." ;;
+            esac
           } >>"$GITHUB_STEP_SUMMARY"
 
   dry-run:

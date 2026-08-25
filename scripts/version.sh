@@ -6,8 +6,8 @@
 #
 #   scripts/version.sh check                  every pin agrees; exit 1 if not
 #   scripts/version.sh set <version>          write it everywhere, then check
-#   scripts/version.sh next patch|minor|major print what comes after the newest
-#                                             published release
+#   scripts/version.sh latest                 the newest published release
+#   scripts/version.sh next patch|minor|major print what comes after it
 #
 # Ten files pin the version. They must agree: a bootstrap left behind asks
 # GitHub for a release that was never tagged, and since the Claude marketplace
@@ -107,24 +107,29 @@ set_version() {
   [ "$got" = "$version" ] || die "asked for $version but the pins now read $got — the rewrite did not take"
 }
 
+# The newest published release. PUBLISHED, not tagged and not pinned: the tag is
+# pushed before the build, so a run that fails after tagging leaves a tag with no
+# release behind — and counting from tags would then agree with the manifests and
+# propose the version after it, skipping the unreleased one silently and forever.
+# Drafts and prereleases are excluded for the same reason a dev cut must not
+# become the base for the next stable.
+#
+# `|| true` because pipefail is on and a grep matching nothing would exit before
+# the diagnostic. Numeric sort per component, not `sort -V` (BSD and GNU
+# disagree) and not lexical, which ranks 0.1.9 above 0.1.25.
+latest() {
+  local v
+  v=$(released | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
+    | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1) || true
+  [ -n "$v" ] || die "no published stable release found"
+  printf '%s\n' "$v"
+}
+
 next() {
   local part="$1" latest pinned major minor patch
   case "$part" in patch|minor|major) ;; *) die "expected patch, minor or major" ;; esac
 
-  # Counted from PUBLISHED releases, not from tags. The tag is pushed before the
-  # build, so a run that fails after tagging leaves a tag with no release behind,
-  # and counting from tags would then agree with the manifests and propose the
-  # version after it — skipping the unreleased one silently and forever. Drafts
-  # and prereleases are excluded for the same reason a dev cut must not become
-  # the base for the next stable.
-  #
-  # `|| true` because pipefail is on and a grep matching nothing would exit
-  # before the diagnostic below. Numeric sort per component, not `sort -V` (BSD
-  # and GNU disagree) and not lexical, which ranks 0.1.9 above 0.1.25.
-  latest=$(released | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
-    | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1) || true
-  [ -n "$latest" ] || die "no published stable release to count from — pass an explicit version instead"
-
+  latest=$(latest)
   pinned="${PINNED:-$(jq -r '.version' .claude-plugin/plugin.json)}"
   [ "$pinned" = "$latest" ] || die "the manifests pin $pinned but the newest published release is v$latest — they must match before preparing a new version. If v$pinned was merged or tagged but never published, finish that release rather than bumping past it."
 
@@ -138,8 +143,9 @@ next() {
 }
 
 case "${1:-}" in
-  check) check ;;
-  set)   [ $# -eq 2 ] || die "usage: $0 set <version>"; set_version "$2" ;;
-  next)  [ $# -eq 2 ] || die "usage: $0 next patch|minor|major"; next "$2" ;;
-  *)     echo "usage: $0 check | set <version> | next patch|minor|major" >&2; exit 2 ;;
+  check)  check ;;
+  latest) latest ;;
+  set)    [ $# -eq 2 ] || die "usage: $0 set <version>"; set_version "$2" ;;
+  next)   [ $# -eq 2 ] || die "usage: $0 next patch|minor|major"; next "$2" ;;
+  *)      echo "usage: $0 check | latest | set <version> | next patch|minor|major" >&2; exit 2 ;;
 esac

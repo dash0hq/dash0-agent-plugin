@@ -6,7 +6,8 @@ name: Release prepare
 # pull_request event, so its required checks would never run and it could never
 # be merged. Opening it is one click; the link is in this run's summary.
 #
-# Then merge it and run Release from main. See DEVELOPMENT.md#releasing.
+# Merging that PR publishes the release — release.yml triggers on the push to
+# main. See DEVELOPMENT.md#releasing.
 
 on:
   workflow_dispatch:
@@ -89,10 +90,11 @@ jobs:
           {
             echo "### Prepared v${VERSION}"
             echo
-            echo "1. [Open the PR]($URL) and get it merged."
-            echo "2. Run **Release** from \`main\` with channel \`stable\`."
+            echo "**[Open the PR]($URL) and merge it.** Merging publishes v${VERSION}"
+            echo "— the Release workflow triggers on the push to \`main\`. There is"
+            echo "no second button."
             echo
-            echo "Between the merge and step 2, \`main\` advertises v${VERSION}"
-            echo "while no such release exists, and a fresh \`plugin install\`"
-            echo "in that window cannot download a binary. Keep it short."
+            echo "While it builds (~3 min), \`main\` advertises v${VERSION} before the"
+            echo "release exists, and a fresh \`plugin install\` in that window cannot"
+            echo "download a binary. It resolves itself when the run finishes."
           } >>"$GITHUB_STEP_SUMMARY"

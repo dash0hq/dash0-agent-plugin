@@ -11,7 +11,8 @@
 # that decides whether a tag gets pushed. See test/contracts/release-plan.sh.
 #
 # Reads from the environment, all as GitHub sets them:
-#   EVENT       github.event_name     — "push" (a tag) or "workflow_dispatch"
+#   EVENT       github.event_name     — "push" or "workflow_dispatch"
+#   REF_TYPE    github.ref_type       — "tag" or "branch", on a push
 #   CHANNEL     inputs.channel        — stable | dev
 #   DRY_RUN     inputs.dry_run        — "true" | "false"
 #   IN_VERSION  inputs.version        — optional override, may be empty
@@ -24,6 +25,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 EVENT="${EVENT:-workflow_dispatch}"
+REF_TYPE="${REF_TYPE:-branch}"
 CHANNEL="${CHANNEL:-stable}"
 DRY_RUN="${DRY_RUN:-false}"
 IN_VERSION="${IN_VERSION:-}"
@@ -48,10 +50,28 @@ tag_state() {
   if [ "$at" = "$(git rev-parse HEAD)" ]; then echo here; else echo elsewhere; fi
 }
 
-if [ "$EVENT" = "push" ]; then
+if [ "$EVENT" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
   # A hand-pushed tag. Release what it names, whatever the checkout pins.
   TAG="$REF_NAME"; VERSION="${TAG#v}"
   MODE=release; CREATE_TAG=false
+elif [ "$EVENT" = "push" ]; then
+  # A merge to main. A commit that moves the pinned version past the newest
+  # published release is a release bump and nothing else — that is the whole
+  # meaning of `release: vX` — so it publishes itself. Every other push to main
+  # lands here too and resolves to mode=none, which is why the plan runs before
+  # anything is built.
+  VERSION="$PINNED"; TAG="v$VERSION"; CREATE_TAG=true; MODE=release
+  PUBLISHED=$(./scripts/version.sh latest)
+  if [ "$VERSION" = "$PUBLISHED" ]; then
+    MODE=none; TAG=""; CREATE_TAG=false
+  else
+    # Ordering, not inequality: a reverted bump would otherwise try to re-release
+    # an older version and fail later, at the tag, with a confusing message.
+    NEWER=$(printf '%s\n%s\n' "$VERSION" "$PUBLISHED" \
+      | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1)
+    [ "$NEWER" = "$VERSION" ] \
+      || die "main pins $VERSION but v$PUBLISHED is already published — main has gone backwards"
+  fi
 else
   # Same shape `version.sh set` enforces. Unchecked, `version: v0.2.0` on the dev
   # channel becomes the tag vv0.2.0-dev.N, and a stray space fails at `git tag` —

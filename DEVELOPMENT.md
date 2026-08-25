@@ -2,32 +2,40 @@
 
 ## Releasing
 
-Two buttons in the **Actions** tab. They are separate because `main` requires a
-review and a code owner's approval, so no workflow can push the bump itself.
+**Cutting a release is two steps, and the second is just merging a PR.**
 
-1. **Release prepare** — pick `patch` (default), `minor` or `major`. It counts
-   from the newest published release, writes the result into every file that
-   pins it, and pushes `release/v<version>`. The summary links the PR; open it
-   and get it merged.
-2. **Release** — run from `main`, channel `stable`. Tags, builds, verifies,
-   publishes.
+1. **Actions → Release prepare.** Pick `patch` (default), `minor` or `major`. It
+   counts from the newest published release, writes the result into every file
+   that pins a version, and pushes `release/v<version>`. The run summary links
+   the PR — open it, get it reviewed.
+2. **Merge the PR.** That's the release. `release.yml` triggers on the push to
+   `main`, tags the merge commit, builds all 16 binaries, verifies them, and
+   publishes. Nothing else to press.
 
-The version is derived rather than typed because nothing downstream compares a
-typed version against its predecessor: the format is checked and a duplicate tag
-is refused, but `0.1.27` when you meant `0.1.26` is accepted and permanent. Pass
-an exact version when you need one.
+Why merging rather than a second button: `release: v0.1.26` merged into `main`
+has exactly one meaning, so the merge *is* the decision. A separate button would
+only add a stretch of time in which `main` advertises a version that has no
+release yet.
 
-> **Mind the gap.** Between the merge and step 2, `main` pins a version that has
-> no release. The Claude marketplace lists this repo with no ref, so `plugin
-> install` takes the default branch — an install landing in that window asks
-> GitHub for a tag that does not exist, and every hook fails until the release
-> lands. It self-heals, and has historically run 1–4 minutes, but do not merge
-> the bump and then go to lunch.
+> **The window is now the build.** For the ~3 minutes between the merge landing
+> and the release publishing, `main` pins a version GitHub does not have. The
+> Claude marketplace lists this repo with no ref, so `plugin install` takes the
+> default branch — an install landing in that window asks for a tag that does not
+> exist, and its hooks fail until the run finishes. It then resolves on its own.
+> Watch the run; if it fails, that window stays open until you fix it.
 
-### The other two modes
+Every push to `main` starts the Release workflow, and all but a bump resolve to
+`mode=none` and stop. That is deliberate: GitHub's `paths` and `tags` filters do
+not combine predictably on one trigger, so the decision is made in
+`scripts/release-plan.sh` instead of in YAML.
+
+### The other three modes
+
+**Actions → Release** is still the entry point for what merging cannot express.
 
 **`dry_run`** — build and check, publish nothing. No tag, no release; the 16
 binaries are attached to the run for 7 days. Safe from any branch at any time.
+This is the "are we releasable?" button.
 
 **`channel: dev`** — tags `v<pinned>-dev.<run number>` on the branch you dispatch
 from, as a prerelease. Bumps nothing, never touches `main`, and GitHub's *Latest*
@@ -41,29 +49,38 @@ Every bootstrap reads it, and the cache filename embeds the version, so it never
 collides with the pinned build. Same repo, same checksum verification — only
 which release is asked for changes.
 
+**`channel: stable`** — the manual equivalent of merging, for re-running a
+release that failed halfway. It must be dispatched from `main`, and it refuses
+any version `main` does not already pin.
+
 ### How it is wired
 
-- **`scripts/version.sh`** — `check`, `set`, `next`. The only list of the ten
-  places the version is pinned, so the bump and the check cannot disagree about
-  what needs bumping. `next` counts from the newest **published release** —
-  neither the manifests nor the tags, both of which can name a version that was
-  never released, and counting from either would then skip it silently and
-  forever.
+- **`scripts/version.sh`** — `check`, `set`, `latest`, `next`. The only list of
+  the ten places the version is pinned, so the bump and the check cannot
+  disagree about what needs bumping. `next` counts from the newest **published
+  release** — neither the manifests nor the tags, both of which can name a
+  version that was never released, and counting from either would then skip it
+  silently and forever.
 - **One workflow run does everything.** A tag pushed with `GITHUB_TOKEN` starts
   no workflow, and neither does GoReleaser's release event — the previous
   end-to-end gate listened on `release: [published]` and ran zero times across 13
-  releases. So tag, build, verify and publish all live in `release.yml`.
+  releases. So tag, build, verify and publish all live in `release.yml`. A human
+  merge is not subject to that rule, which is what makes step 2 work; a merge
+  performed by an app using `GITHUB_TOKEN` would silently do nothing.
 - **GoReleaser uploads into a draft**, published only once the artifact set is
-  complete and the linux binary has been run. It creates the release before
-  uploading and writes `checksums.txt` last, so publishing at creation leaves a
-  window — ~4s on v0.1.24 — where the tag resolves but a binary does not.
+  complete, the linux binary has been run, and the uploaded asset list matches
+  what was built. It creates the release before uploading and writes
+  `checksums.txt` last, so publishing at creation leaves a window — ~4s on
+  v0.1.24 — where the tag resolves but a binary does not.
 - **`concurrency: release`** serializes runs, because `mode: replace` means two
   runs on one tag delete each other's uploads.
+- **A failed run is re-runnable.** The tag is pushed before the build, so the
+  planner treats a tag already on this commit as a re-run — it skips tagging and
+  continues, rather than tripping over its own tag.
 - **After publishing**, `scripts/verify-release-assets.sh --strict` checks every
   asset name a bootstrap can ask for at its public URL, then the end-to-end job
   installs the real binary through `claude-on-event.sh`. CI runs the same script
-  non-strict, where a missing release is a warning — the normal state of a bump
-  PR.
+  non-strict, where a 404 is a warning — the normal state of a bump PR.
 
 ### Renaming a published asset
 

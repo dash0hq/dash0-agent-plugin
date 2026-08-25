@@ -73,13 +73,29 @@ plan_is "dev tags a prerelease off the branch and declines Latest" \
   "mode=release,version=$PINNED-dev.41,tag=v$PINNED-dev.41,create_tag=true,latest=false" -- \
   EVENT=workflow_dispatch CHANNEL=dev DRY_RUN=false REF_NAME=some-branch RUN_NUMBER=41
 
+# Merging the bump PR IS the release trigger — `release: vX` on main has one
+# meaning, and a second button to press only widens the window in which main
+# advertises a version that has no release.
+plan_is "a bump merged to main releases itself" \
+  "mode=release,version=0.1.26,tag=v0.1.26,create_tag=true,latest=true" -- \
+  EVENT=push REF_TYPE=branch REF_NAME=main PINNED=0.1.26 \
+  EXISTING_RELEASES="v0.1.24 v0.1.25" TAG_STATE=absent
+
+# Every other push to main reaches the planner too — `paths` and `tags` do not
+# combine predictably on one trigger — so it must resolve to a no-op rather than
+# re-releasing the current version.
+plan_is "an ordinary push to main releases nothing" \
+  "mode=none,version=0.1.25,tag=,create_tag=false,latest=true" -- \
+  EVENT=push REF_TYPE=branch REF_NAME=main PINNED=0.1.25 \
+  EXISTING_RELEASES="v0.1.24 v0.1.25"
+
 plan_is "a pushed tag releases itself without re-tagging" \
   "mode=release,version=0.9.9,tag=v0.9.9,create_tag=false,latest=true" -- \
-  EVENT=push REF_NAME=v0.9.9
+  EVENT=push REF_TYPE=tag REF_NAME=v0.9.9
 
 plan_is "a pushed prerelease tag declines Latest" \
   "mode=release,version=0.9.9-rc.1,tag=v0.9.9-rc.1,create_tag=false,latest=false" -- \
-  EVENT=push REF_NAME=v0.9.9-rc.1
+  EVENT=push REF_TYPE=tag REF_NAME=v0.9.9-rc.1
 
 echo "== What it refuses =="
 
@@ -112,6 +128,12 @@ plan_is "a re-run continues from the tag it already pushed" \
   "mode=release,version=0.9.9,tag=v0.9.9,create_tag=false,latest=true" -- \
   EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
   IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=here
+
+# A reverted bump would otherwise try to re-release an older version and fail
+# later, at the tag, with a message about the wrong thing.
+plan_rejects "main having gone backwards" "gone backwards" -- \
+  EVENT=push REF_TYPE=branch REF_NAME=main PINNED=0.1.24 \
+  EXISTING_RELEASES="v0.1.24 v0.1.25"
 
 plan_rejects "a malformed explicit version" "is not a version" -- \
   EVENT=workflow_dispatch CHANNEL=dev DRY_RUN=false REF_NAME=branch \

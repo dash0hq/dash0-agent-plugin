@@ -545,6 +545,55 @@ func TestSessionStartHintSuppressedWhenConfigured(t *testing.T) {
 	assert.Contains(t, stdout, "dash0: connected")
 }
 
+func TestSessionStartHintWhenTeamMissing(t *testing.T) {
+	dataDir := t.TempDir()
+	srv, _, _ := collectingServer(t)
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL="+srv.URL,
+		"DASH0_TEAM_NAME=",
+		"CLAUDE_PLUGIN_OPTION_TEAM_NAME=",
+	)
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-noteam","model":"opus"}`, env)
+
+	// Claude Code parses stdout as one hook response and discards everything when
+	// a second JSON object follows, so both parts must ride in one systemMessage.
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	require.Len(t, lines, 1)
+
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &resp))
+	assert.Contains(t, resp["systemMessage"], "dash0: connected")
+	assert.Contains(t, resp["systemMessage"], "no team configured")
+}
+
+func TestSessionStartTeamHintSuppressedWhenTeamSet(t *testing.T) {
+	dataDir := t.TempDir()
+	srv, _, _ := collectingServer(t)
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL="+srv.URL,
+		"DASH0_TEAM_NAME=platform",
+	)
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-team-set","model":"opus"}`, env)
+	assert.Contains(t, stdout, "dash0: connected")
+	assert.NotContains(t, stdout, "no team configured")
+}
+
+func TestSessionStartTeamHintSuppressedWhenNotConfigured(t *testing.T) {
+	// Telemetry is off, so the configure hint is the only useful message.
+	dataDir := t.TempDir()
+	env := append(os.Environ(),
+		"CLAUDE_PLUGIN_DATA="+dataDir,
+		"DASH0_OTLP_URL=",
+		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
+		"DASH0_TEAM_NAME=",
+	)
+	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-noteam-off","model":"opus"}`, env)
+	assert.Contains(t, stdout, "telemetry is not active")
+	assert.NotContains(t, stdout, "no team configured")
+}
+
 func TestSessionStartConnectivityFailure(t *testing.T) {
 	dataDir := t.TempDir()
 	env := append(os.Environ(),

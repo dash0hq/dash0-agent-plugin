@@ -17,8 +17,8 @@
 # consistency-checks job, and `make version-check`.
 #
 # Test hooks, used by test/contracts/release-plan.sh:
-#   EXISTING_TAGS  a tag list, instead of `git tag`
-#   PINNED         the manifest version, instead of reading plugin.json
+#   EXISTING_RELEASES  a version list, instead of querying GitHub
+#   PINNED             the manifest version, instead of reading plugin.json
 
 set -euo pipefail
 
@@ -41,6 +41,16 @@ BOOTSTRAPS=(
   codex/codex-on-event.sh
   copilot/copilot-on-event.sh
 )
+
+# Tag names of published, non-draft, non-prerelease releases.
+released() {
+  if [ -n "${EXISTING_RELEASES:-}" ]; then
+    printf '%s\n' "$EXISTING_RELEASES" | tr ' ' '\n'
+    return
+  fi
+  gh api "repos/dash0hq/dash0-agent-plugin/releases" --paginate \
+    --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name'
+}
 
 pins() {
   for f in "${MANIFESTS[@]}"; do
@@ -70,10 +80,16 @@ check() {
 }
 
 set_version() {
-  local version="$1"
+  local version="$1" before got
   # Prereleases are allowed so a dev build can be cut from a branch.
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
     || die "'$version' is not a version (expected 0.2.0, or 0.2.0-dev.1)"
+  # Reachable when a previous release failed after its bump merged: the tag and
+  # branch guards both pass, every sed no-ops, and release-prepare then dies at
+  # `git commit -a` with an opaque "nothing to commit".
+  before=$(pins | cut -f2 | sort -u)
+  [ "$before" != "$version" ] \
+    || die "every file already pins $version — there is nothing to prepare. If v$version was never published, finish that release instead."
   # `sed -i` takes its backup suffix differently on BSD and GNU; passing one and
   # removing it after is the form both accept.
   for f in "${MANIFESTS[@]}"; do
@@ -85,28 +101,32 @@ set_version() {
     rm -f "$f.bak"
   done
   check
+  # check only proves the pins AGREE. This proves they agree on what was asked
+  # for, so a sed that stops matching fails here rather than shipping.
+  got=$(pins | cut -f2 | sort -u)
+  [ "$got" = "$version" ] || die "asked for $version but the pins now read $got — the rewrite did not take"
 }
 
 next() {
   local part="$1" latest pinned major minor patch
   case "$part" in patch|minor|major) ;; *) die "expected patch, minor or major" ;; esac
 
-  # Newest stable tag. `|| true` because pipefail is on and a grep that matches
-  # nothing would exit before the diagnostic below. Numeric sort per component,
-  # not `sort -V` (BSD and GNU disagree) and not lexical, which ranks 0.1.9 above
-  # 0.1.25. Prereleases are excluded so a dev build cut from a branch cannot
-  # become the base for the next stable.
-  latest=$( { [ -n "${EXISTING_TAGS:-}" ] && printf '%s\n' "$EXISTING_TAGS" | tr ' ' '\n' || git tag; } \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
+  # Counted from PUBLISHED releases, not from tags. The tag is pushed before the
+  # build, so a run that fails after tagging leaves a tag with no release behind,
+  # and counting from tags would then agree with the manifests and propose the
+  # version after it — skipping the unreleased one silently and forever. Drafts
+  # and prereleases are excluded for the same reason a dev cut must not become
+  # the base for the next stable.
+  #
+  # `|| true` because pipefail is on and a grep matching nothing would exit
+  # before the diagnostic below. Numeric sort per component, not `sort -V` (BSD
+  # and GNU disagree) and not lexical, which ranks 0.1.9 above 0.1.25.
+  latest=$(released | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
     | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1) || true
   [ -n "$latest" ] || die "no published stable release to count from — pass an explicit version instead"
 
-  # Counted from the newest tag, not the manifests. They agree after a successful
-  # release and diverge in one case — a bump merged whose release never published
-  # — where counting from the manifests would skip the unreleased version
-  # silently and forever.
   pinned="${PINNED:-$(jq -r '.version' .claude-plugin/plugin.json)}"
-  [ "$pinned" = "$latest" ] || die "the manifests pin $pinned but the newest release is v$latest — they must match before preparing a new version. If v$pinned was never published, run Release (channel: stable) from main rather than preparing another bump."
+  [ "$pinned" = "$latest" ] || die "the manifests pin $pinned but the newest published release is v$latest — they must match before preparing a new version. If v$pinned was merged or tagged but never published, finish that release rather than bumping past it."
 
   IFS=. read -r major minor patch <<<"$latest"
   case "$part" in

@@ -33,15 +33,19 @@ PINNED="${PINNED:-$(jq -r '.version' .claude-plugin/plugin.json)}"
 
 die() { echo "::error::$1" >&2; exit 1; }
 
+# absent | here | elsewhere. "here" matters: the tag is pushed before the build,
+# so a run that fails after tagging leaves it behind, and re-running must
+# continue rather than refuse its own tag. Only a tag on a DIFFERENT commit is a
+# real collision.
+#
 # Only as complete as the checkout, hence fetch-depth: 0 in the workflow.
-# EXISTING_TAGS stands in for git so the contract test does not depend on which
-# tags a clone happens to hold.
-tag_exists() {
-  if [ -n "${EXISTING_TAGS:-}" ]; then
-    case " $EXISTING_TAGS " in *" $1 "*) return 0 ;; esac
-    return 1
-  fi
-  git rev-parse -q --verify "refs/tags/$1" >/dev/null 2>&1
+# TAG_STATE stands in for git so the contract test does not depend on which tags
+# a clone happens to hold.
+tag_state() {
+  if [ -n "${TAG_STATE:-}" ]; then printf '%s\n' "$TAG_STATE"; return; fi
+  local at
+  at=$(git rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null) || { echo absent; return; }
+  if [ "$at" = "$(git rev-parse HEAD)" ]; then echo here; else echo elsewhere; fi
 }
 
 if [ "$EVENT" = "push" ]; then
@@ -49,6 +53,12 @@ if [ "$EVENT" = "push" ]; then
   TAG="$REF_NAME"; VERSION="${TAG#v}"
   MODE=release; CREATE_TAG=false
 else
+  # Same shape `version.sh set` enforces. Unchecked, `version: v0.2.0` on the dev
+  # channel becomes the tag vv0.2.0-dev.N, and a stray space fails at `git tag` —
+  # both after the operator has been shown a green plan.
+  if [ -n "$IN_VERSION" ] && ! [[ "$IN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+    die "'$IN_VERSION' is not a version (expected 0.2.0, or 0.2.0-dev.1; no leading v)"
+  fi
   BASE="${IN_VERSION:-$PINNED}"
   if [ "$DRY_RUN" = "true" ]; then
     MODE=dry-run; VERSION="$BASE"; TAG=""; CREATE_TAG=false
@@ -68,8 +78,13 @@ else
   fi
 fi
 
-if [ "$CREATE_TAG" = "true" ] && tag_exists "$TAG"; then
-  die "tag $TAG already exists"
+if [ "$CREATE_TAG" = "true" ]; then
+  case "$(tag_state "$TAG")" in
+    elsewhere) die "tag $TAG already exists on another commit" ;;
+    # Left by an earlier run of this same release that failed after tagging.
+    # Nothing to create, and GoReleaser's `mode: replace` makes the rebuild safe.
+    here)      CREATE_TAG=false ;;
+  esac
 fi
 
 # "Latest" stays on the newest stable, so a prerelease suffix declines it.

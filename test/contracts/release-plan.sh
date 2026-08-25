@@ -93,17 +93,29 @@ plan_rejects "stable that main does not pin" "run Release prepare" -- \
 plan_rejects "stable from a branch" "must be dispatched from main" -- \
   EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=some-branch
 
-# EXISTING_TAGS rather than the clone's own tags: actions/checkout and a local
+# TAG_STATE rather than the clone's own tags: actions/checkout and a local
 # `git fetch` disagree about which tags are present, and a guard that quietly
 # passes because the tag was simply not fetched is worse than no guard.
-plan_rejects "a version already tagged" "already exists" -- \
+plan_rejects "a tag already on another commit" "another commit" -- \
   EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
-  IN_VERSION=0.9.9 PINNED=0.9.9 EXISTING_TAGS="v0.9.8 v0.9.9"
+  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=elsewhere
 
-plan_is "a version not yet tagged passes the same guard" \
+plan_is "an untagged version tags normally" \
   "mode=release,version=0.9.9,tag=v0.9.9,create_tag=true,latest=true" -- \
   EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
-  IN_VERSION=0.9.9 PINNED=0.9.9 EXISTING_TAGS="v0.9.7 v0.9.8"
+  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=absent
+
+# The tag is pushed before the build, so a run that fails after tagging leaves it
+# behind. Re-running must continue from it rather than refuse its own tag —
+# otherwise that version can never be released without deleting the tag by hand.
+plan_is "a re-run continues from the tag it already pushed" \
+  "mode=release,version=0.9.9,tag=v0.9.9,create_tag=false,latest=true" -- \
+  EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
+  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=here
+
+plan_rejects "a malformed explicit version" "is not a version" -- \
+  EVENT=workflow_dispatch CHANNEL=dev DRY_RUN=false REF_NAME=branch \
+  IN_VERSION=v0.2.0 TAG_STATE=absent
 
 echo "== What version comes next =="
 
@@ -136,30 +148,33 @@ next_rejects() {
 
 VER="$REPO/scripts/version.sh"
 
-next_is "patch"  "0.1.26" -- EXISTING_TAGS="v0.1.24 v0.1.25" PINNED=0.1.25 "$VER" next patch
-next_is "minor"  "0.2.0"  -- EXISTING_TAGS="v0.1.24 v0.1.25" PINNED=0.1.25 "$VER" next minor
-next_is "major"  "1.0.0"  -- EXISTING_TAGS="v0.1.24 v0.1.25" PINNED=0.1.25 "$VER" next major
+next_is "patch"  "0.1.26" -- EXISTING_RELEASES="v0.1.24 v0.1.25" PINNED=0.1.25 "$VER" next patch
+next_is "minor"  "0.2.0"  -- EXISTING_RELEASES="v0.1.24 v0.1.25" PINNED=0.1.25 "$VER" next minor
+next_is "major"  "1.0.0"  -- EXISTING_RELEASES="v0.1.24 v0.1.25" PINNED=0.1.25 "$VER" next major
 
 # Lexical order would pick v0.1.9 as newest and propose 0.1.10 — a version
 # already published.
 next_is "counts numerically, not lexically" "0.1.26" -- \
-  EXISTING_TAGS="v0.1.9 v0.1.10 v0.1.25" PINNED=0.1.25 "$VER" next patch
+  EXISTING_RELEASES="v0.1.9 v0.1.10 v0.1.25" PINNED=0.1.25 "$VER" next patch
 
 # A dev build cut from a branch must not become the base for the next stable.
 next_is "ignores prereleases" "0.1.26" -- \
-  EXISTING_TAGS="v0.1.25 v0.2.0-dev.7 v0.9.0-rc.1" PINNED=0.1.25 "$VER" next patch
+  EXISTING_RELEASES="v0.1.25 v0.2.0-dev.7 v0.9.0-rc.1" PINNED=0.1.25 "$VER" next patch
 
-# The one state where the tags and the manifests disagree: a bump PR merged but
-# the release never published. Counting from the manifests would skip the
-# unreleased version forever, so this is refused rather than guessed.
-next_rejects "a bump that was merged but never released" "must match" -- \
-  EXISTING_TAGS="v0.1.25" PINNED=0.1.26 "$VER" next patch
+# Counting from PUBLISHED releases covers what a tag-based count cannot: v0.1.26
+# tagged by a run that then failed. A tag count would agree with the manifests
+# and propose 0.1.27, skipping it forever.
+next_rejects "a version merged or tagged but never published" "must match" -- \
+  EXISTING_RELEASES="v0.1.25" PINNED=0.1.26 "$VER" next patch
 
 next_rejects "no stable release to count from" "no published stable release" -- \
-  EXISTING_TAGS="v0.1.0-dev.1" PINNED=0.1.25 "$VER" next patch
+  EXISTING_RELEASES="v0.1.0-dev.1" PINNED=0.1.25 "$VER" next patch
 
 next_rejects "an unknown part" "expected patch, minor or major" -- \
-  EXISTING_TAGS="v0.1.25" PINNED=0.1.25 "$VER" next sideways
+  EXISTING_RELEASES="v0.1.25" PINNED=0.1.25 "$VER" next sideways
+
+next_rejects "a bump to the version already pinned" "nothing to prepare" -- \
+  "$VER" set 0.1.25
 
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: the planner tags, names and flags every dispatch as documented, and picks the next version"

@@ -28,18 +28,25 @@ VERSION="${1:-}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+die() { echo "::error::$1" >&2; exit 1; }
+
 BASE="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${VERSION}"
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
 BOOTSTRAPS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
             codex/codex-on-event.sh copilot/copilot-on-event.sh)
 
-resolves() { [ "$(curl -sI -o /dev/null -w '%{http_code}' -L "$1")" = "200" ]; }
+status() { curl -sI -o /dev/null -w '%{http_code}' -L "$1"; }
+resolves() { [ "$(status "$1")" = "200" ]; }
 
-if ! resolves "${BASE}/checksums.txt"; then
-  if [ "$STRICT" -eq 1 ]; then
-    echo "::error::release v${VERSION} has no checksums.txt at ${BASE}" >&2
-    exit 1
-  fi
+CHECKSUMS_STATUS=$(status "${BASE}/checksums.txt")
+if [ "$CHECKSUMS_STATUS" != "200" ]; then
+  [ "$STRICT" -eq 0 ] \
+    || die "release v${VERSION} has no checksums.txt at ${BASE} (HTTP $CHECKSUMS_STATUS)"
+  # Only a 404 means "not published yet". A 5xx, a rate limit or a connection
+  # failure (000) must not read as a clean skip — that is how a genuinely broken
+  # asset set passes CI behind one flaky request.
+  [ "$CHECKSUMS_STATUS" = "404" ] \
+    || die "could not reach ${BASE}/checksums.txt (HTTP $CHECKSUMS_STATUS)"
   # Expected on a version-bump PR. Validated for real by the release workflow.
   echo "::warning::release v${VERSION} is not published yet — asset check skipped"
   exit 0

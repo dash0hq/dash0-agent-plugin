@@ -45,9 +45,9 @@ which release is asked for changes.
 
 - **`scripts/version.sh`** — `check`, `set`, `next`. The only list of the ten
   places the version is pinned, so the bump and the check cannot disagree about
-  what needs bumping. `next` counts from the newest **tag**, not the manifests:
-  they diverge only when a bump merged whose release never published, and
-  counting from the manifests there would skip that version silently and
+  what needs bumping. `next` counts from the newest **published release** —
+  neither the manifests nor the tags, both of which can name a version that was
+  never released, and counting from either would then skip it silently and
   forever.
 - **One workflow run does everything.** A tag pushed with `GITHUB_TOKEN` starts
   no workflow, and neither does GoReleaser's release event — the previous

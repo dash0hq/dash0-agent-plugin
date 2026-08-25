@@ -144,6 +144,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Only reached when the tag does not already point here — the planner
+          # sets create_tag=false for a re-run of a release that failed after
+          # tagging, so this step is skipped rather than failing on its own tag.
           git tag "$TAG"
           # GITHUB_TOKEN, so this does not re-enter via the tag trigger above.
           git push origin "$TAG"
@@ -171,18 +174,38 @@ jobs:
             dist/claude-on-event-linux-amd64 \
             <<<'{"hook_event_name":"SessionStart","session_id":"release-verify","model":"opus"}'
 
+      - name: The draft carries exactly what was built
+        run: |
+          set -euo pipefail
+          # The point of the draft: check what GitHub actually stored, while it is
+          # still unreachable. Everything above inspects the local dist/, which
+          # says nothing about the upload.
+          #
+          # By id from the list — GET /releases/tags/{tag} does not return drafts.
+          # The list is newest-first, so take the FIRST match: a leftover draft
+          # from an aborted run would otherwise be the one published, and
+          # `mode: replace` may have stripped its assets.
+          ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+                 --jq '.[] | select(.tag_name==env.TAG) | .id')
+          ID=${ID%%$'\n'*}
+          [ -n "$ID" ] || { echo "::error::no release found for $TAG"; exit 1; }
+          echo "RELEASE_ID=$ID" >>"$GITHUB_ENV"
+
+          # checksums.txt names every binary, so it plus itself is the whole set.
+          { awk '{print $2}' dist/checksums.txt; echo checksums.txt; } | sort >expected.txt
+          gh api "repos/${GITHUB_REPOSITORY}/releases/$ID/assets" --paginate \
+            --jq '.[].name' | sort >uploaded.txt
+          diff expected.txt uploaded.txt \
+            || { echo "::error::the draft's assets do not match the build"; exit 1; }
+          echo "PASS: all $(wc -l <uploaded.txt | tr -d ' ') artifacts present on the draft"
+
       - name: Publish
         env:
           MAKE_LATEST: ${{ needs.plan.outputs.latest }}
         run: |
           set -euo pipefail
-          # By id, via the list: GET /releases/tags/{tag} does not return drafts.
-          # tail, not head — pipefail is on and head would SIGPIPE gh mid-paginate.
-          ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-                 --jq '.[] | select(.tag_name==env.TAG) | .id' | tail -n1)
-          [ -n "$ID" ] || { echo "::error::no release found for $TAG"; exit 1; }
           # draft is a boolean (-F); make_latest is a string enum (-f).
-          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${ID}" \
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             -F draft=false -f make_latest="$MAKE_LATEST" >/dev/null
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" >>"$GITHUB_STEP_SUMMARY"
 

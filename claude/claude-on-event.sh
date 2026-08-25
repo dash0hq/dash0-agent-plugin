@@ -89,6 +89,22 @@ BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}"
 # Download the binary on first run.
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR"
+
+  # Download to a private temp and rename into place. Hooks run concurrently —
+  # parallel tool calls each fire their own, and every session on the machine
+  # shares this directory — so on the first run after a version bump, N processes
+  # see no binary at once. Writing $BINARY directly let them interleave into one
+  # file and exec whatever was there so far. rename(2) is atomic within a
+  # directory: a late arrival sees either no file or a complete one, and a process
+  # already executing the old inode keeps running it.
+  #
+  # $$ suffices to make the name private, because every process that can collide
+  # here is on this machine. The trap covers the failure paths below; a temp is
+  # only orphaned if the run is killed outright, which for a hook means the host's
+  # timeout. exec does not fire it, and by then there is nothing left to remove.
+  TMP="$BINARY.tmp.$$"
+  trap 'rm -f "$TMP"' EXIT
+
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
@@ -113,14 +129,13 @@ if [ ! -x "$BINARY" ]; then
   for CANDIDATE in "claude-on-event-${OS}-${ARCH}" "on-event-${OS}-${ARCH}"; do
     # stderr is dropped: a miss on the first candidate is expected until the
     # rename ships, and the message below covers the case where none is found.
-    if fetch "${BASE_URL}/${CANDIDATE}" "$BINARY" 2>/dev/null; then
+    if fetch "${BASE_URL}/${CANDIDATE}" "$TMP" 2>/dev/null; then
       ASSET="$CANDIDATE"
       break
     fi
   done
   if [ -z "$ASSET" ]; then
     echo "on-event: no release asset for ${OS}-${ARCH} in v${VERSION}" >&2
-    rm -f "$BINARY"
     exit 1
   fi
   CHECKSUMS=$(fetch_stdout "$CHECKSUMS_URL")
@@ -135,13 +150,12 @@ if [ ! -x "$BINARY" ]; then
   EXPECTED=$(printf '%s\n' "$CHECKSUMS" | awk -v want="$ASSET" '$2 == want { print $1 }')
   if [ -z "$EXPECTED" ]; then
     echo "on-event: ${ASSET} is not listed in checksums.txt for v${VERSION}" >&2
-    rm -f "$BINARY"
     exit 1
   fi
   if command -v sha256sum &>/dev/null; then
-    ACTUAL=$(sha256sum "$BINARY" | cut -d' ' -f1)
+    ACTUAL=$(sha256sum "$TMP" | cut -d' ' -f1)
   elif command -v shasum &>/dev/null; then
-    ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
+    ACTUAL=$(shasum -a 256 "$TMP" | cut -d' ' -f1)
   else
     # Neither tool present. The READMEs list one of them as a requirement; the
     # binary is still used, as before, so a minimal host is not broken by this.
@@ -149,11 +163,13 @@ if [ ! -x "$BINARY" ]; then
   fi
   if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
     echo "on-event: checksum mismatch (expected $EXPECTED, got $ACTUAL)" >&2
-    rm -f "$BINARY"
     exit 1
   fi
 
-  chmod +x "$BINARY"
+  # Executable before it is visible, so nothing can find $BINARY and fail the
+  # -x test that guards this block.
+  chmod +x "$TMP"
+  mv -f "$TMP" "$BINARY"
 fi
 
 # Forward stdin and arguments to the binary.

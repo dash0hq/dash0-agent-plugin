@@ -114,6 +114,9 @@ jobs:
       - name: Codex install/config contracts
         run: ./test/contracts/codex.sh
 
+      - name: Bootstrap download contracts
+        run: ./test/contracts/bootstrap.sh
+
   e2e:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository

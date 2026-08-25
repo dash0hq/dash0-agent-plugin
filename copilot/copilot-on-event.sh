@@ -97,16 +97,25 @@ BINARY="$BIN_DIR/copilot-on-event-${VERSION}-${OS}-${ARCH}"
 
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
+
+  # Download to a private temp and rename into place. Hooks run concurrently and
+  # every session on the machine shares this directory, so several processes can
+  # find no binary at once; writing $BINARY directly let them interleave into one
+  # file. rename(2) is atomic within a directory, so the others see either no file
+  # or a complete one. The trap covers the fail_open paths below.
+  TMP="$BINARY.tmp.$$"
+  trap 'rm -f "$TMP"' EXIT
+
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
   ASSET="copilot-on-event-${OS}-${ARCH}"
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
   if command -v curl &>/dev/null; then
-    curl -fsSL -o "$BINARY" "$URL" || fail_open "download failed: $URL"
+    curl -fsSL -o "$TMP" "$URL" || fail_open "download failed: $URL"
     CHECKSUMS=$(curl -fsSL "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
   elif command -v wget &>/dev/null; then
-    wget -qO "$BINARY" "$URL" || fail_open "download failed: $URL"
+    wget -qO "$TMP" "$URL" || fail_open "download failed: $URL"
     CHECKSUMS=$(wget -qO- "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
   else
     fail_open "neither curl nor wget found"
@@ -117,26 +126,26 @@ if [ ! -x "$BINARY" ]; then
   # session isn't broken — we just skip telemetry this run and re-download next.
   EXPECTED=$(echo "$CHECKSUMS" | grep "  ${ASSET}$" | cut -d' ' -f1)
   if [ -z "$EXPECTED" ]; then
-    rm -f "$BINARY"
     fail_open "no checksum for ${ASSET} — refusing to run an unverified binary"
   fi
   if command -v sha256sum &>/dev/null; then
-    ACTUAL=$(sha256sum "$BINARY" | cut -d' ' -f1)
+    ACTUAL=$(sha256sum "$TMP" | cut -d' ' -f1)
   elif command -v shasum &>/dev/null; then
-    ACTUAL=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
+    ACTUAL=$(shasum -a 256 "$TMP" | cut -d' ' -f1)
   else
     ACTUAL=""
   fi
   if [ -z "$ACTUAL" ]; then
-    rm -f "$BINARY"
     fail_open "no sha256 tool (sha256sum/shasum) to verify ${ASSET} — refusing to run an unverified binary"
   fi
   if [ "$ACTUAL" != "$EXPECTED" ]; then
-    rm -f "$BINARY"
     fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
-  chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
+  # Executable before it is visible, so nothing can find $BINARY and fail the
+  # -x test that guards this block.
+  chmod +x "$TMP" || fail_open "could not mark $TMP executable"
+  mv -f "$TMP" "$BINARY" || fail_open "could not move $TMP into place"
 fi
 
 # Forward the event-name argument(s) and stdin to the binary.

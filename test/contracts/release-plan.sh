@@ -67,11 +67,13 @@ plan_is "dry run works off a branch too" \
 # takes its version from the manifest and not from anywhere else.
 plan_is "stable from main releases the version main pins" \
   "mode=release,version=9.9.9,tag=v9.9.9,create_tag=true,latest=true" -- \
-  EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main PINNED=9.9.9
+  EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main PINNED=9.9.9 \
+  EXISTING_RELEASES="v0.1.25" TAG_STATE=absent
 
 plan_is "dev tags a prerelease off the branch and declines Latest" \
   "mode=release,version=$PINNED-dev.41,tag=v$PINNED-dev.41,create_tag=true,latest=false" -- \
-  EVENT=workflow_dispatch CHANNEL=dev DRY_RUN=false REF_NAME=some-branch RUN_NUMBER=41
+  EVENT=workflow_dispatch CHANNEL=dev DRY_RUN=false REF_NAME=some-branch RUN_NUMBER=41 \
+  EXISTING_RELEASES="v0.1.25" TAG_STATE=absent
 
 # Merging the bump PR IS the release trigger — `release: vX` on main has one
 # meaning, and a second button to press only widens the window in which main
@@ -114,12 +116,12 @@ plan_rejects "stable from a branch" "must be dispatched from main" -- \
 # passes because the tag was simply not fetched is worse than no guard.
 plan_rejects "a tag already on another commit" "another commit" -- \
   EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
-  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=elsewhere
+  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=elsewhere EXISTING_RELEASES="v0.1.25"
 
 plan_is "an untagged version tags normally" \
   "mode=release,version=0.9.9,tag=v0.9.9,create_tag=true,latest=true" -- \
   EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
-  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=absent
+  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=absent EXISTING_RELEASES="v0.1.25"
 
 # The tag is pushed before the build, so a run that fails after tagging leaves it
 # behind. Re-running must continue from it rather than refuse its own tag —
@@ -127,7 +129,7 @@ plan_is "an untagged version tags normally" \
 plan_is "a re-run continues from the tag it already pushed" \
   "mode=release,version=0.9.9,tag=v0.9.9,create_tag=false,latest=true" -- \
   EVENT=workflow_dispatch CHANNEL=stable DRY_RUN=false REF_NAME=main \
-  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=here
+  IN_VERSION=0.9.9 PINNED=0.9.9 TAG_STATE=here EXISTING_RELEASES="v0.1.25"
 
 # A reverted bump would otherwise try to re-release an older version and fail
 # later, at the tag, with a message about the wrong thing.
@@ -149,7 +151,7 @@ plan_is "re-dispatching a version tagged but not yet published" \
 
 plan_rejects "a malformed explicit version" "is not a version" -- \
   EVENT=workflow_dispatch CHANNEL=dev DRY_RUN=false REF_NAME=branch \
-  IN_VERSION=v0.2.0 TAG_STATE=absent
+  IN_VERSION=v0.2.0 TAG_STATE=absent EXISTING_RELEASES="v0.1.25"
 
 echo "== What version comes next =="
 

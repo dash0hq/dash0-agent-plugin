@@ -109,7 +109,11 @@ fi
 # the dispatch path needs it, where the check is `VERSION = PINNED` and a
 # published version satisfies that happily.
 if [ "$MODE" = "release" ] && [ "$EVENT" = "workflow_dispatch" ]; then
-  [ "$VERSION" != "$(./scripts/version.sh latest)" ] \
+  # Assigned, not inlined into `[ ]`: a command substitution there swallows its
+  # own failure, so a query that could not run would read as "not published" and
+  # this guard would quietly pass.
+  PUBLISHED=$(./scripts/version.sh latest)
+  [ "$VERSION" != "$PUBLISHED" ] \
     || die "v$VERSION is already published — a re-run would replace its assets. Re-run the failed job from that run, or release a new version."
 fi
 

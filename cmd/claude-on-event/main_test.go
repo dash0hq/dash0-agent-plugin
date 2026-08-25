@@ -565,6 +565,10 @@ func TestSessionStartHintWhenTeamMissing(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(lines[0]), &resp))
 	assert.Contains(t, resp["systemMessage"], "dash0: connected")
 	assert.Contains(t, resp["systemMessage"], "no team configured")
+	// The pipeline names the missing attribute; this entrypoint adds where to set
+	// it, and tells the agent to offer the skill that does it.
+	assert.Contains(t, resp["systemMessage"], "Set Team Name via /plugin → Configure.")
+	assert.Contains(t, resp["additionalContext"], "dash0-configure")
 }
 
 func TestSessionStartTeamHintSuppressedWhenTeamSet(t *testing.T) {

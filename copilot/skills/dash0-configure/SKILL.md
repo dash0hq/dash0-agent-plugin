@@ -1,6 +1,6 @@
 ---
 name: dash0-configure
-description: Configure the Dash0 → GitHub Copilot CLI telemetry integration — write the OTLP URL and auth token to ~/.copilot/dash0-agent-plugin.local.md (or the project-local equivalent) AND install the launch shell function that enables Copilot's native OpenTelemetry (the per-turn token/cost/model source). Use when the user wants to set up Dash0, enable telemetry, paste credentials, or fix an inactive plugin install.
+description: Configure the Dash0 → GitHub Copilot CLI telemetry integration — write the OTLP URL and auth token to ~/.copilot/dash0-agent-plugin.local.md (or the project-local equivalent) AND install the launch shell function that enables Copilot's native OpenTelemetry (the per-turn token/cost/model source). Use when the user wants to set up Dash0, enable telemetry, paste credentials, fix an inactive plugin install, or act on a "dash0: no team configured" message — spans carry no dash0.team.name until the team name is set.
 ---
 
 # Configure Dash0 for Copilot CLI
@@ -30,8 +30,10 @@ you settled on.
 2. Ask for these (one at a time; treat the token as a secret, never echo it):
    - **OTLP URL** (required) — e.g. `https://ingress.us-west-2.aws.dash0.com`
    - **Auth token** (required)
-   - **Dataset** (optional, default `default`)
-   - **Team name** (optional)
+   - **Dataset** (recommended) — blank means the backend picks its default;
+     there is no literal `default` value to write
+   - **Team name** (recommended) — tags every span with `dash0.team.name`;
+     without it spans carry no team attribution
 
 3. Write `<target>` (omit blank optional lines):
    ```
@@ -43,6 +45,10 @@ you settled on.
    ---
    ```
 4. `chmod 600 <target>`.
+
+5. The `dash0: no team configured` warning cannot be silenced. If the user
+   deliberately runs without a team, say so plainly rather than looking for a way
+   to hide it.
 
 ## Step B — install the launch shell function
 

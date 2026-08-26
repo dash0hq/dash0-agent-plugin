@@ -73,6 +73,67 @@ func (l *Limits) BillingMode() string {
 	return BillingSubscription
 }
 
+// ReadSpawnedAgentID returns the thread id of the agent a spawn call created,
+// as Codex itself recorded it, or "" when the rollout does not (yet) say.
+//
+// Codex writes an item_completed event carrying a SubAgentActivity item at the
+// moment a spawn call starts an agent:
+//
+//	{"type":"event_msg","payload":{"type":"item_completed", ...,
+//	  "item":{"type":"SubAgentActivity","id":"<spawn call id>",
+//	          "kind":"started","agent_thread_id":"<the new agent>"}}}
+//
+// The item's id is the spawn call's id, which arrives on the hook payload as
+// tool_use_id, so this is an explicit mapping rather than an inference. It is
+// written into the rollout of the thread that MADE the call — the main session's
+// for a top-level spawn, the parent agent's for a nested one — which is exactly
+// the file the hook payload's transcript_path points at, at any depth.
+//
+// Only "started" is read. Codex also writes "interacted" for later exchanges with
+// an agent already running, under a different call id; treating one as a spawn
+// would anchor a second span onto the same agent.
+func ReadSpawnedAgentID(rolloutPath, spawnCallID string) (string, error) {
+	if rolloutPath == "" || spawnCallID == "" || strings.HasSuffix(rolloutPath, ".zst") {
+		return "", nil
+	}
+	f, err := os.Open(rolloutPath)
+	if err != nil {
+		return "", fmt.Errorf("opening rollout: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var line subAgentActivityLine
+		if err := dec.Decode(&line); err != nil {
+			continue // skip malformed lines, as the usage reader does
+		}
+		item := line.Payload.Item
+		if line.Type != "event_msg" || item.Type != "SubAgentActivity" {
+			continue
+		}
+		if item.Kind == "started" && item.ID == spawnCallID {
+			return item.AgentThreadID, nil
+		}
+	}
+	return "", nil
+}
+
+// subAgentActivityLine is the subset of a rollout record that carries the
+// spawn-call-to-agent mapping.
+type subAgentActivityLine struct {
+	Type    string `json:"type"`
+	Payload struct {
+		Type string `json:"type"`
+		Item struct {
+			Type          string `json:"type"`
+			ID            string `json:"id"`
+			Kind          string `json:"kind"`
+			AgentThreadID string `json:"agent_thread_id"`
+		} `json:"item"`
+	} `json:"payload"`
+}
+
 // Rollout is everything one pass over a rollout file yields.
 type Rollout struct {
 	Usage  *Usage  // the most recent turn's token counts; nil when the file has none

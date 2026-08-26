@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
+	"github.com/dash0hq/dash0-agent-plugin/internal/harness"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
 	"github.com/dash0hq/dash0-agent-plugin/internal/source/claude"
@@ -233,7 +234,7 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		}
 	case "SubagentStop":
 		markedConsumed := false
-		if agentID != "" {
+		if agentID != "" && agentStopEndsTheAgent(cfg.HarnessName) {
 			if err := otlp.MarkAgentTraceContextConsumed(sessionDir, agentID); err != nil {
 				fmt.Fprintf(os.Stderr, "on-event: marking agent trace context consumed: %v\n", err)
 			} else {
@@ -369,6 +370,27 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 
 	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
+}
+
+// agentStopEndsTheAgent reports whether a SubagentStop means the agent is done
+// for good, which decides whether its trace-context snapshot is consumed and
+// deleted there.
+//
+// It is true everywhere except Codex. A Claude sub-agent stops once, and after
+// that anything still arriving for it is stale: the snapshot goes, the consumed
+// marker stays, and a late tool hook fails closed rather than falling back to
+// whichever session turn is current and inventing a parent. That marker is what
+// qa/specs/claude/session/sub-agent-tool-call-produces-a-span.md guards.
+//
+// Codex reuses an agent. SubagentStop marks the end of a TASK — the same
+// agent_id then spawns, runs tools and stops again, with no second
+// SubagentStart to re-arm on (measured on qa/runs/probe-codex-nested-anchored
+// and probe-codex-two-subagents: one start, two stops, real work in between).
+// Consuming there dropped every span of that later work. Keeping the snapshot
+// keeps the agent's own anchor available as the parent, which is still the right
+// one, and it is bounded: the session directory is removed at SessionEnd.
+func agentStopEndsTheAgent(harnessName string) bool {
+	return harnessName != harness.Codex.Name
 }
 
 // Skill invocation routes, reported as dash0.gen_ai.tool.skill.source.

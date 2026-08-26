@@ -165,6 +165,130 @@ func TestNormalizeMarksCompressedSubagentRollout(t *testing.T) {
 	assert.Equal(t, true, out["dash0.codex.rollout.compressed"])
 }
 
+// Codex namespaces the spawn tool with no separator and has changed the prefix:
+// 0.142.5 sent bare "spawn_agent", 0.149.1 sends "collaborationspawn_agent".
+// Both must be anchored, because the anchor is what gives the sub-agent's spans
+// a parent that exists. Measured on qa/runs/probe-codex-subagent, 2026-08-25:
+// with the 0.149.1 name unmatched, the invoke_agent span and the sub-agent's
+// Bash span both pointed at a span id nothing had emitted.
+func TestNormalizeAnchorsSpawnAgentUnderAnyPrefix(t *testing.T) {
+	for _, toolName := range []string{"spawn_agent", "collaborationspawn_agent"} {
+		t.Run(toolName, func(t *testing.T) {
+			dir := t.TempDir()
+			out := Normalize(map[string]any{
+				"hook_event_name": "PostToolUse",
+				"session_id":      "s1",
+				"tool_name":       toolName,
+				"tool_use_id":     "call-1",
+				"tool_response":   `{"agent_id":"01a03a2a-e017-7240-9a94-2a2bca352eaf"}`,
+			}, dir, time.Now().UTC())
+
+			require.NotNil(t, out)
+			assert.Equal(t, "Agent", out["tool_name"],
+				"the spawn call must be renamed so the pipeline treats it as the agent's anchor")
+			assert.Contains(t, out["tool_response"], `"agentId":"01a03a2a-e017-7240-9a94-2a2bca352eaf"`,
+				"the camelCase key is what the pipeline's agent-id extractor reads")
+		})
+	}
+}
+
+// writeSpawnRollout puts a rollout carrying SubAgentActivity records on disk.
+func writeSpawnRollout(t *testing.T, records ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"session_meta","payload":{"id":"thread-1"}}` + "\n"
+	for _, r := range records {
+		content += r + "\n"
+	}
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
+}
+
+func subAgentActivity(kind, callID, agentThreadID string) string {
+	return `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity",` +
+		`"id":"` + callID + `","kind":"` + kind + `","agent_thread_id":"` + agentThreadID + `"}}}`
+}
+
+// Codex 0.149.1's spawn response carries only task_name, so the agent id has to
+// come from the SubAgentActivity record Codex writes into the calling thread's
+// rollout. Two spawns are present to prove the lookup keys on the call id rather
+// than taking the first or the last record: on the reference run both sub-agents
+// were even given the same task name, so a name-based join would have been
+// ambiguous where this is not.
+func TestNormalizeAnchorsSpawnFromTheRolloutMapping(t *testing.T) {
+	path := writeSpawnRollout(t,
+		subAgentActivity("started", "call-first", "agent-first"),
+		subAgentActivity("started", "call-second", "agent-second"),
+	)
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "s1",
+		"tool_name":       "collaborationspawn_agent",
+		"tool_use_id":     "call-second",
+		"transcript_path": path,
+		"tool_response":   `{"task_name":"/root/run_echo"}`,
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "Agent", out["tool_name"])
+	assert.Contains(t, out["tool_response"], `"agentId":"agent-second"`)
+}
+
+// An agent_id in the response still wins, so a 0.142.5 payload needs no rollout
+// and pays no wait.
+func TestNormalizeAnchorPrefersTheResponseAgentID(t *testing.T) {
+	path := writeSpawnRollout(t, subAgentActivity("started", "call-1", "agent-from-rollout"))
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "s1",
+		"tool_name":       "spawn_agent",
+		"tool_use_id":     "call-1",
+		"transcript_path": path,
+		"tool_response":   `{"agent_id":"agent-from-response"}`,
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Contains(t, out["tool_response"], `"agentId":"agent-from-response"`)
+}
+
+// "interacted" is written when the model talks to an agent that is already
+// running, under its own call id. Anchoring on it would give one agent a second
+// anchor span and re-parent its work.
+func TestNormalizeIgnoresInteractedActivity(t *testing.T) {
+	path := writeSpawnRollout(t, subAgentActivity("interacted", "call-1", "agent-1"))
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "s1",
+		"tool_name":       "collaborationspawn_agent",
+		"tool_use_id":     "call-1",
+		"transcript_path": path,
+		"tool_response":   `{"task_name":"/root/x"}`,
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "collaborationspawn_agent", out["tool_name"],
+		"no anchor, so the call must not be renamed")
+}
+
+// A tool whose name merely contains "agent" is not the spawn call and must be
+// left alone, or its span is renamed and the trace grows a second anchor.
+func TestNormalizeLeavesOtherAgentToolsAlone(t *testing.T) {
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "s1",
+		"tool_name":       "collaborationwait_agent",
+		"tool_use_id":     "call-2",
+		"tool_response":   `{"agent_id":"01a03a2a-e017-7240-9a94-2a2bca352eaf"}`,
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "collaborationwait_agent", out["tool_name"])
+}
+
 // writeRollout puts a one-turn rollout on disk and returns its path. rateLimits
 // is spliced in verbatim so each case controls the exact wire shape.
 func writeRollout(t *testing.T, rateLimits string) string {

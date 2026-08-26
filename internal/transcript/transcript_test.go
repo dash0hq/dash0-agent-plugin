@@ -491,6 +491,55 @@ func TestTurnCompletePendingContinuationIsIncomplete(t *testing.T) {
 	assert.False(t, complete)
 }
 
+// A meta entry following a response that DID produce visible text is not a
+// continuation nudge. Claude Code injects meta entries for other reasons — hook
+// output, a skill-already-loaded relay — and treating those as pending made a
+// transcript ending on one wait out the whole budget for nothing.
+func TestTurnCompleteMetaAfterVisibleOutputIsComplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"do it"}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"[hook output injected here]"}}`,
+	})
+	complete, err := TurnComplete(path)
+	require.NoError(t, err)
+	assert.True(t, complete, "the response was visible, so no continuation is coming")
+}
+
+// The nudge case, told apart from the one above only by the absence of a text
+// block. On the run this was found on, the assistant entry's only block was
+// `thinking`.
+func TestTurnCompleteMetaAfterThinkingOnlyIsIncomplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"do it"}}`,
+		`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"..."}],"usage":{"input_tokens":10,"output_tokens":251}}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"[Your previous response had no visible output. Please continue and produce a user-visible response.]"}}`,
+	})
+	complete, err := TurnComplete(path)
+	require.NoError(t, err)
+	assert.False(t, complete, "no visible output, so the continuation's usage is still coming")
+}
+
+// An empty text block is a response with no visible output, so the nudge that
+// follows it is still a continuation. Keying on the block type alone counted it
+// as visible and let the continuation's usage be dropped, which is the whole
+// failure this predicate exists to prevent.
+func TestTurnCompleteMetaAfterEmptyTextIsIncomplete(t *testing.T) {
+	for _, body := range []string{`""`, `"   "`, `"\n"`} {
+		path := filepath.Join(t.TempDir(), "transcript.jsonl")
+		writeTranscript(t, path, []string{
+			`{"type":"user","message":{"role":"user","content":"do it"}}`,
+			`{"type":"assistant","requestId":"req_001","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":` + body + `}],"usage":{"input_tokens":10,"output_tokens":251}}}`,
+			`{"type":"user","isMeta":true,"message":{"role":"user","content":"[Your previous response had no visible output. Please continue and produce a user-visible response.]"}}`,
+		})
+		complete, err := TurnComplete(path)
+		require.NoError(t, err)
+		assert.False(t, complete, "text block %s is not visible output", body)
+	}
+}
+
 func TestTurnCompleteNoAssistant(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	writeTranscript(t, path, []string{

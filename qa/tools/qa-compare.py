@@ -323,6 +323,14 @@ def rollout_summary(root, run_dir):
     """
     path = os.path.join(run_dir, "rollout.jsonl")
     if not os.path.exists(path):
+        # A compressed session rollout keeps its .zst, so say which of the two
+        # this is: unreadable and unavailable, or simply absent. Reporting a
+        # compressed rollout as "no rollout" sends the reader after the driver.
+        if os.path.exists(path + ".zst"):
+            return {"error": "the session's rollout is compressed (.zst), so usage is"
+                             " unavailable from it rather than zero. Neither the plugin nor"
+                             " qa-rollout.py reads zstd; the plugin marks such a span"
+                             " dash0.codex.rollout.compressed."}
         return {"error": "no rollout.jsonl in the run; the driver found no rollout file"}
     script = os.path.join(root, "qa", "tools", "qa-rollout.py")
 

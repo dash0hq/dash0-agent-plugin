@@ -430,6 +430,50 @@ func TestNormalizeScopesTheSkillToItsOwnTurn(t *testing.T) {
 	assert.False(t, has, "the second turn loaded no skill of its own")
 }
 
+// The $mention decides who chose the skill, so its edges matter. A plain
+// substring search also matches a longer name, which would report `command`
+// because the person named a different skill; and holding out every message
+// that opens with an angle bracket loses a real prompt that happens to start
+// with one, reporting `model` for a skill the person named.
+func TestSkillMentionEdges(t *testing.T) {
+	for _, c := range []struct {
+		prompt, skill string
+		want          bool
+	}{
+		{"Use the $qa-echo skill", "qa-echo", true},
+		{"Use the $qa-echo-v2 skill", "qa-echo", false},
+		{"$qa-echo", "qa-echo", true},
+		{"see $qa-echo.", "qa-echo", true},
+		{"run $writing:unslop on it", "writing:unslop", true},
+		{"nothing here", "qa-echo", false},
+	} {
+		assert.Equal(t, c.want, mentions(c.prompt, c.skill), "mentions(%q, %q)", c.prompt, c.skill)
+	}
+
+	assert.False(t, isCodexInjection("<T> is a generic type. Use the $qa-echo skill."),
+		"a person's prompt may open with an angle bracket")
+	assert.True(t, isCodexInjection("<recommended_plugins>\nfoo\n"))
+	assert.True(t, isCodexInjection("<skills_instructions>\n## Skills\n"))
+}
+
+// The rollout line is shared by the usage reader and the message reader, so a
+// message shape the second does not recognise must not cost the first its
+// tokens. Content stays raw for that reason.
+func TestUnusualMessageShapeKeepsTheLinesUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		// content as a bare string rather than an array of parts
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":"plain string"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{` +
+		`"input_tokens":4242,"cached_input_tokens":0,"output_tokens":7}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage, "the token_count line must survive an unfamiliar message shape")
+	assert.Equal(t, int64(4242), usage.InputTokens)
+}
+
 // writeRollout puts a one-turn rollout on disk and returns its path. rateLimits
 // is spliced in verbatim so each case controls the exact wire shape.
 func writeRollout(t *testing.T, rateLimits string) string {

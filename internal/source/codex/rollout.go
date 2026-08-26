@@ -177,6 +177,92 @@ const (
 	skillSourceModel   = "model"
 )
 
+// codexInjectedTags open the user messages Codex writes itself. Only these are
+// held out of the person's words when looking for a $mention.
+//
+// An earlier version held out every message starting with "<", on the reasoning
+// that Codex's injections are XML-ish and a person's prompt is not. That loses a
+// real prompt that happens to begin with an angle bracket — asking about a
+// generic type, quoting HTML — and reports `model` for a skill the person named
+// themselves. A short list of known tags is narrower and fails the safer way:
+// an unrecognised injection is scanned for a mention it almost never contains.
+var codexInjectedTags = []string{
+	"<skill>",
+	"<skills_instructions>",
+	"<recommended_plugins>",
+	"<task-notification>",
+}
+
+func isCodexInjection(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	for _, tag := range codexInjectedTags {
+		if strings.HasPrefix(trimmed, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// messageText joins a message's text parts. Content is raw JSON because its
+// shape varies, so a shape this does not recognise yields no text rather than
+// failing the line it arrived on.
+func messageText(content json.RawMessage) string {
+	if len(content) == 0 {
+		return ""
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(content, &parts); err == nil {
+		var out strings.Builder
+		for _, part := range parts {
+			out.WriteString(part.Text)
+		}
+		return out.String()
+	}
+	// Some records carry the body as a plain string.
+	var plain string
+	if err := json.Unmarshal(content, &plain); err == nil {
+		return plain
+	}
+	return ""
+}
+
+// mentions reports whether the person's words name this skill with Codex's $
+// mention. The boundary check matters: a plain Contains of "$"+name also matches
+// a longer name, so a prompt naming $qa-echo-v2 would be read as choosing
+// qa-echo when that is the skill the turn happened to load.
+func mentions(prompt, skill string) bool {
+	needle := "$" + skill
+	for i := 0; ; {
+		at := strings.Index(prompt[i:], needle)
+		if at < 0 {
+			return false
+		}
+		end := i + at + len(needle)
+		if end == len(prompt) || !isSkillNameByte(prompt[end]) {
+			return true
+		}
+		i = end
+	}
+}
+
+// isSkillNameByte reports whether a byte can continue a skill name, which is
+// what decides where a $mention ends.
+func isSkillNameByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
+		return true
+	// A colon carries a plugin-qualified name such as writing:unslop. A period
+	// and a slash do not: they end far more sentences and paths than they
+	// continue skill names, and treating them as part of the name loses a
+	// mention written as "$qa-echo."
+	case b == '-', b == '_', b == ':':
+		return true
+	}
+	return false
+}
+
 // rolloutLine is the subset of a Codex rollout JSONL record we read. A rollout
 // interleaves several record types (session_meta, turn_context, response_item,
 // event_msg); token usage lives on event_msg records whose payload type is
@@ -196,10 +282,15 @@ type rolloutLine struct {
 		// where a loaded skill shows up. Codex injects several user messages of
 		// its own alongside the person's — <recommended_plugins>, <skill> — so
 		// the role alone does not say who wrote it.
-		Role    string `json:"role"`
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
+		//
+		// Content stays raw on purpose. Decoding it as a shape here would couple
+		// message parsing to usage parsing: a record whose content is a string
+		// rather than an array of parts fails to decode, the loop skips the whole
+		// line, and that line's info.last_token_usage and rate_limits are lost in
+		// silence. Only the message branch looks inside it, and a failure there
+		// costs a skill attribute rather than a turn's tokens.
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
 	} `json:"payload"`
 }
 
@@ -314,18 +405,14 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 
 		// The conversation, for the skill a turn loaded and who asked for it.
 		if line.Type == "response_item" && line.Payload.Type == "message" && line.Payload.Role == "user" {
-			var text strings.Builder
-			for _, part := range line.Payload.Content {
-				text.WriteString(part.Text)
-			}
-			body := text.String()
+			body := messageText(line.Payload.Content)
 			if match := skillNamePattern.FindStringSubmatch(body); match != nil {
 				// Last one wins. A turn that loads two skills can only be
 				// labelled with one, and the later choice is the more recent.
 				turnSkill = match[1]
-			} else if !strings.HasPrefix(strings.TrimSpace(body), "<") {
-				// Codex's own injections are XML-ish; a person's prompt is not.
-				// Only the person's words can say they asked for a skill by name.
+			} else if !isCodexInjection(body) {
+				// Only the person's words can say they asked for a skill by
+				// name, so Codex's own injected user messages are held out.
 				turnPrompt.WriteString(body)
 			}
 			continue
@@ -391,7 +478,7 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 		// The person asked for it if their own words carry Codex's $mention;
 		// otherwise the model picked it out of the catalogue itself.
 		source := skillSourceModel
-		if strings.Contains(turnPrompt.String(), "$"+turnSkill) {
+		if mentions(turnPrompt.String(), turnSkill) {
 			source = skillSourceCommand
 		}
 		out.Skill = &SkillUse{Name: turnSkill, Source: source}

@@ -4,7 +4,9 @@
 package pipeline
 
 import (
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,6 +53,51 @@ func TestProcess_Codex_ToolCallAfterSubagentStopStillGetsASpan(t *testing.T) {
 	require.NotNil(t, tool, "the tool call after SubagentStop must still produce a span")
 	assert.NotEmpty(t, tool.ParentSpanID,
 		"and it must have a parent: falling back to no parent would orphan it in the trace")
+}
+
+// Each task of a reused agent is timed from the previous stop, not from the one
+// SubagentStart that created the agent. Keeping the snapshot alive fixed the
+// missing spans and left every task's span starting at the same instant:
+// measured on qa/runs/spec-codex-agent-reuse, two invoke_agent spans both
+// starting at 0.00s, the second running 16.9s for a task that took 8 and fully
+// overlapping the first.
+func TestProcess_Codex_ReusedAgentTasksDoNotOverlap(t *testing.T) {
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+	s.cfg.HarnessName = "codex"
+
+	const agentID = "01a03cbf-0505-f358-3743-000000000000"
+	start := time.Now().UTC()
+
+	s.feedAt(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "gpt-5.6"}, start)
+	s.feedAt(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "delegate"}, start)
+	s.feedAt(t, map[string]any{"hook_event_name": "SubagentStart", "session_id": "sess-1", "agent_id": agentID},
+		start.Add(1*time.Second))
+	// Task one ends here, task two ends eight seconds later.
+	firstStop := start.Add(5 * time.Second)
+	secondStop := start.Add(13 * time.Second)
+	s.feedAt(t, map[string]any{"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": agentID}, firstStop)
+	s.feedAt(t, map[string]any{"hook_event_name": "SubagentStop", "session_id": "sess-1", "agent_id": agentID}, secondStop)
+
+	mu.Lock()
+	defer mu.Unlock()
+	var agents []otlp.Span
+	for _, sp := range *spans {
+		if sp.Name == "invoke_agent" || hasStringAttr(sp.Attributes, "gen_ai.agent.id", agentID) {
+			agents = append(agents, sp)
+		}
+	}
+	require.Len(t, agents, 2, "one span per completed task")
+	// The wire carries nanoseconds as strings; compare them as numbers.
+	nanos := func(v string) int64 {
+		n, err := strconv.ParseInt(v, 10, 64)
+		require.NoError(t, err)
+		return n
+	}
+	assert.NotEqual(t, agents[0].StartTimeUnixNano, agents[1].StartTimeUnixNano,
+		"the second task must not start where the first did")
+	assert.GreaterOrEqual(t, nanos(agents[1].StartTimeUnixNano), nanos(agents[0].EndTimeUnixNano),
+		"the second task starts at or after the first one's end, so the spans do not overlap")
 }
 
 // Claude sub-agents stop once, so the opposite must hold there: a tool hook

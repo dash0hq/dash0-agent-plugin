@@ -368,16 +368,44 @@ echo "qa: session $SESSION_ID"
 #    made qa-rollout.py read one sub-agent turn as though it were the whole
 #    session. The thread id is in the filename, and for the main thread it is the
 #    session id.
-ROLLOUT=$(find "$CODEX_HOME_DIR/sessions" -name "rollout-*-$SESSION_ID.jsonl*" -type f 2>/dev/null |
+#    Plain .jsonl wins over .jsonl.zst. Both can exist for one thread, `sort`
+#    puts the compressed one last, and copying that to rollout.jsonl gave
+#    qa-rollout.py a zstd blob under a name its compression guard cannot
+#    recognise: it reported every line malformed and handed qa-compare.py zero
+#    usage as a real difference.
+ROLLOUT=$(find "$CODEX_HOME_DIR/sessions" -name "rollout-*-$SESSION_ID.jsonl" -type f 2>/dev/null |
   sort | tail -1)
-[[ -n "$ROLLOUT" ]] && cp "$ROLLOUT" "$RUN/rollout.jsonl"
-# Every other rollout in the home belongs to a sub-agent this session spawned.
+if [[ -z "$ROLLOUT" ]]; then
+  ROLLOUT=$(find "$CODEX_HOME_DIR/sessions" -name "rollout-*-$SESSION_ID.jsonl.zst" -type f 2>/dev/null |
+    sort | tail -1)
+  [[ -n "$ROLLOUT" ]] && echo "qa: the session's rollout is compressed; usage is unavailable from it"
+fi
+# The extension is carried over, so a compressed rollout keeps the .zst that
+# qa-rollout.py's guard keys on rather than being renamed into a lie.
+if [[ -n "$ROLLOUT" ]]; then
+  case "$ROLLOUT" in
+  *.jsonl.zst) cp "$ROLLOUT" "$RUN/rollout.jsonl.zst" ;;
+  *) cp "$ROLLOUT" "$RUN/rollout.jsonl" ;;
+  esac
+fi
+# Every rollout for another thread belongs to a sub-agent this session spawned.
 # Kept alongside, named by thread id, because a sub-agent's usage lives only here
 # and a spec about delegation needs it.
+#
+# Excluded by SESSION ID rather than by path: when the main rollout is the
+# compressed one, a path comparison against it does not match the plain file, so
+# the session's own rollout was copied a second time as a sub-agent's and its
+# tokens counted twice.
+#    The thread id is matched by its UUID shape. A greedy `.*-` in a sed pattern
+#    captures only the last dash-separated group, which never equals the session
+#    id, so the guard silently passed the session's own rollout through and its
+#    tokens were counted twice.
 SUBAGENT_ROLLOUTS=0
 while IFS= read -r path; do
   [[ -z "$path" || "$path" == "$ROLLOUT" ]] && continue
-  cp "$path" "$RUN/rollout-subagent-$(basename "$path" | sed 's/^rollout-.*-\([0-9a-f-]*\)\.jsonl$/\1/').jsonl"
+  thread=$(basename "$path" | grep -oE '[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}' | tail -1)
+  [[ -z "$thread" || "$thread" == "$SESSION_ID" ]] && continue
+  cp "$path" "$RUN/rollout-subagent-$thread.jsonl"
   SUBAGENT_ROLLOUTS=$((SUBAGENT_ROLLOUTS + 1))
 done < <(find "$CODEX_HOME_DIR/sessions" -name 'rollout-*.jsonl' -type f 2>/dev/null | sort)
 [[ "$SUBAGENT_ROLLOUTS" -gt 0 ]] && echo "qa: kept $SUBAGENT_ROLLOUTS sub-agent rollout(s)"

@@ -267,23 +267,36 @@ var terminalStopReasons = map[string]bool{
 func TurnComplete(transcriptPath string) (bool, error) {
 	var lastReason string
 	var sawAssistant bool
+	var continuationPending bool
 	err := forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
 		if isRealUserMessage(entry) {
 			// New turn — only the current turn's terminal state matters.
 			lastReason = ""
 			sawAssistant = false
+			continuationPending = false
+			return true
+		}
+		// A meta user entry after an assistant entry is Claude Code prompting
+		// itself to carry on: it injects one when a response produced no visible
+		// output. Another API call follows, so the turn is not written out yet
+		// even though the assistant entry above says end_turn — and taking
+		// end_turn at face value here dropped that call's usage entirely,
+		// because Stop had already fired by the time it landed.
+		if entry.Type == "user" && entry.IsMeta {
+			continuationPending = sawAssistant
 			return true
 		}
 		if entry.Type == "assistant" && entry.Message != nil {
 			sawAssistant = true
 			lastReason = entry.Message.StopReason
+			continuationPending = false
 		}
 		return true
 	})
 	if err != nil {
 		return false, err
 	}
-	if !sawAssistant {
+	if !sawAssistant || continuationPending {
 		return false, nil
 	}
 	return terminalStopReasons[lastReason], nil

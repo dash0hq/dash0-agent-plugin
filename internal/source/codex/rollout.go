@@ -200,10 +200,17 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 			continue
 		}
 		switch line.Payload.Type {
-		case "user_message":
+		case "user_message", "task_started":
 			// New turn — discard usage accumulated for the previous turn so only
 			// the most recent turn's counts survive. Limits deliberately survive:
 			// they describe the account, not the turn.
+			//
+			// Two event names because Codex changed which one it writes.
+			// 0.142.5 wrote user_message, 0.149.1 writes
+			// task_started and no user_message.
+			//
+			// Both are safe to reset on: each is written once, before its own
+			// turn's token_count events.
 			turn = Usage{}
 			hasUsage = false
 		case "token_count":

@@ -68,6 +68,35 @@ func TestReadTurnUsageScopesToLastTurn(t *testing.T) {
 	assert.Equal(t, int64(15), u.OutputTokens)
 }
 
+// Codex 0.149.1 writes task_started at the head of a turn and no user_message
+// at all, so a rollout from it has no user_message to reset on. Keying only on
+// user_message meant a resumed session accumulated every turn: measured on
+// 2026-08-25 against codex-cli 0.149.1, turn 2's chat span reported 58594 input
+// tokens for a turn whose own calls totalled 29445, having carried turn 1's
+// 29149 a second time. The numbers below are that session's, halved in size but
+// the same shape.
+func TestReadTurnUsageScopesToLastTaskStartedTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := "" +
+		`{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14513,"cached_input_tokens":9984,"output_tokens":97}}}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14636,"cached_input_tokens":14080,"output_tokens":5}}}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"task_complete"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14665,"cached_input_tokens":14080,"output_tokens":89}}}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14780,"cached_input_tokens":14080,"output_tokens":5}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	u, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	// Turn 2 alone: 14665+14780, not the session's 58594.
+	assert.Equal(t, int64(29445), u.InputTokens)
+	assert.Equal(t, int64(28160), u.CacheReadInputTokens)
+	assert.Equal(t, int64(94), u.OutputTokens)
+}
+
 // Tool activity within a turn is recorded as response_item (function_call /
 // function_call_output) records interleaved between token_count events. These
 // are not turn boundaries and must NOT reset the accumulator, otherwise the

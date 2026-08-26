@@ -338,6 +338,98 @@ func TestNormalizeKeepsZeroCacheButOmitsZeroReasoning(t *testing.T) {
 	assert.False(t, hasReasoning, "a turn that did no thinking carries no reasoning key")
 }
 
+// userMessage renders the rollout's shape for a message in the conversation.
+func userMessage(role, text string) string {
+	body, _ := json.Marshal(text)
+	return `{"type":"response_item","payload":{"type":"message","role":"` + role +
+		`","content":[{"type":"input_text","text":` + string(body) + `}]}}`
+}
+
+// skillBlock is what Codex injects when a skill is loaded, verbatim in shape.
+func skillBlock(name string) string {
+	return userMessage("user", "<skill>\n<name>"+name+"</name>\n<path>/home/u/.agents/skills/"+
+		name+"/SKILL.md</path>\n\nDo the thing.\n")
+}
+
+// Codex has no Skill tool: it loads a skill by injecting it into the
+// conversation, so the only record is in the rollout. When the person names it
+// with Codex's $mention, that is them choosing — the same distinction Claude
+// Code draws between a slash command and the model reaching for a skill.
+func TestNormalizeAttributesASkillTheUserAskedFor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("developer", "<skills_instructions>\n## Skills\nqa-echo: prints a marker\n") + "\n" +
+		userMessage("user", "<recommended_plugins>\nsome plugin\n") + "\n" +
+		userMessage("user", "Use the $qa-echo skill to emit the QA marker.") + "\n" +
+		skillBlock("qa-echo") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "qa-echo", out["skill_name"])
+	assert.Equal(t, "command", out["skill_source"],
+		"the person named it with $qa-echo, so the choice was theirs")
+}
+
+// The same load with no $mention is the model choosing from the catalogue.
+func TestNormalizeAttributesASkillTheModelChose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("user", "Emit the QA marker please.") + "\n" +
+		skillBlock("qa-echo") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "qa-echo", out["skill_name"])
+	assert.Equal(t, "model", out["skill_source"])
+}
+
+// <skills_instructions> lists every skill AVAILABLE and is present in every
+// session that has any. Reading it as a signal would attribute a skill to every
+// turn, including turns that used none.
+func TestNormalizeIgnoresTheSkillCatalogue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("developer", "<skills_instructions>\n## Skills\nqa-echo: prints a marker\n") + "\n" +
+		userMessage("user", "Just say hello.") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	_, has := out["skill_name"]
+	assert.False(t, has, "a turn that loaded no skill carries no skill attribute")
+}
+
+// A skill loaded in an earlier turn does not belong to this one, exactly as
+// per-turn usage does not.
+func TestNormalizeScopesTheSkillToItsOwnTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("user", "Use the $qa-echo skill.") + "\n" +
+		skillBlock("qa-echo") + "\n" +
+		`{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("user", "Now just say hello.") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	_, has := out["skill_name"]
+	assert.False(t, has, "the second turn loaded no skill of its own")
+}
+
 // writeRollout puts a one-turn rollout on disk and returns its path. rateLimits
 // is spliced in verbatim so each case controls the exact wire shape.
 func writeRollout(t *testing.T, rateLimits string) string {

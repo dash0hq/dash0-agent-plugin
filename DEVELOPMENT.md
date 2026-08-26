@@ -141,8 +141,8 @@ omitted when its value is empty.
 | `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
 | `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript), Codex (from the rollout) and Copilot, all only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
 | `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh`                                     | Claude only, from the payload's `effort` field. The request-side counterpart to `reasoning.output_tokens`: the setting that produced the thinking those tokens paid for. The attribute is a free-form string — the convention asks for "the exact string value sent to the provider" and gives `low`/`medium`/`high` only as examples — so Claude Code's `xhigh` is reported as-is. |
-| `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude only, and only on the chat span of a turn a slash command started. See below. |
-| `dash0.gen_ai.tool.skill.source` | `command`                                                            | Same rows as above. |
+| `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude and Codex, on the chat span of a turn that a person's slash command or `$mention` started, and for Codex on any turn that loaded a skill at all. See below. |
+| `dash0.gen_ai.tool.skill.source` | `command`, `model`                                                   | Same rows as above. `model` reaches a chat span only on Codex, where the model's own choice also loads without a tool call. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On`invoke_agent` spans.        |
@@ -171,6 +171,14 @@ A skill can be invoked two ways, and they are recorded on different spans.
 
 Both carry `dash0.gen_ai.tool.skill.name` with the same plugin-qualified value, so one query
 counts every invocation and `source` splits it by who decided.
+
+**Codex has the same two routes and neither is a tool call.** It loads a skill by injecting
+it into the conversation — "progressive disclosure": the model sees every skill's name and
+description, and the full `SKILL.md` arrives only once it picks one. So both routes land on
+the turn's `chat` span, and the split comes from whether the person named the skill with
+Codex's `$mention`: `command` when they did, `model` when the model chose from the
+catalogue. There is no `execute_tool Skill` span on Codex at all, which is worth knowing
+before comparing counts across runtimes.
 
 The command route is read from the transcript, which is the only place it is recorded:
 Claude Code writes a `<command-name>` tag into the turn's user entry, and a skill load

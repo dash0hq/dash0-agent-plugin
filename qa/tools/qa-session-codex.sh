@@ -44,6 +44,7 @@
 #   QA_KEEP_SCRATCH=1 qa/tools/qa-session-codex.sh "..."             # keep the throwaway home
 #   QA_CODEX_RESUME="<second prompt>" qa/tools/qa-session-codex.sh "..."  # two turns, one session
 #   QA_CODEX_MULTI_AGENT=1 qa/tools/qa-session-codex.sh "..."        # let the model delegate
+#   QA_CODEX_SKILL=1 qa/tools/qa-session-codex.sh "..."              # install the qa-echo skill
 #
 # Auth: OPENAI_API_KEY is used when set. Otherwise pass QA_CODEX_REUSE_LOGIN=1 to
 # reuse the machine's `codex login` — read the caution in `## Configure` in
@@ -219,6 +220,16 @@ assert lines[-1] == "---", f"unexpected config shape in {path}: {lines}"
 lines[-1:] = ["debug: true", f'debug_file: "{log}"', "---"]
 open(path, "w").write("\n".join(lines) + "\n")
 PY
+
+# 4b. The skill fixture, installed where Codex looks for a user's own skills.
+#     Opt-in: a session with a skill available carries the whole catalogue in its
+#     context, which is not what most runs are measuring, and the catalogue is
+#     itself a trap the skill spec has to control for.
+if [[ "${QA_CODEX_SKILL:-0}" == "1" ]]; then
+  mkdir -p "$SCRATCH/.agents/skills"
+  cp -R qa/skill-fixture/qa-echo "$SCRATCH/.agents/skills/"
+  echo "qa: installed the qa-echo skill fixture into the throwaway home"
+fi
 
 # 5. The workspace. A real git repo, because that is what Codex expects and what
 #    internal/vcs reads. No .codex/dash0-agent-plugin.local.md is written here: a
@@ -425,6 +436,7 @@ cat >"$RUN/manifest.json" <<EOF
   "auth_source": "$AUTH_SOURCE",
   "sandbox": "$SANDBOX",
   "multi_agent": $([[ "${QA_CODEX_MULTI_AGENT:-0}" == "1" ]] && echo true || echo false),
+  "skill_fixture": $([[ "${QA_CODEX_SKILL:-0}" == "1" ]] && echo true || echo false),
   "trust_bypassed": $([[ "$BYPASS_TRUST" == "1" ]] && echo true || echo false),
   "otlp_url": "$OTLP_URL",
   "dataset": "$DATASET",

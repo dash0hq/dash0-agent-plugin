@@ -105,6 +105,15 @@ func injectRollout(event map[string]any) {
 			event["gen_ai.usage.reasoning.output_tokens"] = usage.ReasoningOutputTokens
 		}
 	}
+
+	// A skill lands on the turn's own span, for the same reason Claude Code's
+	// slash-command route does: no tool ran, so there is nothing to wrap and a
+	// zero-duration execute_tool span would be a fabrication. The pipeline maps
+	// these two keys to dash0.gen_ai.tool.skill.{name,source}.
+	if skill := rollout.Skill; skill != nil {
+		event["skill_name"] = skill.Name
+		event["skill_source"] = skill.Source
+	}
 	injectBilling(event, rollout.Limits)
 }
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -137,9 +138,44 @@ type subAgentActivityLine struct {
 
 // Rollout is everything one pass over a rollout file yields.
 type Rollout struct {
-	Usage  *Usage  // the most recent turn's token counts; nil when the file has none
-	Limits *Limits // account allowance state; nil when the CLI predates the field
+	Usage  *Usage    // the most recent turn's token counts; nil when the file has none
+	Limits *Limits   // account allowance state; nil when the CLI predates the field
+	Skill  *SkillUse // the skill the most recent turn loaded; nil when it loaded none
 }
+
+// SkillUse is the skill a turn used, and who chose it.
+//
+// Codex does not call a skill as a tool the way Claude Code does. It loads one
+// by INJECTING it into the conversation — "progressive disclosure": the model
+// sees every skill's name and description, and the full SKILL.md arrives only
+// once it picks one. So there is no PostToolUse to enrich, and the only record
+// that a skill was used at all is in the rollout.
+type SkillUse struct {
+	Name string
+	// Source is skillSourceCommand when the person named the skill themselves,
+	// with Codex's $name mention, and skillSourceModel when the model chose it
+	// from the catalogue. The same two routes Claude Code has, reached
+	// differently: there the person types a slash command, here a $ mention.
+	Source string
+}
+
+// Codex's own markup for a loaded skill, injected as a user message:
+//
+//	<skill>
+//	<name>qa-echo</name>
+//	<path>/…/.agents/skills/qa-echo/SKILL.md</path>
+//
+// Not to be confused with the <skills_instructions> block, which is a developer
+// message listing every skill AVAILABLE. That one says nothing about what was
+// used, and treating it as a signal would attribute a skill to every turn.
+var skillNamePattern = regexp.MustCompile(`(?s)^\s*<skill>.*?<name>([^<]+)</name>`)
+
+// Source values, matching the pipeline's own constants. Kept as literals rather
+// than imported because internal/pipeline imports this package.
+const (
+	skillSourceCommand = "command"
+	skillSourceModel   = "model"
+)
 
 // rolloutLine is the subset of a Codex rollout JSONL record we read. A rollout
 // interleaves several record types (session_meta, turn_context, response_item,
@@ -156,6 +192,14 @@ type rolloutLine struct {
 			LastTokenUsage codexTokenUsage `json:"last_token_usage"`
 		} `json:"info"`
 		RateLimits *codexRateLimits `json:"rate_limits"`
+		// A response_item/message carries the conversation itself, which is
+		// where a loaded skill shows up. Codex injects several user messages of
+		// its own alongside the person's — <recommended_plugins>, <skill> — so
+		// the role alone does not say who wrote it.
+		Role    string `json:"role"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
 	} `json:"payload"`
 }
 
@@ -260,11 +304,33 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 	var turn Usage
 	var hasUsage bool
 	var limits *Limits
+	var turnSkill string
+	var turnPrompt strings.Builder
 	for dec.More() {
 		var line rolloutLine
 		if err := dec.Decode(&line); err != nil {
 			continue // skip malformed lines
 		}
+
+		// The conversation, for the skill a turn loaded and who asked for it.
+		if line.Type == "response_item" && line.Payload.Type == "message" && line.Payload.Role == "user" {
+			var text strings.Builder
+			for _, part := range line.Payload.Content {
+				text.WriteString(part.Text)
+			}
+			body := text.String()
+			if match := skillNamePattern.FindStringSubmatch(body); match != nil {
+				// Last one wins. A turn that loads two skills can only be
+				// labelled with one, and the later choice is the more recent.
+				turnSkill = match[1]
+			} else if !strings.HasPrefix(strings.TrimSpace(body), "<") {
+				// Codex's own injections are XML-ish; a person's prompt is not.
+				// Only the person's words can say they asked for a skill by name.
+				turnPrompt.WriteString(body)
+			}
+			continue
+		}
+
 		if line.Type != "event_msg" {
 			continue
 		}
@@ -282,6 +348,8 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 			// turn's token_count events.
 			turn = Usage{}
 			hasUsage = false
+			turnSkill = ""
+			turnPrompt.Reset()
 		case "token_count":
 			u := line.Payload.Info.LastTokenUsage
 			// Emit Codex's counts as-is. input_tokens is the total prompt count
@@ -318,6 +386,15 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 	out := &Rollout{Limits: limits}
 	if hasUsage {
 		out.Usage = &turn
+	}
+	if turnSkill != "" {
+		// The person asked for it if their own words carry Codex's $mention;
+		// otherwise the model picked it out of the catalogue itself.
+		source := skillSourceModel
+		if strings.Contains(turnPrompt.String(), "$"+turnSkill) {
+			source = skillSourceCommand
+		}
+		out.Skill = &SkillUse{Name: turnSkill, Source: source}
 	}
 	return out, nil
 }

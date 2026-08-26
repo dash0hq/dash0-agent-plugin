@@ -8,6 +8,7 @@ is the table, and [../claude](../claude/README.md) is the other half.
 | --- | --- |
 | [session](session/README.md) | One session: per-turn usage, the attribute surface, tool-call durations, plan and allowance |
 | [subagents](subagents/README.md) | Delegation: the spawn anchor, a reused agent, and whose tokens are whose. Needs `QA_CODEX_MULTI_AGENT=1` |
+| [skills](skills/README.md) | A loaded skill, and which route chose it. Needs `QA_CODEX_SKILL=1` |
 
 Each topic keeps its own coverage map, and each records what is deliberately not written and why.
 

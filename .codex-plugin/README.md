@@ -70,6 +70,11 @@ curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/ins
 
 It fetches the latest release (or the release pinned by `DASH0_VERSION`) and leaves your credentials untouched. Start a new Codex session to pick up the update.
 
+> [!IMPORTANT]
+> Restart any Codex session that was already open when you upgraded, whichever install path you use.
+>
+> A session resolves its hooks once, at startup. `codex plugin update` installs into a new version-scoped directory and deletes the old one, so a session that is still running keeps calling a path that no longer exists. Every hook in it then fails for the rest of the session. From v0.1.26 on, the failure is silent rather than an `error: hook exited with code 127` in your TUI, but the session still sends no telemetry until you restart it.
+
 ## Configuration
 
 After installing, you'll need:

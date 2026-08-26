@@ -4,6 +4,20 @@
 
 set -euo pipefail
 
+# Fail open. The other three runtimes route every failure through a fail_open
+# helper that exits 0; this one relied on `set -e` and bare `exit 1`, so an
+# offline download, a missing release asset or a checksum mismatch left a nonzero
+# status behind. Claude Code puts an error notice with our stderr in the
+# transcript for any nonzero exit, which is noise the user can do nothing about —
+# telemetry plumbing must never surface there. This trap covers both the explicit
+# exits below and any `set -e` abort, and cleans up the download temp (TMP stays
+# unset until the download block runs).
+on_exit() {
+  rm -f "${TMP:-}" 2>/dev/null || true
+  exit 0
+}
+trap on_exit EXIT
+
 # Load settings from a config file. Returns 1 if file doesn't exist.
 load_settings() {
   local file="$1"
@@ -99,11 +113,11 @@ if [ ! -x "$BINARY" ]; then
   # already executing the old inode keeps running it.
   #
   # $$ suffices to make the name private, because every process that can collide
-  # here is on this machine. The trap covers the failure paths below; a temp is
-  # only orphaned if the run is killed outright, which for a hook means the host's
-  # timeout. exec does not fire it, and by then there is nothing left to remove.
+  # here is on this machine. The on_exit trap installed at the top removes it on
+  # every failure path; a temp is only orphaned if the run is killed outright,
+  # which for a hook means the host's timeout. exec does not fire the trap, and by
+  # then there is nothing left to remove.
   TMP="$BINARY.tmp.$$"
-  trap 'rm -f "$TMP"' EXIT
 
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
@@ -116,7 +130,7 @@ if [ ! -x "$BINARY" ]; then
     fetch_stdout() { wget -qO- "$1"; }
   else
     echo "on-event: neither curl nor wget found" >&2
-    exit 1
+    exit 0
   fi
 
   # Try each asset name this binary has been published under, newest first. The
@@ -136,7 +150,7 @@ if [ ! -x "$BINARY" ]; then
   done
   if [ -z "$ASSET" ]; then
     echo "on-event: no release asset for ${OS}-${ARCH} in v${VERSION}" >&2
-    exit 1
+    exit 0
   fi
   CHECKSUMS=$(fetch_stdout "$CHECKSUMS_URL")
 
@@ -150,7 +164,7 @@ if [ ! -x "$BINARY" ]; then
   EXPECTED=$(printf '%s\n' "$CHECKSUMS" | awk -v want="$ASSET" '$2 == want { print $1 }')
   if [ -z "$EXPECTED" ]; then
     echo "on-event: ${ASSET} is not listed in checksums.txt for v${VERSION}" >&2
-    exit 1
+    exit 0
   fi
   if command -v sha256sum &>/dev/null; then
     ACTUAL=$(sha256sum "$TMP" | cut -d' ' -f1)
@@ -163,7 +177,7 @@ if [ ! -x "$BINARY" ]; then
   fi
   if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
     echo "on-event: checksum mismatch (expected $EXPECTED, got $ACTUAL)" >&2
-    exit 1
+    exit 0
   fi
 
   # Executable before it is visible, so nothing can find $BINARY and fail the
@@ -172,5 +186,18 @@ if [ ! -x "$BINARY" ]; then
   mv -f "$TMP" "$BINARY"
 fi
 
-# Forward stdin and arguments to the binary.
-exec "$BINARY" "$@"
+# Forward stdin and arguments to the binary as a child process, not via exec.
+#
+# The binary can be deleted or replaced between the -x test above and here, and
+# whatever the host then reports must still be 0. exec cannot give that guarantee
+# in this script: with `set -e` on, a failed exec terminates the shell with status
+# 1 and the EXIT trap does not run, and `shopt -s execfail` plus `|| true` did not
+# change that (measured on bash 5.3.3 — the same construct does return 0 in a
+# script without this one's preamble, so do not "simplify" this back to exec
+# without re-measuring the failure path).
+#
+# The cost is one extra live process for the length of the hook, which is nothing
+# next to the binary's own work. `|| true` keeps a nonzero status from the binary
+# out of `set -e`, and the explicit exit states the contract.
+"$BINARY" "$@" || true
+exit 0

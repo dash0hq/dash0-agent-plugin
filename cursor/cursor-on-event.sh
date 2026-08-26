@@ -141,4 +141,6 @@ fi
 
 # Forward stdin to the binary. The binary itself exits 0 on telemetry errors
 # (see cmd/cursor-on-event/main.go) so we don't need to wrap this in a trap.
-exec "$BINARY"
+shopt -s execfail
+exec "$BINARY" || true
+exit 0

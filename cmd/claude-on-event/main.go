@@ -63,6 +63,10 @@ func run() error {
 func printSessionMessage(event map[string]any, result pipeline.Result, cfg otlp.Config) {
 	hookEvent, _ := event["hook_event_name"].(string)
 
+	// Claude Code parses stdout as ONE hook response, and a second JSON object
+	// makes it discard the whole output — verified, nothing at all is shown. So
+	// every message this event produced rides in a single response.
+	var texts, contexts []string
 	for _, msg := range result.Messages {
 		text := msg.UserText
 		// SessionStart's "telemetry is not active" message gets a Claude-Code-specific
@@ -71,17 +75,20 @@ func printSessionMessage(event map[string]any, result pipeline.Result, cfg otlp.
 		if hookEvent == "SessionStart" && strings.HasPrefix(text, "dash0: telemetry is not active") {
 			text = "dash0: telemetry is not active — configure the plugin to start sending data. Run /plugin → Installed → dash0 → Configure, then /reload-plugins."
 		}
-		// Only Claude Code renders session messages, so this hint lives here rather
-		// than in the shared pipeline. It rides in the connected message instead of
-		// being printed on its own: Claude Code parses stdout as ONE hook response,
-		// and a second JSON object makes it discard the whole output — verified,
-		// nothing at all is shown. The "dash0: connected" message is the marker for a
-		// first SessionStart with working telemetry: without it, either the session
-		// was resumed or the user has a more urgent problem to fix first.
-		if hookEvent == "SessionStart" && strings.HasPrefix(text, "dash0: connected") && cfg.TeamName == "" {
-			text += "\ndash0: no team configured — set Team Name via /plugin → Configure."
+		// The pipeline names the missing attribute; where to set it is per-agent, so
+		// the route lives here.
+		if hookEvent == "SessionStart" && strings.HasPrefix(text, pipeline.NoTeamPrefix) {
+			text += " Set Team Name via /plugin → Configure."
 		}
-		printHookResponse(text, msg.ModelContext)
+		if text != "" {
+			texts = append(texts, text)
+		}
+		if msg.ModelContext != "" {
+			contexts = append(contexts, msg.ModelContext)
+		}
+	}
+	if len(texts) > 0 || len(contexts) > 0 {
+		printHookResponse(strings.Join(texts, "\n"), strings.Join(contexts, "\n"))
 	}
 
 	if (hookEvent == "Stop" || hookEvent == "StopFailure") && cfg.OTLPUrl != "" && hn.PluginOptionBool("SHOW_SESSION_LINK") {

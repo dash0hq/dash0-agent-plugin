@@ -614,6 +614,9 @@ func TestProcess_SessionStart_ConnectivityMessages(t *testing.T) {
 	t.Run("connected when endpoint accepts the empty trace request", func(t *testing.T) {
 		url, _, _ := mockOTLPServer(t)
 		s := newSetup(t, url)
+		// The missing-team warning rides along on the connected path and has its own
+		// test; set a team so this one stays about connectivity.
+		s.cfg.TeamName = "platform"
 		res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess", "model": "opus"})
 		require.Len(t, res.Messages, 1)
 		// The pipeline (not the source entrypoint) annotates the success message
@@ -624,11 +627,103 @@ func TestProcess_SessionStart_ConnectivityMessages(t *testing.T) {
 	})
 }
 
+// Telemetry can be live while the option that makes it attributable is unset.
+// Users don't know TEAM_NAME exists, so a connected session names the gap and
+// tells the calling agent to offer setup.
+func TestProcess_SessionStart_NoTeamWarning(t *testing.T) {
+	sessionStart := func() map[string]any {
+		return map[string]any{"hook_event_name": "SessionStart", "session_id": "sess", "model": "opus"}
+	}
+
+	// warningOf returns the missing-team message from a Result, or fails if there
+	// is none.
+	warningOf := func(t *testing.T, res Result) Message {
+		t.Helper()
+		require.Len(t, res.Messages, 2, "expected the connected message plus the missing-team warning")
+		assert.Contains(t, res.Messages[0].UserText, "dash0: connected")
+		return res.Messages[1]
+	}
+
+	// The text names the attribute rather than where to set it: every coding agent
+	// configures the plugin differently, so the entrypoints add that part.
+	t.Run("names the missing attribute", func(t *testing.T) {
+		url, _, _ := mockOTLPServer(t)
+		s := newSetup(t, url)
+
+		msg := warningOf(t, s.feed(t, sessionStart()))
+		assert.Equal(t, "dash0: no team configured — spans carry no dash0.team.name.", msg.UserText)
+	})
+
+	// An unset dataset is not a gap: it means the backend picks the dataset named
+	// "default", which is what the installers write explicitly.
+	t.Run("ignores an unset dataset", func(t *testing.T) {
+		url, _, _ := mockOTLPServer(t)
+		s := newSetup(t, url)
+		s.cfg.TeamName = "platform"
+		s.cfg.Dataset = ""
+
+		res := s.feed(t, sessionStart())
+		require.Len(t, res.Messages, 1)
+		assert.Contains(t, res.Messages[0].UserText, "dash0: connected")
+	})
+
+	// The model context is the point of the warning: the agent, not the user, is
+	// expected to start the conversation about finishing setup.
+	t.Run("tells the agent to offer the configure skill", func(t *testing.T) {
+		url, _, _ := mockOTLPServer(t)
+		s := newSetup(t, url)
+
+		msg := warningOf(t, s.feed(t, sessionStart()))
+		assert.Contains(t, msg.ModelContext, "dash0-configure")
+		assert.Contains(t, msg.ModelContext, "TEAM_NAME")
+	})
+
+	t.Run("silent when the team name is set", func(t *testing.T) {
+		url, _, _ := mockOTLPServer(t)
+		s := newSetup(t, url)
+		s.cfg.TeamName = "platform"
+
+		res := s.feed(t, sessionStart())
+		require.Len(t, res.Messages, 1)
+		assert.Contains(t, res.Messages[0].UserText, "dash0: connected")
+	})
+
+	// Telemetry being off is the louder problem and already has its own message.
+	// Adding the warning there would bury it.
+	t.Run("silent when telemetry is not active", func(t *testing.T) {
+		s := newSetup(t, "")
+
+		res := s.feed(t, sessionStart())
+		require.Len(t, res.Messages, 1)
+		assert.Contains(t, res.Messages[0].UserText, "telemetry is not active")
+	})
+
+	t.Run("silent when the connectivity check failed", func(t *testing.T) {
+		s := newSetup(t, unreachableURL(t))
+
+		res := s.feed(t, sessionStart())
+		require.Len(t, res.Messages, 1)
+		assert.Contains(t, res.Messages[0].UserText, "connectivity check failed")
+	})
+
+	// Resume, compact, and clear re-fire SessionStart. Warning on each would turn
+	// a reminder into a nag within one session.
+	t.Run("silent on a re-fired SessionStart", func(t *testing.T) {
+		url, _, _ := mockOTLPServer(t)
+		s := newSetup(t, url)
+
+		warningOf(t, s.feed(t, sessionStart()))
+		res := s.feed(t, sessionStart())
+		assert.Empty(t, res.Messages)
+	})
+}
+
 // Subsequent SessionStart fires (resume, compact, clear) within the same
 // session are no-ops: no connectivity check, no messages, no trace context overwrite.
 func TestProcess_SessionStart_SubsequentFireIsNoOp(t *testing.T) {
 	url, _, _ := mockOTLPServer(t)
 	s := newSetup(t, url)
+	s.cfg.TeamName = "platform"
 
 	res := s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
 	require.Len(t, res.Messages, 1)
@@ -664,6 +759,7 @@ func TestProcess_SessionStart_ReFireStillLogsEvent(t *testing.T) {
 func TestProcess_SessionStart_ReInitializesAfterSessionEnd(t *testing.T) {
 	url, _, _ := mockOTLPServer(t)
 	s := newSetup(t, url)
+	s.cfg.TeamName = "platform"
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
 	s.feed(t, map[string]any{"hook_event_name": "SessionEnd", "session_id": "sess-1"})

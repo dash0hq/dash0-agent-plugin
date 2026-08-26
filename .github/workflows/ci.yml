@@ -395,10 +395,15 @@ jobs:
             echo "::error::.claude-plugin/plugin.json hooks ($HOOKS_FILE) does not exist"
             exit 1
           fi
+          # The command must invoke the bootstrap at the expected path, but it is
+          # not just that path: it also has to survive its own absence, because a
+          # nonzero hook exit shows up in the user's transcript. The guard's exact
+          # shape is pinned by TestHookManifestCommandsAreGuarded in
+          # test/consistency, so match the prefix here rather than the whole line.
           HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$HOOKS_FILE")
           EXPECTED='${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh'
-          if [ "$HOOK_CMD" != "$EXPECTED" ]; then
-            echo "::error::hooks.json command ($HOOK_CMD) does not match expected ($EXPECTED)"
+          if [ "${HOOK_CMD#"$EXPECTED"}" = "$HOOK_CMD" ]; then
+            echo "::error::hooks.json command ($HOOK_CMD) does not start with the expected path ($EXPECTED)"
             exit 1
           fi
 

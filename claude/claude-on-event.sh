@@ -12,6 +12,7 @@ set -euo pipefail
 # telemetry plumbing must never surface there. This trap covers both the explicit
 # exits below and any `set -e` abort, and cleans up the download temp (TMP stays
 # unset until the download block runs).
+# shellcheck disable=SC2317 # reached via the EXIT trap below, not inline
 on_exit() {
   rm -f "${TMP:-}" 2>/dev/null || true
   exit 0

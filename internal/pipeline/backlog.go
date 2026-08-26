@@ -4,6 +4,7 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -41,14 +42,16 @@ func flushBacklog(cfg otlp.Config, dataDir string, now time.Time) {
 	}
 	deadline := now.Add(backlogBudget)
 
-	// Incidents first. They are small, they are the only evidence that the plugin
-	// was mute, and a send failure re-spools them rather than dropping them.
-	incidents, err := incident.Drain(dataDir)
+	// Incidents first. They are small, and they are the only evidence that the
+	// plugin was mute, so the breadcrumbs are not discarded until every one of
+	// them is either sent or spooled — a kill mid-report must cost us nothing.
+	incidents, commit, err := incident.Drain(dataDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: reading plugin incidents: %v\n", err)
 	}
+	durable := true
 	for _, inc := range incidents {
-		if err := otlp.SendPluginIncident(otlp.PluginIncident{
+		err := otlp.SendPluginIncident(otlp.PluginIncident{
 			Kind:      inc.Kind,
 			Harness:   inc.Harness,
 			Detail:    inc.Detail,
@@ -56,9 +59,17 @@ func flushBacklog(cfg otlp.Config, dataDir string, now time.Time) {
 			Count:     inc.Count,
 			First:     inc.First,
 			Last:      inc.Last,
-		}, cfg); err != nil {
+		}, cfg)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: reporting plugin incident: %v\n", err)
 		}
+		// Spooled counts as safe: the payload is on disk and will go out later.
+		if err != nil && !errors.Is(err, otlp.ErrSpooled) {
+			durable = false
+		}
+	}
+	if durable {
+		commit()
 	}
 
 	// Then the spooled payloads. SendOnce, not the spooling send: a payload that

@@ -160,6 +160,10 @@ cost analysis short without saying so.
   (`dash0.plugin.incident.kind`, `.count`, `.detail`, `.first`, `.last`), which is
   the only way a session that ran with the plugin mute becomes visible. Derive
   metrics from those records in the backend rather than emitting metrics here.
+  The breadcrumbs are claimed by rename and discarded only once every report is
+  sent or spooled, and a claim left behind by a killed hook is adopted after five
+  minutes — reporting an incident twice beats losing the one record that says
+  data is missing.
 - Both live in the per-session state root above, so `uninstall-*.sh` removes them
   with the rest of it.
 

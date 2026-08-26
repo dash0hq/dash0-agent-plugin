@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -56,44 +57,48 @@ func Path(dataDir string) string {
 	return filepath.Join(dataDir, FileName)
 }
 
-// Drain claims the breadcrumb file and returns what it held, aggregated.
+// orphanGrace is how long a claim must sit untouched before another invocation
+// adopts it. A live drain finishes in seconds — one report, with the OTLP
+// client's own timeouts as the ceiling — so anything older than this belongs to a
+// process that died holding it.
+const orphanGrace = 5 * time.Minute
+
+// Drain claims the breadcrumbs and returns what they held, aggregated, together
+// with a commit that discards them.
 //
 // The file is renamed before it is read, so hooks running concurrently keep
 // appending to a fresh file instead of writing lines into one being consumed.
-// The claim is removed once parsed: the caller is expected to hand every
-// Incident to something durable (a send that spools on failure), so the window
-// where a crash loses a breadcrumb is the few microseconds in between.
-func Drain(dataDir string) ([]Incident, error) {
+//
+// The claim is deliberately NOT removed here. Reporting an incident can take as
+// long as the OTLP client's timeouts allow before the payload reaches the spool,
+// and a hook killed inside that window would take the only evidence that the
+// plugin was mute with it. So the caller commits once every incident is durable,
+// and a claim left behind by a process that died is adopted by a later one.
+// Reporting an incident twice is a far better failure than losing it.
+func Drain(dataDir string) (incidents []Incident, commit func(), err error) {
 	path := Path(dataDir)
 	if path == "" {
-		return nil, nil
+		return nil, func() {}, nil
 	}
 
-	claim := fmt.Sprintf("%s.claimed.%d", path, os.Getpid())
-	if err := os.Rename(path, claim); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil // nothing to report, the common case
-		}
-		return nil, fmt.Errorf("incident: claiming %s: %w", path, err)
-	}
-	defer func() { _ = os.Remove(claim) }()
-
-	f, err := os.Open(claim)
+	claims, err := claim(path)
 	if err != nil {
-		return nil, fmt.Errorf("incident: reading %s: %w", claim, err)
+		return nil, func() {}, err
 	}
-	defer func() { _ = f.Close() }()
+	commit = func() {
+		for _, c := range claims {
+			_ = os.Remove(c)
+		}
+	}
+	if len(claims) == 0 {
+		return nil, commit, nil // nothing to report, the common case
+	}
 
 	// Keys in insertion order, so the report reads in the order things broke.
 	var order []string
 	byKey := make(map[string]*Incident)
 
-	scanner := bufio.NewScanner(f)
-	for lines := 0; scanner.Scan() && lines < maxLines; lines++ {
-		inc, ok := parse(scanner.Text())
-		if !ok {
-			continue
-		}
+	for _, inc := range readAll(claims) {
 		key := strings.Join([]string{inc.Kind, inc.Harness, inc.Detail, inc.SessionID}, "\x00")
 		existing, seen := byKey[key]
 		if !seen {
@@ -115,7 +120,70 @@ func Drain(dataDir string) ([]Incident, error) {
 	for _, key := range order {
 		out = append(out, *byKey[key])
 	}
-	return out, nil
+	return out, commit, nil
+}
+
+// claim takes ownership of the breadcrumb file and of any claim a dead process
+// left behind, returning the paths this invocation now owns.
+//
+// Ownership is established by rename, which is atomic within a directory: two
+// invocations racing for the same file means exactly one of them gets it.
+func claim(path string) ([]string, error) {
+	mine := fmt.Sprintf("%s.claimed.%d", path, os.Getpid())
+
+	var claims []string
+	switch err := os.Rename(path, mine); {
+	case err == nil:
+		claims = append(claims, mine)
+	case !os.IsNotExist(err):
+		return nil, fmt.Errorf("incident: claiming %s: %w", path, err)
+	}
+
+	// Adopt claims abandoned by processes that died mid-report. Only old ones:
+	// a fresh claim belongs to an invocation that is still working on it.
+	abandoned, err := filepath.Glob(path + ".claimed.*")
+	if err != nil {
+		return claims, nil // a bad pattern is not possible here, but never fail the drain
+	}
+	for _, other := range abandoned {
+		if other == mine {
+			continue
+		}
+		fi, err := os.Stat(other)
+		if err != nil || time.Since(fi.ModTime()) < orphanGrace {
+			continue
+		}
+		adopted := fmt.Sprintf("%s.adopted.%d", other, os.Getpid())
+		if err := os.Rename(other, adopted); err != nil {
+			continue // another invocation adopted it first
+		}
+		claims = append(claims, adopted)
+	}
+	return claims, nil
+}
+
+// readAll parses every claimed file, oldest name first so repeated failures
+// aggregate in the order they happened.
+func readAll(claims []string) []Incident {
+	slices.Sort(claims)
+
+	var out []Incident
+	lines := 0
+	for _, c := range claims {
+		f, err := os.Open(c)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() && lines < maxLines {
+			lines++
+			if inc, ok := parse(scanner.Text()); ok {
+				out = append(out, inc)
+			}
+		}
+		_ = f.Close()
+	}
+	return out
 }
 
 // parse reads one breadcrumb line. Anything malformed is skipped rather than

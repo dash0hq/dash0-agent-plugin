@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -362,6 +363,12 @@ func SendOnce(cfg Config, path string, payload []byte) error {
 	return send(cfg, path, payload)
 }
 
+// ErrSpooled wraps a send that failed but whose payload is now on disk, so it
+// will go out on a later invocation. Callers that hold the only copy of
+// something — the incident breadcrumbs — test for this to know the data is safe
+// before they discard their copy.
+var ErrSpooled = errors.New("kept for a later invocation")
+
 // sendOTLP sends a payload, keeping it in the spool when it cannot be delivered
 // and SpoolDir is set. The error is still returned: the caller decides whether a
 // deferred send is good enough to stay quiet about.
@@ -373,7 +380,7 @@ func sendOTLP(cfg Config, path string, payload []byte) error {
 	if spoolErr := spool.Append(cfg.SpoolDir, path, payload); spoolErr != nil {
 		return fmt.Errorf("%w (and could not spool it: %v)", err, spoolErr)
 	}
-	return fmt.Errorf("%w (kept for a later invocation)", err)
+	return fmt.Errorf("%w: %w", ErrSpooled, err)
 }
 
 func send(cfg Config, path string, payload []byte) error {

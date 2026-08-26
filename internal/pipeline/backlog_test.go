@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -180,6 +181,31 @@ func TestBacklog_BreadcrumbSurvivesAFailedReport(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "the incident should arrive once the endpoint is reachable")
+}
+
+// When the report can neither be sent nor spooled, the breadcrumbs stay. This is
+// the last line of defence: they are the only evidence the plugin was mute, so
+// they are not discarded until the report is somewhere durable.
+func TestBacklog_BreadcrumbsSurviveWhenNothingCanBeSaved(t *testing.T) {
+	s := newSetup(t, unreachableURL(t))
+
+	body := []byte("2026-08-25T14:15:16Z\thook_script_missing\tcodex\t/gone.sh\tsess-1\n")
+	require.NoError(t, os.WriteFile(incident.Path(s.dataDir), body, 0o644))
+
+	// Occupy the spool's path with a file, so MkdirAll cannot create it and the
+	// failed report has nowhere to go.
+	require.NoError(t, os.WriteFile(spool.Dir(s.dataDir), []byte("not a directory"), 0o644))
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "gpt-5.5"})
+
+	// The breadcrumbs are not at the original name — they are claimed — but they
+	// are still on disk for a later invocation to adopt.
+	claims, err := filepath.Glob(incident.Path(s.dataDir) + ".claimed.*")
+	require.NoError(t, err)
+	require.Len(t, claims, 1, "an unreportable incident must not be discarded")
+	kept, err := os.ReadFile(claims[0])
+	require.NoError(t, err)
+	assert.Equal(t, body, kept)
 }
 
 // With no endpoint configured there is nothing to flush to, and the breadcrumbs

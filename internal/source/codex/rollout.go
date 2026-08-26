@@ -18,10 +18,11 @@ import (
 // here. Codex reports tokens the same way (input_tokens includes cached), so the
 // mapping is a straight copy.
 type Usage struct {
-	InputTokens           int64 // total prompt tokens, INCLUDING the cached portion
-	CacheReadInputTokens  int64 // prompt tokens served from cache (a subset of InputTokens)
-	OutputTokens          int64 // completion tokens (includes reasoning tokens)
-	ReasoningOutputTokens int64 // reasoning tokens (a subset of OutputTokens); parsed for future use, not yet emitted
+	InputTokens              int64 // total prompt tokens, INCLUDING the cached portion
+	CacheReadInputTokens     int64 // prompt tokens served from cache (a subset of InputTokens)
+	CacheCreationInputTokens int64 // prompt tokens written to the cache (also a subset of InputTokens)
+	OutputTokens             int64 // completion tokens (includes reasoning tokens)
+	ReasoningOutputTokens    int64 // reasoning tokens (a subset of OutputTokens, not an addition)
 }
 
 // Limits holds the account-level allowance state Codex reports alongside token
@@ -199,8 +200,15 @@ func newWindow(w *codexWindow) *Window {
 // (verified against Codex 0.142.5: total_tokens == input_tokens + output_tokens,
 // and cached_input_tokens <= input_tokens).
 type codexTokenUsage struct {
-	InputTokens           int64 `json:"input_tokens"`
+	InputTokens int64 `json:"input_tokens"`
+	// The two cache halves. cached_input_tokens is the part served FROM cache;
+	// cache_write_input_tokens is the part written TO it. Both are subsets of
+	// input_tokens, so neither is added to it. The write half went unparsed
+	// until 2026-08-26, which is why no Codex span could carry
+	// gen_ai.usage.cache_creation.input_tokens: the field was on the wire the
+	// whole time, and every value observed so far happens to be zero.
 	CachedInputTokens     int64 `json:"cached_input_tokens"`
+	CacheWriteInputTokens int64 `json:"cache_write_input_tokens"`
 	OutputTokens          int64 `json:"output_tokens"`
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
 }
@@ -283,6 +291,7 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 			// the discount and under-price the turn.
 			turn.InputTokens += u.InputTokens
 			turn.CacheReadInputTokens += u.CachedInputTokens
+			turn.CacheCreationInputTokens += u.CacheWriteInputTokens
 			turn.OutputTokens += u.OutputTokens
 			turn.ReasoningOutputTokens += u.ReasoningOutputTokens
 			hasUsage = true

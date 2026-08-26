@@ -289,6 +289,55 @@ func TestNormalizeLeavesOtherAgentToolsAlone(t *testing.T) {
 	assert.Equal(t, "collaborationwait_agent", out["tool_name"])
 }
 
+// Codex reports five usage figures and only three reached a span: the cache
+// WRITE half was never parsed, and reasoning tokens were parsed and dropped.
+// Measured 2026-08-26 across 115 real token_count events, 1382 reasoning tokens
+// reached no span at all. Both are subsets of a figure already emitted, so cost
+// was unaffected — what was missing was the breakdown.
+func TestNormalizeEmitsBothCacheHalvesAndReasoning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{` +
+		`"input_tokens":14525,"cached_input_tokens":9984,"cache_write_input_tokens":4096,` +
+		`"output_tokens":108,"reasoning_output_tokens":17}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, int64(14525), out["gen_ai.usage.input_tokens"])
+	assert.Equal(t, int64(108), out["gen_ai.usage.output_tokens"])
+	assert.Equal(t, int64(9984), out["gen_ai.usage.cache_read.input_tokens"])
+	assert.Equal(t, int64(4096), out["gen_ai.usage.cache_creation.input_tokens"],
+		"the cache write half is on the wire and must reach the span")
+	assert.Equal(t, int64(17), out["gen_ai.usage.reasoning.output_tokens"])
+}
+
+// Zero is a measurement for the cache halves and must be emitted: dropping the
+// key makes "this turn cached nothing" indistinguishable from "this runtime does
+// not report caching". Reasoning is the other way round — absence means the turn
+// did no thinking, which is how Claude and Copilot already report it.
+func TestNormalizeKeepsZeroCacheButOmitsZeroReasoning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{` +
+		`"input_tokens":100,"cached_input_tokens":0,"cache_write_input_tokens":0,` +
+		`"output_tokens":5,"reasoning_output_tokens":0}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, int64(0), out["gen_ai.usage.cache_read.input_tokens"])
+	assert.Equal(t, int64(0), out["gen_ai.usage.cache_creation.input_tokens"])
+	_, hasReasoning := out["gen_ai.usage.reasoning.output_tokens"]
+	assert.False(t, hasReasoning, "a turn that did no thinking carries no reasoning key")
+}
+
 // writeRollout puts a one-turn rollout on disk and returns its path. rateLimits
 // is spliced in verbatim so each case controls the exact wire shape.
 func writeRollout(t *testing.T, rateLimits string) string {

@@ -90,7 +90,20 @@ func injectRollout(event map[string]any) {
 	if usage := rollout.Usage; usage != nil {
 		event["gen_ai.usage.input_tokens"] = usage.InputTokens
 		event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+		// Both cache halves, unconditionally. A zero is a measurement — the turn
+		// read or wrote nothing from cache — and dropping the key at zero makes
+		// "no cache activity" indistinguishable from "this runtime does not
+		// report it", which is exactly the confusion that hid the missing
+		// cache-creation key.
 		event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+		event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
+		// Reasoning only when there is some, matching what Claude and Copilot
+		// do: absence means the turn did no thinking, and a zero on every
+		// non-thinking turn is noise. It is a subset of output_tokens rather
+		// than an addition, so cost is unaffected either way.
+		if usage.ReasoningOutputTokens > 0 {
+			event["gen_ai.usage.reasoning.output_tokens"] = usage.ReasoningOutputTokens
+		}
 	}
 	injectBilling(event, rollout.Limits)
 }

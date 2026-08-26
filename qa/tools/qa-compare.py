@@ -52,6 +52,7 @@ USAGE_KEYS = {
     "output": "gen_ai.usage.output_tokens",
     "cache_read": "gen_ai.usage.cache_read.input_tokens",
     "cache_write": "gen_ai.usage.cache_creation.input_tokens",
+    "reasoning": "gen_ai.usage.reasoning.output_tokens",
 }
 
 # A manifest with no runtime is a Claude run: the Claude driver predates the
@@ -362,10 +363,12 @@ def rollout_summary(root, run_dir):
     row = {"input": totals["input"],
            "output": totals["output"],
            "cache_read": totals["cache_read"],
-           # Codex reports no cache-creation count. Zero here is the absence of a
-           # concept, not a measurement, and the plugin sends no such attribute
-           # either, so the two agree at zero for the right reason.
-           "cache_write": 0}
+           # Codex does report a cache-write count, as cache_write_input_tokens.
+           # This column used to hardcode zero on the belief that it did not,
+           # which is precisely why nobody noticed the plugin was not parsing the
+           # field: both sides agreed at zero for the wrong reason.
+           "cache_write": totals["cache_write"],
+           "reasoning": totals["reasoning"]}
     models = data["models"] or ["<no model>"]
     return {
         "total": {models[0]: row},
@@ -531,7 +534,12 @@ def report(data):
         print(f"  {name:<20}{got:>6}{want:>6}{flag}")
 
     print("\nTokens")
-    keys = ("input", "output", "cache_read", "cache_write")
+    keys = ["input", "output", "cache_read", "cache_write"]
+    # reasoning is compared only where the second channel reports it. The Codex
+    # rollout does; claude-code-usage-audit.py does not, so asking for it there
+    # would read as Dash0 inventing tokens rather than the channel being silent.
+    if any("reasoning" in row for row in (transcript.get("total") or {}).values()):
+        keys.append("reasoning")
     d0 = totals(dash0["usage"], keys)
     tx = totals(transcript.get("total", {}), keys)
     label = "claude" if runtime == "claude" else runtime

@@ -59,6 +59,7 @@ import sys
 USAGE_FIELDS = {
     "input": "input_tokens",
     "cache_read": "cached_input_tokens",
+    "cache_write": "cache_write_input_tokens",
     "output": "output_tokens",
     "reasoning": "reasoning_output_tokens",
 }

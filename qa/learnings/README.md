@@ -30,6 +30,7 @@ below cost a full redesign of the harness before they were understood.
 - [Per-session plugin state is deleted at SessionEnd, so it cannot be inspected afterwards](hooks-session-state-is-deleted-at-sessionend.md) — poll during the run or get a confident wrong answer.
 - [The Task tool returns in milliseconds, so a sub-agent outlives the turn that spawned it](hooks-the-task-tool-returns-before-its-sub-agent-runs.md) — two `chat` spans per prompt is correct, and a one-tool-call sub-agent probe tests almost nothing.
 - [Some slash commands fire no UserPromptSubmit and no Stop, so they cannot be probed](hooks-some-slash-commands-fire-no-hooks-at-all.md) — `/help` produces no turn at all, so it cannot serve as a negative control.
+- [A Codex SubagentStop ends a task; a Claude one ends the agent](hooks-a-codex-subagent-is-reusable-a-claude-one-is-not.md) — the same Codex agent stops, works again and stops again, with no second `SubagentStart` to notice it by.
 
 ## What is actually under test
 
@@ -44,3 +45,4 @@ below cost a full redesign of the harness before they were understood.
 ## Dead ends
 
 - [A throwaway HOME cannot run a real Claude Code session](deadend-a-throwaway-home-loses-claude-code-auth.md) — credentials do not travel with the flags.
+- [Codex answers a delegation prompt directly unless multi_agent_mode is enabled](deadend-codex-does-not-delegate-without-multi-agent-mode.md) — the failure looks like a successful run, and it was written up as "this runtime has no sub-agents".

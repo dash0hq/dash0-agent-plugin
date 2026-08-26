@@ -176,6 +176,42 @@ func TestDrainAdoptsAnAbandonedClaim(t *testing.T) {
 	assert.Empty(t, entries, "the adopted claim is gone once reported")
 }
 
+// A claim taken from a file that had been sitting around must not look abandoned
+// the instant it is claimed. rename(2) carries the old mtime over, and a
+// breadcrumb is written when the hook breaks — which can be long before anything
+// drains it — so without a fresh stamp a concurrent hook adopts a claim that is
+// still being reported, and the incident goes out twice.
+func TestDrainDoesNotAdoptAClaimItJustTook(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "2026-08-25T14:15:16Z\thook_script_missing\tcodex\t/a.sh\tthr-1\n")
+
+	// The breadcrumb has been there far longer than the grace period.
+	old := time.Now().Add(-10 * orphanGrace)
+	require.NoError(t, os.Chtimes(Path(dir), old, old))
+
+	// First drain claims it and is still working — no commit yet.
+	got, _, err := Drain(dir)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	// The claim must date from when it was claimed, not from when the breadcrumb
+	// was written. This is the assertion that pins the fix: rename alone leaves
+	// the old mtime and the grace period then measures the wrong thing.
+	claims, err := filepath.Glob(Path(dir) + ".claimed.*")
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	fi, err := os.Stat(claims[0])
+	require.NoError(t, err)
+	assert.Less(t, time.Since(fi.ModTime()), orphanGrace,
+		"a claim must not be adoptable the moment it is taken")
+
+	// And a hook firing concurrently must not take it. Drain names each claim
+	// uniquely, so this second call stands in for a second process.
+	stolen, _, err := Drain(dir)
+	require.NoError(t, err)
+	assert.Empty(t, stolen, "a claim in flight must not be adopted out from under its owner")
+}
+
 // A claim young enough to belong to a live invocation is left alone, so two
 // concurrent hooks do not report the same incident twice.
 func TestDrainLeavesAFreshClaimAlone(t *testing.T) {

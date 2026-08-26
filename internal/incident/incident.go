@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -123,18 +124,26 @@ func Drain(dataDir string) (incidents []Incident, commit func(), err error) {
 	return out, commit, nil
 }
 
+// claimSeq keeps one process's claim names distinct, so two drains in the same
+// process behave like two processes rather than mistaking each other's claims
+// for their own.
+var claimSeq atomic.Uint64
+
 // claim takes ownership of the breadcrumb file and of any claim a dead process
 // left behind, returning the paths this invocation now owns.
 //
 // Ownership is established by rename, which is atomic within a directory: two
 // invocations racing for the same file means exactly one of them gets it.
 func claim(path string) ([]string, error) {
-	mine := fmt.Sprintf("%s.claimed.%d", path, os.Getpid())
+	name := func() string {
+		return fmt.Sprintf("%s.claimed.%d-%d", path, os.Getpid(), claimSeq.Add(1))
+	}
 
 	var claims []string
+	mine := name()
 	switch err := os.Rename(path, mine); {
 	case err == nil:
-		claims = append(claims, mine)
+		claims = append(claims, touch(mine))
 	case !os.IsNotExist(err):
 		return nil, fmt.Errorf("incident: claiming %s: %w", path, err)
 	}
@@ -153,13 +162,30 @@ func claim(path string) ([]string, error) {
 		if err != nil || time.Since(fi.ModTime()) < orphanGrace {
 			continue
 		}
-		adopted := fmt.Sprintf("%s.adopted.%d", other, os.Getpid())
+		adopted := name()
 		if err := os.Rename(other, adopted); err != nil {
 			continue // another invocation adopted it first
 		}
-		claims = append(claims, adopted)
+		claims = append(claims, touch(adopted))
 	}
 	return claims, nil
+}
+
+// touch stamps a claim with the time it was claimed, and returns it unchanged.
+//
+// The grace period is meant to measure how long a claim has gone unattended, but
+// rename(2) carries the original mtime over — and a breadcrumb file was written
+// when the hook broke, which can be hours before anything drains it. Without this
+// a claim is born already looking abandoned, and a concurrent hook adopts it out
+// from under the invocation that is still reporting it. Codex runs up to eight
+// hooks at a time, so that is a routine race, not a corner case.
+//
+// A failure here is not worth reporting: the claim is ours either way, and the
+// cost is a duplicate report rather than a lost one.
+func touch(claim string) string {
+	now := time.Now()
+	_ = os.Chtimes(claim, now, now)
+	return claim
 }
 
 // readAll parses every claimed file, oldest name first so repeated failures

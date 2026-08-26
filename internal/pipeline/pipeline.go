@@ -206,6 +206,9 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 				res.Messages = append(res.Messages, Message{
 					UserText: text,
 				})
+				if msg, ok := setupNudge(cfg); ok {
+					res.Messages = append(res.Messages, msg)
+				}
 			}
 		}
 	}

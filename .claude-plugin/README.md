@@ -204,6 +204,14 @@ dash0: connected (v0.1.22)
 
 If credentials are missing: `dash0: telemetry is not active — configure the plugin to start sending data.`
 
+If telemetry works but `TEAM_NAME` is unset, a second line names the gap:
+
+```
+dash0: no team configured — spans carry no dash0.team.name. Set Team Name via /plugin → Configure.
+```
+
+Claude also receives this as context, so you can just ask it to finish the setup and it runs `/dash0-agent-plugin:dash0-configure` for you. The warning cannot be silenced — setting a team name is what stops it.
+
 ### Options
 
 | Option | Description | Default | Sensitive |

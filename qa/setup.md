@@ -30,7 +30,7 @@ transcript logic nor the audit script transfers to them. `test/contracts/` and
 
 ## Layout
 
-- specs:     qa/specs/<area>/
+- specs:     qa/specs/<runtime>/<topic>/   (today: `claude/session`, `claude/mcp`, `claude/skills`)
 - learnings: qa/learnings/
 - findings:  qa/findings/        (open spec failures only; a fixed one is deleted)
 - runs:      qa/runs/            (gitignored)

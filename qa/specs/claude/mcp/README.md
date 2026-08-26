@@ -40,7 +40,7 @@ every tool equally cannot pass.
 
 The content of `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, and `exception.message`. The
 API returns all three redacted, so a spec here checks presence and never value. `test/e2e/` owns
-those against a mock. See `## Configure` in [../../setup.md](../../setup.md).
+those against a mock. See `## Configure` in [../../setup.md](../../../setup.md).
 
 The wire format, for the same reason as everywhere else in this harness: the managed install cannot
 be reconfigured for one session.

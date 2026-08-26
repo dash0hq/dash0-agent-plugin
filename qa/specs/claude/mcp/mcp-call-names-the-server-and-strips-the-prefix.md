@@ -1,6 +1,7 @@
 ---
 id: mcp-call-names-the-server-and-strips-the-prefix
-area: mcp
+area: claude/mcp
+runtime: claude
 status: active
 input: qa/mcp-fixture, via QA_MCP=1 on qa/tools/qa-session.sh
 duration: ~15s
@@ -106,7 +107,7 @@ numbers, not constants; only the equality is the assertion.
 
 **`qa-attrs.py` exits `1` on release 0.1.24, and that is not this spec's finding.** It reports
 `prompt_id`, `session_crons`, and `background_tasks`, which
-[../session/span-carries-no-undeclared-attribute](../session/span-carries-no-undeclared-attribute.md)
+[../session/claude-span-carries-no-undeclared-attribute](../session/claude-span-carries-no-undeclared-attribute.md)
 already owns and which are fixed in the working tree. Read the tool's list, not its exit code, and
 only for MCP keys. If `mcp_server` ever appears in it, that is this spec's finding.
 

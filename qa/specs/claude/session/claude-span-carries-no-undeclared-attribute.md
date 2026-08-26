@@ -1,6 +1,7 @@
 ---
-id: span-carries-no-undeclared-attribute
-area: session
+id: claude-span-carries-no-undeclared-attribute
+area: claude/session
+runtime: claude
 status: draft
 input: qa/tools/qa-session.sh, one prompt that produces all three span types
 duration: ~25s

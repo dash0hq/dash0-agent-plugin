@@ -134,7 +134,7 @@ def mcp_tool_name(raw):
     makes the tool table's MCP rows deductive rather than independent: it is the
     harness agreeing with a documented rule so that the counts, ids and
     durations either side of it stay comparable. The rule itself is asserted by
-    qa/specs/mcp/, against the raw name in the payload.
+    qa/specs/claude/mcp/, against the raw name in the payload.
     """
     if not raw.startswith("mcp__"):
         return raw

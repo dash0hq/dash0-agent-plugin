@@ -1,6 +1,7 @@
 ---
 id: skill-invocation-is-counted-by-either-route
-area: skills
+area: claude/skills
+runtime: claude
 status: draft
 input: qa/tools/qa-session.sh, two prompts that invoke the same skill by different routes
 duration: ~10s each
@@ -60,7 +61,7 @@ run where the model declines to use it is a discarded run rather than a result.
 That matters because the usual expectation source is unavailable here. `qa-compare.py` derives its
 expectation from the hook-to-span mapping, and on route 1 there is no tool hook to map, so it agrees
 with Dash0 whatever Dash0 says. See
-[the learning on that blind spot](../../learnings/oracle-the-hook-mapping-is-blind-to-work-that-fires-no-tool-hook.md).
+[the learning on that blind spot](../../../learnings/oracle-the-hook-mapping-is-blind-to-work-that-fires-no-tool-hook.md).
 
 **Route 2, from the record.** `record/events/*PostToolUse*.json` holds one payload with
 `tool_name: Skill` and `tool_input` `{"skill": "writing:unslop", "args": "..."}`.

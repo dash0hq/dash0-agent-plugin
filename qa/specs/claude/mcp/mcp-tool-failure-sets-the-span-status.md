@@ -1,6 +1,7 @@
 ---
 id: mcp-tool-failure-sets-the-span-status
-area: mcp
+area: claude/mcp
+runtime: claude
 status: active
 input: qa/mcp-fixture, via QA_MCP=1 on qa/tools/qa-session.sh
 duration: ~15s

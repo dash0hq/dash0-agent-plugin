@@ -1,6 +1,7 @@
 ---
 id: tool-call-produces-one-span-per-post-tool-use
-area: session
+area: claude/session
+runtime: claude
 status: draft
 input: qa/tools/qa-session.sh, one prompt that forces two different tools
 duration: ~15s

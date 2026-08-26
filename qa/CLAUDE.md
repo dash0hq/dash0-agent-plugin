@@ -15,6 +15,13 @@ the project moves.
 
 One writer per directory, so a hand edit in the wrong place gets overwritten or quietly ignored.
 
+## Two runtimes
+
+Specs target either Claude Code or Codex, and say which in their `runtime:` frontmatter. The two
+have different drivers, different second channels, and different limits on what a run can prove.
+`## Runtimes` in [setup.md](setup.md) is the table; read it before running or writing anything, and
+never carry a result from one runtime over to the other.
+
 ## Findings
 
 Report spec failures that are unaddressed in `findings/`

@@ -1,6 +1,6 @@
 ---
 name: dash0-configure
-description: Set up or finish setting up the Dash0 → Claude Code telemetry integration by writing ~/.claude/dash0-agent-plugin.local.md (or the project-local equivalent). Use when the user wants to configure Dash0, enable telemetry, paste credentials, fix an inactive plugin install, or act on a "dash0: no team configured" message — spans carry no dash0.team.name until the team name is set.
+description: 'Set up or finish setting up the Dash0 → Claude Code telemetry integration by writing ~/.claude/dash0-agent-plugin.local.md (or the project-local equivalent). Use when the user wants to configure Dash0, enable telemetry, paste credentials, fix an inactive plugin install, or act on a "dash0: no team configured" message — spans carry no dash0.team.name until the team name is set.'
 ---
 
 # Configure Dash0

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Bootstrap download contracts (runnable locally and in CI):
 #   - every *-on-event.sh downloads via a private temp and renames into place
+#   - none of them ends a hook with a non-zero exit
+#   - a missing release disturbs nothing and installs nothing
 #   - concurrent invocations against a cold cache all succeed and converge
 #
 # Hooks run concurrently — parallel tool calls each fire their own, and every
@@ -48,6 +50,44 @@ for s in "${SCRIPTS[@]}"; do
 done
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: all ${#SCRIPTS[@]} bootstraps stage downloads in a temp and rename"
+
+echo "== No bootstrap ends a hook with a non-zero exit =="
+# Every one of these paths means "we can't safely run the binary", and none of
+# them is worth interrupting a session for. The commonest is transient: for
+# about a minute after a release bump lands on main, main names a version whose
+# binaries are still building. Claude used to exit 1 there and surface a hook
+# error per event; the other three already exited 0.
+fail=0
+for s in "${SCRIPTS[@]}"; do
+  bad=$(sed 's/#.*//' "$REPO/$s" | grep -nE '^[[:space:]]*exit [1-9]' || true)
+  if [ -n "$bad" ]; then
+    echo "  FAIL $s: non-zero exit before exec:"
+    printf '    %s\n' "$bad"
+    fail=1
+  else
+    echo "  ok $s"
+  fi
+done
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: all ${#SCRIPTS[@]} bootstraps fail open"
+
+echo "== A missing release does not disturb the session, and installs nothing =="
+# Points the Claude bootstrap at a version that will never exist. Exercises the
+# path a real install hits inside the release window.
+missing=$(mktemp -d)
+sed 's/^VERSION="[^"]*"/VERSION="9.9.9"/' "$REPO/claude/claude-on-event.sh" >"$missing/probe.sh"
+data=$(mktemp -d)
+status=0
+CLAUDE_PLUGIN_DATA="$data" bash "$missing/probe.sh" \
+  <<<'{"hook_event_name":"SessionStart","session_id":"contract"}' >/dev/null 2>&1 || status=$?
+if [ "$status" -ne 0 ]; then
+  echo "ERROR: a missing release exited $status — a hook error the user cannot act on" >&2
+  exit 1
+fi
+left=$(find "$data" -type f 2>/dev/null | wc -l | tr -d ' ')
+[ "$left" -eq 0 ] || { echo "ERROR: $left file(s) left behind after a failed download" >&2; exit 1; }
+rm -rf "$missing" "$data"
+echo "PASS: a missing release exits 0 and leaves nothing behind"
 
 echo "== Concurrent cold-cache invocations all succeed =="
 VERSION=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")

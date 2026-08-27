@@ -4,6 +4,23 @@
 
 set -euo pipefail
 
+# Nothing here is worth interrupting a session for. Claude treats a non-zero,
+# non-2 hook exit as an error and shows it, so every path that ends in "we can't
+# safely run the binary" exits 0 with a note on stderr instead — matching what
+# cursor/codex/copilot-on-event.sh already do.
+#
+# The commonest cause is transient: for about a minute after a release bump
+# lands on main, main names a version whose binaries are still building, and
+# every asset 404s. That resolves itself, and an error per hook in the meantime
+# is noise about nothing the user can act on.
+#
+# `set -e` still governs the unanticipated cases; this covers the ones we check
+# for deliberately.
+fail_open() {
+  echo "on-event: $*" >&2
+  exit 0
+}
+
 # Load settings from a config file. Returns 1 if file doesn't exist.
 load_settings() {
   local file="$1"
@@ -115,8 +132,7 @@ if [ ! -x "$BINARY" ]; then
     fetch() { wget -qO "$2" "$1"; }
     fetch_stdout() { wget -qO- "$1"; }
   else
-    echo "on-event: neither curl nor wget found" >&2
-    exit 1
+    fail_open "neither curl nor wget found"
   fi
 
   # Try each asset name this binary has been published under, newest first. The
@@ -135,10 +151,10 @@ if [ ! -x "$BINARY" ]; then
     fi
   done
   if [ -z "$ASSET" ]; then
-    echo "on-event: no release asset for ${OS}-${ARCH} in v${VERSION}" >&2
-    exit 1
+    fail_open "no release asset for ${OS}-${ARCH} in v${VERSION}"
   fi
-  CHECKSUMS=$(fetch_stdout "$CHECKSUMS_URL")
+  CHECKSUMS=$(fetch_stdout "$CHECKSUMS_URL") \
+    || fail_open "could not fetch checksums.txt for v${VERSION}"
 
   # Verify the checksum. A missing entry is fatal, not skipped: the first asset
   # name tried is one that current releases do not publish, so treating "not in
@@ -149,8 +165,7 @@ if [ ! -x "$BINARY" ]; then
   # whether or not it matched.
   EXPECTED=$(printf '%s\n' "$CHECKSUMS" | awk -v want="$ASSET" '$2 == want { print $1 }')
   if [ -z "$EXPECTED" ]; then
-    echo "on-event: ${ASSET} is not listed in checksums.txt for v${VERSION}" >&2
-    exit 1
+    fail_open "${ASSET} is not listed in checksums.txt for v${VERSION} — refusing to run an unverified binary"
   fi
   if command -v sha256sum &>/dev/null; then
     ACTUAL=$(sha256sum "$TMP" | cut -d' ' -f1)
@@ -162,8 +177,7 @@ if [ ! -x "$BINARY" ]; then
     ACTUAL=""
   fi
   if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-    echo "on-event: checksum mismatch (expected $EXPECTED, got $ACTUAL)" >&2
-    exit 1
+    fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
   # Executable before it is visible, so nothing can find $BINARY and fail the

@@ -17,8 +17,7 @@
       "gen_ai.tool.call.id": "call_9pq2ChYkd2XGBYc3HpRZO29b",
       "gen_ai.tool.call.result": "Exit code: 0\nWall time: 0.4 seconds\nOutput:\nSuccess. Updated the following files:\nA hello.txt\n",
       "gen_ai.tool.name": "apply_patch",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3be8-05bd-7fe1-a139-fb244f6c0f04"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -40,8 +39,7 @@
       "gen_ai.tool.call.id": "call_ji8njWEPsfeWE9wGPL5RBT7o",
       "gen_ai.tool.call.result": "      14 hello.txt\n",
       "gen_ai.tool.name": "Bash",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3be8-05bd-7fe1-a139-fb244f6c0f04"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -63,8 +61,7 @@
       "gen_ai.tool.call.id": "call_ljaDC0sXe6Ys52D2uKiWf0KN",
       "gen_ai.tool.call.result": "{\"content\":[{\"text\":\"Echo: dash0-mcp-probe\",\"type\":\"text\"}]}",
       "gen_ai.tool.name": "echo",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3be8-05bd-7fe1-a139-fb244f6c0f04"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -88,10 +85,10 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"`hello.txt` is 14 bytes.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_creation.input_tokens": "int:0",
       "gen_ai.usage.cache_read.input_tokens": "int:29312",
       "gen_ai.usage.input_tokens": "int:34465",
-      "gen_ai.usage.output_tokens": "int:161",
-      "turn_id": "019f3be8-05bd-7fe1-a139-fb244f6c0f04"
+      "gen_ai.usage.output_tokens": "int:161"
     }
   },
   {
@@ -112,8 +109,7 @@
       "gen_ai.tool.call.id": "call_SachtxQDqk197ekz465JAlMB",
       "gen_ai.tool.call.result": "Exit code: 0\nWall time: 0.3 seconds\nOutput:\nSuccess. Updated the following files:\nA foo.txt\n",
       "gen_ai.tool.name": "apply_patch",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf0-d15b-7393-a174-85a31f0194a3"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -135,8 +131,7 @@
       "gen_ai.tool.call.id": "call_GDNv6uqt9M7B99HCssbhKPFG",
       "gen_ai.tool.call.result": "hello\n",
       "gen_ai.tool.name": "Bash",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf0-d15b-7393-a174-85a31f0194a3"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -160,10 +155,10 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Created `foo.txt` and confirmed its contents:\\n\\n```text\\nhello\\n```\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_creation.input_tokens": "int:0",
       "gen_ai.usage.cache_read.input_tokens": "int:29824",
       "gen_ai.usage.input_tokens": "int:35753",
-      "gen_ai.usage.output_tokens": "int:127",
-      "turn_id": "019f3bf0-d15b-7393-a174-85a31f0194a3"
+      "gen_ai.usage.output_tokens": "int:127"
     }
   },
   {
@@ -185,8 +180,7 @@
       "gen_ai.tool.call.id": "call_m0SbSogsP5t5y5bPwnynCDfX",
       "gen_ai.tool.call.result": "{\"agentId\":\"019f3bf3-5f80-7ca3-81a0-298149d46129\",\"agent_id\":\"019f3bf3-5f80-7ca3-81a0-298149d46129\",\"nickname\":\"Hilbert\"}",
       "gen_ai.tool.name": "Agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -208,8 +202,7 @@
       "gen_ai.tool.call.id": "call_V4tjgxWpFoKdPlPkmfjhvP9Q",
       "gen_ai.tool.call.result": "{\"agentId\":\"019f3bf3-605d-7393-ac4f-63f8dcc20260\",\"agent_id\":\"019f3bf3-605d-7393-ac4f-63f8dcc20260\",\"nickname\":\"Pauli\"}",
       "gen_ai.tool.name": "Agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -231,8 +224,7 @@
       "gen_ai.tool.call.id": "call_Mel0SIaH7xQS5Vi3svVVOZuy",
       "gen_ai.tool.call.result": "{\"agentId\":\"019f3bf3-60f7-7db2-8a74-7cf0618742e6\",\"agent_id\":\"019f3bf3-60f7-7db2-8a74-7cf0618742e6\",\"nickname\":\"Bernoulli\"}",
       "gen_ai.tool.name": "Agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -254,8 +246,7 @@
       "gen_ai.tool.call.id": "call_oJ6XYBXFuVLAzqKl9Go55zch",
       "gen_ai.tool.call.result": "Exit code: 0\nWall time: 0.3 seconds\nOutput:\nSuccess. Updated the following files:\nA b.txt\n",
       "gen_ai.tool.name": "apply_patch",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-6091-70f0-8f09-be34a2a11e62"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -277,8 +268,7 @@
       "gen_ai.tool.call.id": "call_ZHdeHWCK0dJGfIMrGdU6MR6b",
       "gen_ai.tool.call.result": "Exit code: 0\nWall time: 0.3 seconds\nOutput:\nSuccess. Updated the following files:\nA c.txt\n",
       "gen_ai.tool.name": "apply_patch",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-6124-7c70-a5ca-e8009c1ebe71"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -300,8 +290,7 @@
       "gen_ai.tool.call.id": "call_wOuIkPJ23ZTUiZAS2qmHTHf4",
       "gen_ai.tool.call.result": "Exit code: 0\nWall time: 0.3 seconds\nOutput:\nSuccess. Updated the following files:\nA a.txt\n",
       "gen_ai.tool.name": "apply_patch",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-5fe4-7a30-b800-02777660b362"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -325,10 +314,10 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Changed path: `c.txt`\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_creation.input_tokens": "int:0",
       "gen_ai.usage.cache_read.input_tokens": "int:18176",
       "gen_ai.usage.input_tokens": "int:22763",
-      "gen_ai.usage.output_tokens": "int:67",
-      "turn_id": "019f3bf3-6124-7c70-a5ca-e8009c1ebe71"
+      "gen_ai.usage.output_tokens": "int:67"
     }
   },
   {
@@ -349,8 +338,7 @@
       "gen_ai.tool.call.id": "call_0FckWvvOwmCy1o1qcY6JrTx4",
       "gen_ai.tool.call.result": "{\"status\":{\"019f3bf3-60f7-7db2-8a74-7cf0618742e6\":{\"completed\":\"Changed path: `c.txt`\"}},\"timed_out\":false}",
       "gen_ai.tool.name": "multi_agent_v1wait_agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -373,8 +361,7 @@
       "gen_ai.tool.call.id": "call_5SaLCF8SLo9dsxVUcyVM3V5p",
       "gen_ai.tool.call.result": "       2 b.txt\n           42  0a                                                        \n\n",
       "gen_ai.tool.name": "Bash",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-6091-70f0-8f09-be34a2a11e62"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -397,8 +384,7 @@
       "gen_ai.tool.call.id": "call_5GfipjMwNiQ9SZ1yGZ1Ub6ux",
       "gen_ai.tool.call.result": "           41  0a                                                        \n\n",
       "gen_ai.tool.name": "Bash",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-5fe4-7a30-b800-02777660b362"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -422,10 +408,10 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Created [b.txt](\u003cCWD\u003e/b.txt) with exactly `B\\\\n`.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_creation.input_tokens": "int:0",
       "gen_ai.usage.cache_read.input_tokens": "int:31360",
       "gen_ai.usage.input_tokens": "int:34337",
-      "gen_ai.usage.output_tokens": "int:210",
-      "turn_id": "019f3bf3-6091-70f0-8f09-be34a2a11e62"
+      "gen_ai.usage.output_tokens": "int:210"
     }
   },
   {
@@ -446,8 +432,7 @@
       "gen_ai.tool.call.id": "call_Sbbe5CFB8XBs8SnBYNLRGFRQ",
       "gen_ai.tool.call.result": "{\"status\":{\"019f3bf3-605d-7393-ac4f-63f8dcc20260\":{\"completed\":\"Created [b.txt](\u003cCWD\u003e/b.txt) with exactly `B\\\\n`.\"}},\"timed_out\":false}",
       "gen_ai.tool.name": "multi_agent_v1wait_agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -471,10 +456,10 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Changed path: [a.txt](\u003cCWD\u003e/a.txt)\\n\\nVerified it contains exactly `A` followed by a newline.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_creation.input_tokens": "int:0",
       "gen_ai.usage.cache_read.input_tokens": "int:31360",
       "gen_ai.usage.input_tokens": "int:34332",
-      "gen_ai.usage.output_tokens": "int:215",
-      "turn_id": "019f3bf3-5fe4-7a30-b800-02777660b362"
+      "gen_ai.usage.output_tokens": "int:215"
     }
   },
   {
@@ -495,8 +480,7 @@
       "gen_ai.tool.call.id": "call_82zwXBpy733CoV9nDOfIhoJg",
       "gen_ai.tool.call.result": "{\"status\":{\"019f3bf3-5f80-7ca3-81a0-298149d46129\":{\"completed\":\"Changed path: [a.txt](\u003cCWD\u003e/a.txt)\\n\\nVerified it contains exactly `A` followed by a newline.\"}},\"timed_out\":false}",
       "gen_ai.tool.name": "multi_agent_v1wait_agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -518,8 +502,7 @@
       "gen_ai.tool.call.id": "call_AQAgqdxVdmWcB9Bg5MHgyOod",
       "gen_ai.tool.call.result": "           41  0a                                                        \n\n",
       "gen_ai.tool.name": "Bash",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -541,8 +524,7 @@
       "gen_ai.tool.call.id": "call_9DB4AEjDZxMP3oeO5lwdzxp3",
       "gen_ai.tool.call.result": "           42  0a                                                        \n\n",
       "gen_ai.tool.name": "Bash",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -564,8 +546,7 @@
       "gen_ai.tool.call.id": "call_I1oGjW15IMHIcDHdDWfMkAXE",
       "gen_ai.tool.call.result": "           43  0a                                                        \n\n",
       "gen_ai.tool.name": "Bash",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -586,8 +567,7 @@
       "gen_ai.tool.call.id": "call_zXE9WsyfqJf8LUQyfMecaMUn",
       "gen_ai.tool.call.result": "{\"previous_status\":{\"completed\":\"Changed path: [a.txt](\u003cCWD\u003e/a.txt)\\n\\nVerified it contains exactly `A` followed by a newline.\"}}",
       "gen_ai.tool.name": "multi_agent_v1close_agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -608,8 +588,7 @@
       "gen_ai.tool.call.id": "call_Xs5B8j2LSTZYkLW39eZmzufL",
       "gen_ai.tool.call.result": "{\"previous_status\":{\"completed\":\"Created [b.txt](\u003cCWD\u003e/b.txt) with exactly `B\\\\n`.\"}}",
       "gen_ai.tool.name": "multi_agent_v1close_agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -630,8 +609,7 @@
       "gen_ai.tool.call.id": "call_JIrBYOCti9ySh1eaZe6kqDxL",
       "gen_ai.tool.call.result": "{\"previous_status\":{\"completed\":\"Changed path: `c.txt`\"}}",
       "gen_ai.tool.name": "multi_agent_v1close_agent",
-      "gen_ai.tool.type": "function",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.tool.type": "function"
     }
   },
   {
@@ -655,10 +633,11 @@
       "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"Done. Three parallel worker subagents created:\\n\\n- [a.txt](\u003cCWD\u003e/a.txt): `A`\\n- [b.txt](\u003cCWD\u003e/b.txt): `B`\\n- [c.txt](\u003cCWD\u003e/c.txt): `C`\\n\\nVerified bytes: `41 0a`, `42 0a`, and `43 0a`, so each file contains the requested letter followed by a newline.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
       "gen_ai.provider.name": "openai",
       "gen_ai.request.model": "gpt-5.5",
+      "gen_ai.usage.cache_creation.input_tokens": "int:0",
       "gen_ai.usage.cache_read.input_tokens": "int:88576",
       "gen_ai.usage.input_tokens": "int:117555",
       "gen_ai.usage.output_tokens": "int:1500",
-      "turn_id": "019f3bf3-2a8a-7531-ab40-b598c5a910c5"
+      "gen_ai.usage.reasoning.output_tokens": "int:263"
     }
   }
 ]

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
+	"github.com/dash0hq/dash0-agent-plugin/internal/harness"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
 	"github.com/dash0hq/dash0-agent-plugin/internal/source/claude"
@@ -233,7 +234,7 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		}
 	case "SubagentStop":
 		markedConsumed := false
-		if agentID != "" {
+		if agentID != "" && agentStopEndsTheAgent(cfg.HarnessName) {
 			if err := otlp.MarkAgentTraceContextConsumed(sessionDir, agentID); err != nil {
 				fmt.Fprintf(os.Stderr, "on-event: marking agent trace context consumed: %v\n", err)
 			} else {
@@ -245,6 +246,16 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		}
 		if markedConsumed {
 			otlp.ClearAgentTraceContext(sessionDir, agentID)
+		} else if agentID != "" {
+			// The agent lives on (Codex), so its snapshot has to move with it.
+			// sendLLMTrace starts an invoke_agent span at ctx.StartTime, which
+			// SubagentStart set once, so leaving it alone gave every task of a
+			// reused agent the same start instant: measured on
+			// qa/runs/spec-codex-agent-reuse, two spans both starting at 0.00s
+			// with the second running 16.9s for a task that took 8, fully
+			// overlapping the first and swallowing the idle gap between them.
+			// This stop is where the next task begins.
+			advanceAgentTraceContext(sessionDir, agentID, now)
 		}
 	case "SessionEnd":
 		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil && ctx.TraceID != "" {
@@ -369,6 +380,49 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 
 	span := otlp.NewToolSpan(traceID, spanID, parentSpanID, startTime, ts, event, failed, cfg)
 	return otlp.SendTrace(span, event, cfg)
+}
+
+// advanceAgentTraceContext moves a surviving agent's snapshot start time to now,
+// so the next task that agent runs is timed from this stop rather than from the
+// SubagentStart that created it. Best-effort: on any failure the snapshot keeps
+// its old start, which is the behaviour this replaces.
+func advanceAgentTraceContext(dataDir, agentID string, now time.Time) {
+	snap, err := otlp.LoadAgentTraceContext(dataDir, agentID)
+	if err != nil || snap == nil {
+		return
+	}
+	snap.StartTime = now.Format(time.RFC3339Nano)
+	if err := otlp.SaveAgentTraceContext(*snap, dataDir, agentID); err != nil {
+		fmt.Fprintf(os.Stderr, "on-event: advancing agent trace context: %v\n", err)
+	}
+}
+
+// agentStopEndsTheAgent reports whether a SubagentStop means the agent is done
+// for good, which decides whether its trace-context snapshot is consumed and
+// deleted there.
+//
+// It is true everywhere except Codex. A Claude sub-agent stops once, and after
+// that anything still arriving for it is stale: the snapshot goes, the consumed
+// marker stays, and a late tool hook fails closed rather than falling back to
+// whichever session turn is current and inventing a parent. That marker is what
+// qa/specs/claude/session/sub-agent-tool-call-produces-a-span.md guards.
+//
+// Codex reuses an agent. SubagentStop marks the end of a TASK — the same
+// agent_id then spawns, runs tools and stops again, with no second
+// SubagentStart to re-arm on (measured on qa/runs/probe-codex-nested-anchored
+// and probe-codex-two-subagents: one start, two stops, real work in between).
+// Consuming there dropped every span of that later work. Keeping the snapshot
+// keeps the agent's own anchor available as the parent, which is still the right
+// one.
+//
+// Nothing prunes it, and an earlier version of this comment claimed SessionEnd
+// did. Codex exposes ten hook events and SessionEnd is not among them
+// (internal/source/codex/trust.go), so a Codex session's scratch directory
+// outlives the session either way — the agent snapshots are a few hundred bytes
+// each on top of the events log already there, not a new leak, but they are not
+// bounded by anything today.
+func agentStopEndsTheAgent(harnessName string) bool {
+	return harnessName != harness.Codex.Name
 }
 
 // Skill invocation routes, reported as dash0.gen_ai.tool.skill.source.

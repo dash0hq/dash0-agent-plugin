@@ -1,9 +1,11 @@
 package codex
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +68,35 @@ func TestReadTurnUsageScopesToLastTurn(t *testing.T) {
 	assert.Equal(t, int64(550), u.InputTokens)
 	assert.Equal(t, int64(150), u.CacheReadInputTokens)
 	assert.Equal(t, int64(15), u.OutputTokens)
+}
+
+// Codex 0.149.1 writes task_started at the head of a turn and no user_message
+// at all, so a rollout from it has no user_message to reset on. Keying only on
+// user_message meant a resumed session accumulated every turn: measured on
+// 2026-08-25 against codex-cli 0.149.1, turn 2's chat span reported 58594 input
+// tokens for a turn whose own calls totalled 29445, having carried turn 1's
+// 29149 a second time. The numbers below are that session's, halved in size but
+// the same shape.
+func TestReadTurnUsageScopesToLastTaskStartedTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := "" +
+		`{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14513,"cached_input_tokens":9984,"output_tokens":97}}}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14636,"cached_input_tokens":14080,"output_tokens":5}}}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"task_complete"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14665,"cached_input_tokens":14080,"output_tokens":89}}}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14780,"cached_input_tokens":14080,"output_tokens":5}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	u, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	// Turn 2 alone: 14665+14780, not the session's 58594.
+	assert.Equal(t, int64(29445), u.InputTokens)
+	assert.Equal(t, int64(28160), u.CacheReadInputTokens)
+	assert.Equal(t, int64(94), u.OutputTokens)
 }
 
 // Tool activity within a turn is recorded as response_item (function_call /
@@ -143,6 +174,99 @@ func TestReadTurnUsageSkipsCompressed(t *testing.T) {
 func TestReadTurnUsageMissingFileErrors(t *testing.T) {
 	_, err := ReadTurnUsage(filepath.Join("testdata", "rollouts", "no-such-rollout.jsonl"))
 	assert.Error(t, err)
+}
+
+// A rollout Codex is still writing ends mid-record, and both readers meet that
+// on purpose: waitForSpawnedAgentID reads during the flush. A decoder cannot
+// advance past a syntax error, and More() answers from the buffered bytes rather
+// than the decoder's stuck state, so a reader that skipped every error spun on a
+// core until the hook timed out. Both cases below hung before forEachRecord.
+//
+// The deadline is what makes this a test rather than a hang: a regression fails
+// the run instead of stalling it.
+func TestRolloutReadersSurviveATruncatedTail(t *testing.T) {
+	complete := `{"type":"event_msg","payload":{"type":"user_message","message":"go"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"item_completed","item":` +
+		`{"type":"SubAgentActivity","id":"call_1","kind":"started","agent_thread_id":"agent-7"}}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":` +
+		`{"input_tokens":300,"cached_input_tokens":100,"output_tokens":10}}}}` + "\n"
+	// A record cut off mid-write, which is what a concurrent flush leaves behind.
+	truncated := `{"type":"event_msg","payload":{"type":"token_c`
+
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(complete+truncated), 0o644))
+
+	withinDeadline(t, "ReadSpawnedAgentID", func() {
+		id, err := ReadSpawnedAgentID(path, "call_1")
+		require.NoError(t, err)
+		assert.Equal(t, "agent-7", id, "the mapping before the truncation must still be found")
+	})
+
+	// The case the spawn poll actually races: the mapping is not written yet, so
+	// the reader walks all the way into the truncated tail. Returning "" is what
+	// lets waitForSpawnedAgentID sleep and try again within its budget.
+	withinDeadline(t, "ReadSpawnedAgentID (no match yet)", func() {
+		id, err := ReadSpawnedAgentID(path, "call_not_yet_recorded")
+		require.NoError(t, err)
+		assert.Empty(t, id)
+	})
+
+	withinDeadline(t, "ReadRollout", func() {
+		u, err := ReadTurnUsage(path)
+		require.NoError(t, err)
+		require.NotNil(t, u, "usage recorded before the truncation must survive")
+		assert.Equal(t, int64(300), u.InputTokens)
+	})
+}
+
+// The other half of the rule: a type mismatch is recoverable, because the
+// decoder consumed the value. Ending the read on one would drop every record
+// after a single odd field, so it must skip exactly that record and continue.
+//
+// The mismatch has to be on a field rolloutLine actually declares. An unknown
+// field of any type is ignored by the decoder, so a record built around one
+// exercises nothing and passes whatever the error rule is.
+func TestReadRolloutSkipsOneRecordOnATypeMismatch(t *testing.T) {
+	badRecord := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":` +
+		`{"input_tokens":"lots","cached_input_tokens":7,"output_tokens":9}}}}`
+
+	// The premise, checked rather than assumed: this is a type error and not a
+	// syntax error, so the decoder is still usable afterwards.
+	var typeErr *json.UnmarshalTypeError
+	require.ErrorAs(t, json.Unmarshal([]byte(badRecord), &rolloutLine{}), &typeErr)
+
+	content := `{"type":"event_msg","payload":{"type":"user_message","message":"go"}}` + "\n" +
+		badRecord + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":` +
+		`{"input_tokens":300,"cached_input_tokens":100,"output_tokens":10}}}}` + "\n"
+
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	u, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, u, "the record after the bad one must still be read")
+	assert.Equal(t, int64(300), u.InputTokens)
+	// Only that one record is lost: the bad one's other fields decoded fine, and
+	// counting them would mean the reader kept a half-decoded record.
+	assert.Equal(t, int64(100), u.CacheReadInputTokens)
+	assert.Equal(t, int64(10), u.OutputTokens)
+}
+
+// withinDeadline fails the test if read does not return in time, instead of
+// letting an unbounded loop hold the run open.
+func withinDeadline(t *testing.T, name string, read func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		read()
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s did not return: a truncated final record must end the read, not spin", name)
+	}
 }
 
 // rate_limits rides on the same token_count records as usage, but as a SIBLING

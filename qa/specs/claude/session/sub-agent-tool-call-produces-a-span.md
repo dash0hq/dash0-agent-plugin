@@ -1,6 +1,7 @@
 ---
 id: sub-agent-tool-call-produces-a-span
-area: session
+area: claude/session
+runtime: claude
 status: draft
 input: qa/tools/qa-session.sh, one prompt that delegates several tool calls to a sub-agent
 duration: ~25s

@@ -317,6 +317,12 @@ var attrSkipKeys = map[string]bool{
 	"session_crons":    true,
 	"background_tasks": true,
 
+	// Codex turn bookkeeping. turn_id is Codex's prompt_id: it groups the spans
+	// of one turn, which the trace already does through parenting. Codex puts it
+	// on nearly every hook payload, so it reached every chat and execute_tool
+	// span until it was denied here.
+	"turn_id": true,
+
 	// InstructionsLoaded bookkeeping. That event maps to no span, so these three
 	// did not reach Dash0; denying them now means mapping the event later cannot
 	// leak them by accident.

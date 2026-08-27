@@ -5,8 +5,10 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -18,10 +20,11 @@ import (
 // here. Codex reports tokens the same way (input_tokens includes cached), so the
 // mapping is a straight copy.
 type Usage struct {
-	InputTokens           int64 // total prompt tokens, INCLUDING the cached portion
-	CacheReadInputTokens  int64 // prompt tokens served from cache (a subset of InputTokens)
-	OutputTokens          int64 // completion tokens (includes reasoning tokens)
-	ReasoningOutputTokens int64 // reasoning tokens (a subset of OutputTokens); parsed for future use, not yet emitted
+	InputTokens              int64 // total prompt tokens, INCLUDING the cached portion
+	CacheReadInputTokens     int64 // prompt tokens served from cache (a subset of InputTokens)
+	CacheCreationInputTokens int64 // prompt tokens written to the cache (also a subset of InputTokens)
+	OutputTokens             int64 // completion tokens (includes reasoning tokens)
+	ReasoningOutputTokens    int64 // reasoning tokens (a subset of OutputTokens, not an addition)
 }
 
 // Limits holds the account-level allowance state Codex reports alongside token
@@ -73,10 +76,224 @@ func (l *Limits) BillingMode() string {
 	return BillingSubscription
 }
 
+// ReadSpawnedAgentID returns the thread id of the agent a spawn call created,
+// as Codex itself recorded it, or "" when the rollout does not (yet) say.
+//
+// Codex writes an item_completed event carrying a SubAgentActivity item at the
+// moment a spawn call starts an agent:
+//
+//	{"type":"event_msg","payload":{"type":"item_completed", ...,
+//	  "item":{"type":"SubAgentActivity","id":"<spawn call id>",
+//	          "kind":"started","agent_thread_id":"<the new agent>"}}}
+//
+// The item's id is the spawn call's id, which arrives on the hook payload as
+// tool_use_id, so this is an explicit mapping rather than an inference. It is
+// written into the rollout of the thread that MADE the call — the main session's
+// for a top-level spawn, the parent agent's for a nested one — which is exactly
+// the file the hook payload's transcript_path points at, at any depth.
+//
+// Only "started" is read. Codex also writes "interacted" for later exchanges with
+// an agent already running, under a different call id; treating one as a spawn
+// would anchor a second span onto the same agent.
+func ReadSpawnedAgentID(rolloutPath, spawnCallID string) (string, error) {
+	if rolloutPath == "" || spawnCallID == "" || strings.HasSuffix(rolloutPath, ".zst") {
+		return "", nil
+	}
+	f, err := os.Open(rolloutPath)
+	if err != nil {
+		return "", fmt.Errorf("opening rollout: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var agentID string
+	forEachRecord(f, func(line subAgentActivityLine) bool {
+		item := line.Payload.Item
+		if line.Type != "event_msg" || item.Type != "SubAgentActivity" {
+			return true
+		}
+		if item.Kind == "started" && item.ID == spawnCallID {
+			agentID = item.AgentThreadID
+			return false
+		}
+		return true
+	})
+	return agentID, nil
+}
+
+// forEachRecord decodes a rollout's JSON records in order and passes each to fn,
+// stopping early when fn returns false.
+//
+// The error handling is the load-bearing part, and it is the rule
+// transcript.forEachEntry already follows for the same reason. A decoder recovers
+// from a type mismatch: it consumed the value, so the stream is intact and the
+// record can be skipped. It cannot recover from a syntax error. It does not
+// advance, and More() answers from the buffered bytes rather than the decoder's
+// stuck state, so it stays true while every Decode returns the same error
+// immediately. A loop that treats the two alike spins on a core until the hook
+// times out.
+//
+// A half-written final record is the normal case here rather than corruption:
+// these hooks read a rollout Codex is still appending to, and
+// waitForSpawnedAgentID reads it during the flush on purpose. So a type error
+// skips one record and a syntax error ends the read, which is the most a decoder
+// can honestly do.
+func forEachRecord[T any](f *os.File, fn func(record T) bool) {
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var record T
+		if err := dec.Decode(&record); err != nil {
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &typeErr) {
+				continue
+			}
+			return
+		}
+		if !fn(record) {
+			return
+		}
+	}
+}
+
+// subAgentActivityLine is the subset of a rollout record that carries the
+// spawn-call-to-agent mapping.
+type subAgentActivityLine struct {
+	Type    string `json:"type"`
+	Payload struct {
+		Type string `json:"type"`
+		Item struct {
+			Type          string `json:"type"`
+			ID            string `json:"id"`
+			Kind          string `json:"kind"`
+			AgentThreadID string `json:"agent_thread_id"`
+		} `json:"item"`
+	} `json:"payload"`
+}
+
 // Rollout is everything one pass over a rollout file yields.
 type Rollout struct {
-	Usage  *Usage  // the most recent turn's token counts; nil when the file has none
-	Limits *Limits // account allowance state; nil when the CLI predates the field
+	Usage  *Usage    // the most recent turn's token counts; nil when the file has none
+	Limits *Limits   // account allowance state; nil when the CLI predates the field
+	Skill  *SkillUse // the skill the most recent turn loaded; nil when it loaded none
+}
+
+// SkillUse is the skill a turn used, and who chose it.
+//
+// Codex does not call a skill as a tool the way Claude Code does. It loads one
+// by INJECTING it into the conversation — "progressive disclosure": the model
+// sees every skill's name and description, and the full SKILL.md arrives only
+// once it picks one. So there is no PostToolUse to enrich, and the only record
+// that a skill was used at all is in the rollout.
+type SkillUse struct {
+	Name string
+	// Source is skillSourceCommand when the person named the skill themselves,
+	// with Codex's $name mention, and skillSourceModel when the model chose it
+	// from the catalogue. The same two routes Claude Code has, reached
+	// differently: there the person types a slash command, here a $ mention.
+	Source string
+}
+
+// Codex's own markup for a loaded skill, injected as a user message:
+//
+//	<skill>
+//	<name>qa-echo</name>
+//	<path>/…/.agents/skills/qa-echo/SKILL.md</path>
+//
+// Not to be confused with the <skills_instructions> block, which is a developer
+// message listing every skill AVAILABLE. That one says nothing about what was
+// used, and treating it as a signal would attribute a skill to every turn.
+var skillNamePattern = regexp.MustCompile(`(?s)^\s*<skill>.*?<name>([^<]+)</name>`)
+
+// Source values, matching the pipeline's own constants. Kept as literals rather
+// than imported because internal/pipeline imports this package.
+const (
+	skillSourceCommand = "command"
+	skillSourceModel   = "model"
+)
+
+// codexInjectedTags open the user messages Codex writes itself. Only these are
+// held out of the person's words when looking for a $mention.
+//
+// An earlier version held out every message starting with "<", on the reasoning
+// that Codex's injections are XML-ish and a person's prompt is not. That loses a
+// real prompt that happens to begin with an angle bracket — asking about a
+// generic type, quoting HTML — and reports `model` for a skill the person named
+// themselves. A short list of known tags is narrower and fails the safer way:
+// an unrecognised injection is scanned for a mention it almost never contains.
+var codexInjectedTags = []string{
+	"<skill>",
+	"<skills_instructions>",
+	"<recommended_plugins>",
+	"<task-notification>",
+}
+
+func isCodexInjection(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	for _, tag := range codexInjectedTags {
+		if strings.HasPrefix(trimmed, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// messageText joins a message's text parts. Content is raw JSON because its
+// shape varies, so a shape this does not recognise yields no text rather than
+// failing the line it arrived on.
+func messageText(content json.RawMessage) string {
+	if len(content) == 0 {
+		return ""
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(content, &parts); err == nil {
+		var out strings.Builder
+		for _, part := range parts {
+			out.WriteString(part.Text)
+		}
+		return out.String()
+	}
+	// Some records carry the body as a plain string.
+	var plain string
+	if err := json.Unmarshal(content, &plain); err == nil {
+		return plain
+	}
+	return ""
+}
+
+// mentions reports whether the person's words name this skill with Codex's $
+// mention. The boundary check matters: a plain Contains of "$"+name also matches
+// a longer name, so a prompt naming $qa-echo-v2 would be read as choosing
+// qa-echo when that is the skill the turn happened to load.
+func mentions(prompt, skill string) bool {
+	needle := "$" + skill
+	for i := 0; ; {
+		at := strings.Index(prompt[i:], needle)
+		if at < 0 {
+			return false
+		}
+		end := i + at + len(needle)
+		if end == len(prompt) || !isSkillNameByte(prompt[end]) {
+			return true
+		}
+		i = end
+	}
+}
+
+// isSkillNameByte reports whether a byte can continue a skill name, which is
+// what decides where a $mention ends.
+func isSkillNameByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
+		return true
+	// A colon carries a plugin-qualified name such as writing:unslop. A period
+	// and a slash do not: they end far more sentences and paths than they
+	// continue skill names, and treating them as part of the name loses a
+	// mention written as "$qa-echo."
+	case b == '-', b == '_', b == ':':
+		return true
+	}
+	return false
 }
 
 // rolloutLine is the subset of a Codex rollout JSONL record we read. A rollout
@@ -94,6 +311,19 @@ type rolloutLine struct {
 			LastTokenUsage codexTokenUsage `json:"last_token_usage"`
 		} `json:"info"`
 		RateLimits *codexRateLimits `json:"rate_limits"`
+		// A response_item/message carries the conversation itself, which is
+		// where a loaded skill shows up. Codex injects several user messages of
+		// its own alongside the person's — <recommended_plugins>, <skill> — so
+		// the role alone does not say who wrote it.
+		//
+		// Content stays raw on purpose. Decoding it as a shape here would couple
+		// message parsing to usage parsing: a record whose content is a string
+		// rather than an array of parts fails to decode, the loop skips the whole
+		// line, and that line's info.last_token_usage and rate_limits are lost in
+		// silence. Only the message branch looks inside it, and a failure there
+		// costs a skill attribute rather than a turn's tokens.
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
 	} `json:"payload"`
 }
 
@@ -138,8 +368,15 @@ func newWindow(w *codexWindow) *Window {
 // (verified against Codex 0.142.5: total_tokens == input_tokens + output_tokens,
 // and cached_input_tokens <= input_tokens).
 type codexTokenUsage struct {
-	InputTokens           int64 `json:"input_tokens"`
+	InputTokens int64 `json:"input_tokens"`
+	// The two cache halves. cached_input_tokens is the part served FROM cache;
+	// cache_write_input_tokens is the part written TO it. Both are subsets of
+	// input_tokens, so neither is added to it. The write half went unparsed
+	// until 2026-08-26, which is why no Codex span could carry
+	// gen_ai.usage.cache_creation.input_tokens: the field was on the wire the
+	// whole time, and every value observed so far happens to be zero.
 	CachedInputTokens     int64 `json:"cached_input_tokens"`
+	CacheWriteInputTokens int64 `json:"cache_write_input_tokens"`
 	OutputTokens          int64 `json:"output_tokens"`
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
 }
@@ -186,26 +423,46 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	dec := json.NewDecoder(f)
-
 	var turn Usage
 	var hasUsage bool
 	var limits *Limits
-	for dec.More() {
-		var line rolloutLine
-		if err := dec.Decode(&line); err != nil {
-			continue // skip malformed lines
+	var turnSkill string
+	var turnPrompt strings.Builder
+	forEachRecord(f, func(line rolloutLine) bool {
+		// The conversation, for the skill a turn loaded and who asked for it.
+		if line.Type == "response_item" && line.Payload.Type == "message" && line.Payload.Role == "user" {
+			body := messageText(line.Payload.Content)
+			if match := skillNamePattern.FindStringSubmatch(body); match != nil {
+				// Last one wins. A turn that loads two skills can only be
+				// labelled with one, and the later choice is the more recent.
+				turnSkill = match[1]
+			} else if !isCodexInjection(body) {
+				// Only the person's words can say they asked for a skill by
+				// name, so Codex's own injected user messages are held out.
+				turnPrompt.WriteString(body)
+			}
+			return true
 		}
+
 		if line.Type != "event_msg" {
-			continue
+			return true
 		}
 		switch line.Payload.Type {
-		case "user_message":
+		case "user_message", "task_started":
 			// New turn — discard usage accumulated for the previous turn so only
 			// the most recent turn's counts survive. Limits deliberately survive:
 			// they describe the account, not the turn.
+			//
+			// Two event names because Codex changed which one it writes.
+			// 0.142.5 wrote user_message, 0.149.1 writes
+			// task_started and no user_message.
+			//
+			// Both are safe to reset on: each is written once, before its own
+			// turn's token_count events.
 			turn = Usage{}
 			hasUsage = false
+			turnSkill = ""
+			turnPrompt.Reset()
 		case "token_count":
 			u := line.Payload.Info.LastTokenUsage
 			// Emit Codex's counts as-is. input_tokens is the total prompt count
@@ -215,6 +472,7 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 			// the discount and under-price the turn.
 			turn.InputTokens += u.InputTokens
 			turn.CacheReadInputTokens += u.CachedInputTokens
+			turn.CacheCreationInputTokens += u.CacheWriteInputTokens
 			turn.OutputTokens += u.OutputTokens
 			turn.ReasoningOutputTokens += u.ReasoningOutputTokens
 			hasUsage = true
@@ -236,11 +494,21 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 				limits = &l
 			}
 		}
-	}
+		return true
+	})
 
 	out := &Rollout{Limits: limits}
 	if hasUsage {
 		out.Usage = &turn
+	}
+	if turnSkill != "" {
+		// The person asked for it if their own words carry Codex's $mention;
+		// otherwise the model picked it out of the catalogue itself.
+		source := skillSourceModel
+		if mentions(turnPrompt.String(), turnSkill) {
+			source = skillSourceCommand
+		}
+		out.Skill = &SkillUse{Name: turnSkill, Source: source}
 	}
 	return out, nil
 }

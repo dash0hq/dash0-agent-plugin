@@ -141,6 +141,11 @@ func (u *usageData) effective() usageData {
 // decoding it.
 type contentType struct {
 	Type string `json:"type"`
+	// Text carries the body of a text block. hasVisibleText needs it because the
+	// block type alone does not say whether the person saw anything: an empty or
+	// whitespace-only text block is a response with no visible output, which is
+	// the case the continuation nudge exists for.
+	Text string `json:"text"`
 }
 
 // ReadTurnUsage reads the transcript file and returns aggregated token usage
@@ -246,6 +251,28 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	return &usage, nil
 }
 
+// hasVisibleText reports whether an assistant message carried anything the
+// person would see. A `text` block is visible; `thinking` and `tool_use` are
+// not. Streaming writes one entry per block, so the entry this is asked about is
+// the last block of that call, which is the one Claude Code judges.
+func hasVisibleText(content json.RawMessage) bool {
+	if len(content) == 0 {
+		return false
+	}
+	var blocks []contentType
+	if err := json.Unmarshal(content, &blocks); err != nil {
+		// A string body is visible text by definition; any other shape is
+		// unknown, and calling it visible keeps the old behaviour of not waiting.
+		return true
+	}
+	for _, block := range blocks {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // terminalStopReasons are the stop_reason values that mark an assistant message
 // as the last one of its turn. "tool_use" is excluded: it is emitted mid-turn,
 // before the model sees the tool result and continues.
@@ -267,23 +294,47 @@ var terminalStopReasons = map[string]bool{
 func TurnComplete(transcriptPath string) (bool, error) {
 	var lastReason string
 	var sawAssistant bool
+	var continuationPending bool
+	var lastAssistantWasVisible bool
 	err := forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
 		if isRealUserMessage(entry) {
 			// New turn — only the current turn's terminal state matters.
 			lastReason = ""
 			sawAssistant = false
+			continuationPending = false
+			lastAssistantWasVisible = false
+			return true
+		}
+		// A meta user entry after an assistant entry that produced no visible
+		// output is Claude Code prompting itself to carry on. Another API call
+		// follows, so the turn is not written out yet even though the assistant
+		// entry above says end_turn — and taking end_turn at face value here
+		// dropped that call's usage entirely, because Stop had already fired by
+		// the time it landed.
+		//
+		// The visible-output test is what keeps this narrow. Claude Code injects
+		// meta entries for other reasons too (hook output, a skill-already-loaded
+		// relay), and treating any of them as a pending continuation made every
+		// transcript that happened to end on one wait out the whole budget for
+		// nothing. Those follow an assistant entry that did produce text; this
+		// one follows an entry whose only block was `thinking`, measured on
+		// qa/runs/spec-subagent.
+		if entry.Type == "user" && entry.IsMeta {
+			continuationPending = sawAssistant && !lastAssistantWasVisible
 			return true
 		}
 		if entry.Type == "assistant" && entry.Message != nil {
 			sawAssistant = true
 			lastReason = entry.Message.StopReason
+			continuationPending = false
+			lastAssistantWasVisible = hasVisibleText(entry.Message.Content)
 		}
 		return true
 	})
 	if err != nil {
 		return false, err
 	}
-	if !sawAssistant {
+	if !sawAssistant || continuationPending {
 		return false, nil
 	}
 	return terminalStopReasons[lastReason], nil

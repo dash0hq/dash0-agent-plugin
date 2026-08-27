@@ -1,6 +1,7 @@
 ---
 id: sub-agent-usage-is-counted-once
-area: session
+area: claude/session
+runtime: claude
 status: draft
 input: qa/tools/qa-session.sh, one prompt that delegates to a sub-agent
 duration: ~25s

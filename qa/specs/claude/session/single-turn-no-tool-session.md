@@ -1,6 +1,7 @@
 ---
 id: single-turn-no-tool-session
-area: session
+area: claude/session
+runtime: claude
 status: draft
 input: qa/tools/qa-session.sh, one prompt that needs no tool
 duration: ~10s

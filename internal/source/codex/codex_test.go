@@ -165,6 +165,315 @@ func TestNormalizeMarksCompressedSubagentRollout(t *testing.T) {
 	assert.Equal(t, true, out["dash0.codex.rollout.compressed"])
 }
 
+// Codex namespaces the spawn tool with no separator and has changed the prefix:
+// 0.142.5 sent bare "spawn_agent", 0.149.1 sends "collaborationspawn_agent".
+// Both must be anchored, because the anchor is what gives the sub-agent's spans
+// a parent that exists. Measured on qa/runs/probe-codex-subagent, 2026-08-25:
+// with the 0.149.1 name unmatched, the invoke_agent span and the sub-agent's
+// Bash span both pointed at a span id nothing had emitted.
+func TestNormalizeAnchorsSpawnAgentUnderAnyPrefix(t *testing.T) {
+	for _, toolName := range []string{"spawn_agent", "collaborationspawn_agent"} {
+		t.Run(toolName, func(t *testing.T) {
+			dir := t.TempDir()
+			out := Normalize(map[string]any{
+				"hook_event_name": "PostToolUse",
+				"session_id":      "s1",
+				"tool_name":       toolName,
+				"tool_use_id":     "call-1",
+				"tool_response":   `{"agent_id":"01a03a2a-e017-7240-9a94-2a2bca352eaf"}`,
+			}, dir, time.Now().UTC())
+
+			require.NotNil(t, out)
+			assert.Equal(t, "Agent", out["tool_name"],
+				"the spawn call must be renamed so the pipeline treats it as the agent's anchor")
+			assert.Contains(t, out["tool_response"], `"agentId":"01a03a2a-e017-7240-9a94-2a2bca352eaf"`,
+				"the camelCase key is what the pipeline's agent-id extractor reads")
+		})
+	}
+}
+
+// writeSpawnRollout puts a rollout carrying SubAgentActivity records on disk.
+func writeSpawnRollout(t *testing.T, records ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"session_meta","payload":{"id":"thread-1"}}` + "\n"
+	for _, r := range records {
+		content += r + "\n"
+	}
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
+}
+
+func subAgentActivity(kind, callID, agentThreadID string) string {
+	return `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity",` +
+		`"id":"` + callID + `","kind":"` + kind + `","agent_thread_id":"` + agentThreadID + `"}}}`
+}
+
+// Codex 0.149.1's spawn response carries only task_name, so the agent id has to
+// come from the SubAgentActivity record Codex writes into the calling thread's
+// rollout. Two spawns are present to prove the lookup keys on the call id rather
+// than taking the first or the last record: on the reference run both sub-agents
+// were even given the same task name, so a name-based join would have been
+// ambiguous where this is not.
+func TestNormalizeAnchorsSpawnFromTheRolloutMapping(t *testing.T) {
+	path := writeSpawnRollout(t,
+		subAgentActivity("started", "call-first", "agent-first"),
+		subAgentActivity("started", "call-second", "agent-second"),
+	)
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "s1",
+		"tool_name":       "collaborationspawn_agent",
+		"tool_use_id":     "call-second",
+		"transcript_path": path,
+		"tool_response":   `{"task_name":"/root/run_echo"}`,
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "Agent", out["tool_name"])
+	assert.Contains(t, out["tool_response"], `"agentId":"agent-second"`)
+}
+
+// An agent_id in the response still wins, so a 0.142.5 payload needs no rollout
+// and pays no wait.
+func TestNormalizeAnchorPrefersTheResponseAgentID(t *testing.T) {
+	path := writeSpawnRollout(t, subAgentActivity("started", "call-1", "agent-from-rollout"))
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "s1",
+		"tool_name":       "spawn_agent",
+		"tool_use_id":     "call-1",
+		"transcript_path": path,
+		"tool_response":   `{"agent_id":"agent-from-response"}`,
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Contains(t, out["tool_response"], `"agentId":"agent-from-response"`)
+}
+
+// "interacted" is written when the model talks to an agent that is already
+// running, under its own call id. Anchoring on it would give one agent a second
+// anchor span and re-parent its work.
+func TestNormalizeIgnoresInteractedActivity(t *testing.T) {
+	path := writeSpawnRollout(t, subAgentActivity("interacted", "call-1", "agent-1"))
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "s1",
+		"tool_name":       "collaborationspawn_agent",
+		"tool_use_id":     "call-1",
+		"transcript_path": path,
+		"tool_response":   `{"task_name":"/root/x"}`,
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "collaborationspawn_agent", out["tool_name"],
+		"no anchor, so the call must not be renamed")
+}
+
+// A tool whose name merely contains "agent" is not the spawn call and must be
+// left alone, or its span is renamed and the trace grows a second anchor.
+func TestNormalizeLeavesOtherAgentToolsAlone(t *testing.T) {
+	dir := t.TempDir()
+	out := Normalize(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"session_id":      "s1",
+		"tool_name":       "collaborationwait_agent",
+		"tool_use_id":     "call-2",
+		"tool_response":   `{"agent_id":"01a03a2a-e017-7240-9a94-2a2bca352eaf"}`,
+	}, dir, time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "collaborationwait_agent", out["tool_name"])
+}
+
+// Codex reports five usage figures and only three reached a span: the cache
+// WRITE half was never parsed, and reasoning tokens were parsed and dropped.
+// Measured 2026-08-26 across 115 real token_count events, 1382 reasoning tokens
+// reached no span at all. Both are subsets of a figure already emitted, so cost
+// was unaffected — what was missing was the breakdown.
+func TestNormalizeEmitsBothCacheHalvesAndReasoning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{` +
+		`"input_tokens":14525,"cached_input_tokens":9984,"cache_write_input_tokens":4096,` +
+		`"output_tokens":108,"reasoning_output_tokens":17}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, int64(14525), out["gen_ai.usage.input_tokens"])
+	assert.Equal(t, int64(108), out["gen_ai.usage.output_tokens"])
+	assert.Equal(t, int64(9984), out["gen_ai.usage.cache_read.input_tokens"])
+	assert.Equal(t, int64(4096), out["gen_ai.usage.cache_creation.input_tokens"],
+		"the cache write half is on the wire and must reach the span")
+	assert.Equal(t, int64(17), out["gen_ai.usage.reasoning.output_tokens"])
+}
+
+// Zero is a measurement for the cache halves and must be emitted: dropping the
+// key makes "this turn cached nothing" indistinguishable from "this runtime does
+// not report caching". Reasoning is the other way round — absence means the turn
+// did no thinking, which is how Claude and Copilot already report it.
+func TestNormalizeKeepsZeroCacheButOmitsZeroReasoning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{` +
+		`"input_tokens":100,"cached_input_tokens":0,"cache_write_input_tokens":0,` +
+		`"output_tokens":5,"reasoning_output_tokens":0}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, int64(0), out["gen_ai.usage.cache_read.input_tokens"])
+	assert.Equal(t, int64(0), out["gen_ai.usage.cache_creation.input_tokens"])
+	_, hasReasoning := out["gen_ai.usage.reasoning.output_tokens"]
+	assert.False(t, hasReasoning, "a turn that did no thinking carries no reasoning key")
+}
+
+// userMessage renders the rollout's shape for a message in the conversation.
+func userMessage(role, text string) string {
+	body, _ := json.Marshal(text)
+	return `{"type":"response_item","payload":{"type":"message","role":"` + role +
+		`","content":[{"type":"input_text","text":` + string(body) + `}]}}`
+}
+
+// skillBlock is what Codex injects when a skill is loaded, verbatim in shape.
+func skillBlock(name string) string {
+	return userMessage("user", "<skill>\n<name>"+name+"</name>\n<path>/home/u/.agents/skills/"+
+		name+"/SKILL.md</path>\n\nDo the thing.\n")
+}
+
+// Codex has no Skill tool: it loads a skill by injecting it into the
+// conversation, so the only record is in the rollout. When the person names it
+// with Codex's $mention, that is them choosing — the same distinction Claude
+// Code draws between a slash command and the model reaching for a skill.
+func TestNormalizeAttributesASkillTheUserAskedFor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("developer", "<skills_instructions>\n## Skills\nqa-echo: prints a marker\n") + "\n" +
+		userMessage("user", "<recommended_plugins>\nsome plugin\n") + "\n" +
+		userMessage("user", "Use the $qa-echo skill to emit the QA marker.") + "\n" +
+		skillBlock("qa-echo") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "qa-echo", out["skill_name"])
+	assert.Equal(t, "command", out["skill_source"],
+		"the person named it with $qa-echo, so the choice was theirs")
+}
+
+// The same load with no $mention is the model choosing from the catalogue.
+func TestNormalizeAttributesASkillTheModelChose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("user", "Emit the QA marker please.") + "\n" +
+		skillBlock("qa-echo") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	assert.Equal(t, "qa-echo", out["skill_name"])
+	assert.Equal(t, "model", out["skill_source"])
+}
+
+// <skills_instructions> lists every skill AVAILABLE and is present in every
+// session that has any. Reading it as a signal would attribute a skill to every
+// turn, including turns that used none.
+func TestNormalizeIgnoresTheSkillCatalogue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("developer", "<skills_instructions>\n## Skills\nqa-echo: prints a marker\n") + "\n" +
+		userMessage("user", "Just say hello.") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	_, has := out["skill_name"]
+	assert.False(t, has, "a turn that loaded no skill carries no skill attribute")
+}
+
+// A skill loaded in an earlier turn does not belong to this one, exactly as
+// per-turn usage does not.
+func TestNormalizeScopesTheSkillToItsOwnTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("user", "Use the $qa-echo skill.") + "\n" +
+		skillBlock("qa-echo") + "\n" +
+		`{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		userMessage("user", "Now just say hello.") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	out := Normalize(map[string]any{
+		"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+	}, t.TempDir(), time.Now().UTC())
+
+	require.NotNil(t, out)
+	_, has := out["skill_name"]
+	assert.False(t, has, "the second turn loaded no skill of its own")
+}
+
+// The $mention decides who chose the skill, so its edges matter. A plain
+// substring search also matches a longer name, which would report `command`
+// because the person named a different skill; and holding out every message
+// that opens with an angle bracket loses a real prompt that happens to start
+// with one, reporting `model` for a skill the person named.
+func TestSkillMentionEdges(t *testing.T) {
+	for _, c := range []struct {
+		prompt, skill string
+		want          bool
+	}{
+		{"Use the $qa-echo skill", "qa-echo", true},
+		{"Use the $qa-echo-v2 skill", "qa-echo", false},
+		{"$qa-echo", "qa-echo", true},
+		{"see $qa-echo.", "qa-echo", true},
+		{"run $writing:unslop on it", "writing:unslop", true},
+		{"nothing here", "qa-echo", false},
+	} {
+		assert.Equal(t, c.want, mentions(c.prompt, c.skill), "mentions(%q, %q)", c.prompt, c.skill)
+	}
+
+	assert.False(t, isCodexInjection("<T> is a generic type. Use the $qa-echo skill."),
+		"a person's prompt may open with an angle bracket")
+	assert.True(t, isCodexInjection("<recommended_plugins>\nfoo\n"))
+	assert.True(t, isCodexInjection("<skills_instructions>\n## Skills\n"))
+}
+
+// The rollout line is shared by the usage reader and the message reader, so a
+// message shape the second does not recognise must not cost the first its
+// tokens. Content stays raw for that reason.
+func TestUnusualMessageShapeKeepsTheLinesUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" +
+		// content as a bare string rather than an array of parts
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":"plain string"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{` +
+		`"input_tokens":4242,"cached_input_tokens":0,"output_tokens":7}}}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage, "the token_count line must survive an unfamiliar message shape")
+	assert.Equal(t, int64(4242), usage.InputTokens)
+}
+
 // writeRollout puts a one-turn rollout on disk and returns its path. rateLimits
 // is spliced in verbatim so each case controls the exact wire shape.
 func writeRollout(t *testing.T, rateLimits string) string {

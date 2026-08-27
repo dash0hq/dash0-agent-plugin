@@ -90,7 +90,29 @@ func injectRollout(event map[string]any) {
 	if usage := rollout.Usage; usage != nil {
 		event["gen_ai.usage.input_tokens"] = usage.InputTokens
 		event["gen_ai.usage.output_tokens"] = usage.OutputTokens
+		// Both cache halves, unconditionally. A zero is a measurement — the turn
+		// read or wrote nothing from cache — and dropping the key at zero makes
+		// "no cache activity" indistinguishable from "this runtime does not
+		// report it", which is exactly the confusion that hid the missing
+		// cache-creation key.
 		event["gen_ai.usage.cache_read.input_tokens"] = usage.CacheReadInputTokens
+		event["gen_ai.usage.cache_creation.input_tokens"] = usage.CacheCreationInputTokens
+		// Reasoning only when there is some, matching what Claude and Copilot
+		// do: absence means the turn did no thinking, and a zero on every
+		// non-thinking turn is noise. It is a subset of output_tokens rather
+		// than an addition, so cost is unaffected either way.
+		if usage.ReasoningOutputTokens > 0 {
+			event["gen_ai.usage.reasoning.output_tokens"] = usage.ReasoningOutputTokens
+		}
+	}
+
+	// A skill lands on the turn's own span, for the same reason Claude Code's
+	// slash-command route does: no tool ran, so there is nothing to wrap and a
+	// zero-duration execute_tool span would be a fabrication. The pipeline maps
+	// these two keys to dash0.gen_ai.tool.skill.{name,source}.
+	if skill := rollout.Skill; skill != nil {
+		event["skill_name"] = skill.Name
+		event["skill_source"] = skill.Source
 	}
 	injectBilling(event, rollout.Limits)
 }
@@ -153,8 +175,51 @@ func injectWindow(event map[string]any, slot string, w *Window) {
 // the workers point to; and (2) add an "agentId" key to the response so the
 // pipeline's Claude-shaped extractor finds the id. Without this the sub-agent
 // spans dangle under a non-existent parent.
+// spawnAnchorWaitBudget caps how long anchorSpawnAgent waits for Codex to flush
+// the SubAgentActivity record. Codex writes it within milliseconds of the spawn
+// call returning — measured 13ms ahead of the hook on one run and already
+// present on both spawns of another — but the rollout is flushed asynchronously,
+// so a hook that wins the race would otherwise silently lose the anchor and
+// orphan every span the sub-agent produces. Only spawn calls pay this, and only
+// when the record is not already there.
+const (
+	spawnAnchorWaitBudget   = 250 * time.Millisecond
+	spawnAnchorPollInterval = 25 * time.Millisecond
+)
+
+// waitForSpawnedAgentID polls the calling thread's rollout for the mapping this
+// spawn call produced. Returns "" when the budget elapses, which leaves the span
+// unanchored rather than wrong.
+func waitForSpawnedAgentID(rolloutPath, spawnCallID string) string {
+	if rolloutPath == "" || spawnCallID == "" {
+		return ""
+	}
+	deadline := time.Now().Add(spawnAnchorWaitBudget)
+	for {
+		id, err := ReadSpawnedAgentID(rolloutPath, spawnCallID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "codex: reading spawn anchor: %v\n", err)
+			return ""
+		}
+		if id != "" {
+			return id
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(spawnAnchorPollInterval)
+	}
+}
+
 func anchorSpawnAgent(event map[string]any) {
-	if name, _ := event["tool_name"].(string); name != "spawn_agent" {
+	// Codex namespaces this tool and has changed the prefix at least once, with
+	// no separator: 0.142.5 sent bare "spawn_agent" (alongside
+	// "multi_agent_v1wait_agent"), 0.149.1 sends "collaborationspawn_agent". An
+	// exact match went stale on the rename, and the failure is silent and ugly —
+	// the anchor is never created, so the sub-agent's invoke_agent span and every
+	// tool call inside it parent onto a span id nothing emitted, and they hang
+	// outside the trace. Match the suffix so the next prefix cannot break it.
+	if name, _ := event["tool_name"].(string); !strings.HasSuffix(name, "spawn_agent") {
 		return
 	}
 	resp, _ := event["tool_response"].(string)
@@ -165,7 +230,26 @@ func anchorSpawnAgent(event map[string]any) {
 	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
 		return
 	}
+
+	// Where the spawned agent's id comes from, newest source first.
+	//
+	// 0.142.5 put agent_id in the spawn call's own response and this was a field
+	// read. 0.149.1 returns only {"task_name":"/root/<name>"}, so there is
+	// nothing in the response to anchor with, and every sub-agent span in the
+	// session ended up parented onto an id no span carried.
+	//
+	// Codex does record the mapping, in the rollout of the thread that made the
+	// call: a SubAgentActivity item keyed by this very call id. transcript_path
+	// on this payload IS that thread's rollout — the main session's at depth 0,
+	// the parent agent's for a nested spawn — so the lookup is correct at any
+	// depth without knowing the depth. Verified against both on
+	// qa/runs/probe-codex-two-subagents.
 	id, _ := parsed["agent_id"].(string)
+	if id == "" {
+		callID, _ := event["tool_use_id"].(string)
+		path, _ := event["transcript_path"].(string)
+		id = waitForSpawnedAgentID(path, callID)
+	}
 	if id == "" {
 		return
 	}

@@ -318,6 +318,34 @@ func TestSendLogDropsSessionBookkeeping(t *testing.T) {
 	}
 }
 
+// TestSendLogDropsCodexTurnID pins the Codex equivalent of prompt_id. Codex puts
+// turn_id on nearly every hook payload, so it reached every chat and
+// execute_tool span the plugin produced for a Codex session. The payload below
+// is a real Stop event from qa/runs/setup-probe-codex, trimmed to the fields at
+// issue. Found by qa/tools/qa-attrs.py on the first Codex QA run, which is the
+// check the Claude-side leak of the same shape also came from.
+func TestSendLogDropsCodexTurnID(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "01a03954-9276-76e1-b3d9-897ba092f275",
+		"turn_id":         "01a03954-92c6-71b2-8f49-c464e52dff27",
+	}
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "01a03954-9276-76e1-b3d9-897ba092f275")
+	assertNoAttr(t, lr.Attributes, "turn_id")
+}
+
 // TestSendLogDropsUnmappedBookkeeping covers the fields that do not reach a span
 // today because InstructionsLoaded maps to no span. Denying them is only useful
 // if it holds when that changes, which is what this asserts. "reason" is in the

@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -221,10 +222,21 @@ func TestRolloutReadersSurviveATruncatedTail(t *testing.T) {
 // The other half of the rule: a type mismatch is recoverable, because the
 // decoder consumed the value. Ending the read on one would drop every record
 // after a single odd field, so it must skip exactly that record and continue.
+//
+// The mismatch has to be on a field rolloutLine actually declares. An unknown
+// field of any type is ignored by the decoder, so a record built around one
+// exercises nothing and passes whatever the error rule is.
 func TestReadRolloutSkipsOneRecordOnATypeMismatch(t *testing.T) {
+	badRecord := `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":` +
+		`{"input_tokens":"lots","cached_input_tokens":7,"output_tokens":9}}}}`
+
+	// The premise, checked rather than assumed: this is a type error and not a
+	// syntax error, so the decoder is still usable afterwards.
+	var typeErr *json.UnmarshalTypeError
+	require.ErrorAs(t, json.Unmarshal([]byte(badRecord), &rolloutLine{}), &typeErr)
+
 	content := `{"type":"event_msg","payload":{"type":"user_message","message":"go"}}` + "\n" +
-		// message is a string in the schema; a number decodes as a type error.
-		`{"type":"event_msg","payload":{"type":"user_message","message":42}}` + "\n" +
+		badRecord + "\n" +
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":` +
 		`{"input_tokens":300,"cached_input_tokens":100,"output_tokens":10}}}}` + "\n"
 
@@ -235,6 +247,10 @@ func TestReadRolloutSkipsOneRecordOnATypeMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, u, "the record after the bad one must still be read")
 	assert.Equal(t, int64(300), u.InputTokens)
+	// Only that one record is lost: the bad one's other fields decoded fine, and
+	// counting them would mean the reader kept a half-decoded record.
+	assert.Equal(t, int64(100), u.CacheReadInputTokens)
+	assert.Equal(t, int64(10), u.OutputTokens)
 }
 
 // withinDeadline fails the test if read does not return in time, instead of

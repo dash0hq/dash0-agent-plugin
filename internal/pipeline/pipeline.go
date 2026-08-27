@@ -468,10 +468,15 @@ func EnrichToolEvent(event map[string]any) {
 	if strings.EqualFold(toolName, "Skill") {
 		if skill := ExtractSkillName(toolInput); skill != "" {
 			event["skill_name"] = skill
-			// The model chose this skill. The other route — a person typing the
-			// slash command — is attributed on the chat span by sendLLMTrace, so
-			// both carry the route and a count can separate deliberate use from
-			// the model's own reaching.
+		}
+		// The name can also arrive pre-set: Copilot ships no arguments for the
+		// skill tool and names the skill in a vendor attribute instead, so its
+		// source fills skill_name in before this runs. Either way the route is
+		// the same — the model chose this skill. The other route, a person
+		// typing the slash command, is attributed on the chat span by
+		// sendLLMTrace, so both carry the route and a count can separate
+		// deliberate use from the model's own reaching.
+		if _, has := event["skill_name"]; has {
 			event["skill_source"] = skillSourceModel
 		}
 	}

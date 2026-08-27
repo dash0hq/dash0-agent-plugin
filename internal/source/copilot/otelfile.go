@@ -32,6 +32,7 @@ type ToolCall struct {
 	ParentSpanID string // nearest execute_tool ancestor emitted this turn, or "" (→ the turn's chat span)
 	Name         string // gen_ai.tool.name (e.g. "bash", "task")
 	Arguments    string // gen_ai.tool.call.arguments (JSON string)
+	SkillName    string // github.copilot.tool.parameters.skill_name
 	Result       string // gen_ai.tool.call.result
 	CallID       string // gen_ai.tool.call.id (e.g. "call_…"; for `task` this is the sub-agent's hook session id)
 	Start, End   time.Time
@@ -150,6 +151,7 @@ func ReadTurn(sessionID, sessionDir string) (*Turn, string) {
 				SpanID:    s.spanID,
 				Name:      attrString(s.attrs, "gen_ai.tool.name"),
 				Arguments: attrString(s.attrs, "gen_ai.tool.call.arguments"),
+				SkillName: attrString(s.attrs, "github.copilot.tool.parameters.skill_name"),
 				Result:    attrString(s.attrs, "gen_ai.tool.call.result"),
 				CallID:    attrString(s.attrs, "gen_ai.tool.call.id"),
 				Start:     s.start,

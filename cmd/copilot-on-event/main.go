@@ -189,6 +189,9 @@ func emitToolSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) 
 		if turn.Usage != nil && turn.Usage.Model != "" {
 			event["model"] = turn.Usage.Model
 		}
+		if tc.SkillName != "" {
+			event["skill_name"] = tc.SkillName
+		}
 
 		// Derive the shared semantic attributes (URLs, line counts, bash/skill,
 		// MCP server + normalized name). Same rule set the hook-driven path runs,

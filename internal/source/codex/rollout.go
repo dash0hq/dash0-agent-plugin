@@ -5,6 +5,7 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -104,21 +105,53 @@ func ReadSpawnedAgentID(rolloutPath, spawnCallID string) (string, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	dec := json.NewDecoder(f)
-	for dec.More() {
-		var line subAgentActivityLine
-		if err := dec.Decode(&line); err != nil {
-			continue // skip malformed lines, as the usage reader does
-		}
+	var agentID string
+	forEachRecord(f, func(line subAgentActivityLine) bool {
 		item := line.Payload.Item
 		if line.Type != "event_msg" || item.Type != "SubAgentActivity" {
-			continue
+			return true
 		}
 		if item.Kind == "started" && item.ID == spawnCallID {
-			return item.AgentThreadID, nil
+			agentID = item.AgentThreadID
+			return false
+		}
+		return true
+	})
+	return agentID, nil
+}
+
+// forEachRecord decodes a rollout's JSON records in order and passes each to fn,
+// stopping early when fn returns false.
+//
+// The error handling is the load-bearing part, and it is the rule
+// transcript.forEachEntry already follows for the same reason. A decoder recovers
+// from a type mismatch: it consumed the value, so the stream is intact and the
+// record can be skipped. It cannot recover from a syntax error. It does not
+// advance, and More() answers from the buffered bytes rather than the decoder's
+// stuck state, so it stays true while every Decode returns the same error
+// immediately. A loop that treats the two alike spins on a core until the hook
+// times out.
+//
+// A half-written final record is the normal case here rather than corruption:
+// these hooks read a rollout Codex is still appending to, and
+// waitForSpawnedAgentID reads it during the flush on purpose. So a type error
+// skips one record and a syntax error ends the read, which is the most a decoder
+// can honestly do.
+func forEachRecord[T any](f *os.File, fn func(record T) bool) {
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var record T
+		if err := dec.Decode(&record); err != nil {
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &typeErr) {
+				continue
+			}
+			return
+		}
+		if !fn(record) {
+			return
 		}
 	}
-	return "", nil
 }
 
 // subAgentActivityLine is the subset of a rollout record that carries the
@@ -390,19 +423,12 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	dec := json.NewDecoder(f)
-
 	var turn Usage
 	var hasUsage bool
 	var limits *Limits
 	var turnSkill string
 	var turnPrompt strings.Builder
-	for dec.More() {
-		var line rolloutLine
-		if err := dec.Decode(&line); err != nil {
-			continue // skip malformed lines
-		}
-
+	forEachRecord(f, func(line rolloutLine) bool {
 		// The conversation, for the skill a turn loaded and who asked for it.
 		if line.Type == "response_item" && line.Payload.Type == "message" && line.Payload.Role == "user" {
 			body := messageText(line.Payload.Content)
@@ -415,11 +441,11 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 				// name, so Codex's own injected user messages are held out.
 				turnPrompt.WriteString(body)
 			}
-			continue
+			return true
 		}
 
 		if line.Type != "event_msg" {
-			continue
+			return true
 		}
 		switch line.Payload.Type {
 		case "user_message", "task_started":
@@ -468,7 +494,8 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 				limits = &l
 			}
 		}
-	}
+		return true
+	})
 
 	out := &Rollout{Limits: limits}
 	if hasUsage {

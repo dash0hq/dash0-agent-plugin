@@ -90,7 +90,11 @@ Sub-agents (spawned via the `task` tool) fire their own hook lifecycles under a
 **synthetic `session_id` = `call_<toolCallId>`**, with no field linking back to
 the parent conversation (verified against captured payloads). The normalizer
 (`internal/source/copilot/copilot.go`) **drops every `call_`-prefixed session**
-so they never mint spurious, token-less conversations. Sub-agent work still
+so they never mint spurious, token-less conversations. Interactively that id is
+a plain UUID instead, so the entrypoint drops any session that reaches a Stop
+having had no `sessionStart` **and** having no spans of its own in the
+native-OTel file — a sub-agent's chat spans carry the parent's conversation id,
+so the file is what tells the two apart when the marker cannot. Sub-agent work still
 lands in the parent conversation via the OTel file:
 
 - **Sub-agent tokens roll into the parent turn** (flat attribution): their
@@ -106,7 +110,8 @@ lands in the parent conversation via the OTel file:
 - **That span carries the standard agent attributes**, the same keys Claude and
   Codex emit. `gen_ai.agent.name` is the agent kind from the native span (e.g.
   `task`); `gen_ai.agent.id` is the spawning `call_…` id — unique per invocation,
-  and the same value Copilot uses as that sub-agent's own hook session id. The
+  and under `copilot -p` also the sub-agent's own hook session id, so the two
+  records join there. Interactively that hook session is a plain UUID instead. The
   native `gen_ai.agent.id` (`builtin:task`) is deliberately not used: every
   sub-agent of a kind shares it, so it is a type filter wearing an id's name.
 - **No usage on the agent span.** Attribution stays flat, so the sub-agent's
@@ -129,6 +134,13 @@ has finished processing…`). The normalizer tags these `prompt_role: assistant`
   `agentStop` read lands in the next turn's window and is emitted there (parented
   to that turn's chat span). Graceful, slightly misattributed, rare — tool spans
   normally flush before the turn's final chat round-trip.
+  - One shape of that is worth naming: an `execute_tool task` encloses the
+    `invoke_agent` it spawned and so is written later, so a read falling between
+    the two flushes sees the agent with a parent the file does not yet hold.
+    That is indistinguishable from the turn's own root, whose parent is likewise
+    absent, so **the sub-agent's `invoke_agent` span is dropped** for that turn
+    and never re-read — the cursor has moved past it. Its tools still arrive,
+    parented on the turn's chat span. A missing span rather than a wrong tree.
 - **No native-OTel file → no tool spans**: without the launch function (native
   OTel disabled), only lifecycle chat spans are emitted, without usage or tools.
 - **No line-count metrics for Copilot file edits**: `dash0.gen_ai.code.lines_added`

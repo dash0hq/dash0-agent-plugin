@@ -58,8 +58,29 @@ type otelSpan struct {
 	attrs        map[string]any
 }
 
-// cursorFile persists the id of the last consumed native span (see cursor).
-const cursorFile = "otel_cursor.json"
+// cursorPrefix names the per-session file that persists the id of the last
+// consumed native span (see cursor).
+//
+// The cursor lives beside the native-OTel files, NOT in the session directory
+// the rest of the session's state uses. pipeline.Process deletes that directory
+// on SessionEnd, and a Copilot session id outlives its session: `copilot
+// --resume` comes back under the same id, so the cursor is precisely the state
+// that must survive the end of a launch. It used to be wiped with everything
+// else, and a resumed session then re-read the whole file from the start —
+// measured on qa/runs/probe-two-turns, where turn 2's chat span carried 59068
+// input tokens for a turn of 29655, having counted turn 1 a second time, and
+// turn 1's tool span was emitted again under turn 2's trace.
+//
+// Only reachable when both launches write to one native-OTel file. The launch
+// function the dash0-configure skill installs gives each launch its own file
+// and deletes it at exit, so a fresh file made the stale cursor harmless; the
+// per-session path documented as the alternative to that function does not.
+const cursorPrefix = "cursor-"
+
+// cursorPath is where this conversation's cursor lives.
+func cursorPath(sessionID string) string {
+	return filepath.Join(OtelDir(), cursorPrefix+sessionID+".json")
+}
 
 // staleFileTTL bounds how long a native-OTel file (or an empty dir) left behind
 // by an unclean prior exit — where the launcher's `rm` never ran — lingers
@@ -102,7 +123,9 @@ func OtelDir() string {
 // Correct across --resume / rotation / re-runs: each launch writes an
 // append-only file of disjoint span ids, so an unknown cursor means a fresh
 // file (all spans new) and a known cursor bounds exactly this turn's new spans;
-// re-running the same Stop finds the cursor at the end → nothing new.
+// re-running the same Stop finds the cursor at the end → nothing new. The
+// cursor is keyed by conversation and kept outside the session directory, so it
+// survives the SessionEnd that ends a launch — see cursorPrefix.
 //
 // Usage sums the window's `chat` spans; sub-agent chat spans share the
 // conversation and fold into the turn total (flat attribution). Tools are the
@@ -113,7 +136,7 @@ func OtelDir() string {
 // parents those under the turn's chat span). A span that Copilot flushes late
 // (after this read) folds into the next turn's window — graceful, slightly
 // misattributed, rare. Returns (nil, "") when there is no file or nothing new.
-func ReadTurn(sessionID, sessionDir string) (*Turn, string) {
+func ReadTurn(sessionID string) (*Turn, string) {
 	if sessionID == "" {
 		return nil, ""
 	}
@@ -121,7 +144,7 @@ func ReadTurn(sessionID, sessionDir string) (*Turn, string) {
 	if len(spans) == 0 {
 		return nil, ""
 	}
-	fresh := spansAfterCursor(spans, loadCursor(sessionDir))
+	fresh := spansAfterCursor(spans, loadCursor(sessionID))
 	if len(fresh) == 0 {
 		return nil, ""
 	}
@@ -392,8 +415,8 @@ func otelFailed(v any) bool {
 	return code == 2
 }
 
-func loadCursor(sessionDir string) string {
-	data, err := os.ReadFile(filepath.Join(sessionDir, cursorFile))
+func loadCursor(sessionID string) string {
+	data, err := os.ReadFile(cursorPath(sessionID))
 	if err != nil {
 		return ""
 	}
@@ -407,12 +430,16 @@ func loadCursor(sessionDir string) string {
 // SaveCursor persists the id of the last consumed chat span. A write failure is
 // logged rather than silently swallowed: a lost cursor makes the next turn
 // re-sum from the start and double-count.
-func SaveCursor(sessionDir, lastSpanID string) {
+func SaveCursor(sessionID, lastSpanID string) {
 	data, err := json.Marshal(cursor{LastSpanID: lastSpanID})
 	if err != nil {
 		return
 	}
-	if err := os.WriteFile(filepath.Join(sessionDir, cursorFile), data, 0o644); err != nil {
+	if err := os.MkdirAll(OtelDir(), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "copilot-on-event: persisting usage cursor: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(cursorPath(sessionID), data, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "copilot-on-event: persisting usage cursor: %v\n", err)
 	}
 }
@@ -420,6 +447,14 @@ func SaveCursor(sessionDir, lastSpanID string) {
 // SweepOldOtelFiles removes native-OTel files (and now-empty dirs) under
 // OtelDir() older than staleFileTTL — leftovers from processes that exited
 // uncleanly so the launcher's `rm` never ran. Best-effort; called on SessionStart.
+//
+// Cursors are left alone, however old. "Stale" here means "untouched for a
+// day", which a conversation idle over a weekend also is, and its cursor ages
+// while a shared native-OTel file stays fresh under other sessions' writes.
+// Deleting it sends the next ReadTurn back to the top of that file and
+// double-counts every token and tool it already reported, which is the defect
+// the cursor exists to prevent. They are 35-byte files; the marker beside them
+// is exempt for the same reason, in session.go.
 func SweepOldOtelFiles(now time.Time) {
 	dir := OtelDir()
 	entries, err := os.ReadDir(dir)
@@ -432,9 +467,10 @@ func SweepOldOtelFiles(now time.Time) {
 			continue
 		}
 		p := filepath.Join(dir, e.Name())
-		if e.IsDir() {
+		switch {
+		case e.IsDir():
 			_ = os.Remove(p) // removes only if empty
-		} else if strings.HasSuffix(e.Name(), ".jsonl") {
+		case strings.HasSuffix(e.Name(), ".jsonl"):
 			_ = os.Remove(p)
 		}
 	}

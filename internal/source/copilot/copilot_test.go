@@ -103,12 +103,11 @@ func chatSpanLine(spanID, conv string, in, out, cacheRead, reasoning int, cost f
 func TestReadTurn_perTurnCursor(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
-	sessionDir := t.TempDir()
 	f := filepath.Join(otelDir, "otel-1.jsonl")
 
 	// Turn 1: one chat span.
 	writeLines(t, f, chatSpanLine("s1", "conv-1", 100, 20, 90, 5, 1.0, "gpt-5.3-codex"))
-	t1, c1 := ReadTurn("conv-1", sessionDir)
+	t1, c1 := ReadTurn("conv-1")
 	require.NotNil(t, t1)
 	require.NotNil(t, t1.Usage)
 	assert.Equal(t, int64(100), t1.Usage.InputTokens)
@@ -117,20 +116,20 @@ func TestReadTurn_perTurnCursor(t *testing.T) {
 	assert.Equal(t, int64(5), t1.Usage.ReasoningOutputTokens)
 	assert.Equal(t, "gpt-5.3-codex", t1.Usage.Model)
 	assert.Equal(t, "s1", c1)
-	SaveCursor(sessionDir, c1)
+	SaveCursor("conv-1", c1)
 
 	// Turn 2: append a second span; the reader returns ONLY turn 2.
 	appendLines(t, f, chatSpanLine("s2", "conv-1", 200, 30, 150, 0, 2.0, "gpt-5.3-codex"))
-	t2, c2 := ReadTurn("conv-1", sessionDir)
+	t2, c2 := ReadTurn("conv-1")
 	require.NotNil(t, t2)
 	require.NotNil(t, t2.Usage)
 	assert.Equal(t, int64(200), t2.Usage.InputTokens, "must not double-count turn 1")
 	assert.Equal(t, int64(30), t2.Usage.OutputTokens)
 	assert.Equal(t, "s2", c2)
-	SaveCursor(sessionDir, c2)
+	SaveCursor("conv-1", c2)
 
 	// Re-run with no new spans → nil (idempotent, no double-count).
-	t3, c3 := ReadTurn("conv-1", sessionDir)
+	t3, c3 := ReadTurn("conv-1")
 	assert.Nil(t, t3)
 	assert.Empty(t, c3)
 }
@@ -138,13 +137,12 @@ func TestReadTurn_perTurnCursor(t *testing.T) {
 func TestReadTurn_subAgentRollup(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
-	sessionDir := t.TempDir()
 	// A turn with a main chat span + two sub-agent chat spans (same conversation.id).
 	writeLines(t, filepath.Join(otelDir, "otel.jsonl"),
 		chatSpanLine("s1", "conv-1", 100, 20, 0, 0, 1.0, "gpt"),
 		chatSpanLine("s2", "conv-1", 50, 10, 0, 0, 0.5, "gpt"),
 		chatSpanLine("s3", "conv-1", 40, 8, 0, 0, 0.5, "gpt"))
-	turn, c := ReadTurn("conv-1", sessionDir)
+	turn, c := ReadTurn("conv-1")
 	require.NotNil(t, turn)
 	require.NotNil(t, turn.Usage)
 	assert.Equal(t, int64(190), turn.Usage.InputTokens, "sub-agent input tokens roll into the turn total")
@@ -159,13 +157,12 @@ func TestReadTurn_subAgentRollup(t *testing.T) {
 func TestReadTurn_resumeRotatedFile(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
-	sessionDir := t.TempDir()
 
 	// Launch 1.
 	fileA := filepath.Join(otelDir, "otel-A.jsonl")
 	writeLines(t, fileA, chatSpanLine("a1", "conv-1", 100, 20, 0, 0, 1, "gpt"))
-	_, c1 := ReadTurn("conv-1", sessionDir)
-	SaveCursor(sessionDir, c1) // cursor = "a1"
+	_, c1 := ReadTurn("conv-1")
+	SaveCursor("conv-1", c1) // cursor = "a1"
 
 	// Launch 2 (resume): brand-new file, disjoint ids, made newer than A.
 	fileB := filepath.Join(otelDir, "otel-B.jsonl")
@@ -173,21 +170,81 @@ func TestReadTurn_resumeRotatedFile(t *testing.T) {
 	older := time.Now().Add(-time.Hour)
 	require.NoError(t, os.Chtimes(fileA, older, older))
 
-	turn, c := ReadTurn("conv-1", sessionDir)
+	turn, c := ReadTurn("conv-1")
 	require.NotNil(t, turn, "resumed session must still get per-turn usage")
 	require.NotNil(t, turn.Usage)
 	assert.Equal(t, int64(300), turn.Usage.InputTokens)
 	assert.Equal(t, "b1", c)
 }
 
-func TestReadTurn_fileDiscoveryByConversationID(t *testing.T) {
+// TestReadTurn_cursorSurvivesSessionEnd is the other cross-launch case, and the
+// one that shipped broken. When both launches write to ONE native-OTel file —
+// which is what a fixed COPILOT_OTEL_FILE_EXPORTER_PATH gives you, the
+// documented alternative to the dash0-configure launch function — the cursor is
+// the only thing keeping turn 2 from re-reading turn 1. It used to live in the
+// per-session directory that pipeline.Process deletes on SessionEnd, so the
+// resumed launch found none and summed the whole file again.
+//
+// Measured on qa/runs/probe-two-turns before the fix: turn 2's chat span
+// carried 59068 input tokens for a turn of 29655, and turn 1's tool span was
+// emitted a second time under turn 2's trace. The wipe is simulated here by
+// deleting everything the session directory could have held.
+func TestReadTurn_cursorSurvivesSessionEnd(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
 	sessionDir := t.TempDir()
+	f := filepath.Join(otelDir, "otel.jsonl")
+
+	writeLines(t, f, chatSpanLine("s1", "conv-1", 100, 20, 0, 0, 1, "gpt"))
+	_, c1 := ReadTurn("conv-1")
+	SaveCursor("conv-1", c1)
+
+	// SessionEnd: pipeline.Process removes the session directory wholesale.
+	require.NoError(t, os.RemoveAll(sessionDir))
+
+	// The resumed launch appends to the same file.
+	appendLines(t, f, chatSpanLine("s2", "conv-1", 200, 30, 0, 0, 2, "gpt"))
+	turn, _ := ReadTurn("conv-1")
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, int64(200), turn.Usage.InputTokens,
+		"a resumed launch sharing one OTel file must not re-count the previous launch")
+	assert.Equal(t, int64(30), turn.Usage.OutputTokens)
+}
+
+// TestSweepOldOtelFilesKeepsCursors pins the exemption. The sweep runs on any
+// session's start and cannot tell a conversation that is over from one idle
+// over a weekend — and an idle conversation's cursor ages while a shared
+// native-OTel file stays fresh under other sessions' writes. Deleting it sends
+// the next ReadTurn back to the top of that file and double-counts everything
+// it already reported, which is the defect the cursor exists to prevent.
+func TestSweepOldOtelFilesKeepsCursors(t *testing.T) {
+	otelDir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
+
+	SaveCursor("conv-idle", "s1")
+	old := time.Now().Add(-4 * 7 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(filepath.Join(otelDir, "cursor-conv-idle.json"), old, old))
+
+	// A stale native-OTel file in the same directory still goes.
+	stale := filepath.Join(otelDir, "otel-dead.jsonl")
+	writeLines(t, stale, chatSpanLine("x", "conv-other", 1, 1, 0, 0, 0, "gpt"))
+	require.NoError(t, os.Chtimes(stale, old, old))
+
+	SweepOldOtelFiles(time.Now())
+
+	assert.NoFileExists(t, stale, "a native-OTel file left by an unclean exit is still swept")
+	assert.FileExists(t, filepath.Join(otelDir, "cursor-conv-idle.json"),
+		"a cursor is never swept: losing one double-counts the conversation's next turn")
+}
+
+func TestReadTurn_fileDiscoveryByConversationID(t *testing.T) {
+	otelDir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
 	// Two concurrent sessions' files; the reader must pick ours by conversation.id.
 	writeLines(t, filepath.Join(otelDir, "other.jsonl"), chatSpanLine("o1", "conv-OTHER", 999, 999, 0, 0, 9, "gpt"))
 	writeLines(t, filepath.Join(otelDir, "ours.jsonl"), chatSpanLine("m1", "conv-MINE", 100, 20, 0, 0, 1, "gpt"))
-	turn, _ := ReadTurn("conv-MINE", sessionDir)
+	turn, _ := ReadTurn("conv-MINE")
 	require.NotNil(t, turn)
 	require.NotNil(t, turn.Usage)
 	assert.Equal(t, int64(100), turn.Usage.InputTokens)
@@ -195,10 +252,10 @@ func TestReadTurn_fileDiscoveryByConversationID(t *testing.T) {
 
 func TestReadTurn_absentGraceful(t *testing.T) {
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", t.TempDir()) // empty dir
-	t1, c1 := ReadTurn("conv-1", t.TempDir())
+	t1, c1 := ReadTurn("conv-1")
 	assert.Nil(t, t1)
 	assert.Empty(t, c1)
-	t2, _ := ReadTurn("", t.TempDir())
+	t2, _ := ReadTurn("")
 	assert.Nil(t, t2)
 }
 
@@ -227,7 +284,6 @@ func chatSpanWithOutput(t *testing.T, spanID, conv, outputMessages string) strin
 func TestReadTurn_responseText(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
-	sessionDir := t.TempDir()
 	f := filepath.Join(otelDir, "otel.jsonl")
 
 	// Two spans in the turn: the first ends in a tool call, the second in text.
@@ -238,7 +294,7 @@ func TestReadTurn_responseText(t *testing.T) {
 		chatSpanWithOutput(t, "s2", "conv-1",
 			`[{"role":"assistant","parts":[{"type":"text","content":"All done."}],"finish_reason":"stop"}]`))
 
-	turn, _ := ReadTurn("conv-1", sessionDir)
+	turn, _ := ReadTurn("conv-1")
 	require.NotNil(t, turn)
 	require.NotNil(t, turn.Usage)
 	assert.Equal(t, "All done.", turn.Usage.ResponseText)
@@ -306,7 +362,6 @@ func nativeSpanLine(t *testing.T, traceID, spanID, parentID, name string, startS
 func TestReadTurn_toolCalls(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
-	sessionDir := t.TempDir()
 
 	// Mirrors a real capture:
 	//   invoke_agent (conv-1)
@@ -341,7 +396,7 @@ func TestReadTurn_toolCalls(t *testing.T) {
 		}),
 	)
 
-	turn, c := ReadTurn("conv-1", sessionDir)
+	turn, c := ReadTurn("conv-1")
 	require.NotNil(t, turn)
 	require.NotNil(t, turn.Usage, "chat span still summed for usage")
 	assert.Equal(t, int64(100), turn.Usage.InputTokens)
@@ -369,8 +424,8 @@ func TestReadTurn_toolCalls(t *testing.T) {
 
 	// The cursor covers ALL consumed spans (tools included): after persisting it,
 	// a re-read finds nothing new.
-	SaveCursor(sessionDir, c)
-	again, _ := ReadTurn("conv-1", sessionDir)
+	SaveCursor("conv-1", c)
+	again, _ := ReadTurn("conv-1")
 	assert.Nil(t, again, "re-run after SaveCursor must not re-emit tools or re-count usage")
 }
 
@@ -418,7 +473,7 @@ func TestReadTurn_skillNameFromVendorAttribute(t *testing.T) {
 		}),
 	)
 
-	turn, _ := ReadTurn(conv, t.TempDir())
+	turn, _ := ReadTurn(conv)
 	require.NotNil(t, turn, "the turn must be recovered from the native-OTel file")
 	require.Len(t, turn.Tools, 1, "the skill invocation is one tool call")
 

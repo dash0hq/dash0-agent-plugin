@@ -97,16 +97,16 @@ func run() error {
 	// BEFORE Process — the Stop branch clears it.
 	var turn *copilot.Turn
 	var turnCtx *otlp.TraceContext
-	var turnCursor, turnDir string
+	var turnCursor, turnSession string
 	if hookEvent == "Stop" {
 		sessionID, _ := event["session_id"].(string)
 		sessionDir := pipeline.SessionDir(dataDir, sessionID)
-		if t, newCursor := copilot.ReadTurn(sessionID, sessionDir); t != nil {
+		if t, newCursor := copilot.ReadTurn(sessionID); t != nil {
 			turn = t
 			if t.Usage != nil {
 				attachUsage(event, t.Usage)
 			}
-			turnCursor, turnDir = newCursor, sessionDir
+			turnCursor, turnSession = newCursor, sessionID
 		}
 		turnCtx, _ = otlp.LoadTraceContext(sessionDir)
 	}
@@ -115,7 +115,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if turnDir != "" {
+	if turnSession != "" {
 		// Emit the tool spans and advance the cursor TOGETHER, gated on an intact
 		// trace context (captured before Process, which clears it). When the context
 		// is missing — blank TraceID — skip BOTH: pipeline.Process likewise refuses
@@ -125,7 +125,7 @@ func run() error {
 		// only after Process — keeps the cursor and the spans from drifting apart.
 		if turn != nil && turnCtx != nil && turnCtx.TraceID != "" {
 			emitToolSpans(turn, turnCtx, cfg)
-			copilot.SaveCursor(turnDir, turnCursor)
+			copilot.SaveCursor(turnSession, turnCursor)
 		}
 	}
 	for _, msg := range result.Messages {

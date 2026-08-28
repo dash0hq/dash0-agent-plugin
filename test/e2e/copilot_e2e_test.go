@@ -264,7 +264,12 @@ func TestE2ECopilotDefersTurnWhenTraceContextMissing(t *testing.T) {
 	}
 
 	sid := `"sessionId":"` + copilotConvID + `"`
-	cursorFile := filepath.Join(pluginData, copilotConvID, "otel_cursor.json")
+	// The cursor lives beside the native-OTel files, not under the plugin's
+	// per-session directory: pipeline.Process deletes that directory on
+	// SessionEnd and a Copilot session id outlives its session, so a resumed
+	// launch would find no cursor and re-read the whole file. See cursorPrefix in
+	// internal/source/copilot.
+	cursorFile := filepath.Join(otelDir, "cursor-"+copilotConvID+".json")
 
 	// Phase 1: sessionStart records only SessionID (no TraceID minted), so a Stop
 	// now has no intact context. The turn must be deferred.

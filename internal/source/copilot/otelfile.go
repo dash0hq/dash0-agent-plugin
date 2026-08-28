@@ -56,8 +56,10 @@ type SubAgent struct {
 	// it, exactly as Claude's subagent_type does.
 	AgentType string
 	// CallID is the spawning tool call's gen_ai.tool.call.id. It is the per
-	// invocation identity, and it is the same value Copilot uses for the
-	// sub-agent's own hook session id, so it joins the two records.
+	// invocation identity. Under `copilot -p` it is also the sub-agent's own
+	// hook session id (call_<toolCallId>), so it joins the two records there;
+	// an interactive session names that hook session with a plain UUID instead,
+	// and the join does not hold.
 	CallID     string
 	Start, End time.Time
 	Failed     bool
@@ -126,15 +128,20 @@ type cursor struct {
 // launch environment to hook processes, so the two sides cannot communicate a
 // path at runtime and must share a baked-in convention. DASH0_COPILOT_OTEL_DIR
 // overrides it (tests only; the bootstrap does not set it in production).
+// otelDirName is the leaf of the convention path. It is a constant because
+// ReservedSessionID has to keep a session id from naming it: in the default
+// layout this directory is a child of the plugin's own data root.
+const otelDirName = "otel"
+
 func OtelDir() string {
 	if v := os.Getenv("DASH0_COPILOT_OTEL_DIR"); v != "" {
 		return v
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), "dash0-agent-plugin", "copilot", "otel")
+		return filepath.Join(os.TempDir(), "dash0-agent-plugin", "copilot", otelDirName)
 	}
-	return filepath.Join(home, ".local", "state", "dash0-agent-plugin", "copilot", "otel")
+	return filepath.Join(home, ".local", "state", "dash0-agent-plugin", "copilot", otelDirName)
 }
 
 // ReadTurn recovers everything for the turn that just ended — aggregated usage
@@ -173,6 +180,13 @@ func ReadTurn(sessionID string) (*Turn, string) {
 		return nil, ""
 	}
 
+	// Every span of this conversation by native id, built before the loop below
+	// because identifying the turn's own agent needs it.
+	byID := make(map[string]otelSpan, len(spans))
+	for _, s := range spans {
+		byID[s.spanID] = s
+	}
+
 	turn := &Turn{}
 	// Every span this turn will emit, by native id. Both tools and sub-agents go
 	// in, because parenting resolves to the nearest ancestor that is *itself*
@@ -197,11 +211,35 @@ func ReadTurn(sessionID string) (*Turn, string) {
 				u.ResponseText = txt // last non-empty assistant text in the turn = the final response
 			}
 		case strings.HasPrefix(s.name, "invoke_agent"):
-			// The turn's own agent is the root of the trace and has no parent.
-			// It is the turn, which the pipeline's chat span already represents,
-			// so emitting it too would duplicate the turn as a second span.
-			// A nested one is a real sub-agent.
+			// The turn's own agent roots the trace. It IS the turn, which the
+			// pipeline's chat span already represents, so emitting it too would
+			// duplicate the turn as a second span with the whole tool tree
+			// beneath it. A sub-agent is the nested case.
+			//
+			// "Roots the trace" is not the same as "has no parent id". Copilot
+			// already injects a traceparent into an interactive session's hook
+			// payloads, so a turn whose trace continues one from outside would
+			// carry a parent id here that names a span this file does not hold,
+			// and a bare emptiness check would read that root as a sub-agent.
+			//
+			// So the test is the positive one: a sub-agent hangs under the
+			// execute_tool call that spawned it. Asking only whether the parent
+			// is some span of this conversation is looser than that, and it
+			// admits a turn whose root continues an earlier turn's trace within
+			// the same file — which would duplicate that turn under its own chat
+			// span, with the whole tool tree beneath.
 			if s.parentSpanID == "" {
+				continue
+			}
+			parent, known := byID[s.parentSpanID]
+			if !known || !strings.HasPrefix(parent.name, "execute_tool") {
+				// Also the window where a sub-agent's spawning execute_tool has
+				// not flushed yet: a child span is written before its parent, so
+				// the agent reaches the file first and a read landing between the
+				// two sees a parent it cannot resolve. Indistinguishable from the
+				// case above, so the agent span is dropped rather than guessed
+				// at. Its tools still arrive, parented on the turn's chat span.
+				// Rare, one-sided, and it costs a span rather than a wrong tree.
 				continue
 			}
 			emitted[s.spanID] = true
@@ -238,10 +276,6 @@ func ReadTurn(sessionID string) (*Turn, string) {
 	// Ancestry walks the FULL span list (a parent record precedes only by id, not
 	// necessarily by window), but the resolved parent must itself be emitted this
 	// turn or the link would point at a span nobody sent.
-	byID := make(map[string]otelSpan, len(spans))
-	for _, s := range spans {
-		byID[s.spanID] = s
-	}
 	for i := range turn.Tools {
 		turn.Tools[i].ParentSpanID = nearestEmittedAncestor(byID, emitted, turn.Tools[i].SpanID)
 	}

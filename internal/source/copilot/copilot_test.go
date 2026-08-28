@@ -187,20 +187,27 @@ func TestReadTurn_resumeRotatedFile(t *testing.T) {
 //
 // Measured on qa/runs/probe-two-turns before the fix: turn 2's chat span
 // carried 59068 input tokens for a turn of 29655, and turn 1's tool span was
-// emitted a second time under turn 2's trace. The wipe is simulated here by
-// deleting everything the session directory could have held.
+// emitted a second time under turn 2's trace.
+//
+// This asserts the cursor's location rather than simulating the wipe, because
+// there is no longer a session directory in the path to wipe — which is the
+// property that makes the wipe survivable. The wipe itself is driven end to end
+// by TestE2ECopilotDefersTurnWhenTraceContextMissing.
 func TestReadTurn_cursorSurvivesSessionEnd(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
-	sessionDir := t.TempDir()
 	f := filepath.Join(otelDir, "otel.jsonl")
 
 	writeLines(t, f, chatSpanLine("s1", "conv-1", 100, 20, 0, 0, 1, "gpt"))
 	_, c1 := ReadTurn("conv-1")
 	SaveCursor("conv-1", c1)
 
-	// SessionEnd: pipeline.Process removes the session directory wholesale.
-	require.NoError(t, os.RemoveAll(sessionDir))
+	// The cursor is keyed by conversation and lives beside the OTel files, so it
+	// is reachable with nothing but the session id — no session directory is
+	// consulted, which is precisely why the SessionEnd wipe can no longer reach
+	// it. The path itself is asserted end to end by the e2e's
+	// TestE2ECopilotDefersTurnWhenTraceContextMissing.
+	require.FileExists(t, filepath.Join(otelDir, "cursor-conv-1.json"))
 
 	// The resumed launch appends to the same file.
 	appendLines(t, f, chatSpanLine("s2", "conv-1", 200, 30, 0, 0, 2, "gpt"))
@@ -236,6 +243,101 @@ func TestSweepOldOtelFilesKeepsCursors(t *testing.T) {
 	assert.NoFileExists(t, stale, "a native-OTel file left by an unclean exit is still swept")
 	assert.FileExists(t, filepath.Join(otelDir, "cursor-conv-idle.json"),
 		"a cursor is never swept: losing one double-counts the conversation's next turn")
+}
+
+// TestReadTurn_turnRootUnderARemoteParent covers a trace this plugin does not
+// root itself. Copilot already injects a traceparent into an interactive
+// session's hook payloads, so a turn whose trace continues one from outside
+// would carry a parent id on its own invoke_agent span naming something this
+// file does not hold.
+//
+// That span is still the turn, and the pipeline's chat span already represents
+// it. Reading it as a sub-agent — which an "is the parent id empty" test does —
+// mints an invoke_agent span duplicating the turn, and re-parents the whole tool
+// tree beneath it, because parenting resolves to the nearest emitted ancestor.
+//
+// The same fixture as TestReadTurn_toolCalls, with one difference: the root
+// invoke_agent names a parent outside the file.
+func TestReadTurn_turnRootUnderARemoteParent(t *testing.T) {
+	otelDir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
+
+	writeLines(t, filepath.Join(otelDir, "otel.jsonl"),
+		nativeSpanLine(t, "t1", "ch1", "ia1", "chat gpt", 100, 101, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1", "gen_ai.request.model": "gpt",
+			"gen_ai.usage.input_tokens": 100, "gen_ai.usage.output_tokens": 10,
+		}),
+		nativeSpanLine(t, "t1", "e1", "ia1", "execute_tool bash", 101, 101.5, 0, map[string]any{
+			"gen_ai.tool.name": "bash", "gen_ai.tool.call.id": "call_A",
+		}),
+		// The turn's root, under a span no file of this conversation carries.
+		nativeSpanLine(t, "t1", "ia1", "REMOTEPARENT0001", "invoke_agent", 100, 104, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1", "gen_ai.agent.name": "default",
+		}),
+	)
+
+	turn, _ := ReadTurn("conv-1")
+	require.NotNil(t, turn)
+
+	assert.Empty(t, turn.Agents,
+		"the turn's own agent is the turn, however its trace is rooted; emitting it duplicates the turn")
+	require.Len(t, turn.Tools, 1)
+	assert.Empty(t, turn.Tools[0].ParentSpanID,
+		"a top-level tool still resolves to the turn's chat span, not to a spurious agent span")
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, int64(100), turn.Usage.InputTokens, "usage is unaffected")
+}
+
+// TestReadTurn_laterTurnRootChainedInFile is the in-file half of the case above.
+// A turn whose root continues an earlier turn's trace carries a parent id that
+// this file DOES hold, so "the parent is some span of this conversation" reads
+// that root as a sub-agent: it would be emitted under the turn's own chat span,
+// duplicating the turn, and every tool of the turn would re-parent beneath it.
+//
+// What actually marks a sub-agent is hanging under the execute_tool call that
+// spawned it, so that is what the reader tests.
+func TestReadTurn_laterTurnRootChainedInFile(t *testing.T) {
+	otelDir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
+	f := filepath.Join(otelDir, "otel.jsonl")
+
+	// Turn 1, consumed and cursored away.
+	writeLines(t, f,
+		nativeSpanLine(t, "t1", "ch1", "ia1", "chat gpt", 100, 101, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1", "gen_ai.request.model": "gpt",
+			"gen_ai.usage.input_tokens": 100, "gen_ai.usage.output_tokens": 10,
+		}),
+		nativeSpanLine(t, "t1", "ia1", "", "invoke_agent", 100, 102, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1", "gen_ai.agent.name": "default",
+		}),
+	)
+	_, c1 := ReadTurn("conv-1")
+	SaveCursor("conv-1", c1)
+
+	// Turn 2, whose root hangs off turn 1's root rather than starting a trace.
+	appendLines(t, f,
+		nativeSpanLine(t, "t1", "ch2", "ia2", "chat gpt", 103, 104, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1", "gen_ai.request.model": "gpt",
+			"gen_ai.usage.input_tokens": 200, "gen_ai.usage.output_tokens": 20,
+		}),
+		nativeSpanLine(t, "t1", "e2", "ia2", "execute_tool bash", 103, 103.5, 0, map[string]any{
+			"gen_ai.tool.name": "bash", "gen_ai.tool.call.id": "call_B",
+		}),
+		nativeSpanLine(t, "t1", "ia2", "ia1", "invoke_agent", 103, 105, 0, map[string]any{
+			"gen_ai.conversation.id": "conv-1", "gen_ai.agent.name": "default",
+		}),
+	)
+
+	turn, _ := ReadTurn("conv-1")
+	require.NotNil(t, turn)
+
+	assert.Empty(t, turn.Agents,
+		"a turn root chained onto an earlier turn is still a turn, not a sub-agent")
+	require.Len(t, turn.Tools, 1)
+	assert.Empty(t, turn.Tools[0].ParentSpanID,
+		"and its tools still resolve to the turn's chat span")
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, int64(200), turn.Usage.InputTokens, "turn 2's usage only")
 }
 
 func TestReadTurn_fileDiscoveryByConversationID(t *testing.T) {

@@ -1842,3 +1842,16 @@ func TestProcess_SubAgentToolSpanUsesTheSubAgentsModel(t *testing.T) {
 		t.Fatal("the span is still emitted; only the model is withheld")
 	})
 }
+
+// TestIsSafeSessionID pins the guard cmd/copilot-on-event needs before it joins
+// a path or removes a directory with a session id from a hook payload. Process
+// substitutes a random id for an unsafe one, but only once the event reaches it.
+func TestIsSafeSessionID(t *testing.T) {
+	for _, ok := range []string{"abc", "8e58c3d0-5b41-4c8a-8d70-e9dcde56c66c", "call_KpW525rG"} {
+		assert.True(t, IsSafeSessionID(ok), "%q is a safe path segment", ok)
+	}
+	// An empty id resolves SessionDir to dataDir itself; the rest escape it.
+	for _, bad := range []string{"", "..", "../victim", "a/b", "a.b", "x\x00y"} {
+		assert.False(t, IsSafeSessionID(bad), "%q must not reach filepath.Join", bad)
+	}
+}

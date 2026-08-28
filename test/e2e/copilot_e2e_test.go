@@ -192,11 +192,16 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	assert.True(t, chatWithUsage, "expected the chat span to carry per-turn gen_ai.usage.*_tokens from the native-OTel file")
 	assert.True(t, chatWithResponse, "expected the chat span to carry gen_ai.output.messages (the agent response) from the native-OTel file")
 
+	// Two keys that must NOT survive the trip, both present in this fixture's
+	// inputs. github.copilot.cost is on the staged native chat span, in AI
+	// credits, and would land beside the money figure Dash0 derives at ingest.
 	// stopReason is on the agentStop payload and is camelCase, so the deny list's
-	// snake_case spellings did not cover it: it shipped on every chat span. This
-	// is the end-to-end lock, above the unit test in internal/otlp.
+	// snake_case spellings did not cover it. Both shipped once; this is the
+	// end-to-end lock, above the unit test in internal/otlp.
 	for _, s := range spans {
 		for _, a := range s.Attributes {
+			assert.NotEqual(t, "github.copilot.cost", a.Key,
+				"Copilot's AI-credit cost must not be exported (span %q)", s.Name)
 			assert.NotEqual(t, "stopReason", a.Key,
 				"the agentStop payload's stopReason must not reach a span (span %q)", s.Name)
 		}
@@ -241,6 +246,352 @@ func assertSpanAttr(t *testing.T, s otlp.Span, key, want string) {
 		}
 	}
 	t.Errorf("span %s carries no %s", s.Name, key)
+}
+
+// TestE2ECopilotUnmarkedRealSessionStillExports (L2) is the other half of the
+// sub-agent suppression: a missing marker is not on its own evidence of a
+// sub-agent.
+//
+// Only sessionStart writes a marker, and that hook can fail to write one for
+// reasons that have nothing to do with sub-agents — the bootstrap downloads the
+// binary inside it, under Copilot's 10s timeout, and every fail-open path exits
+// before the binary runs. The first session after a version bump on a slow link
+// is a real session with no marker. Suppressing on the marker alone silenced
+// every one of its turns, permanently, since sessionStart does not fire again.
+//
+// The native-OTel file settles it: a sub-agent has no spans under its own
+// conversation id, because its chat spans carry the parent's. So this drives a
+// turn with no sessionStart at all, for a session the file DOES describe, and it
+// must still export.
+func TestE2ECopilotUnmarkedRealSessionStillExports(t *testing.T) {
+	pluginDir := findPluginDir(t)
+	bin := buildCopilotBinary(t, pluginDir)
+	cap, srv := newOTLPCapture(t)
+	defer srv.Close()
+
+	pluginData := t.TempDir()
+	otelDir := t.TempDir()
+	stagedOtelTurn(otelDir, copilotConvID)
+
+	run := func(eventName, payload string) {
+		cmd := exec.Command(bin, eventName)
+		cmd.Env = append(hermeticEnv(t),
+			"DASH0_OTLP_URL="+srv.URL,
+			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+			"COPILOT_PLUGIN_DATA="+pluginData,
+			"DASH0_COPILOT_OTEL_DIR="+otelDir,
+		)
+		cmd.Stdin = strings.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s failed: %s", eventName, out)
+	}
+
+	// No sessionStart: this is the shape a failed bootstrap leaves behind.
+	sid := `"sessionId":"` + copilotConvID + `"`
+	run("userPromptSubmitted", `{`+sid+`,"prompt":"still a real session"}`)
+	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
+
+	time.Sleep(200 * time.Millisecond)
+	bodies, _ := cap.snapshot()
+	spans := collectSpans(t, bodies)
+	require.NotEmpty(t, spans,
+		"a real session whose marker was never written must still export")
+
+	require.NoFileExists(t, filepath.Join(pluginData, "started", copilotConvID),
+		"the premise: this session really has no marker")
+
+	var chatWithUsage bool
+	for _, s := range spans {
+		if strings.HasPrefix(s.Name, "chat") && spanHasPositiveTokenUsage(s) {
+			chatWithUsage = true
+		}
+	}
+	assert.True(t, chatWithUsage,
+		"and it must carry the turn's usage, not a bare span")
+}
+
+// TestE2ECopilotSubAgentSessionMintsNoConversation (L2) pins the suppression of
+// a sub-agent's own hook session, using the payload shape an INTERACTIVE Copilot
+// session produces.
+//
+// Copilot gives a sub-agent its own session id, and its shape depends on how the
+// CLI was launched: `copilot -p` names it call_<toolCallId>, which
+// copilot.Normalize drops on the prefix, while an interactive session gives it a
+// plain UUID that the prefix cannot catch. That one shipped. Observed
+// 2026-08-28 against Copilot CLI 1.0.80: a delegating turn produced the expected
+// four-span conversation plus a second conversation holding one `chat ` span
+// with no model and no usage — the sub-agent's own turn, whose native-OTel spans
+// carry the PARENT's conversation id.
+//
+// What holds in both modes is that a sub-agent session receives no sessionStart.
+// The events below are the interactive shape: the parent runs a full lifecycle,
+// the sub-agent gets userPromptSubmitted and agentStop under a UUID, and both
+// carry the traceparent interactive mode adds.
+func TestE2ECopilotSubAgentSessionMintsNoConversation(t *testing.T) {
+	pluginDir := findPluginDir(t)
+	bin := buildCopilotBinary(t, pluginDir)
+	cap, srv := newOTLPCapture(t)
+	defer srv.Close()
+
+	pluginData := t.TempDir()
+	otelDir := t.TempDir()
+	stagedOtelTurn(otelDir, copilotConvID)
+
+	run := func(eventName, payload string) {
+		cmd := exec.Command(bin, eventName)
+		cmd.Env = append(hermeticEnv(t),
+			"DASH0_OTLP_URL="+srv.URL,
+			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+			"COPILOT_PLUGIN_DATA="+pluginData,
+			"DASH0_COPILOT_OTEL_DIR="+otelDir,
+		)
+		cmd.Stdin = strings.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s failed: %s", eventName, out)
+	}
+
+	const subAgentID = "5b65a91f-cbe0-4feb-9736-aadec8fe09b8"
+	const trace = `"traceparent":"00-558ca38a5fd1be05a94cf7002271be76-36bfb9a97f18b534-01"`
+	parent := `"sessionId":"` + copilotConvID + `"`
+	sub := `"sessionId":"` + subAgentID + `"`
+
+	run("sessionStart", `{`+parent+`,"cwd":`+strconv.Quote(t.TempDir())+`,"source":"new",`+trace+`}`)
+	run("userPromptSubmitted", `{`+parent+`,"prompt":"delegate this"}`)
+
+	// The sub-agent's whole lifecycle: a prompt and a stop, no sessionStart.
+	run("userPromptSubmitted", `{`+sub+`,"prompt":"Execute exactly this shell command: echo sub",`+trace+`}`)
+	run("agentStop", `{`+sub+`,"stopReason":"end_turn","stop_hook_active":false,`+trace+`}`)
+
+	run("agentStop", `{`+parent+`,"stopReason":"end_turn"}`)
+
+	time.Sleep(200 * time.Millisecond)
+	bodies, _ := cap.snapshot()
+	spans := collectSpans(t, bodies)
+	require.NotEmpty(t, spans)
+	logSpanTree(t, spans)
+
+	conversations := map[string]int{}
+	for _, s := range spans {
+		for _, a := range s.Attributes {
+			if a.Key == "gen_ai.conversation.id" && a.Value.StringValue != nil {
+				conversations[*a.Value.StringValue]++
+			}
+		}
+	}
+	assert.NotContains(t, conversations, subAgentID,
+		"a sub-agent session must mint no conversation, whatever its id looks like")
+	assert.Len(t, conversations, 1,
+		"a delegating turn is one conversation; got %v", conversations)
+	assert.Positive(t, conversations[copilotConvID], "the parent turn must still be exported")
+
+	// The parent is unaffected: its turn still carries the usage and the tools.
+	var chatWithUsage, tools int
+	for _, s := range spans {
+		switch {
+		case strings.HasPrefix(s.Name, "chat") && spanHasPositiveTokenUsage(s):
+			chatWithUsage++
+		case strings.HasPrefix(s.Name, "execute_tool"):
+			tools++
+		}
+	}
+	assert.Equal(t, 1, chatWithUsage, "the parent turn's chat span must still carry usage")
+	assert.Positive(t, tools, "the parent turn's tool spans must still be emitted")
+}
+
+// TestE2ECopilotUnsafeSessionIDDestroysNothing (L2) pins the guard in front of
+// the entrypoint's os.RemoveAll.
+//
+// The sub-agent suppression removes the session directory of a turn it drops,
+// and it resolves that directory from the raw payload — before pipeline.Process,
+// which is what normally substitutes a random id for a missing or unsafe one. An
+// agentStop with no sessionId therefore resolved SessionDir to the plugin's data
+// root ITSELF and deleted it: the bootstrap's cached binary and every concurrent
+// session's state, exit 0, no diagnostic. "../victim" walked out of it.
+func TestE2ECopilotUnsafeSessionIDDestroysNothing(t *testing.T) {
+	pluginDir := findPluginDir(t)
+	bin := buildCopilotBinary(t, pluginDir)
+	_, srv := newOTLPCapture(t)
+	defer srv.Close()
+
+	root := t.TempDir()
+	pluginData := filepath.Join(root, "data")
+	binCache := filepath.Join(pluginData, "bin")
+	other := filepath.Join(pluginData, "another-live-session")
+	sibling := filepath.Join(root, "victim")
+	markers := filepath.Join(pluginData, "started")
+	for _, d := range []string{binCache, other, sibling, markers} {
+		require.NoError(t, os.MkdirAll(d, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(d, "keep"), []byte("x"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(markers, "live-session"), nil, 0o644))
+
+	runAs := func(eventName, payload string) {
+		cmd := exec.Command(bin, eventName)
+		cmd.Env = append(hermeticEnv(t),
+			"DASH0_OTLP_URL="+srv.URL,
+			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+			"COPILOT_PLUGIN_DATA="+pluginData,
+			"DASH0_COPILOT_OTEL_DIR="+t.TempDir(),
+		)
+		cmd.Stdin = strings.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "the binary must stay fail-open: %s", out)
+	}
+	run := func(payload string) { runAs("agentStop", payload) }
+
+	// Quoted, not interpolated raw: a Windows path is full of backslashes, and
+	// every one of them starts a JSON escape. An unquoted path made the payload
+	// undecodable, the binary rejected it before reading a single field, and this
+	// case passed on Windows for the wrong reason — nothing was destroyed because
+	// nothing ran.
+	cwd := strconv.Quote(root)
+
+	run(`{"cwd":` + cwd + `,"stopReason":"end_turn"}`)                         // no sessionId at all
+	run(`{"cwd":` + cwd + `,"sessionId":"../victim","stopReason":"end_turn"}`) // escapes the data dir
+	run(`{"cwd":` + cwd + `,"sessionId":"","stopReason":"end_turn"}`)          // empty is the data dir
+	// A safe path segment is not enough: these three name directories the plugin
+	// owns, so resolving them would delete every live session's marker, or the
+	// bootstrap's cached binary.
+	run(`{"cwd":` + cwd + `,"sessionId":"started","stopReason":"end_turn"}`)
+	run(`{"cwd":` + cwd + `,"sessionId":"bin","stopReason":"end_turn"}`)
+	run(`{"cwd":` + cwd + `,"sessionId":"otel","stopReason":"end_turn"}`)
+
+	// sessionEnd is the other RemoveAll, and it is pipeline.Process's rather than
+	// this entrypoint's: Process joins the payload's id onto the data dir itself
+	// and removes what it joined. Keeping the entrypoint's own paths off these
+	// names leaves that one untouched, so the id has to be renamed in the payload
+	// before Process ever sees it.
+	for _, id := range []string{"started", "bin", "otel"} {
+		runAs("sessionEnd", `{"cwd":`+cwd+`,"sessionId":"`+id+`"}`)
+	}
+
+	assert.DirExists(t, pluginData, "the plugin data root must survive an unusable session id")
+	assert.FileExists(t, filepath.Join(binCache, "keep"), "the bootstrap's binary cache must survive")
+	assert.FileExists(t, filepath.Join(other, "keep"), "a concurrent session's state must survive")
+	assert.FileExists(t, filepath.Join(sibling, "keep"), "a sibling directory must be unreachable")
+	assert.FileExists(t, filepath.Join(markers, "live-session"), "the marker directory must be unreachable")
+
+	// Nothing is asserted about spans here. A bare Stop has no preceding prompt
+	// and so no trace context, and pipeline.Process declines to build a chat span
+	// without one — which is correct and predates this guard. What matters is
+	// that the event took the normal path instead of the suppression's
+	// RemoveAll.
+}
+
+// TestE2ECopilotSweepsOnSessionStart (L2) pins the wiring of the session-directory
+// sweep. Removing the call keeps the whole suite green otherwise: the sweep's own
+// behaviour is covered at function level, its wiring by nothing.
+func TestE2ECopilotSweepsOnSessionStart(t *testing.T) {
+	pluginDir := findPluginDir(t)
+	bin := buildCopilotBinary(t, pluginDir)
+	_, srv := newOTLPCapture(t)
+	defer srv.Close()
+
+	pluginData := t.TempDir()
+
+	// What a killed run leaves: a session directory nothing will ever end, and
+	// the sessionStart marker its launch wrote, which nothing deletes. The marker
+	// is what identifies the directory as this runtime's — under
+	// DASH0_PLUGIN_DATA the data root is shared with Cursor and Codex, whose
+	// sessions the sweep must not touch.
+	dead := filepath.Join(pluginData, "killed-session")
+	require.NoError(t, os.MkdirAll(dead, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(pluginData, "started"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pluginData, "started", "killed-session"), nil, 0o644))
+	events := filepath.Join(dead, "events.jsonl")
+	require.NoError(t, os.WriteFile(events, []byte(`{"prompt":"private"}`+"\n"), 0o644))
+	old := time.Now().Add(-4 * 7 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(events, old, old))
+
+	cmd := exec.Command(bin, "sessionStart")
+	cmd.Env = append(hermeticEnv(t),
+		"DASH0_OTLP_URL="+srv.URL,
+		"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+		"COPILOT_PLUGIN_DATA="+pluginData,
+		"DASH0_COPILOT_OTEL_DIR="+t.TempDir(),
+	)
+	cmd.Stdin = strings.NewReader(`{"sessionId":"` + copilotConvID + `","cwd":` + strconv.Quote(t.TempDir()) + `,"source":"new"}`)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "sessionStart failed: %s", out)
+
+	assert.NoDirExists(t, dead,
+		"sessionStart must collect what killed runs left, or their prompts sit on disk forever")
+	assert.DirExists(t, filepath.Join(pluginData, copilotConvID),
+		"the starting session's own directory must survive its own sweep")
+}
+
+// TestE2ECopilotTurnAfterSessionEndStillExports (L2) pins the marker against the
+// thing that deletes the directory it used to live in.
+//
+// pipeline.Process removes the session directory on SessionEnd. A turn arriving
+// afterwards recreates it — its userPromptSubmitted mints a fresh trace context
+// — so the pipeline will build the chat span; what it cannot recreate is the
+// sessionStart marker, because sessionStart does not fire again. With the marker
+// inside that directory the turn was read as a sub-agent's and dropped in
+// silence.
+//
+// The reachable case is not session reuse but the end of every session:
+// agentStop and sessionEnd fire together as separate processes, and agentStop is
+// the slower — it scans the native-OTel file — so a sessionEnd that wins the
+// race took the last turn with it.
+func TestE2ECopilotTurnAfterSessionEndStillExports(t *testing.T) {
+	pluginDir := findPluginDir(t)
+	bin := buildCopilotBinary(t, pluginDir)
+	cap, srv := newOTLPCapture(t)
+	defer srv.Close()
+
+	pluginData := t.TempDir()
+	otelDir := t.TempDir()
+	stagedOtelTurn(otelDir, copilotConvID)
+
+	run := func(eventName, payload string) {
+		cmd := exec.Command(bin, eventName)
+		cmd.Env = append(hermeticEnv(t),
+			"DASH0_OTLP_URL="+srv.URL,
+			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+			"COPILOT_PLUGIN_DATA="+pluginData,
+			"DASH0_COPILOT_OTEL_DIR="+otelDir,
+		)
+		cmd.Stdin = strings.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s failed: %s", eventName, out)
+	}
+
+	sid := `"sessionId":"` + copilotConvID + `"`
+	cwd := t.TempDir()
+	run("sessionStart", `{`+sid+`,"cwd":`+strconv.Quote(cwd)+`,"source":"new"}`)
+	run("userPromptSubmitted", `{`+sid+`,"prompt":"first"}`)
+	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
+	run("sessionEnd", `{`+sid+`,"reason":"exit"}`)
+
+	require.NoDirExists(t, filepath.Join(pluginData, copilotConvID),
+		"SessionEnd removes the session directory; that is the premise of this test")
+
+	// The late turn. No second sessionStart, exactly as a racing agentStop has none.
+	before := len(collectSpansQuiet(t, cap))
+	run("userPromptSubmitted", `{`+sid+`,"prompt":"second"}`)
+	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
+	time.Sleep(200 * time.Millisecond)
+
+	after := collectSpansQuiet(t, cap)
+	assert.Greater(t, len(after), before,
+		"a turn arriving after SessionEnd must still export; the marker outlives the directory")
+
+	var lateChat bool
+	for _, s := range after[before:] {
+		if strings.HasPrefix(s.Name, "chat") {
+			lateChat = true
+		}
+	}
+	assert.True(t, lateChat, "the late turn's chat span is the one that used to be dropped")
+}
+
+// collectSpansQuiet is collectSpans without the tree logging, for a test that
+// snapshots the capture more than once.
+func collectSpansQuiet(t *testing.T, cap *otlpCapture) []otlp.Span {
+	t.Helper()
+	bodies, _ := cap.snapshot()
+	return collectSpans(t, bodies)
 }
 
 // TestE2ECopilotDefersTurnWhenTraceContextMissing (L2) guards the F1 invariant:
@@ -460,6 +811,10 @@ func TestE2ECopilotSystemNotificationInput(t *testing.T) {
 	}
 
 	sid := `"sessionId":"` + copilotConvID + `"`
+	// sessionStart first, as a real session always has it: a turn ending in a
+	// session that never started is a sub-agent's and is dropped. See the
+	// suppression in cmd/copilot-on-event.
+	run("sessionStart", `{`+sid+`,"cwd":`+strconv.Quote(t.TempDir())+`,"source":"new"}`)
 	run("userPromptSubmitted", `{`+sid+`,"prompt":"<system_notification>\nAgent \"time-ticker\" (task) has finished processing and is now idle."}`)
 	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
 

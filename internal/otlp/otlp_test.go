@@ -368,6 +368,9 @@ func TestSendLogDropsCopilotStopReason(t *testing.T) {
 		"session_id":       "ad6ab0d8-093f-4a85-9fa7-87e0e5480a92",
 		"stopReason":       "end_turn",
 		"stop_hook_active": false,
+		// Interactive sessions add this one. It is a propagation header, and on a
+		// span it names a different trace than the span belongs to.
+		"traceparent": "00-558ca38a5fd1be05a94cf7002271be76-adc5bef1061afc70-01",
 	}
 	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
 
@@ -375,6 +378,7 @@ func TestSendLogDropsCopilotStopReason(t *testing.T) {
 	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "ad6ab0d8-093f-4a85-9fa7-87e0e5480a92")
 	assertNoAttr(t, lr.Attributes, "stopReason")
 	assertNoAttr(t, lr.Attributes, "stop_hook_active")
+	assertNoAttr(t, lr.Attributes, "traceparent")
 }
 
 // TestSendLogDropsUnmappedBookkeeping covers the fields that do not reach a span

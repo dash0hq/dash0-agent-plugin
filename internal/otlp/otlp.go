@@ -323,6 +323,18 @@ var attrSkipKeys = map[string]bool{
 	// span until it was denied here.
 	"turn_id": true,
 
+	// W3C trace context, which Copilot puts on an interactive session's payloads
+	// so a hook can continue its trace. It is a propagation header, not a span
+	// attribute, and on an emitted span it is worse than redundant: the span
+	// belongs to the plugin's own trace, derived from the session id, while this
+	// names Copilot's native one and a span id that is not its parent. Measured
+	// 2026-08-28: a chat span in trace 3b361e94… carrying
+	// 00-558ca38a…-adc5bef1061afc70-01, pointing at a trace that exists only in a
+	// local file. Correlating the two traces deliberately is worth doing — as a
+	// span link, on every span of the turn rather than whichever one carried the
+	// header — and is not this.
+	"traceparent": true,
+
 	// Copilot's agentStop bookkeeping. stopReason says why the turn ended
 	// ("end_turn"), which the span's own status already carries, and it is
 	// camelCase so it arrives unnamespaced. It reached every Copilot chat span

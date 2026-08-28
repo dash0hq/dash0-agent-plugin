@@ -153,7 +153,9 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	sid := `"sessionId":"` + copilotConvID + `"`
 	run("sessionStart", `{`+sid+`,"cwd":`+strconv.Quote(t.TempDir())+`,"source":"new"}`)
 	run("userPromptSubmitted", `{`+sid+`,"prompt":"run echo hi"}`)
-	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
+	// traceparent as an interactive session sends it: Copilot continues its own
+	// trace into the hook, and that trace is not the one the emitted span is on.
+	run("agentStop", `{`+sid+`,"stopReason":"end_turn","traceparent":"00-558ca38a5fd1be05a94cf7002271be76-adc5bef1061afc70-01"}`)
 
 	time.Sleep(200 * time.Millisecond)
 	bodies, _ := cap.snapshot()
@@ -192,18 +194,22 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	assert.True(t, chatWithUsage, "expected the chat span to carry per-turn gen_ai.usage.*_tokens from the native-OTel file")
 	assert.True(t, chatWithResponse, "expected the chat span to carry gen_ai.output.messages (the agent response) from the native-OTel file")
 
-	// Two keys that must NOT survive the trip, both present in this fixture's
+	// Three keys that must NOT survive the trip, all present in this fixture's
 	// inputs. github.copilot.cost is on the staged native chat span, in AI
 	// credits, and would land beside the money figure Dash0 derives at ingest.
-	// stopReason is on the agentStop payload and is camelCase, so the deny list's
-	// snake_case spellings did not cover it. Both shipped once; this is the
-	// end-to-end lock, above the unit test in internal/otlp.
+	// stopReason and traceparent are on the agentStop payload and are neither
+	// snake_case nor namespaced, so nothing else stops them; traceparent is
+	// worse than redundant, naming a different trace than the span it sits on.
+	// All three shipped once; this is the end-to-end lock, above the unit tests
+	// in internal/otlp.
 	for _, s := range spans {
 		for _, a := range s.Attributes {
 			assert.NotEqual(t, "github.copilot.cost", a.Key,
 				"Copilot's AI-credit cost must not be exported (span %q)", s.Name)
 			assert.NotEqual(t, "stopReason", a.Key,
 				"the agentStop payload's stopReason must not reach a span (span %q)", s.Name)
+			assert.NotEqual(t, "traceparent", a.Key,
+				"the propagation header must not reach a span (span %q)", s.Name)
 		}
 	}
 
@@ -419,11 +425,13 @@ func TestE2ECopilotUnsafeSessionIDDestroysNothing(t *testing.T) {
 	other := filepath.Join(pluginData, "another-live-session")
 	sibling := filepath.Join(root, "victim")
 	markers := filepath.Join(pluginData, "started")
-	for _, d := range []string{binCache, other, sibling, markers} {
+	otel := filepath.Join(pluginData, "otel")
+	for _, d := range []string{binCache, other, sibling, markers, otel} {
 		require.NoError(t, os.MkdirAll(d, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(d, "keep"), []byte("x"), 0o644))
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(markers, "live-session"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(otel, "otel.jsonl"), []byte("{}\n"), 0o644))
 
 	runAs := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
@@ -470,6 +478,8 @@ func TestE2ECopilotUnsafeSessionIDDestroysNothing(t *testing.T) {
 	assert.FileExists(t, filepath.Join(other, "keep"), "a concurrent session's state must survive")
 	assert.FileExists(t, filepath.Join(sibling, "keep"), "a sibling directory must be unreachable")
 	assert.FileExists(t, filepath.Join(markers, "live-session"), "the marker directory must be unreachable")
+	assert.FileExists(t, filepath.Join(otel, "otel.jsonl"),
+		"the native-OTel directory must be unreachable: in the default layout it is a child of the data root")
 
 	// Nothing is asserted about spans here. A bare Stop has no preceding prompt
 	// and so no trace context, and pipeline.Process declines to build a chat span

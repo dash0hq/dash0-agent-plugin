@@ -40,12 +40,36 @@ type ToolCall struct {
 	Failed       bool // native span status code == ERROR
 }
 
+// SubAgent is one sub-agent invocation of the turn, recovered from a native
+// invoke_agent span nested under the tool that spawned it.
+//
+// Copilot's hooks cannot describe this: a sub-agent's hook session is a
+// synthetic call_<toolCallId> with nothing linking it to the parent
+// conversation. The native-OTel file can, and does — the layer used to be
+// collapsed and thrown away, which left the sub-agent's identity with nowhere
+// standard to go.
+type SubAgent struct {
+	SpanID       string // native span id, reused verbatim
+	ParentSpanID string // the execute_tool span that spawned it
+	// AgentType is the native gen_ai.agent.name, e.g. "task". It names the kind
+	// of agent, not this invocation — two concurrent sub-agents of one kind share
+	// it, exactly as Claude's subagent_type does.
+	AgentType string
+	// CallID is the spawning tool call's gen_ai.tool.call.id. It is the per
+	// invocation identity, and it is the same value Copilot uses for the
+	// sub-agent's own hook session id, so it joins the two records.
+	CallID     string
+	Start, End time.Time
+	Failed     bool
+}
+
 // Turn is everything recovered from the native-OTel file for the turn that just
-// ended: aggregated usage (nil if no chat span flushed yet) and the turn's tool
-// executions, parent and sub-agent alike.
+// ended: aggregated usage (nil if no chat span flushed yet), the turn's tool
+// executions parent and sub-agent alike, and its sub-agent invocations.
 type Turn struct {
-	Usage *Usage
-	Tools []ToolCall
+	Usage  *Usage
+	Tools  []ToolCall
+	Agents []SubAgent
 }
 
 // otelSpan is one native-OTel span record belonging to this conversation.
@@ -150,7 +174,11 @@ func ReadTurn(sessionID string) (*Turn, string) {
 	}
 
 	turn := &Turn{}
-	freshTools := make(map[string]bool)
+	// Every span this turn will emit, by native id. Both tools and sub-agents go
+	// in, because parenting resolves to the nearest ancestor that is *itself*
+	// emitted — that is what nests a sub-agent's tools under their agent, and the
+	// agent under the tool that spawned it.
+	emitted := make(map[string]bool)
 	for _, s := range fresh {
 		switch {
 		case strings.HasPrefix(s.name, "chat "):
@@ -162,19 +190,30 @@ func ReadTurn(sessionID string) (*Turn, string) {
 			u.OutputTokens += attrInt(a, "gen_ai.usage.output_tokens")
 			u.CacheReadInputTokens += attrInt(a, "gen_ai.usage.cache_read.input_tokens")
 			u.ReasoningOutputTokens += attrInt(a, "gen_ai.usage.reasoning.output_tokens")
-			// github.copilot.cost is deliberately not read. It is Copilot's own
-			// AI-credit accounting and the plugin does not export it — see
-			// attachUsage in cmd/copilot-on-event. Summing it here would leave a
-			// field whose only purpose is to be discarded, which is the shape the
-			// export grew out of the first time.
 			if m := attrString(a, "gen_ai.request.model"); m != "" {
 				u.Model = m // last non-empty model in the turn
 			}
 			if txt := assistantTextFromOutput(attrString(a, "gen_ai.output.messages")); txt != "" {
 				u.ResponseText = txt // last non-empty assistant text in the turn = the final response
 			}
+		case strings.HasPrefix(s.name, "invoke_agent"):
+			// The turn's own agent is the root of the trace and has no parent.
+			// It is the turn, which the pipeline's chat span already represents,
+			// so emitting it too would duplicate the turn as a second span.
+			// A nested one is a real sub-agent.
+			if s.parentSpanID == "" {
+				continue
+			}
+			emitted[s.spanID] = true
+			turn.Agents = append(turn.Agents, SubAgent{
+				SpanID:    s.spanID,
+				AgentType: attrString(s.attrs, "gen_ai.agent.name"),
+				Start:     s.start,
+				End:       s.end,
+				Failed:    s.failed,
+			})
 		case strings.HasPrefix(s.name, "execute_tool"):
-			freshTools[s.spanID] = true
+			emitted[s.spanID] = true
 			turn.Tools = append(turn.Tools, ToolCall{
 				SpanID:    s.spanID,
 				Name:      attrString(s.attrs, "gen_ai.tool.name"),
@@ -189,25 +228,43 @@ func ReadTurn(sessionID string) (*Turn, string) {
 		}
 	}
 
-	// Collapse the invoke_agent/chat layers: parent each tool to its nearest
-	// execute_tool ancestor emitted this turn. Ancestry walks the FULL span list
-	// (a parent record precedes only by id, not necessarily by window), but the
-	// resolved parent must itself be emitted this turn to keep the link intact.
+	// Collapse only the layers nothing is emitted for — the native chat spans,
+	// and the turn's own root invoke_agent. Every span this turn emits parents to
+	// the nearest ancestor that is also emitted, which reproduces the native tree
+	// minus those layers:
+	//
+	//   chat → execute_tool task → invoke_agent task → execute_tool bash
+	//
+	// Ancestry walks the FULL span list (a parent record precedes only by id, not
+	// necessarily by window), but the resolved parent must itself be emitted this
+	// turn or the link would point at a span nobody sent.
 	byID := make(map[string]otelSpan, len(spans))
 	for _, s := range spans {
 		byID[s.spanID] = s
 	}
 	for i := range turn.Tools {
-		turn.Tools[i].ParentSpanID = nearestFreshToolAncestor(byID, freshTools, turn.Tools[i].SpanID)
+		turn.Tools[i].ParentSpanID = nearestEmittedAncestor(byID, emitted, turn.Tools[i].SpanID)
+	}
+	for i := range turn.Agents {
+		parent := nearestEmittedAncestor(byID, emitted, turn.Agents[i].SpanID)
+		turn.Agents[i].ParentSpanID = parent
+		// The sub-agent's per-invocation identity is the call id of the tool that
+		// spawned it. The native span's own gen_ai.agent.id is "builtin:<type>",
+		// which every sub-agent of that kind shares, so it would be a type filter
+		// wearing an id's name.
+		if p, ok := byID[parent]; ok {
+			turn.Agents[i].CallID = attrString(p.attrs, "gen_ai.tool.call.id")
+		}
 	}
 
 	return turn, fresh[len(fresh)-1].spanID
 }
 
-// nearestFreshToolAncestor walks up the native parent chain from spanID and
-// returns the first execute_tool ancestor that is being emitted this turn, or
-// "" if the chain exits the known tree first (top-level tool → chat span).
-func nearestFreshToolAncestor(byID map[string]otelSpan, freshTools map[string]bool, spanID string) string {
+// nearestEmittedAncestor walks up the native parent chain from spanID and
+// returns the first ancestor this turn is emitting, or "" if the chain exits the
+// known tree first (a top-level tool, which the caller parents to the turn's
+// chat span).
+func nearestEmittedAncestor(byID map[string]otelSpan, emitted map[string]bool, spanID string) string {
 	seen := map[string]bool{spanID: true}
 	cur := byID[spanID].parentSpanID
 	for cur != "" && !seen[cur] {
@@ -216,7 +273,7 @@ func nearestFreshToolAncestor(byID map[string]otelSpan, freshTools map[string]bo
 		if !ok {
 			return ""
 		}
-		if strings.HasPrefix(s.name, "execute_tool") && freshTools[s.spanID] {
+		if emitted[s.spanID] {
 			return s.spanID
 		}
 		cur = s.parentSpanID

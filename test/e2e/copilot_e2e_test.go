@@ -99,8 +99,8 @@ func bootstrapVersion(t *testing.T, pluginDir string) string {
 // stagedOtelTurn writes a realistic native-OTel file for one turn, mirroring a
 // real capture: an invoke_agent root, a chat span (usage + response), a
 // top-level bash tool (real 0.5s duration), and a task spawn whose sub-agent
-// runs its own bash — the sub-agent's tool hangs off an invoke_agent-task layer
-// that the plugin must collapse.
+// runs its own bash under an invoke_agent-task layer the plugin must re-emit as
+// its own span.
 func stagedOtelTurn(dir, conv string) {
 	const trace = "11111111111111111111111111111111"
 	lines := []string{
@@ -110,8 +110,8 @@ func stagedOtelTurn(dir, conv string) {
 		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa02","parentSpanId":"aaaaaaaaaaaaaa00","name":"execute_tool bash","startTime":[1001,0],"endTime":[1001,500000000],"status":{"code":0},"attributes":{"gen_ai.tool.name":"bash","gen_ai.tool.call.id":"call_top","gen_ai.tool.call.arguments":"{\"command\":\"echo hi\"}","gen_ai.tool.call.result":"hi"}}`, trace),
 		// sub-agent's bash, under the invoke_agent-task layer.
 		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa05","parentSpanId":"aaaaaaaaaaaaaa04","name":"execute_tool bash","startTime":[1002,0],"endTime":[1002,250000000],"status":{"code":0},"attributes":{"gen_ai.tool.name":"bash","gen_ai.tool.call.id":"call_sub","gen_ai.tool.call.arguments":"{\"command\":\"echo hello\"}","gen_ai.tool.call.result":"hello"}}`, trace),
-		// the sub-agent root (collapsed by the plugin).
-		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa04","parentSpanId":"aaaaaaaaaaaaaa03","name":"invoke_agent task","startTime":[1001,600000000],"endTime":[1003,0],"status":{"code":0},"attributes":{"gen_ai.conversation.id":%q}}`, trace, conv),
+		// the sub-agent root, which the plugin re-emits as its own invoke_agent span.
+		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa04","parentSpanId":"aaaaaaaaaaaaaa03","name":"invoke_agent task","startTime":[1001,600000000],"endTime":[1003,0],"status":{"code":0},"attributes":{"gen_ai.conversation.id":%q,"gen_ai.agent.name":"task","gen_ai.agent.id":"builtin:task"}}`, trace, conv),
 		// the task spawn itself.
 		fmt.Sprintf(`{"type":"span","traceId":"%s","spanId":"aaaaaaaaaaaaaa03","parentSpanId":"aaaaaaaaaaaaaa00","name":"execute_tool task","startTime":[1001,600000000],"endTime":[1003,100000000],"status":{"code":0},"attributes":{"gen_ai.tool.name":"task","gen_ai.tool.call.id":"call_spawn","gen_ai.tool.call.arguments":"{\"agent_type\":\"task\",\"name\":\"echo-runner\"}","gen_ai.tool.call.result":"done"}}`, trace),
 		// the turn's invoke_agent root.
@@ -123,8 +123,9 @@ func stagedOtelTurn(dir, conv string) {
 // TestE2ECopilotPerTurnSpans (L2) feeds a turn of synthetic camelCase hook
 // events through the built binary with a staged native-OTel file, and asserts
 // the emitted canonical spans: a chat span carrying per-turn tokens + response,
-// and OTel-sourced execute_tool spans with REAL durations — the top-level tool
-// under the chat span, the sub-agent's tool nested under its `task` spawn.
+// OTel-sourced execute_tool spans with REAL durations, and an invoke_agent span
+// per sub-agent. The tree must reproduce the native one minus the layers nothing
+// is emitted for: chat → execute_tool task → invoke_agent task → execute_tool bash.
 func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	pluginDir := findPluginDir(t)
 	bin := buildCopilotBinary(t, pluginDir)
@@ -162,7 +163,8 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 
 	var chatWithUsage, chatWithResponse, harnessOK bool
 	chatSpanID := ""
-	tools := map[string]otlp.Span{} // by native span id
+	tools := map[string]otlp.Span{}  // by native span id
+	agents := map[string]otlp.Span{} // sub-agent invoke_agent spans, by native span id
 	for _, s := range spans {
 		for _, a := range s.Attributes {
 			if a.Key == "gen_ai.harness.name" && a.Value.StringValue != nil && *a.Value.StringValue == "github-copilot-cli" {
@@ -182,6 +184,8 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 			}
 		case strings.HasPrefix(s.Name, "execute_tool"):
 			tools[s.SpanID] = s
+		case strings.HasPrefix(s.Name, "invoke_agent"):
+			agents[s.SpanID] = s
 		}
 	}
 	assert.True(t, harnessOK, "expected a span tagged gen_ai.harness.name=github-copilot-cli")
@@ -208,17 +212,35 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	task, ok := tools["aaaaaaaaaaaaaa03"]
 	require.True(t, ok, "task spawn emitted")
 	assert.Equal(t, chatSpanID, task.ParentSpanID)
-	taskName := ""
-	for _, a := range task.Attributes {
-		if a.Key == "dash0.gen_ai.tool.task.name" && a.Value.StringValue != nil {
-			taskName = *a.Value.StringValue
-		}
-	}
-	assert.Equal(t, "echo-runner", taskName, "task spans carry their instance name")
+
+	// The sub-agent gets its own invoke_agent span, carrying the SAME standard
+	// attributes Claude and Codex produce — not a Copilot-specific key on the
+	// tool span. gen_ai.agent.id is the spawning call id, which is unique per
+	// invocation; the native gen_ai.agent.id ("builtin:task") is shared by every
+	// sub-agent of that kind and would be a type filter wearing an id's name.
+	agent, ok := agents["aaaaaaaaaaaaaa04"]
+	require.True(t, ok, "the sub-agent's invoke_agent span must be emitted, not collapsed")
+	assert.Equal(t, "invoke_agent task", agent.Name)
+	assert.Equal(t, "aaaaaaaaaaaaaa03", agent.ParentSpanID, "the sub-agent hangs under the task tool that spawned it")
+	assertSpanAttr(t, agent, "gen_ai.agent.name", "task")
+	assertSpanAttr(t, agent, "gen_ai.agent.id", "call_spawn")
 
 	subBash, ok := tools["aaaaaaaaaaaaaa05"]
 	require.True(t, ok, "sub-agent tool emitted")
-	assert.Equal(t, "aaaaaaaaaaaaaa03", subBash.ParentSpanID, "sub-agent tool must nest under its spawning task span (invoke_agent layer collapsed)")
+	assert.Equal(t, "aaaaaaaaaaaaaa04", subBash.ParentSpanID, "sub-agent tool must nest under the sub-agent's invoke_agent span")
+}
+
+// assertSpanAttr fails unless the span carries key with exactly want.
+func assertSpanAttr(t *testing.T, s otlp.Span, key, want string) {
+	t.Helper()
+	for _, a := range s.Attributes {
+		if a.Key == key {
+			require.NotNil(t, a.Value.StringValue, "%s on %s has no string value", key, s.Name)
+			assert.Equal(t, want, *a.Value.StringValue, "%s on %s", key, s.Name)
+			return
+		}
+	}
+	t.Errorf("span %s carries no %s", s.Name, key)
 }
 
 // TestE2ECopilotDefersTurnWhenTraceContextMissing (L2) guards the F1 invariant:

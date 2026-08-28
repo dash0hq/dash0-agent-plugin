@@ -357,8 +357,10 @@ func nativeSpanLine(t *testing.T, traceID, spanID, parentID, name string, startS
 // TestReadTurn_toolCalls covers the OTel-sourced tool recovery: execute_tool
 // spans (which carry NO conversation.id — membership goes via the shared
 // traceId) come back with real timings and failure status, and parents collapse
-// the invoke_agent layers — a sub-agent's tool nests under its spawning `task`
-// span, top-level tools resolve to "" (→ the caller's chat span).
+// the native tree — a sub-agent's tool nests under the sub-agent's invoke_agent
+// span, that agent under the `task` tool that spawned it, and top-level tools
+// resolve to "" (→ the caller's chat span). Only the turn's own root
+// invoke_agent and the native chat spans are collapsed away.
 func TestReadTurn_toolCalls(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
@@ -385,6 +387,10 @@ func TestReadTurn_toolCalls(t *testing.T) {
 		}),
 		nativeSpanLine(t, "t1", "ia2", "e2", "invoke_agent task", 101.5, 103, 0, map[string]any{
 			"gen_ai.conversation.id": "conv-1",
+			// As captured: the agent's kind, and an id shared by every sub-agent
+			// of that kind. The plugin takes the name and ignores the id.
+			"gen_ai.agent.name": "task",
+			"gen_ai.agent.id":   "builtin:task",
 		}),
 		nativeSpanLine(t, "t1", "e2", "ia1", "execute_tool task", 101.5, 103.5, 0, map[string]any{
 			"gen_ai.tool.name": "task", "gen_ai.tool.call.id": "call_X",
@@ -419,8 +425,19 @@ func TestReadTurn_toolCalls(t *testing.T) {
 	assert.Empty(t, task.ParentSpanID)
 
 	sub := byID["e3"]
-	assert.Equal(t, "e2", sub.ParentSpanID, "sub-agent tool nests under its spawning task span (invoke_agent layer collapsed)")
+	assert.Equal(t, "ia2", sub.ParentSpanID, "sub-agent tool nests under the sub-agent's own invoke_agent span")
 	assert.True(t, sub.Failed, "native status code 2 marks the tool failed")
+
+	// The sub-agent itself. Its identity is the spawning tool call's id, not the
+	// native gen_ai.agent.id, which is a per-type value every task sub-agent
+	// shares. The turn's root invoke_agent is NOT among these: it is the turn,
+	// which the pipeline's chat span already represents.
+	require.Len(t, turn.Agents, 1, "only the nested invoke_agent is a sub-agent")
+	agent := turn.Agents[0]
+	assert.Equal(t, "ia2", agent.SpanID, "native span id reused verbatim")
+	assert.Equal(t, "e2", agent.ParentSpanID, "the sub-agent hangs under the task tool that spawned it")
+	assert.Equal(t, "task", agent.AgentType)
+	assert.Equal(t, "call_X", agent.CallID, "per-invocation identity comes from the spawning tool call")
 
 	// The cursor covers ALL consumed spans (tools included): after persisting it,
 	// a re-read finds nothing new.

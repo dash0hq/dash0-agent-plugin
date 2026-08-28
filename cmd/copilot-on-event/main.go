@@ -12,9 +12,10 @@
 //     Copilot's native-OTel file: token/model/response (attached to the Stop
 //     event for the pipeline's chat span) AND the turn's tool executions. The
 //     file's own cost figure is left behind — see attachUsage.
-//  4. Hands off to pipeline.Process for the chat span, then emits one
-//     execute_tool span per recovered tool call — real durations, sub-agent
-//     tools nested under their spawning `task` span.
+//  4. Hands off to pipeline.Process for the chat span, then emits the turn's
+//     recovered spans: one invoke_agent per sub-agent and one execute_tool per
+//     tool call, with real durations and the native tree preserved —
+//     chat → execute_tool task → invoke_agent → execute_tool bash.
 //
 // Telemetry failures never break the user's session: errors go to stderr and
 // the process always exits 0. This fail-open contract is mandatory (Copilot's
@@ -25,7 +26,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/dotenv"
@@ -124,6 +124,9 @@ func run() error {
 		// consumed and dropping them. Advancing only after a successful emit — and
 		// only after Process — keeps the cursor and the spans from drifting apart.
 		if turn != nil && turnCtx != nil && turnCtx.TraceID != "" {
+			// Agents first: a sub-agent's tools parent onto its invoke_agent span,
+			// so the parent is on the wire before its children.
+			emitAgentSpans(turn, turnCtx, cfg)
 			emitToolSpans(turn, turnCtx, cfg)
 			copilot.SaveCursor(turnSession, turnCursor)
 		}
@@ -145,16 +148,6 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 	if u.ReasoningOutputTokens > 0 {
 		event["gen_ai.usage.reasoning.output_tokens"] = u.ReasoningOutputTokens
 	}
-	// Copilot's own github.copilot.cost is deliberately NOT carried through. Its
-	// unit is AI credits, and it would land one attribute away from
-	// dash0.gen_ai.usage.cost, which Dash0 derives from tokens at ingest and
-	// reports in money. Two keys ending in "cost", on one span, in two units, one
-	// of them a vendor's internal accounting unit — the reader has no way to tell
-	// them apart, and a dashboard summing them is wrong without ever looking
-	// wrong. internal/source/copilot does not read it into Usage either: a field
-	// whose only purpose is to be discarded here is how the export grew the first
-	// time. The credits figure is still recoverable from the native-OTel file for
-	// anyone who wants it.
 	if u.Model != "" {
 		if _, has := event["model"]; !has {
 			event["model"] = u.Model
@@ -173,9 +166,9 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 // emitToolSpans emits one execute_tool span per tool call recovered from the
 // native-OTel file, onto the turn's trace: native span ids are reused verbatim
 // (same 16-hex format as ours — idempotent across re-reads), timings are the
-// tool's real start/end, and parents collapse the native invoke_agent/chat
-// layers — a sub-agent's tools nest under their spawning `task` span, top-level
-// tools under the turn's chat span. Events are synthesized in the pipeline's
+// tool's real start/end, and parents follow the native tree — a sub-agent's
+// tools nest under its invoke_agent span (see emitAgentSpans), top-level tools
+// under the turn's chat span. Events are synthesized in the pipeline's
 // canonical shape and run through the same extractor enrichments as
 // hook-sourced tool events on the other runtimes, so OmitIO redaction and the
 // dash0.gen_ai.* details stay uniform.
@@ -211,14 +204,6 @@ func emitToolSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) 
 		// so OmitIO redaction and the dash0.gen_ai.* details stay uniform.
 		pipeline.EnrichToolEvent(event)
 
-		// Label a sub-agent spawn with its instance name (e.g. "echo-runner") so
-		// task spans are tellable apart.
-		if strings.EqualFold(tc.Name, "task") && args != nil {
-			if name, _ := args["name"].(string); name != "" {
-				event["dash0.gen_ai.tool.task.name"] = name
-			}
-		}
-
 		parent := tc.ParentSpanID
 		if parent == "" {
 			parent = ctx.SpanID // top-level tool → the turn's chat span
@@ -226,6 +211,50 @@ func emitToolSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) 
 		span := otlp.NewToolSpan(ctx.TraceID, tc.SpanID, parent, tc.Start, tc.End, event, tc.Failed, cfg)
 		if err := otlp.SendTrace(span, event, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "copilot-on-event: tool span export: %v\n", err)
+		}
+	}
+}
+
+// emitAgentSpans emits one invoke_agent span per sub-agent the turn spawned,
+// between the `task` tool that spawned it and the tools it ran. Copilot's own
+// OpenTelemetry describes that layer and the plugin used to collapse it, which
+// left the sub-agent's identity with nowhere standard to go and put a custom
+// key on the tool span instead.
+//
+// The event is shaped so the pipeline's existing mapping does the work:
+// agent_type becomes gen_ai.agent.name and drives the invoke_agent span name,
+// agent_id becomes gen_ai.agent.id. Same keys as Claude and Codex produce.
+//
+// No usage is attached. Attribution stays flat — a sub-agent's chat spans fold
+// into the parent turn's total, which is what Copilot's file supports today —
+// so putting the same tokens here as well would double them for anyone summing
+// across a trace. The native span carries no usage either.
+func emitAgentSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) {
+	for _, sa := range turn.Agents {
+		agentType := sa.AgentType
+		if agentType == "" {
+			// NewLLMSpan reads agent_type to decide it is an invoke_agent span at
+			// all, so an unnamed agent would silently become a chat span.
+			agentType = "agent"
+		}
+		event := map[string]any{
+			"session_id": ctx.SessionID,
+			"agent_type": agentType,
+		}
+		if sa.CallID != "" {
+			event["agent_id"] = sa.CallID
+		}
+		if turn.Usage != nil && turn.Usage.Model != "" {
+			event["model"] = turn.Usage.Model
+		}
+
+		parent := sa.ParentSpanID
+		if parent == "" {
+			parent = ctx.SpanID // no spawning tool span this turn → the chat span
+		}
+		span := otlp.NewLLMSpan(ctx.TraceID, sa.SpanID, parent, sa.Start, sa.End, event, sa.Failed, cfg)
+		if err := otlp.SendTrace(span, event, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "copilot-on-event: agent span export: %v\n", err)
 		}
 	}
 }

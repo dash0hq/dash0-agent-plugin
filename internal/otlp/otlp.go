@@ -323,6 +323,13 @@ var attrSkipKeys = map[string]bool{
 	// span until it was denied here.
 	"turn_id": true,
 
+	// Copilot's agentStop bookkeeping. stopReason says why the turn ended
+	// ("end_turn"), which the span's own status already carries, and it is
+	// camelCase so it arrives unnamespaced. It reached every Copilot chat span
+	// until it was denied here. Copilot's snake_case stop_hook_active is already
+	// covered above, which is why only this one was left.
+	"stopReason": true,
+
 	// InstructionsLoaded bookkeeping. That event maps to no span, so these three
 	// did not reach Dash0; denying them now means mapping the event later cannot
 	// leak them by accident.

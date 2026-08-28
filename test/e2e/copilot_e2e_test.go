@@ -188,6 +188,16 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	assert.True(t, chatWithUsage, "expected the chat span to carry per-turn gen_ai.usage.*_tokens from the native-OTel file")
 	assert.True(t, chatWithResponse, "expected the chat span to carry gen_ai.output.messages (the agent response) from the native-OTel file")
 
+	// stopReason is on the agentStop payload and is camelCase, so the deny list's
+	// snake_case spellings did not cover it: it shipped on every chat span. This
+	// is the end-to-end lock, above the unit test in internal/otlp.
+	for _, s := range spans {
+		for _, a := range s.Attributes {
+			assert.NotEqual(t, "stopReason", a.Key,
+				"the agentStop payload's stopReason must not reach a span (span %q)", s.Name)
+		}
+	}
+
 	require.Len(t, tools, 3, "all execute_tool spans (top-level bash, task spawn, sub-agent bash) must be emitted from the native-OTel file")
 	topBash, ok := tools["aaaaaaaaaaaaaa02"]
 	require.True(t, ok, "top-level bash keeps its native span id")

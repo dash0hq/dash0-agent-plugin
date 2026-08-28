@@ -50,7 +50,16 @@ func flushBacklog(cfg otlp.Config, dataDir string, now time.Time) {
 		fmt.Fprintf(os.Stderr, "on-event: reading plugin incidents: %v\n", err)
 	}
 	durable := true
-	for _, inc := range incidents {
+	for i, inc := range incidents {
+		// The same budget the spool drain gets. One report can spend the OTLP
+		// client's whole timeout while the endpoint is down, so without this a
+		// handful of distinct incidents would hold the user's hook for half a
+		// minute. What is left stays claimed and goes out on a later invocation.
+		if !time.Now().Before(deadline) {
+			fmt.Fprintf(os.Stderr, "on-event: out of time, %d plugin incidents left for the next invocation\n", len(incidents)-i)
+			durable = false
+			break
+		}
 		err := otlp.SendPluginIncident(otlp.PluginIncident{
 			Kind:      inc.Kind,
 			Harness:   inc.Harness,
@@ -83,7 +92,17 @@ func flushBacklog(cfg otlp.Config, dataDir string, now time.Time) {
 	}
 	if sent > 0 {
 		if left := spool.Len(dir); left > 0 {
-			fmt.Fprintf(os.Stderr, "on-event: sent %d spooled payloads, %d still queued\n", sent, left)
+			// Say which limit stopped the drain. "Still queued" on its own reads
+			// like the endpoint failed again, which is a different problem from a
+			// backlog that is simply larger than one invocation's budget.
+			reason := "the endpoint failed again"
+			switch {
+			case !time.Now().Before(deadline):
+				reason = "out of time"
+			case sent >= backlogBatch:
+				reason = "batch full"
+			}
+			fmt.Fprintf(os.Stderr, "on-event: sent %d spooled payloads, %d still queued (%s)\n", sent, left, reason)
 		} else {
 			fmt.Fprintf(os.Stderr, "on-event: sent %d spooled payloads\n", sent)
 		}

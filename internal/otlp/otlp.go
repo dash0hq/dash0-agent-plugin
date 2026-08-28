@@ -337,6 +337,9 @@ func SendPluginIncident(inc PluginIncident, cfg Config) error {
 	if cfg.Debug {
 		debugLog(cfg, "incident", payload)
 	}
+	// The second endpoint check is not redundant with the one above: this is the
+	// debug-without-an-endpoint case, where the payload has just been printed and
+	// there is nothing left to send. SendLog and SendRawMetrics do the same.
 	if cfg.OTLPUrl == "" {
 		return nil
 	}

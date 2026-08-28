@@ -118,15 +118,25 @@ func TestBacklog_UnsentSpanIsKeptAndSentByALaterInvocation(t *testing.T) {
 	assert.Equal(t, "22", intAttr(t, (*spans)[0], "gen_ai.usage.output_tokens"))
 }
 
+// writeBreadcrumbs lays down one session's breadcrumb file, the way the hook
+// registration's shell fallback does when the bootstrap is gone.
+func writeBreadcrumbs(t *testing.T, dataDir, session string, body []byte) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(incident.Dir(dataDir), 0o755))
+	path := filepath.Join(incident.Dir(dataDir), session+".log")
+	require.NoError(t, os.WriteFile(path, body, 0o644))
+	return path
+}
+
 // The breadcrumb a dead hook leaves behind becomes a log record, which is the
 // only way we learn that a session ran with the plugin mute.
 func TestBacklog_BreadcrumbIsReportedAsALogRecord(t *testing.T) {
 	url, records, mu := mockLogServer(t)
 	s := newSetup(t, url)
 
-	require.NoError(t, os.WriteFile(incident.Path(s.dataDir), []byte(
+	writeBreadcrumbs(t, s.dataDir, "sess-1", []byte(
 		"2026-08-25T14:15:16Z\thook_script_missing\tcodex\t/plugins/0.1.24/codex/codex-on-event.sh\tsess-1\n"+
-			"2026-08-25T14:15:20Z\thook_script_missing\tcodex\t/plugins/0.1.24/codex/codex-on-event.sh\tsess-1\n"), 0o644))
+			"2026-08-25T14:15:20Z\thook_script_missing\tcodex\t/plugins/0.1.24/codex/codex-on-event.sh\tsess-1\n"))
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-2", "model": "gpt-5.5"})
 
@@ -153,8 +163,9 @@ func TestBacklog_BreadcrumbIsReportedAsALogRecord(t *testing.T) {
 	assert.Equal(t, "2026-08-25T14:15:20Z", rec.attr("dash0.plugin.incident.last"))
 	assert.NotEmpty(t, rec.TraceID, "the incident correlates with the session it belongs to")
 
-	_, err := os.Stat(incident.Path(s.dataDir))
-	assert.True(t, os.IsNotExist(err), "a reported breadcrumb must not be reported again")
+	left, err := os.ReadDir(incident.Dir(s.dataDir))
+	require.NoError(t, err)
+	assert.Empty(t, left, "a reported breadcrumb must not be reported again")
 }
 
 // Reporting an incident while the endpoint is still down must not lose it. The
@@ -162,8 +173,8 @@ func TestBacklog_BreadcrumbIsReportedAsALogRecord(t *testing.T) {
 func TestBacklog_BreadcrumbSurvivesAFailedReport(t *testing.T) {
 	s := newSetup(t, unreachableURL(t))
 
-	require.NoError(t, os.WriteFile(incident.Path(s.dataDir), []byte(
-		"2026-08-25T14:15:16Z\thook_script_missing\tcodex\t/gone.sh\tsess-1\n"), 0o644))
+	writeBreadcrumbs(t, s.dataDir, "sess-1", []byte(
+		"2026-08-25T14:15:16Z\thook_script_missing\tcodex\t/gone.sh\tsess-1\n"))
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "gpt-5.5"})
 	require.NotZero(t, spool.Len(spool.Dir(s.dataDir)), "the failed incident report must be kept")
@@ -190,7 +201,7 @@ func TestBacklog_BreadcrumbsSurviveWhenNothingCanBeSaved(t *testing.T) {
 	s := newSetup(t, unreachableURL(t))
 
 	body := []byte("2026-08-25T14:15:16Z\thook_script_missing\tcodex\t/gone.sh\tsess-1\n")
-	require.NoError(t, os.WriteFile(incident.Path(s.dataDir), body, 0o644))
+	path := writeBreadcrumbs(t, s.dataDir, "sess-1", body)
 
 	// Occupy the spool's path with a file, so MkdirAll cannot create it and the
 	// failed report has nowhere to go.
@@ -200,7 +211,7 @@ func TestBacklog_BreadcrumbsSurviveWhenNothingCanBeSaved(t *testing.T) {
 
 	// The breadcrumbs are not at the original name — they are claimed — but they
 	// are still on disk for a later invocation to adopt.
-	claims, err := filepath.Glob(incident.Path(s.dataDir) + ".claimed.*")
+	claims, err := filepath.Glob(path + ".claimed.*")
 	require.NoError(t, err)
 	require.Len(t, claims, 1, "an unreportable incident must not be discarded")
 	kept, err := os.ReadFile(claims[0])
@@ -214,11 +225,11 @@ func TestBacklog_WithoutAnEndpointNothingIsConsumed(t *testing.T) {
 	s := newSetup(t, "")
 
 	body := []byte("2026-08-25T14:15:16Z\thook_script_missing\tcodex\t/gone.sh\tsess-1\n")
-	require.NoError(t, os.WriteFile(incident.Path(s.dataDir), body, 0o644))
+	path := writeBreadcrumbs(t, s.dataDir, "sess-1", body)
 
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "gpt-5.5"})
 
-	got, err := os.ReadFile(incident.Path(s.dataDir))
+	got, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, body, got, "an unconfigured plugin must not discard the evidence")
 }
@@ -254,4 +265,32 @@ func TestBacklog_SpentBudgetSendsNothing(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, spool.Len(dir), "the payload waits for an invocation with budget")
+}
+
+// The incident report shares the backlog's budget. One report can spend the OTLP
+// client's whole timeout while the endpoint is down, so an invocation with no
+// budget left must hand the breadcrumbs on rather than hold the user's hook.
+func TestBacklog_SpentBudgetLeavesIncidentsForLater(t *testing.T) {
+	url, records, mu := mockLogServer(t)
+	s := newSetup(t, url)
+
+	path := writeBreadcrumbs(t, s.dataDir, "sess-1",
+		[]byte("2026-08-25T14:15:16Z\thook_script_missing\tcodex\t/gone.sh\tsess-1\n"))
+
+	// now far enough in the past that now+backlogBudget is already behind us.
+	_, err := Process(
+		map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "gpt-5.5"},
+		s.cfg, s.dataDir, time.Now().Add(-time.Hour),
+	)
+	require.NoError(t, err)
+
+	mu.Lock()
+	for _, r := range *records {
+		assert.Empty(t, r.attr("dash0.plugin.incident.kind"), "no budget means no report")
+	}
+	mu.Unlock()
+
+	claims, err := filepath.Glob(path + ".claimed.*")
+	require.NoError(t, err)
+	assert.Len(t, claims, 1, "the breadcrumbs wait for an invocation with budget")
 }

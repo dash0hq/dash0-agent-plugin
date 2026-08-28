@@ -129,6 +129,10 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 	startedFile := filepath.Join(sessionDir, "started")
 	sessionAlreadyStarted := false
 	if hookEvent == "SessionStart" {
+		// Once per session, off the per-event path: clear out sessions that ended
+		// without a SessionEnd to delete them. See sweepStaleSessions.
+		sweepStaleSessions(dataDir, now, sessionID)
+
 		if _, err := os.Stat(startedFile); err == nil {
 			sessionAlreadyStarted = true
 		} else {

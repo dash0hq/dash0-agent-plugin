@@ -155,17 +155,42 @@ cost analysis short without saying so.
   invocation, stopping at the first failure. `pipeline.Process` sets
   `Config.SpoolDir`; a `Config` without it behaves exactly as before.
 - **Incidents** (`internal/incident`). When the wrapper itself is missing, no Go
-  code runs, so the registration appends a line to `<state>/incidents.log`
-  instead. The next working invocation reports each one as a `WARN` log record
+  code runs, so the registration appends a line to
+  `<state>/incidents/<session>.log` instead — one file per session, because the
+  shell caps the file it writes to and a shared log would let one broken session
+  silence every other one. The next working invocation reports each one as a
+  `WARN` log record
   (`dash0.plugin.incident.kind`, `.count`, `.detail`, `.first`, `.last`), which is
   the only way a session that ran with the plugin mute becomes visible. Derive
   metrics from those records in the backend rather than emitting metrics here.
-  The breadcrumbs are claimed by rename and discarded only once every report is
-  sent or spooled, and a claim left behind by a killed hook is adopted after five
+  Each file is claimed by rename and deleted only once every report is sent or
+  spooled, and a claim left behind by a killed hook is adopted after five
   minutes — reporting an incident twice beats losing the one record that says
-  data is missing.
+  data is missing. The directory is bounded at 256 files, oldest evicted first,
+  and the reports share the 3-second budget above — whatever does not fit stays
+  claimed for the next invocation.
 - Both live in the per-session state root above, so `uninstall-*.sh` removes them
   with the rest of it.
+
+### The state directory is bounded
+
+Everything the plugin keeps on disk has an upper bound, so a machine that runs
+agents every day does not accumulate state forever.
+
+- **Session directories.** `SessionEnd` deletes `<state>/<session_id>/`, but
+  Codex has no `SessionEnd` hook and any harness misses it when the agent is
+  killed. `SessionStart` therefore sweeps session directories that nothing has
+  touched in seven days (`pipeline.sweepStaleSessions`). Age is the newest mtime
+  inside the directory, not the directory's own: a long session only appends to
+  `events.jsonl`, which leaves the directory looking untouched since it started.
+  A directory is a session only if it holds an `events.jsonl`. That test has to
+  be positive rather than a list of names to skip, because for an
+  installer-based Codex setup the data root is also where the bootstrap keeps
+  `bin/` — and a binary downloaded once is always older than the window.
+- **`events.jsonl`.** Trimmed to the most recent 100 events once it runs 50 past
+  them. Only recent events are ever read — `FindEvent` searches backwards for the
+  current turn — so this also keeps prompts and tool payloads from sitting on
+  disk for the life of a session.
 
 ## User notifications
 

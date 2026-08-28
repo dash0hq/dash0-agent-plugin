@@ -45,7 +45,7 @@ func TestAppendsMultipleEvents(t *testing.T) {
 	}
 }
 
-func TestDoesNotLimitFileSize(t *testing.T) {
+func TestKeepsEveryEventWithinTheBound(t *testing.T) {
 	dir := t.TempDir()
 
 	for i := range 105 {
@@ -53,7 +53,7 @@ func TestDoesNotLimitFileSize(t *testing.T) {
 	}
 
 	lines := readLines(t, filepath.Join(dir, "events.jsonl"))
-	assert.Len(t, lines, 105, "all events retained — session dir is cleaned up at SessionEnd")
+	assert.Len(t, lines, 105, "nothing is dropped until the log runs past MaxEvents+trimSlack")
 }
 
 func TestPreservesNestedJSON(t *testing.T) {
@@ -164,4 +164,43 @@ func readLines(t *testing.T, path string) []string {
 		}
 	}
 	return lines
+}
+
+// A long session used to grow events.jsonl without limit — MaxEvents was
+// declared and never enforced. Codex has no SessionEnd hook, so nothing deleted
+// the file either, and the raw events sat in the user's state directory forever.
+func TestWriteEventTrimsToTheMostRecentEvents(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+
+	total := MaxEvents + trimSlack + 1
+	for i := range total {
+		require.NoError(t, WriteEvent(map[string]any{"hook_event_name": "PostToolUse", "n": i}, dir))
+	}
+
+	lines := readLines(t, path)
+	require.Len(t, lines, MaxEvents, "the log keeps its most recent MaxEvents and no more")
+
+	// The newest event survives, the oldest does not: FindEvent searches
+	// backwards, so trimming the wrong end would break correlation.
+	var first, last map[string]any
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &first))
+	require.NoError(t, json.Unmarshal([]byte(lines[len(lines)-1]), &last))
+	assert.Equal(t, float64(total-MaxEvents), first["n"])
+	assert.Equal(t, float64(total-1), last["n"])
+
+	// And no temp file is left next to the log for FindEvent to trip over.
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "events.jsonl", entries[0].Name())
+}
+
+// Below the slack the log is left alone, so the common case does no rewriting.
+func TestWriteEventKeepsAShortLogUntouched(t *testing.T) {
+	dir := t.TempDir()
+	for i := range MaxEvents + trimSlack {
+		require.NoError(t, WriteEvent(map[string]any{"hook_event_name": "PostToolUse", "n": i}, dir))
+	}
+	assert.Len(t, readLines(t, filepath.Join(dir, "events.jsonl")), MaxEvents+trimSlack)
 }

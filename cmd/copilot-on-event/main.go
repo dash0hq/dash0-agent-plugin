@@ -9,8 +9,9 @@
 //     hook_event_name field) and the payload from stdin.
 //  2. Normalizes it to the pipeline's canonical vocabulary.
 //  3. On a turn boundary (agentStop→Stop), recovers the whole turn from
-//     Copilot's native-OTel file: token/cost/model/response (attached to the
-//     Stop event for the pipeline's chat span) AND the turn's tool executions.
+//     Copilot's native-OTel file: token/model/response (attached to the Stop
+//     event for the pipeline's chat span) AND the turn's tool executions. The
+//     file's own cost figure is left behind — see attachUsage.
 //  4. Hands off to pipeline.Process for the chat span, then emits one
 //     execute_tool span per recovered tool call — real durations, sub-agent
 //     tools nested under their spawning `task` span.
@@ -135,7 +136,8 @@ func run() error {
 	return nil
 }
 
-// attachUsage sets the per-turn token/cost/model attributes on the Stop event.
+// attachUsage sets the per-turn token, model and response attributes on the Stop
+// event.
 func attachUsage(event map[string]any, u *copilot.Usage) {
 	event["gen_ai.usage.input_tokens"] = u.InputTokens
 	event["gen_ai.usage.output_tokens"] = u.OutputTokens
@@ -143,9 +145,16 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 	if u.ReasoningOutputTokens > 0 {
 		event["gen_ai.usage.reasoning.output_tokens"] = u.ReasoningOutputTokens
 	}
-	if u.Cost > 0 {
-		event["github.copilot.cost"] = u.Cost
-	}
+	// Copilot's own github.copilot.cost is deliberately NOT carried through. Its
+	// unit is AI credits, and it would land one attribute away from
+	// dash0.gen_ai.usage.cost, which Dash0 derives from tokens at ingest and
+	// reports in money. Two keys ending in "cost", on one span, in two units, one
+	// of them a vendor's internal accounting unit — the reader has no way to tell
+	// them apart, and a dashboard summing them is wrong without ever looking
+	// wrong. internal/source/copilot does not read it into Usage either: a field
+	// whose only purpose is to be discarded here is how the export grew the first
+	// time. The credits figure is still recoverable from the native-OTel file for
+	// anyone who wants it.
 	if u.Model != "" {
 		if _, has := event["model"]; !has {
 			event["model"] = u.Model

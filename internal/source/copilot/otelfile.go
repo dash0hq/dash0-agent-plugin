@@ -13,13 +13,14 @@ import (
 	"time"
 )
 
-// Usage is the per-turn token/cost/model recovered from the native-OTel file.
+// Usage is the per-turn token count, model and response recovered from the
+// native-OTel file. Copilot's own cost figure is not among them: see the note in
+// ReadTurn's chat branch.
 type Usage struct {
 	InputTokens           int64
 	OutputTokens          int64
 	CacheReadInputTokens  int64
 	ReasoningOutputTokens int64
-	Cost                  float64
 	Model                 string
 	ResponseText          string // final assistant text of the turn (from gen_ai.output.messages)
 }
@@ -138,7 +139,11 @@ func ReadTurn(sessionID, sessionDir string) (*Turn, string) {
 			u.OutputTokens += attrInt(a, "gen_ai.usage.output_tokens")
 			u.CacheReadInputTokens += attrInt(a, "gen_ai.usage.cache_read.input_tokens")
 			u.ReasoningOutputTokens += attrInt(a, "gen_ai.usage.reasoning.output_tokens")
-			u.Cost += attrFloat(a, "github.copilot.cost")
+			// github.copilot.cost is deliberately not read. It is Copilot's own
+			// AI-credit accounting and the plugin does not export it — see
+			// attachUsage in cmd/copilot-on-event. Summing it here would leave a
+			// field whose only purpose is to be discarded, which is the shape the
+			// export grew out of the first time.
 			if m := attrString(a, "gen_ai.request.model"); m != "" {
 				u.Model = m // last non-empty model in the turn
 			}
@@ -435,20 +440,13 @@ func SweepOldOtelFiles(now time.Time) {
 	}
 }
 
-// attrInt/attrFloat/attrString read a native-OTel flat attribute (JSON numbers
-// decode as float64).
+// attrInt/attrString read a native-OTel flat attribute (JSON numbers decode as
+// float64).
 func attrInt(a map[string]any, key string) int64 {
 	switch v := a[key].(type) {
 	case float64:
 		return int64(v)
 	case int64:
-		return v
-	}
-	return 0
-}
-
-func attrFloat(a map[string]any, key string) float64 {
-	if v, ok := a[key].(float64); ok {
 		return v
 	}
 	return 0

@@ -149,7 +149,6 @@ func TestReadTurn_subAgentRollup(t *testing.T) {
 	require.NotNil(t, turn.Usage)
 	assert.Equal(t, int64(190), turn.Usage.InputTokens, "sub-agent input tokens roll into the turn total")
 	assert.Equal(t, int64(38), turn.Usage.OutputTokens, "sub-agent output tokens roll into the turn total")
-	assert.InDelta(t, 2.0, turn.Usage.Cost, 0.001)
 	assert.Equal(t, "s3", c, "cursor is the last consumed span")
 }
 

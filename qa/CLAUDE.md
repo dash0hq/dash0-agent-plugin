@@ -15,12 +15,18 @@ the project moves.
 
 One writer per directory, so a hand edit in the wrong place gets overwritten or quietly ignored.
 
-## Two runtimes
+## Three runtimes
 
-Specs target either Claude Code or Codex, and say which in their `runtime:` frontmatter. The two
-have different drivers, different second channels, and different limits on what a run can prove.
-`## Runtimes` in [setup.md](setup.md) is the table; read it before running or writing anything, and
-never carry a result from one runtime over to the other.
+Specs target Claude Code, Codex or GitHub Copilot CLI, and say which in their `runtime:`
+frontmatter. Each has its own driver, its own second channel, and its own limits on what a run can
+prove. `## Runtimes` in [setup.md](setup.md) is the table; read it before running or writing
+anything, and never carry a result from one runtime over to another.
+
+Copilot is the one that differs in kind rather than in detail. Its hooks carry no numbers and no
+tool events the plugin uses, so its second channel — Copilot's own OpenTelemetry file — is also the
+plugin's input. Agreement there proves a faithful copy, not a correct measurement. Read
+`## The one thing to know before reading any spec here` in [specs/copilot](specs/copilot/README.md)
+before writing or judging a Copilot spec.
 
 ## Findings
 

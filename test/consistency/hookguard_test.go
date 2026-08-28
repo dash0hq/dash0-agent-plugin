@@ -5,6 +5,7 @@ package consistency
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -109,6 +110,47 @@ func TestCodexInstallerCommandIsGuarded(t *testing.T) {
 	assert.Contains(t, cmd, guardBreadcrumb,
 		"install-codex.sh HOOK_CMD must record a breadcrumb when the bootstrap is missing: "+
 			"nothing of ours runs in that state, so this is the only way we learn about it")
+}
+
+// TestBreadcrumbsAreWrittenPerSession pins where the guard puts its breadcrumb.
+//
+// internal/incident drains a directory and deletes each file it consumed. One
+// shared log would undo that: the shell caps the file it appends to, so the first
+// broken session to reach the cap would silence the breadcrumbs of every other
+// session on the machine — including the ones that would tell us why.
+func TestBreadcrumbsAreWrittenPerSession(t *testing.T) {
+	root := repoRoot(t)
+
+	commands := map[string]string{}
+
+	raw, err := os.ReadFile(filepath.Join(root, "install-codex.sh"))
+	require.NoError(t, err)
+	m := regexp.MustCompile(`(?m)^HOOK_CMD=(.*)$`).FindSubmatch(raw)
+	require.NotNil(t, m, "install-codex.sh no longer assigns HOOK_CMD")
+	commands["install-codex.sh HOOK_CMD"] = string(m[1])
+
+	raw, err = os.ReadFile(filepath.Join(root, "codex", "hooks.json"))
+	require.NoError(t, err)
+	var doc struct {
+		Hooks map[string][]json.RawMessage `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	for event, entries := range doc.Hooks {
+		for _, entry := range entries {
+			for i, cmd := range commandsIn(t, entry, "command") {
+				commands[fmt.Sprintf("codex/hooks.json %s[%d]", event, i)] = cmd
+			}
+		}
+	}
+	require.NotEmpty(t, commands)
+
+	for source, cmd := range commands {
+		assert.Contains(t, cmd, "/incidents",
+			"%s: breadcrumbs belong in the incidents directory internal/incident drains", source)
+		assert.Contains(t, cmd, "${CODEX_THREAD_ID:-nosession-$$}",
+			"%s: the breadcrumb file must be named per session, with a pid fallback when "+
+				"the harness gives us no thread id", source)
+	}
 }
 
 // TestBootstrapsGuardTheBinaryHandoff pins the second nonzero-exit path. A

@@ -12,6 +12,12 @@
 // This package turns those lines into something the next working invocation can
 // ship, which is the only way we ever learn the plugin was mute.
 //
+// Breadcrumbs go into a directory, one file per session, the same shape the
+// telemetry spool uses: a writer owns its own file, and a drain deletes what it
+// consumed instead of growing a log nobody truncates. One shared file would let a
+// single broken session hit the shell's size cap and silence the breadcrumbs of
+// every other session on the machine.
+//
 // The format is fixed by the shell that writes it (see codex/hooks.json and
 // install-codex.sh) and is tab separated:
 //
@@ -29,13 +35,25 @@ import (
 	"time"
 )
 
-// FileName is the breadcrumb log inside a data root.
-const FileName = "incidents.log"
+// DirName is the breadcrumb directory inside a data root.
+const DirName = "incidents"
 
 // maxLines bounds the work one invocation does. A session that fires hundreds of
-// hooks while broken writes a line each time; the shell caps the file's size and
+// hooks while broken writes a line each time; the shell caps each file's size and
 // this caps the parse.
 const maxLines = 5000
+
+// maxFiles bounds the directory. The shell caps a session's own file, but it
+// cannot count files without a subshell per hook, so the bound on how many
+// sessions may pile up lives here. Oldest goes first: a stale breadcrumb from a
+// plugin that was broken months ago is worth less than today's.
+//
+// Nothing sweeps while the plugin stays broken, because nothing of ours runs then.
+// That is bounded in practice — one small file per broken session — and the first
+// working invocation cleans it up.
+//
+// A var, not a const, so a test can shrink it instead of writing 256 files.
+var maxFiles = 256
 
 // Incident is one kind of failure, aggregated over however many times it
 // happened. Reporting each line separately would put hundreds of identical
@@ -50,12 +68,12 @@ type Incident struct {
 	Last      time.Time
 }
 
-// Path returns the breadcrumb file for a data root.
-func Path(dataDir string) string {
+// Dir returns the breadcrumb directory for a data root.
+func Dir(dataDir string) string {
 	if dataDir == "" {
 		return ""
 	}
-	return filepath.Join(dataDir, FileName)
+	return filepath.Join(dataDir, DirName)
 }
 
 // orphanGrace is how long a claim must sit untouched before another invocation
@@ -64,25 +82,28 @@ func Path(dataDir string) string {
 // process that died holding it.
 const orphanGrace = 5 * time.Minute
 
-// Drain claims the breadcrumbs and returns what they held, aggregated, together
-// with a commit that discards them.
+// Drain claims every breadcrumb file and returns what they held, aggregated,
+// together with a commit that deletes them.
 //
-// The file is renamed before it is read, so hooks running concurrently keep
-// appending to a fresh file instead of writing lines into one being consumed.
+// Each file is renamed before it is read, so a session still writing keeps
+// appending to a fresh file instead of into one being consumed. A drain can take
+// the last few lines of a session that is broken right now; the report aggregates
+// by kind, so the cost is a count that is short by one or two, not a lost
+// incident.
 //
-// The claim is deliberately NOT removed here. Reporting an incident can take as
+// The claims are deliberately NOT removed here. Reporting an incident can take as
 // long as the OTLP client's timeouts allow before the payload reaches the spool,
 // and a hook killed inside that window would take the only evidence that the
 // plugin was mute with it. So the caller commits once every incident is durable,
 // and a claim left behind by a process that died is adopted by a later one.
 // Reporting an incident twice is a far better failure than losing it.
 func Drain(dataDir string) (incidents []Incident, commit func(), err error) {
-	path := Path(dataDir)
-	if path == "" {
+	dir := Dir(dataDir)
+	if dir == "" {
 		return nil, func() {}, nil
 	}
 
-	claims, err := claim(path)
+	claims, err := claim(dir)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -129,46 +150,103 @@ func Drain(dataDir string) (incidents []Incident, commit func(), err error) {
 // for their own.
 var claimSeq atomic.Uint64
 
-// claim takes ownership of the breadcrumb file and of any claim a dead process
+// claimMark separates a breadcrumb file's name from the claim that owns it.
+const claimMark = ".claimed."
+
+// claim takes ownership of every breadcrumb file, and of any claim a dead process
 // left behind, returning the paths this invocation now owns.
 //
 // Ownership is established by rename, which is atomic within a directory: two
 // invocations racing for the same file means exactly one of them gets it.
-func claim(path string) ([]string, error) {
-	name := func() string {
-		return fmt.Sprintf("%s.claimed.%d-%d", path, os.Getpid(), claimSeq.Add(1))
+func claim(dir string) ([]string, error) {
+	names, err := entries(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	names = evict(dir, names)
+
+	seq := func(path string) string {
+		return fmt.Sprintf("%s%s%d-%d", path, claimMark, os.Getpid(), claimSeq.Add(1))
 	}
 
 	var claims []string
-	mine := name()
-	switch err := os.Rename(path, mine); {
-	case err == nil:
-		claims = append(claims, touch(mine))
-	case !os.IsNotExist(err):
-		return nil, fmt.Errorf("incident: claiming %s: %w", path, err)
-	}
-
-	// Adopt claims abandoned by processes that died mid-report. Only old ones:
-	// a fresh claim belongs to an invocation that is still working on it.
-	abandoned, err := filepath.Glob(path + ".claimed.*")
-	if err != nil {
-		return claims, nil // a bad pattern is not possible here, but never fail the drain
-	}
-	for _, other := range abandoned {
-		if other == mine {
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		if !strings.Contains(name, claimMark) {
+			mine := seq(path)
+			if err := os.Rename(path, mine); err != nil {
+				continue // another invocation got there first
+			}
+			claims = append(claims, touch(mine))
 			continue
 		}
-		fi, err := os.Stat(other)
+
+		// A claim. Adopt it only if it is old: a fresh one belongs to an
+		// invocation that is still reporting it.
+		fi, err := os.Stat(path)
 		if err != nil || time.Since(fi.ModTime()) < orphanGrace {
 			continue
 		}
-		adopted := name()
-		if err := os.Rename(other, adopted); err != nil {
-			continue // another invocation adopted it first
+		// Strip the previous claim before adding ours, so a file passed between
+		// dead processes does not grow a suffix per hand-off. Cut on the name, not
+		// the path: the data root is out of our control and may contain anything.
+		adopted := seq(filepath.Join(dir, name[:strings.Index(name, claimMark)]))
+		if err := os.Rename(path, adopted); err != nil {
+			continue
 		}
 		claims = append(claims, touch(adopted))
 	}
 	return claims, nil
+}
+
+// entries lists the breadcrumb directory in name order, which is only there to
+// make a drain deterministic — a session id says nothing about time.
+func entries(dir string) ([]string, error) {
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // the common case: nothing ever broke
+		}
+		return nil, fmt.Errorf("incident: reading %s: %w", dir, err)
+	}
+	names := make([]string, 0, len(des))
+	for _, de := range des {
+		if !de.IsDir() {
+			names = append(names, de.Name())
+		}
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+// evict drops the oldest files when the directory is over its bound, and returns
+// what is left to claim. Sorting is by name, which is a session id and says
+// nothing about age, so mtime decides.
+//
+// A failure to remove is ignored. Being over the bound is not a reason to report
+// nothing.
+func evict(dir string, names []string) []string {
+	if len(names) <= maxFiles {
+		return names
+	}
+	byAge := slices.Clone(names)
+	mtime := make(map[string]time.Time, len(byAge))
+	for _, name := range byAge {
+		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			mtime[name] = fi.ModTime()
+		}
+	}
+	slices.SortStableFunc(byAge, func(a, b string) int { return mtime[a].Compare(mtime[b]) })
+
+	dropped := make(map[string]bool, len(byAge)-maxFiles)
+	for _, name := range byAge[:len(byAge)-maxFiles] {
+		_ = os.Remove(filepath.Join(dir, name))
+		dropped[name] = true
+	}
+	return slices.DeleteFunc(names, func(name string) bool { return dropped[name] })
 }
 
 // touch stamps a claim with the time it was claimed, and returns it unchanged.
@@ -188,8 +266,9 @@ func touch(claim string) string {
 	return claim
 }
 
-// readAll parses every claimed file, oldest name first so repeated failures
-// aggregate in the order they happened.
+// readAll parses every claimed file. Lines within a file are already in the order
+// they happened, and aggregation takes the earliest first and the latest last, so
+// the sort is only here to make the report's own order deterministic.
 func readAll(claims []string) []Incident {
 	slices.Sort(claims)
 

@@ -256,8 +256,11 @@ info "registering + pre-trusting hooks in ${CONFIG_TOML}..."
 # the user sees on every event and can do nothing about. Guard the call so the
 # shell always exits 0, and record a breadcrumb the next working run ships as
 # telemetry — otherwise a plugin that cannot run is silent to us too.
-# shellcheck disable=SC2016 # $S/$D/$L and $(date) must reach Codex's shell unexpanded
-HOOK_CMD='S="'"$SCRIPT_PATH"'"; D="'"$STATE_BASE"'"; if [ -r "$S" ]; then bash "$S"; else mkdir -p "$D" 2>/dev/null; L="$D/incidents.log"; if [ ! -s "$L" ] || [ "$(wc -c <"$L" | tr -d " ")" -lt 65536 ]; then printf "%s\thook_script_missing\tcodex\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$S" "${CODEX_THREAD_ID:-}" >>"$L" 2>/dev/null; fi; fi; exit 0'
+# The breadcrumb goes to one file per session, not one file per machine: the size
+# cap below is what keeps a broken session from writing forever, and with a shared
+# file the first session to hit it would silence every other one.
+# shellcheck disable=SC2016 # $S/$I/$L, $$ and $(date) must reach Codex's shell unexpanded
+HOOK_CMD='S="'"$SCRIPT_PATH"'"; if [ -r "$S" ]; then bash "$S"; else I="'"$STATE_BASE"'/incidents"; mkdir -p "$I" 2>/dev/null; L="$I/${CODEX_THREAD_ID:-nosession-$$}.log"; if [ ! -s "$L" ] || [ "$(wc -c <"$L" | tr -d " ")" -lt 65536 ]; then printf "%s\thook_script_missing\tcodex\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$S" "${CODEX_THREAD_ID:-}" >>"$L" 2>/dev/null; fi; fi; exit 0'
 
 if [ -f "$CONFIG_TOML" ]; then
   STRIPPED_TMP=$(mktemp)

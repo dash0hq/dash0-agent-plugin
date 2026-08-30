@@ -20,24 +20,33 @@ set -euo pipefail
 #
 # Time tells them apart. Note the first failure, stay quiet for GRACE, and after
 # that speak through the plugin's own channel — a systemMessage, the same way
-# the binary reports a session link — at most once every REMIND.
+# the binary reports a session link — roughly once every REMIND. "Roughly"
+# because the marker is a read-modify-write with no lock: hooks firing in the
+# same instant can each read the old timestamp and each print. The cost is a
+# duplicated one-line notice, which is not worth a lockfile in a hot path.
 
 GRACE=600      # 10 min: an order of magnitude past any release window
-REMIND=3600    # at most one message an hour; hooks fire many times a turn
+REMIND=3600    # roughly hourly; hooks fire many times a turn
 
 fail_open() {
   echo "on-event: $*" >&2
 
-  local marker="${BIN_DIR:-}/.download-failing" now first notified
+  local marker="${BIN_DIR:-}/.download-failing" now ver first notified
   now=$(date +%s)
   if [ -n "${BIN_DIR:-}" ]; then
     mkdir -p "$BIN_DIR" 2>/dev/null || true
-    read -r first notified <<<"$(cat "$marker" 2>/dev/null || true)"
-    if [ -z "${first:-}" ]; then
-      # First failure for this install. Assume it is the release window.
-      echo "$now 0" >"$marker" 2>/dev/null || true
+    read -r ver first notified <<<"$(cat "$marker" 2>/dev/null || true)"
+    # Keyed by version. Hooks race, so a straggler can write a marker moments
+    # after a faster sibling finished the download and cleared it, and nothing
+    # afterwards takes the `-x` branch that would clear it again. Left unkeyed,
+    # that stale timestamp would be days old at the next bump and fire the alarm
+    # on the first release-window failure — the exact case GRACE exists to
+    # suppress.
+    if [ "${ver:-}" != "$VERSION" ] || [ -z "${first:-}" ]; then
+      # First failure for this version. Assume it is the release window.
+      echo "$VERSION $now 0" >"$marker" 2>/dev/null || true
     elif [ $((now - first)) -gt "$GRACE" ] && [ $((now - ${notified:-0})) -gt "$REMIND" ]; then
-      echo "$first $now" >"$marker" 2>/dev/null || true
+      echo "$VERSION $first $now" >"$marker" 2>/dev/null || true
       # Fixed text plus the version, which is semver-safe. The error itself goes
       # to stderr only — interpolating it here could emit invalid JSON.
       # \\n, not \n: the leading newline must reach Claude Code as the two-character
@@ -115,7 +124,11 @@ if [[ -n "$KEYCHAIN_SERVICE" ]] && command -v security &>/dev/null; then
   [[ -n "$keychain_token" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$keychain_token"
 fi
 
-PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
+# Claude Code always sets this. If it somehow does not, fail open like every
+# other path rather than aborting: `:?` exits 1, which is the hook error this
+# script exists to avoid, and it happens before fail_open is reachable.
+PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-}"
+[ -n "$PLUGIN_DATA" ] || fail_open "CLAUDE_PLUGIN_DATA is not set"
 BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
 VERSION="0.1.25"
@@ -133,7 +146,7 @@ BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}"
 
 # Download the binary on first run.
 if [ ! -x "$BINARY" ]; then
-  mkdir -p "$BIN_DIR"
+  mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
 
   # Download to a private temp and rename into place. Hooks run concurrently —
   # parallel tool calls each fire their own, and every session on the machine
@@ -210,8 +223,8 @@ if [ ! -x "$BINARY" ]; then
 
   # Executable before it is visible, so nothing can find $BINARY and fail the
   # -x test that guards this block.
-  chmod +x "$TMP"
-  mv -f "$TMP" "$BINARY"
+  chmod +x "$TMP" || fail_open "could not mark $TMP executable"
+  mv -f "$TMP" "$BINARY" || fail_open "could not move $TMP into place"
   # Downloads work again; forget the earlier failures.
   rm -f "$BIN_DIR/.download-failing"
 fi

@@ -13,7 +13,8 @@
 # v0.1.25, 48 of 48 staggered invocations failed, each computing a different
 # checksum, plus one process's cleanup deleting the file another was chmod'ing.
 #
-# Requires: curl, bash, sha256sum or shasum. Network for the second contract.
+# Requires: curl, bash, sha256sum or shasum; jq for the JSON check (skipped
+# without it). Network only for the concurrency contract.
 set -euo pipefail
 # shellcheck source=test/contracts/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -53,22 +54,39 @@ done
 echo "PASS: all ${#SCRIPTS[@]} bootstraps stage downloads in a temp and rename"
 
 echo "== No bootstrap ends a hook with a non-zero exit =="
-# Every one of these paths means "we can't safely run the binary", and none of
-# them is worth interrupting a session for. The commonest is transient: for
-# about a minute after a release bump lands on main, main names a version whose
-# binaries are still building. Claude used to exit 1 there and surface a hook
-# error per event; the other three already exited 0.
+# Behavioural, not textual. A grep for `exit [1-9]` cannot see the ways a script
+# actually exits non-zero — `set -e` on an unguarded command, a `:?` expansion,
+# a failing exec — and a previous version of this contract printed PASS against
+# a script that exited 1 in two reproducible cases.
+#
+# A read-only data directory poisons the first thing every bootstrap does, so
+# this reaches each one without needing the network.
 fail=0
-for s in "${SCRIPTS[@]}"; do
-  bad=$(sed 's/#.*//' "$REPO/$s" | grep -nE '^[[:space:]]*exit [1-9]' || true)
-  if [ -n "$bad" ]; then
-    echo "  FAIL $s: non-zero exit before exec:"
-    printf '    %s\n' "$bad"
-    fail=1
-  else
-    echo "  ok $s"
-  fi
-done
+readonly_root=$(mktemp -d)
+chmod a-w "$readonly_root"
+if touch "$readonly_root/probe" 2>/dev/null; then
+  # Running as root, or on a filesystem that ignores the mode bits.
+  rm -f "$readonly_root/probe"
+  echo "  SKIP: cannot make a directory unwritable here"
+else
+  for s in "${SCRIPTS[@]}"; do
+    # Each runtime names its data directory differently; set them all.
+    status=0
+    env -i PATH="$PATH" HOME="$readonly_root/nohome" \
+      CLAUDE_PLUGIN_DATA="$readonly_root/d" \
+      DASH0_PLUGIN_DATA="$readonly_root/d" \
+      COPILOT_PLUGIN_DATA="$readonly_root/d" \
+      bash "$REPO/$s" someEvent <<<'{"hook_event_name":"SessionStart"}' \
+      >/dev/null 2>&1 || status=$?
+    if [ "$status" -ne 0 ]; then
+      echo "  FAIL $s: exited $status when its data directory could not be created"
+      fail=1
+    else
+      echo "  ok $s"
+    fi
+  done
+fi
+chmod u+w "$readonly_root"; rm -rf "$readonly_root"
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: all ${#SCRIPTS[@]} bootstraps fail open"
 
@@ -101,8 +119,21 @@ probe=$(mktemp -d)
 sed 's/^VERSION="[^"]*"/VERSION="9.9.9"/' "$REPO/claude/claude-on-event.sh" >"$probe/p.sh"
 pdata=$(mktemp -d)
 EV='{"hook_event_name":"SessionStart","session_id":"contract"}'
-say() { CLAUDE_PLUGIN_DATA="$pdata" bash "$probe/p.sh" <<<"$EV" 2>/dev/null; }
-age()  { awk -v g="$1" -v r="$2" '{print $1-g, ($2==0?0:$2-r)}' "$pdata/bin/.download-failing" >"$probe/m"; cp "$probe/m" "$pdata/bin/.download-failing"; }
+# Hermetic HOME and cwd. With the caller's, ~/.claude/dash0-agent-plugin.local.md
+# — which dash0-configure writes on every developer machine — is loaded, and an
+# `enabled: false` there exits the script before any download logic runs. Both
+# "stayed quiet" assertions would then pass having tested nothing, and `age`
+# would die on a marker that was never created.
+say() {
+  ( cd "$probe" && env -i PATH="$PATH" HOME="$probe/home" \
+      CLAUDE_PLUGIN_DATA="$pdata" bash "$probe/p.sh" <<<"$EV" 2>/dev/null )
+}
+# Winds the marker back in time. Fields are: version, first failure, last notified.
+age() {
+  awk -v g="$1" -v r="$2" '{print $1, $2-g, ($3==0?0:$3-r)}' \
+    "$pdata/bin/.download-failing" >"$probe/m"
+  cp "$probe/m" "$pdata/bin/.download-failing"
+}
 
 [ -z "$(say)" ] || { echo "ERROR: spoke up on the first failure — that looks like a release window" >&2; exit 1; }
 [ -z "$(say)" ] || { echo "ERROR: spoke up while still inside the grace period" >&2; exit 1; }
@@ -112,8 +143,13 @@ msg=$(say)
 [ -n "$msg" ] || { echo "ERROR: still silent 11 minutes in — a broken install would never be noticed" >&2; exit 1; }
 # Must be parseable: Claude Code reads this channel as JSON, and a literal
 # newline inside the string would make it a control character and invalid.
-printf '%s' "$msg" | jq -e '.systemMessage' >/dev/null \
-  || { echo "ERROR: the systemMessage is not valid JSON: $msg" >&2; exit 1; }
+if command -v jq >/dev/null 2>&1; then
+  printf '%s' "$msg" | jq -e '.systemMessage' >/dev/null \
+    || { echo "ERROR: the systemMessage is not valid JSON: $msg" >&2; exit 1; }
+else
+  # Say so rather than reporting a JSON bug that isn't there.
+  echo "  (jq absent — JSON validity not checked)"
+fi
 
 [ -z "$(say)" ] || { echo "ERROR: repeated immediately — hooks fire many times a turn" >&2; exit 1; }
 

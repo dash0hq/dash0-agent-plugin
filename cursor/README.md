@@ -76,29 +76,27 @@ go test ./...
 
 ## Package
 
-Releases are cut via `scripts/release.sh <version>`, which:
-
-1. Bumps the hardcoded `VERSION` in `claude/claude-on-event.sh`, `cursor/cursor-on-event.sh`,
-   `.claude-plugin/plugin.json`, and `.cursor-plugin/plugin.json`.
-   (`install-cursor.sh` resolves the latest GitHub release at runtime, so it's
-   not bumped here — set `DASH0_VERSION=` to pin a specific version.)
-2. Commits the bumps as `release: v<version>`.
-3. Creates the `v<version>` tag and pushes it.
-
-The push triggers `.github/workflows/release.yml`, which runs GoReleaser
-(`.goreleaser.yaml`) to build and publish:
+Releasing is the same two-step flow for every runtime — see
+[DEVELOPMENT.md](../DEVELOPMENT.md#releasing). It ends with GoReleaser
+(`.goreleaser.yaml`) building and publishing:
 
 | Artifact | Source |
 |---|---|
-| `on-event-{darwin,linux}-{amd64,arm64}` | `cmd/claude-on-event` (Claude Code) |
 | `cursor-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/cursor-on-event` (this) |
+| `claude-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/claude-on-event` |
+| `codex-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/codex-on-event` |
+| `copilot-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/copilot-on-event` |
 | `checksums.txt` | sha256 of every artifact |
 
-The bootstrap script (`cursor/cursor-on-event.sh`) and `install-cursor.sh`
-both fetch the binary from GitHub Releases by version on first run and
-verify against `checksums.txt`. They also pull `cursor-on-event.sh` itself
-from the matching git tag on `raw.githubusercontent.com`, so the install
-flow has zero dependencies beyond `curl`/`wget` + `sha256sum`/`shasum`.
+`cursor/cursor-on-event.sh` and `install-cursor.sh` both fetch the binary from
+GitHub Releases by version and verify it against `checksums.txt`. The installer
+also pulls `cursor-on-event.sh` itself from the matching git tag on
+`raw.githubusercontent.com`, so the install flow needs nothing beyond
+`curl`/`wget` and `sha256sum`/`shasum`.
+
+`DASH0_VERSION` pins a release: `install-cursor.sh` reads it when resolving what
+to install, and `cursor-on-event.sh` reads it at runtime to override the version
+it was installed with.
 
 ## Install in a local Cursor instance
 

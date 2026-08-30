@@ -2,53 +2,76 @@
 
 ## Releasing
 
-> `scripts/release.sh <version>` executes the following release steps in one go.
->
-Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release, update the version in:
+**Actions → Release.** One button, and it is the whole thing: pick `patch`
+(default), `minor` or `major`, and the workflow works out the next version,
+writes it into every file that pins one, builds, verifies, moves `main`, tags
+and publishes.
 
-- `.claude-plugin/plugin.json` — `version` field
-- `.cursor-plugin/plugin.json` — `version` field
-- `copilot/plugin.json` — `version` field
-- `.github/plugin/marketplace.json` — `metadata.version` and the plugin entry `version` (Copilot marketplace)
-- `claude/claude-on-event.sh` — `VERSION=` line (Claude Code binary downloader)
-- `cursor/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
-- `codex/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
-- `copilot/copilot-on-event.sh` — `VERSION=` line (Copilot binary downloader; vendored inside the `copilot/` subpath-install package)
+There is no prepare step, no bump PR and no merge to wait for.
 
-> **Renaming a published asset.** The Claude marketplace lists this repo with no
-> ref, so `claude plugin install` and `update` take the default branch. A
-> checked-in bootstrap is therefore paired with the *last published* release, and a
-> script that asks for a name that release does not carry breaks every fresh
-> install until the next tag.
->
-> `claude/claude-on-event.sh` handles this by trying each name it may have been
-> published under, newest first, and using the first that resolves. Each installed
-> script asks its own pinned release, and that release carries whichever name it
-> was built with, so no commit on the default branch is ever inconsistent.
->
-> The Claude asset is already switched: releases from v0.1.25 on publish
-> `claude-on-event-<os>-<arch>`, and v0.1.24 and earlier carry the unprefixed
-> `on-event-<os>-<arch>`. Drop the `on-event-<os>-<arch>` candidate from the script
-> once no supported install can still be pinned to v0.1.24 or earlier. The local
-> cache filename stays `on-event-<version>-<os>-<arch>` on purpose, because
-> changing it would force every existing install to download again.
->
-> The CI job "Release assets exist for configured version" reads the candidates out
-> of each bootstrap and requires at least one to exist per platform, so a name that
-> nothing publishes cannot pass unnoticed.
+### Why the order is what it is
 
-`main` is protected, so the script commits the version bump on a `release/v<version>` branch and pushes it — it does **not** push a tag. Open a PR from that branch and merge it.
+Everything expensive happens while `main` still points at the *old* version, and
+`main` only learns the new one once the binaries are already on GitHub:
 
-After the PR is merged, tag the merged commit on `main` manually:
+1. Check out the commit `main` pointed at when the button was pressed.
+2. Work out the version, write it everywhere, commit and tag — **locally**.
+3. Build all 16 binaries and upload them to a **draft** release.
+4. Verify: checksums, all 16 present, the Linux binary actually runs, and the
+   uploaded asset list matches what was built. A failure here publishes nothing.
+5. Push the bump to `main`.
+6. Push the tag, then flip the draft to published.
+7. Check every public download URL, then install the real binary end to end.
+
+Steps 5 to 6 are two API calls. Before this, the gap between `main` naming a
+version and that version existing was 57 seconds when a merge triggered the
+build, and unbounded before that, when a human had to remember to push the tag.
+
+**If someone merges mid-release**, step 5 is a plain `git push` and is rejected —
+it is a compare-and-swap. Nothing was published, so the run deletes its draft and
+stops. Re-run and it picks up the new `main`. There is no way to publish binaries
+that do not match `main`, because the only way to reach step 6 is to have won.
+
+**If a run fails after step 5**, `main` names a version with no release. Just run
+Release again: the planner sees `main` already carrying an unreleased bump and
+finishes that one instead of starting another, which would skip a version.
+
+### The other two modes
+
+**`dry_run`** — build and check, publish nothing. No tag, no release; the 16
+binaries are attached to the run for 7 days. Safe from any branch at any time.
+
+**`channel: dev`** — tags `v<pinned>-dev.<run number>` on the branch you dispatch
+from, as a prerelease. Bumps nothing, never touches `main`, and *Latest* stays on
+the newest stable. Point an install at one with:
 
 ```bash
-git checkout main && git pull
-git tag v<version>
-git push origin v<version>
+export DASH0_VERSION=0.2.0-dev.41
 ```
 
-The tag push triggers the release workflow which cross-compiles binaries for `darwin/linux × amd64/arm64` and publishes them to [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases).
-The `on-event-<agent>.sh` scripts download the matching binaries on first run.
+Every bootstrap reads it, and the cache filename embeds the version, so it never
+collides with the pinned build. Same repo, same checksum verification.
+
+### How it is wired
+
+- **`scripts/version.sh`** — `check`, `set`, `latest`, `next`. The only list of
+  the ten places a version is pinned, so the bump and the check cannot disagree
+  about what needs bumping. `next` counts from the newest **published release**,
+  not from tags or the manifests, both of which can name a version that was never
+  released.
+- **Pushing to `main`** uses the *Dash0 Release Bot* App, for that one step only.
+  Everything else uses the built-in token. GitHub Actions' own token cannot be
+  granted this — GitHub refuses it as a ruleset bypass actor with a 422 — so the
+  App is named in the `Protect Main Branch` bypass list instead.
+- **GoReleaser uploads into a draft.** It creates the release before uploading
+  and writes `checksums.txt` last, so publishing at creation would leave a window
+  where the tag resolves but a binary does not.
+- **`concurrency: release`** serializes runs; `mode: replace` means two runs on
+  one tag would delete each other's uploads.
+- **After publishing**, `scripts/verify-release-assets.sh --strict` checks every
+  asset name a bootstrap can ask for at its public URL, then the end-to-end job
+  installs the real binary through `claude-on-event.sh`. CI runs the same script
+  non-strict, where a 404 is a warning — the normal state of a PR.
 
 ## Feature support matrix
 

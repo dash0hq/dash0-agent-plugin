@@ -117,6 +117,9 @@ jobs:
       - name: Bootstrap download contracts
         run: ./test/contracts/bootstrap.sh
 
+      - name: Release planning contracts
+        run: ./test/contracts/release-plan.sh
+
   e2e:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -169,29 +172,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Version consistency (plugin.json == claude-on-event.sh)
-        run: |
-          PLUGIN_VERSION=$(jq -r '.version' .claude-plugin/plugin.json)
-          SCRIPT_VERSION=$(grep '^VERSION=' claude/claude-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
-          echo "plugin.json: $PLUGIN_VERSION"
-          echo "claude-on-event.sh: $SCRIPT_VERSION"
-          if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
-            echo "::error::Version mismatch: plugin.json=$PLUGIN_VERSION, claude-on-event.sh=$SCRIPT_VERSION"
-            exit 1
-          fi
-
-      - name: Version consistency (Cursor plugin.json == cursor-on-event.sh)
-        run: |
-          # Mirror of the Claude version check. Both files are bumped together
-          # by scripts/release.sh; this guards against a hand-edit drifting.
-          PLUGIN_VERSION=$(jq -r '.version' .cursor-plugin/plugin.json)
-          SCRIPT_VERSION=$(grep '^VERSION=' cursor/cursor-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
-          echo ".cursor-plugin/plugin.json: $PLUGIN_VERSION"
-          echo "cursor/cursor-on-event.sh: $SCRIPT_VERSION"
-          if [ "$PLUGIN_VERSION" != "$SCRIPT_VERSION" ]; then
-            echo "::error::Version mismatch: .cursor-plugin/plugin.json=$PLUGIN_VERSION, cursor-on-event.sh=$SCRIPT_VERSION"
-            exit 1
-          fi
+      - name: Version consistency (every pinned version agrees)
+        # Was two hand-written comparisons covering Claude and Cursor, leaving the
+        # Codex and Copilot manifests and both marketplace entries unguarded.
+        # scripts/version.sh owns the list, and the release workflow bumps through
+        # the same file, so the check and the bump cannot disagree.
+        run: ./scripts/version.sh check
 
       - name: Codex marketplace consistency (marketplace.json ↔ plugin manifest)
         run: |
@@ -217,51 +203,10 @@ jobs:
           fi
 
       - name: Release assets exist for configured version
-        run: |
-          # Derive the version and every asset name each bootstrap may request,
-          # so this checks what the scripts actually ask for. Hardcoding the names
-          # here once let a rename through: the script asked for
-          # claude-on-event-<os>-<arch> while this job probed on-event-<os>-<arch>
-          # and passed.
-          #
-          # A script may list more than one candidate and try them in order, which
-          # is how a published name can be changed without release-timing
-          # coordination. So the requirement is that AT LEAST ONE candidate exists
-          # per platform, not that all of them do.
-          fail=0
-          for SCRIPT in claude/claude-on-event.sh cursor/cursor-on-event.sh \
-                        codex/codex-on-event.sh copilot/copilot-on-event.sh; do
-            VERSION=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$SCRIPT")
-            CANDIDATES=$(grep -oE '"[a-z-]+-\$\{OS\}-\$\{ARCH\}"' "$SCRIPT" \
-              | tr -d '"' | sed 's/-\${OS}-\${ARCH}//' | sort -u)
-            if [ -z "$VERSION" ] || [ -z "$CANDIDATES" ]; then
-              echo "::error::Could not read VERSION or asset names from $SCRIPT — update this parser"
-              fail=1
-              continue
-            fi
-            TAG_STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "https://github.com/dash0hq/dash0-agent-plugin/releases/tag/v${VERSION}")
-            if [ "$TAG_STATUS" = "404" ]; then
-              echo "::warning::Release v$VERSION does not exist yet — expected for a version bump PR. Validated after release."
-              continue
-            fi
-            for PLATFORM in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
-              found=""
-              for NAME in $CANDIDATES; do
-                URL="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${VERSION}/${NAME}-${PLATFORM}"
-                STATUS=$(curl -sI -o /dev/null -w "%{http_code}" -L "$URL")
-                echo "  $SCRIPT -> ${NAME}-${PLATFORM}: $STATUS"
-                if [ "$STATUS" = "200" ]; then
-                  found="${NAME}-${PLATFORM}"
-                  break
-                fi
-              done
-              if [ -z "$found" ]; then
-                echo "::error::$SCRIPT can obtain no binary for $PLATFORM from release v${VERSION} — tried: $(echo $CANDIDATES | tr ' ' ',')"
-                fail=1
-              fi
-            done
-          done
-          if [ "$fail" -ne 0 ]; then exit 1; fi
+        # Warns rather than fails when the release is missing — the Release
+        # workflow runs the same script with --strict after publishing, where a
+        # missing asset IS the failure.
+        run: ./scripts/verify-release-assets.sh "$(jq -r '.version' .claude-plugin/plugin.json)"
 
       - name: userConfig covers all plugin options
         run: |

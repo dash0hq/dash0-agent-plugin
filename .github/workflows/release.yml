@@ -1,28 +1,170 @@
 name: Release
 
+# One button. The workflow bumps the version itself, so there is no prepare step,
+# no bump PR and no merge to wait for.
+#
+# The order matters: everything expensive happens while main still points at the
+# old version, and main only learns about the new one once the binaries are
+# already sitting on GitHub. That closes the window in which main named a version
+# whose assets did not exist yet — measured at 57s when a merge triggered the
+# build, and unbounded before that, when a human pushed the tag.
+#
+# Pushing to main needs an identity the ruleset lets through. GitHub Actions'
+# own token cannot be granted that (GitHub refuses it as a bypass actor with a
+# 422), so the Dash0 Release Bot App is used for that one step and nothing else.
+
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'stable bumps main and publishes. dev tags a prerelease off this branch and changes nothing else.'
+        type: choice
+        options: [stable, dev]
+        default: stable
+      bump:
+        description: 'Which part to increment, counted from the newest published release.'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: 'Build and check only — no tag, no release, nothing published.'
+        type: boolean
+        default: false
+      version:
+        description: 'Optional: an exact version instead of a bump, e.g. 0.2.0 (no leading v).'
+        type: string
+        required: false
+
+concurrency:
+  # GoReleaser runs in `mode: replace`, so two runs on one tag delete each
+  # other's uploads and leave a partial asset set.
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
-  goreleaser:
-    name: Release with GoReleaser
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      bump_needed: ${{ steps.plan.outputs.bump_needed }}
+      latest: ${{ steps.plan.outputs.latest }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The commit main pointed at when Release was pressed. Pinned rather
+          # than re-resolved, so plan and release cannot see different trees.
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Every file pins the same version
+        run: ./scripts/version.sh check
+
+      - name: Resolve what to release
+        id: plan
+        env:
+          # version.sh asks GitHub which releases are published; gh needs a token.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Through env, not interpolation: two of these are free text.
+          CHANNEL: ${{ inputs.channel }}
+          BUMP: ${{ inputs.bump }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          IN_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          PLAN=$(./scripts/release-plan.sh)
+          printf '%s\n' "$PLAN" | tee -a "$GITHUB_OUTPUT"
+          { echo "### Release plan"; echo '```'; printf '%s\n' "$PLAN"; echo '```'; } \
+            >>"$GITHUB_STEP_SUMMARY"
+
+  dry-run:
+    name: Dry run
+    needs: plan
+    if: needs.plan.outputs.mode == 'dry-run'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: '${{ github.sha }}', fetch-depth: 0 }
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
-      - name: Run GoReleaser
+      - name: Build every artifact without publishing
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --snapshot --clean --skip=publish
+
+      - name: The build is complete
+        run: |
+          set -euo pipefail
+          ( cd dist && sha256sum -c checksums.txt )
+          N=$(find dist -maxdepth 1 -name '*-on-event-*' | wc -l)
+          [ "$N" -eq 16 ] || { echo "::error::built $N binaries, expected 16"; exit 1; }
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-${{ needs.plan.outputs.version }}
+          path: |
+            dist/*-on-event-*
+            dist/checksums.txt
+          retention-days: 7
+
+  release:
+    name: Release ${{ needs.plan.outputs.tag }}
+    needs: plan
+    if: needs.plan.outputs.mode == 'release'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      BUMP_NEEDED: ${{ needs.plan.outputs.bump_needed }}
+    steps:
+      - name: Mint a token for the one push that needs it
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          # The App's token, so the push below carries the identity the ruleset
+          # lets through. Building and publishing still use GITHUB_TOKEN.
+          token: ${{ steps.app.outputs.token }}
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Write the version and tag it, locally
+        run: |
+          set -euo pipefail
+          git config user.name "dash0-release-bot[bot]"
+          git config user.email "dash0-release-bot[bot]@users.noreply.github.com"
+          # bump_needed is false when main already carries this version — an
+          # earlier run pushed the bump and then failed — and for dev cuts, which
+          # change nothing outside their own tag.
+          if [ "$BUMP_NEEDED" = "true" ]; then
+            ./scripts/version.sh set "$VERSION"
+            git commit -aqm "release: $TAG"
+          fi
+          # Local only. Nothing has left the runner yet.
+          git tag "$TAG" 2>/dev/null || echo "tag $TAG already here — re-run of a release that failed after tagging"
+
+      - name: Build and upload as a draft
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -30,3 +172,72 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: The build is complete and the binary runs
+        run: |
+          set -euo pipefail
+          # Still a draft, so nothing here can reach an install. Running the
+          # binary catches an artifact that is complete and correctly checksummed
+          # but not actually executable on its platform.
+          ( cd dist && sha256sum -c checksums.txt )
+          N=$(find dist -maxdepth 1 -name '*-on-event-*' | wc -l)
+          [ "$N" -eq 16 ] || { echo "::error::built $N binaries, expected 16"; exit 1; }
+          CLAUDE_PLUGIN_DATA=$(mktemp -d) \
+          DASH0_OTLP_URL=http://127.0.0.1:1 \
+            dist/claude-on-event-linux-amd64 \
+            <<<'{"hook_event_name":"SessionStart","session_id":"release-verify","model":"opus"}'
+
+      - name: The draft carries exactly what was built
+        run: |
+          set -euo pipefail
+          # What GitHub actually stored, while it is still unreachable —
+          # everything above inspects the local dist/, which says nothing about
+          # the upload. By id from the list: GET /releases/tags/{tag} does not
+          # return drafts. Newest-first, so take the first match; a leftover
+          # draft from an aborted run would otherwise be the one published.
+          ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+                 --jq '.[] | select(.tag_name==env.TAG) | .id')
+          ID=${ID%%$'\n'*}
+          [ -n "$ID" ] || { echo "::error::no release found for $TAG"; exit 1; }
+          echo "RELEASE_ID=$ID" >>"$GITHUB_ENV"
+          { awk '{print $2}' dist/checksums.txt; echo checksums.txt; } | sort >expected.txt
+          gh api "repos/${GITHUB_REPOSITORY}/releases/$ID/assets" --paginate \
+            --jq '.[].name' | sort >uploaded.txt
+          diff expected.txt uploaded.txt \
+            || { echo "::error::the draft's assets do not match the build"; exit 1; }
+
+      - name: Move main to the new version
+        if: needs.plan.outputs.bump_needed == 'true'
+        run: |
+          set -euo pipefail
+          # The compare-and-swap. A plain push is rejected if main moved since the
+          # plan checked it out, and nothing has been published yet — so a lost
+          # race costs one build and no exposure. This is also the only step that
+          # uses the App's identity.
+          if ! git push origin HEAD:main; then
+            echo "::error::main moved during this run — nothing was published. Re-run."
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" || true
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          MAKE_LATEST: ${{ needs.plan.outputs.latest }}
+        run: |
+          set -euo pipefail
+          git push origin "$TAG"
+          # draft is a boolean (-F); make_latest is a string enum (-f).
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false -f make_latest="$MAKE_LATEST" >/dev/null
+          echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Every bootstrap resolves a binary at its public URL
+        run: ./scripts/verify-release-assets.sh --strict "$VERSION"
+
+  verify:
+    name: Verify
+    needs: [plan, release]
+    uses: ./.github/workflows/e2e-release.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}

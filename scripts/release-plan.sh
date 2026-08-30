@@ -68,11 +68,29 @@ else
   [ "$REF_NAME" = "main" ] \
     || die "stable releases must be dispatched from main (got '$REF_NAME'); use channel=dev to cut from a branch"
 
+  # A stable release writes its version into main, and the Claude marketplace
+  # lists this repo with no ref — so every install would then pin a prerelease,
+  # with GitHub's "Latest" pointer still on the last stable and nothing else
+  # signalling it. Prereleases have exactly one route: channel=dev.
+  case "$IN_VERSION" in
+    *-*) die "'$IN_VERSION' is a prerelease — use channel=dev. A stable release writes its version to main, and every install reads it from there." ;;
+  esac
+  case "$PINNED" in
+    *-*) die "main pins the prerelease $PINNED — a stable release cannot be cut from it" ;;
+  esac
+
+  # Both sides are plain X.Y.Z from here: PUBLISHED comes from version.sh latest,
+  # which excludes prereleases, and the two cases above rule them out on the
+  # other. `higher` compares numerically per component and would otherwise rank
+  # 0.2.0-dev.1 above 0.2.0.
   PUBLISHED=$(./scripts/version.sh latest)
   if [ "$PINNED" != "$PUBLISHED" ] && [ "$(higher "$PINNED" "$PUBLISHED")" = "$PINNED" ]; then
     # main already carries a bump that was never released — an earlier run pushed
     # it and then failed. Finish that release rather than starting another, which
     # would skip a version permanently.
+    if [ -n "$IN_VERSION" ] && [ "$IN_VERSION" != "$PINNED" ]; then
+      die "main already carries the unreleased v$PINNED — finish that release, or revert the bump on main before asking for $IN_VERSION"
+    fi
     VERSION="$PINNED"; BUMP_NEEDED=false
   else
     VERSION="${IN_VERSION:-$(./scripts/version.sh next "$BUMP")}"

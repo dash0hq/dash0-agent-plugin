@@ -90,6 +90,23 @@ refuse "a version that would not move forward" "already published" -- \
   CHANNEL=stable REF_NAME=main PINNED=0.1.25 IN_VERSION=0.1.20 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
 
+# A stable release writes its version into main, and the marketplace reads main
+# with no ref — so a prerelease there would be pinned by every install, while
+# GitHub's Latest pointer stayed on the last stable and said nothing.
+refuse "a prerelease on the stable channel" "use channel=dev" -- \
+  CHANNEL=stable REF_NAME=main PINNED=0.1.25 IN_VERSION=0.2.0-dev.9 \
+  EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
+
+refuse "a stable release cut from a prerelease pin" "main pins the prerelease" -- \
+  CHANNEL=stable REF_NAME=main PINNED=0.2.0-dev.9 \
+  EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
+
+# Silently publishing 0.1.26 when the operator asked for 0.2.0 is worse than
+# refusing: the plan block is the only place the substitution would show.
+refuse "an explicit version while main carries an unreleased bump" "finish that release" -- \
+  CHANNEL=stable REF_NAME=main PINNED=0.1.26 IN_VERSION=0.2.0 \
+  EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
+
 refuse "a tag already on another commit" "another commit" -- \
   CHANNEL=stable REF_NAME=main PINNED=0.1.25 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=elsewhere "$PLAN"

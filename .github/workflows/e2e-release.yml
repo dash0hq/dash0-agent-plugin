@@ -100,9 +100,18 @@ jobs:
           CLAUDE_PLUGIN_DATA: /tmp/e2e-plugin-data
         run: |
           ls -la "$CLAUDE_PLUGIN_DATA/bin/"
-          BINARY=$(ls "$CLAUDE_PLUGIN_DATA/bin/" | head -1)
+          BINARY=$(find "$CLAUDE_PLUGIN_DATA/bin" -type f -name 'on-event-*' | head -1)
           echo "Downloaded binary: $BINARY"
           if [ -z "$BINARY" ]; then
             echo "::error::No binary found — claude-on-event.sh failed to download"
+            exit 1
+          fi
+          # The cache filename embeds the version. Without this, an empty
+          # DASH0_VERSION — a bare dispatch, a dropped plan output, a caller that
+          # omits `with:` — silently falls back to the version pinned in the
+          # checkout, and this job reports the NEW release as verified having
+          # downloaded the previous one.
+          if [ -n "${DASH0_VERSION:-}" ] && [[ "$BINARY" != *"$DASH0_VERSION"* ]]; then
+            echo "::error::asked for v$DASH0_VERSION but installed $BINARY"
             exit 1
           fi

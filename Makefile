@@ -82,7 +82,7 @@ shellcheck-lint: ## Lint all shell scripts with shellcheck.
 	find . -name '*.sh' -not -path './bin/*' -print0 | xargs -0 shellcheck -x
 
 .PHONY: lint
-lint: go-version-check golangci-lint shellcheck-lint ## Run all static analysis (Go, shell, version sync).
+lint: go-version-check version-check golangci-lint shellcheck-lint ## Run all static analysis (Go, shell, version sync).
 
 .PHONY: ci
 ci: lint test ## Run the full CI check set locally.

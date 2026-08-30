@@ -161,8 +161,15 @@ jobs:
             ./scripts/version.sh set "$VERSION"
             git commit -aqm "release: $TAG"
           fi
-          # Local only. Nothing has left the runner yet.
-          git tag "$TAG" 2>/dev/null || echo "tag $TAG already here — re-run of a release that failed after tagging"
+          # Local only. Nothing has left the runner yet. A tag that already
+          # exists is a re-run of a release that failed after tagging — but only
+          # if it points at what we just built. The planner compared it against
+          # the pre-bump commit, and HEAD has moved since.
+          if ! git tag "$TAG" 2>/dev/null; then
+            [ "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)" ] \
+              || { echo "::error::tag $TAG exists on a different commit than the one just built"; exit 1; }
+            echo "tag $TAG already here — re-run of a release that failed after tagging"
+          fi
 
       - name: Build and upload as a draft
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3

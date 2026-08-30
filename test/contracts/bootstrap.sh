@@ -152,6 +152,11 @@ EXPECTED=$(printf '%s\n' "$CHECKSUMS" | awk -v a="claude-on-event-$(os_arch)" '$
 
 DATA=$(mktemp -d)
 export CLAUDE_PLUGIN_DATA="$DATA"
+# Hermetic HOME and cwd, as above: an `enabled: false` in the caller's config
+# exits the script before it downloads anything, and every assertion below would
+# then be measuring a directory that was never created.
+export HOME="$DATA/home"
+mkdir -p "$HOME"
 # Dead endpoint: the exported telemetry is irrelevant here, and the binary exits
 # 0 when it can't reach a collector, so a nonzero exit means the bootstrap failed.
 export DASH0_OTLP_URL="http://127.0.0.1:1"
@@ -159,7 +164,8 @@ export DASH0_OTLP_URL="http://127.0.0.1:1"
 # while a later one truncates the same path, which a burst of identical starts
 # mostly misses.
 for i in $(seq 8); do
-  ( echo '{"hook_event_name":"SessionStart","session_id":"contract","model":"opus"}' \
+  ( cd "$DATA" \
+    && echo '{"hook_event_name":"SessionStart","session_id":"contract","model":"opus"}' \
       | bash "$REPO/claude/claude-on-event.sh" >/dev/null 2>"$DATA/err.$i"
     echo "$?" >"$DATA/rc.$i" ) &
   sleep 0.35

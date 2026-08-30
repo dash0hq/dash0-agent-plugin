@@ -4,54 +4,25 @@
 
 set -euo pipefail
 
-# Nothing here is worth interrupting a session for. Claude renders a non-zero,
-# non-2 hook exit as an error on every event, so every path that ends in "we
-# can't safely run the binary" exits 0 instead — as cursor, codex and copilot
-# already do. `set -e` still governs the unanticipated cases.
-#
-# But exiting 0 alone would hide a real breakage. Two very different things look
-# identical on the first attempt:
-#
-#   transient  the minute between a release bump landing on main and its
-#              binaries publishing. Resolves itself; not worth a word.
-#   persistent a proxy blocking github.com, no curl, an unsupported platform, a
-#              release that never published. Never resolves — and silence here
-#              means someone believes telemetry works while no data arrives.
-#
-# Time tells them apart. Note the first failure, stay quiet for GRACE, and after
-# that speak through the plugin's own channel — a systemMessage, the same way
-# the binary reports a session link — roughly once every REMIND. "Roughly"
-# because the marker is a read-modify-write with no lock: hooks firing in the
-# same instant can each read the old timestamp and each print. The cost is a
-# duplicated one-line notice, which is not worth a lockfile in a hot path.
-
-GRACE=600      # 10 min: an order of magnitude past any release window
-REMIND=3600    # roughly hourly; hooks fire many times a turn
+# Exit 0 on every "we can't safely run the binary" path, as the other three
+# bootstraps do: Claude renders any other non-zero exit as an error on *every*
+# event. But say so once an hour, or silence would hide a proxy blocking github
+# or a release that never published. Keyed by version — hooks race, and a marker
+# written by a straggler after a faster sibling cleared it is never cleared
+# again. Roughly hourly, not exactly: no lock, so simultaneous hooks can each
+# print, and a duplicated one-liner is not worth one in a hot path.
+REMIND=3600
 
 fail_open() {
   echo "on-event: $*" >&2
 
-  local marker="${BIN_DIR:-}/.download-failing" now ver first notified
+  local marker="${BIN_DIR:-}/.download-failing" now ver notified
   now=$(date +%s)
-  if [ -n "${BIN_DIR:-}" ]; then
-    mkdir -p "$BIN_DIR" 2>/dev/null || true
-    read -r ver first notified <<<"$(cat "$marker" 2>/dev/null || true)"
-    # Keyed by version. Hooks race, so a straggler can write a marker moments
-    # after a faster sibling finished the download and cleared it, and nothing
-    # afterwards takes the `-x` branch that would clear it again. Left unkeyed,
-    # that stale timestamp would be days old at the next bump and fire the alarm
-    # on the first release-window failure — the exact case GRACE exists to
-    # suppress.
-    if [ "${ver:-}" != "$VERSION" ] || [ -z "${first:-}" ]; then
-      # First failure for this version. Assume it is the release window.
-      echo "$VERSION $now 0" >"$marker" 2>/dev/null || true
-    elif [ $((now - first)) -gt "$GRACE" ] && [ $((now - ${notified:-0})) -gt "$REMIND" ]; then
-      echo "$VERSION $first $now" >"$marker" 2>/dev/null || true
-      # Fixed text plus the version, which is semver-safe. The error itself goes
-      # to stderr only — interpolating it here could emit invalid JSON.
-      # \\n, not \n: the leading newline must reach Claude Code as the two-character
-      # JSON escape. printf would turn a single backslash into a real newline,
-      # which is a control character and illegal inside a JSON string.
+  if [ -n "${BIN_DIR:-}" ] && mkdir -p "$BIN_DIR" 2>/dev/null; then
+    read -r ver notified <<<"$(cat "$marker" 2>/dev/null || true)"
+    if [ "${ver:-}" != "$VERSION" ] || [ $((now - ${notified:-0})) -gt "$REMIND" ]; then
+      echo "$VERSION $now" >"$marker" 2>/dev/null || true
+      # \\n, not \n: printf would emit a real newline, invalid inside JSON.
       printf '{"systemMessage":"\\ndash0: cannot download the v%s binary, so no telemetry is being sent. Run claude with --debug for the reason."}\n' "$VERSION"
     fi
   fi
@@ -124,9 +95,7 @@ if [[ -n "$KEYCHAIN_SERVICE" ]] && command -v security &>/dev/null; then
   [[ -n "$keychain_token" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$keychain_token"
 fi
 
-# Claude Code always sets this. If it somehow does not, fail open like every
-# other path rather than aborting: `:?` exits 1, which is the hook error this
-# script exists to avoid, and it happens before fail_open is reachable.
+# `:?` would exit 1 before fail_open is even reachable.
 PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-}"
 [ -n "$PLUGIN_DATA" ] || fail_open "CLAUDE_PLUGIN_DATA is not set"
 BIN_DIR="$PLUGIN_DATA/bin"

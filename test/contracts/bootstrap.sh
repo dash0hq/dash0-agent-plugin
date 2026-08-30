@@ -2,8 +2,7 @@
 # Bootstrap download contracts (runnable locally and in CI):
 #   - every *-on-event.sh downloads via a private temp and renames into place
 #   - none of them ends a hook with a non-zero exit
-#   - a missing release disturbs nothing and installs nothing
-#   - but a persistent one does eventually say so
+#   - a missing release disturbs nothing and installs nothing, but is reported
 #   - concurrent invocations against a cold cache all succeed and converge
 #
 # Hooks run concurrently — parallel tool calls each fire their own, and every
@@ -23,11 +22,10 @@ SCRIPTS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
          codex/codex-on-event.sh copilot/copilot-on-event.sh)
 
 echo "== Every bootstrap writes the binary only by rename =="
-# Static, so it holds regardless of whether a race reproduces on this machine or
-# this runner. Inside the download block the final path may appear only in the
-# guard that opens it, the temp name derived from it, and the closing rename —
-# any other use is a write to a path a concurrent process may already be
-# exec'ing. This is the check that fails if someone restores `-o "$BINARY"`.
+# Static, so it holds whether or not a race reproduces here. Inside the download
+# block the final path may appear only in the guard, the temp name derived from
+# it, and the rename — any other use writes to a path a concurrent process may
+# be exec'ing. Fails if someone restores `-o "$BINARY"`.
 fail=0
 for s in "${SCRIPTS[@]}"; do
   block=$(awk '/^if \[ ! -x "\$BINARY" \]/,/^fi$/' "$REPO/$s" | sed 's/#.*//')
@@ -54,13 +52,10 @@ done
 echo "PASS: all ${#SCRIPTS[@]} bootstraps stage downloads in a temp and rename"
 
 echo "== No bootstrap ends a hook with a non-zero exit =="
-# Behavioural, not textual. A grep for `exit [1-9]` cannot see the ways a script
-# actually exits non-zero — `set -e` on an unguarded command, a `:?` expansion,
-# a failing exec — and a previous version of this contract printed PASS against
-# a script that exited 1 in two reproducible cases.
-#
-# A read-only data directory poisons the first thing every bootstrap does, so
-# this reaches each one without needing the network.
+# Behavioural, not textual: a grep for `exit [1-9]` cannot see a `set -e` exit, a
+# `:?` expansion or a failing exec, and the version of this check that did that
+# printed PASS against a script that exited 1 in two reproducible cases. A
+# read-only data directory poisons the first thing every bootstrap does.
 fail=0
 readonly_root=$(mktemp -d)
 chmod a-w "$readonly_root"
@@ -70,7 +65,6 @@ if touch "$readonly_root/probe" 2>/dev/null; then
   echo "  SKIP: cannot make a directory unwritable here"
 else
   for s in "${SCRIPTS[@]}"; do
-    # Each runtime names its data directory differently; set them all.
     status=0
     env -i PATH="$PATH" HOME="$readonly_root/nohome" \
       CLAUDE_PLUGIN_DATA="$readonly_root/d" \
@@ -91,8 +85,7 @@ chmod u+w "$readonly_root"; rm -rf "$readonly_root"
 echo "PASS: all ${#SCRIPTS[@]} bootstraps fail open"
 
 echo "== A missing release does not disturb the session, and installs nothing =="
-# Points the Claude bootstrap at a version that will never exist. Exercises the
-# path a real install hits inside the release window.
+# The path a real install hits inside the release window.
 missing=$(mktemp -d)
 sed 's/^VERSION="[^"]*"/VERSION="9.9.9"/' "$REPO/claude/claude-on-event.sh" >"$missing/probe.sh"
 data=$(mktemp -d)
@@ -103,60 +96,45 @@ if [ "$status" -ne 0 ]; then
   echo "ERROR: a missing release exited $status — a hook error the user cannot act on" >&2
   exit 1
 fi
-# No binary and no half-written temp. The failure marker is deliberate state —
-# it is what lets a persistent failure be told apart from a release window.
+# No binary, no half-written temp. The marker is deliberate state.
 left=$(find "$data" -type f ! -name '.download-failing' 2>/dev/null | wc -l | tr -d ' ')
 [ "$left" -eq 0 ] || { echo "ERROR: $left file(s) left behind after a failed download" >&2; exit 1; }
 rm -rf "$missing" "$data"
 echo "PASS: a missing release exits 0 and leaves nothing behind"
 
-echo "== A persistent failure eventually says so =="
-# Exiting 0 keeps a session quiet, but on its own it would also hide a proxy
-# blocking github.com or a release that never published — someone would believe
-# telemetry works while no data arrives. Time separates the two: quiet inside the
-# grace period, then a systemMessage, rate-limited so hooks don't spam it.
-probe=$(mktemp -d)
+echo "== A failure is reported, once, not on every hook =="
+# Exiting 0 alone would hide a proxy blocking github or a release that never
+# published. Hermetic HOME and cwd: with the caller's, an `enabled: false` in
+# ~/.claude/dash0-agent-plugin.local.md exits the probe before any download
+# logic, and every assertion below would pass having tested nothing.
+probe=$(mktemp -d); pdata=$(mktemp -d)
 sed 's/^VERSION="[^"]*"/VERSION="9.9.9"/' "$REPO/claude/claude-on-event.sh" >"$probe/p.sh"
-pdata=$(mktemp -d)
-EV='{"hook_event_name":"SessionStart","session_id":"contract"}'
-# Hermetic HOME and cwd. With the caller's, ~/.claude/dash0-agent-plugin.local.md
-# — which dash0-configure writes on every developer machine — is loaded, and an
-# `enabled: false` there exits the script before any download logic runs. Both
-# "stayed quiet" assertions would then pass having tested nothing, and `age`
-# would die on a marker that was never created.
 say() {
-  ( cd "$probe" && env -i PATH="$PATH" HOME="$probe/home" \
-      CLAUDE_PLUGIN_DATA="$pdata" bash "$probe/p.sh" <<<"$EV" 2>/dev/null )
-}
-# Winds the marker back in time. Fields are: version, first failure, last notified.
-age() {
-  awk -v g="$1" -v r="$2" '{print $1, $2-g, ($3==0?0:$3-r)}' \
-    "$pdata/bin/.download-failing" >"$probe/m"
-  cp "$probe/m" "$pdata/bin/.download-failing"
+  ( cd "$probe" && env -i PATH="$PATH" HOME="$probe/home" CLAUDE_PLUGIN_DATA="$pdata" \
+      bash "$probe/p.sh" <<<'{"hook_event_name":"SessionStart"}' 2>/dev/null )
 }
 
-[ -z "$(say)" ] || { echo "ERROR: spoke up on the first failure — that looks like a release window" >&2; exit 1; }
-[ -z "$(say)" ] || { echo "ERROR: spoke up while still inside the grace period" >&2; exit 1; }
-
-age 700 0
 msg=$(say)
-[ -n "$msg" ] || { echo "ERROR: still silent 11 minutes in — a broken install would never be noticed" >&2; exit 1; }
-# Must be parseable: Claude Code reads this channel as JSON, and a literal
-# newline inside the string would make it a control character and invalid.
+[ -n "$msg" ] || { echo "ERROR: silent — a broken install would never be noticed" >&2; exit 1; }
 if command -v jq >/dev/null 2>&1; then
   printf '%s' "$msg" | jq -e '.systemMessage' >/dev/null \
-    || { echo "ERROR: the systemMessage is not valid JSON: $msg" >&2; exit 1; }
+    || { echo "ERROR: not valid JSON: $msg" >&2; exit 1; }
 else
-  # Say so rather than reporting a JSON bug that isn't there.
   echo "  (jq absent — JSON validity not checked)"
 fi
 
 [ -z "$(say)" ] || { echo "ERROR: repeated immediately — hooks fire many times a turn" >&2; exit 1; }
 
-age 0 3700
+awk '{print $1, $2-3700}' "$pdata/bin/.download-failing" >"$probe/m"
+cp "$probe/m" "$pdata/bin/.download-failing"
 [ -n "$(say)" ] || { echo "ERROR: never reminded again after an hour" >&2; exit 1; }
+
+# A marker left by an earlier version must not silence the current one.
+printf '0.1.20 %s\n' "$(date +%s)" >"$pdata/bin/.download-failing"
+[ -n "$(say)" ] || { echo "ERROR: a stale marker from another version silenced it" >&2; exit 1; }
+
 rm -rf "$probe" "$pdata"
-echo "PASS: quiet while transient, audible once persistent, rate-limited, valid JSON"
+echo "PASS: reported once, rate-limited, per version, valid JSON"
 
 echo "== Concurrent cold-cache invocations all succeed =="
 VERSION=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")

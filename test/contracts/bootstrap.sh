@@ -3,6 +3,7 @@
 #   - every *-on-event.sh downloads via a private temp and renames into place
 #   - none of them ends a hook with a non-zero exit
 #   - a missing release disturbs nothing and installs nothing
+#   - but a persistent one does eventually say so
 #   - concurrent invocations against a cold cache all succeed and converge
 #
 # Hooks run concurrently — parallel tool calls each fire their own, and every
@@ -84,10 +85,42 @@ if [ "$status" -ne 0 ]; then
   echo "ERROR: a missing release exited $status — a hook error the user cannot act on" >&2
   exit 1
 fi
-left=$(find "$data" -type f 2>/dev/null | wc -l | tr -d ' ')
+# No binary and no half-written temp. The failure marker is deliberate state —
+# it is what lets a persistent failure be told apart from a release window.
+left=$(find "$data" -type f ! -name '.download-failing' 2>/dev/null | wc -l | tr -d ' ')
 [ "$left" -eq 0 ] || { echo "ERROR: $left file(s) left behind after a failed download" >&2; exit 1; }
 rm -rf "$missing" "$data"
 echo "PASS: a missing release exits 0 and leaves nothing behind"
+
+echo "== A persistent failure eventually says so =="
+# Exiting 0 keeps a session quiet, but on its own it would also hide a proxy
+# blocking github.com or a release that never published — someone would believe
+# telemetry works while no data arrives. Time separates the two: quiet inside the
+# grace period, then a systemMessage, rate-limited so hooks don't spam it.
+probe=$(mktemp -d)
+sed 's/^VERSION="[^"]*"/VERSION="9.9.9"/' "$REPO/claude/claude-on-event.sh" >"$probe/p.sh"
+pdata=$(mktemp -d)
+EV='{"hook_event_name":"SessionStart","session_id":"contract"}'
+say() { CLAUDE_PLUGIN_DATA="$pdata" bash "$probe/p.sh" <<<"$EV" 2>/dev/null; }
+age()  { awk -v g="$1" -v r="$2" '{print $1-g, ($2==0?0:$2-r)}' "$pdata/bin/.download-failing" >"$probe/m"; cp "$probe/m" "$pdata/bin/.download-failing"; }
+
+[ -z "$(say)" ] || { echo "ERROR: spoke up on the first failure — that looks like a release window" >&2; exit 1; }
+[ -z "$(say)" ] || { echo "ERROR: spoke up while still inside the grace period" >&2; exit 1; }
+
+age 700 0
+msg=$(say)
+[ -n "$msg" ] || { echo "ERROR: still silent 11 minutes in — a broken install would never be noticed" >&2; exit 1; }
+# Must be parseable: Claude Code reads this channel as JSON, and a literal
+# newline inside the string would make it a control character and invalid.
+printf '%s' "$msg" | jq -e '.systemMessage' >/dev/null \
+  || { echo "ERROR: the systemMessage is not valid JSON: $msg" >&2; exit 1; }
+
+[ -z "$(say)" ] || { echo "ERROR: repeated immediately — hooks fire many times a turn" >&2; exit 1; }
+
+age 0 3700
+[ -n "$(say)" ] || { echo "ERROR: never reminded again after an hour" >&2; exit 1; }
+rm -rf "$probe" "$pdata"
+echo "PASS: quiet while transient, audible once persistent, rate-limited, valid JSON"
 
 echo "== Concurrent cold-cache invocations all succeed =="
 VERSION=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")

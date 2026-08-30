@@ -4,20 +4,48 @@
 
 set -euo pipefail
 
-# Nothing here is worth interrupting a session for. Claude treats a non-zero,
-# non-2 hook exit as an error and shows it, so every path that ends in "we can't
-# safely run the binary" exits 0 with a note on stderr instead — matching what
-# cursor/codex/copilot-on-event.sh already do.
+# Nothing here is worth interrupting a session for. Claude renders a non-zero,
+# non-2 hook exit as an error on every event, so every path that ends in "we
+# can't safely run the binary" exits 0 instead — as cursor, codex and copilot
+# already do. `set -e` still governs the unanticipated cases.
 #
-# The commonest cause is transient: for about a minute after a release bump
-# lands on main, main names a version whose binaries are still building, and
-# every asset 404s. That resolves itself, and an error per hook in the meantime
-# is noise about nothing the user can act on.
+# But exiting 0 alone would hide a real breakage. Two very different things look
+# identical on the first attempt:
 #
-# `set -e` still governs the unanticipated cases; this covers the ones we check
-# for deliberately.
+#   transient  the minute between a release bump landing on main and its
+#              binaries publishing. Resolves itself; not worth a word.
+#   persistent a proxy blocking github.com, no curl, an unsupported platform, a
+#              release that never published. Never resolves — and silence here
+#              means someone believes telemetry works while no data arrives.
+#
+# Time tells them apart. Note the first failure, stay quiet for GRACE, and after
+# that speak through the plugin's own channel — a systemMessage, the same way
+# the binary reports a session link — at most once every REMIND.
+
+GRACE=600      # 10 min: an order of magnitude past any release window
+REMIND=3600    # at most one message an hour; hooks fire many times a turn
+
 fail_open() {
   echo "on-event: $*" >&2
+
+  local marker="${BIN_DIR:-}/.download-failing" now first notified
+  now=$(date +%s)
+  if [ -n "${BIN_DIR:-}" ]; then
+    mkdir -p "$BIN_DIR" 2>/dev/null || true
+    read -r first notified <<<"$(cat "$marker" 2>/dev/null || true)"
+    if [ -z "${first:-}" ]; then
+      # First failure for this install. Assume it is the release window.
+      echo "$now 0" >"$marker" 2>/dev/null || true
+    elif [ $((now - first)) -gt "$GRACE" ] && [ $((now - ${notified:-0})) -gt "$REMIND" ]; then
+      echo "$first $now" >"$marker" 2>/dev/null || true
+      # Fixed text plus the version, which is semver-safe. The error itself goes
+      # to stderr only — interpolating it here could emit invalid JSON.
+      # \\n, not \n: the leading newline must reach Claude Code as the two-character
+      # JSON escape. printf would turn a single backslash into a real newline,
+      # which is a control character and illegal inside a JSON string.
+      printf '{"systemMessage":"\\ndash0: cannot download the v%s binary, so no telemetry is being sent. Run claude with --debug for the reason."}\n' "$VERSION"
+    fi
+  fi
   exit 0
 }
 
@@ -184,6 +212,8 @@ if [ ! -x "$BINARY" ]; then
   # -x test that guards this block.
   chmod +x "$TMP"
   mv -f "$TMP" "$BINARY"
+  # Downloads work again; forget the earlier failures.
+  rm -f "$BIN_DIR/.download-failing"
 fi
 
 # Forward stdin and arguments to the binary.

@@ -77,8 +77,9 @@ else
   else
     VERSION="${IN_VERSION:-$(./scripts/version.sh next "$BUMP")}"
     BUMP_NEEDED=true
-    [ "$(higher "$VERSION" "$PUBLISHED")" = "$VERSION" ] && [ "$VERSION" != "$PUBLISHED" ] \
-      || die "v$PUBLISHED is already published — $VERSION would not move the release forward"
+    if [ "$VERSION" = "$PUBLISHED" ] || [ "$(higher "$VERSION" "$PUBLISHED")" != "$VERSION" ]; then
+      die "v$PUBLISHED is already published — $VERSION would not move the release forward"
+    fi
   fi
   TAG="v$VERSION"
 fi

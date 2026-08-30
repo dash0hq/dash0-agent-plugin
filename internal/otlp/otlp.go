@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/identity"
+	"github.com/dash0hq/dash0-agent-plugin/internal/spool"
 	"github.com/dash0hq/dash0-agent-plugin/internal/vcs"
 	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
@@ -114,6 +116,13 @@ type Config struct {
 	// OS-derived user.name is dropped instead of reported. For orgs that would
 	// rather have no attribution than an approximate one.
 	OmitIdentityFallback bool
+
+	// SpoolDir, when set, keeps payloads that could not be sent so a later
+	// invocation can send them. Empty means a failed send is a lost payload,
+	// which is what every caller did before the spool existed. pipeline.Process
+	// sets it from the data root; leave it empty for one-shot sends that must not
+	// be retried later, such as the install-time connectivity check.
+	SpoolDir string
 }
 
 // ValidateURL reports whether OTLPUrl is usable, and clears it when it is not.
@@ -228,6 +237,115 @@ func SendRawMetrics(payload []byte, cfg Config) error {
 	return sendOTLP(cfg, "/v1/metrics", payload)
 }
 
+// PluginIncident is a failure in the plugin's own plumbing rather than anything
+// the agent did — most importantly, a hook that could not run at all because the
+// bootstrap script was missing. It is a log record and not a span because it
+// belongs to no turn and no tool call; it is a fact about the plugin.
+//
+// Count is how many times it happened, so a session that fired hundreds of dead
+// hooks produces one record instead of hundreds.
+type PluginIncident struct {
+	Kind      string
+	Harness   string
+	Detail    string
+	SessionID string
+	Count     int
+	First     time.Time
+	Last      time.Time
+}
+
+// SendPluginIncident reports one aggregated incident. It goes through the
+// spooling path, so a report made while the endpoint is still unreachable is
+// kept and sent later rather than lost — which matters more here than anywhere
+// else, since the incident is itself evidence that data went missing.
+func SendPluginIncident(inc PluginIncident, cfg Config) error {
+	if cfg.OTLPUrl == "" && !cfg.Debug {
+		return nil
+	}
+
+	harness := inc.Harness
+	if harness == "" {
+		harness = cfg.HarnessName
+	}
+	attrs := []Attribute{
+		strAttr("dash0.plugin.incident.kind", inc.Kind),
+		{Key: "dash0.plugin.incident.count", Value: IntVal(int64(inc.Count))},
+		strAttr("dash0.plugin.version", version.Version),
+	}
+	if inc.Detail != "" {
+		// The detail is a filesystem path. Redact the home directory the same way
+		// span attributes do: it is diagnostic, not an identifier.
+		attrs = append(attrs, strAttr("dash0.plugin.incident.detail", redactHomeDir(inc.Detail)))
+	}
+	if !inc.First.IsZero() {
+		attrs = append(attrs, strAttr("dash0.plugin.incident.first", inc.First.UTC().Format(time.RFC3339)))
+	}
+	if !inc.Last.IsZero() {
+		attrs = append(attrs, strAttr("dash0.plugin.incident.last", inc.Last.UTC().Format(time.RFC3339)))
+	}
+	if harness != "" {
+		attrs = append(attrs, strAttr("gen_ai.harness.name", harness))
+	}
+	attrs = append(attrs, teamSpanAttributes(cfg)...)
+
+	serviceName := cfg.AgentName
+	if serviceName == "" {
+		serviceName = harness
+	}
+	if serviceName == "" {
+		serviceName = "dash0-agent-plugin"
+	}
+
+	// Correlate with the session's trace when the breadcrumb captured an ID, so
+	// the incident lands next to whatever telemetry that session did manage.
+	var traceID, spanID string
+	if inc.SessionID != "" {
+		traceID = TraceIDFromSessionID(inc.SessionID)
+		spanID = SpanIDFromSessionID(inc.SessionID)
+	}
+
+	ts := inc.Last
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+
+	req := ExportLogsRequest{
+		ResourceLogs: []ResourceLogs{{
+			Resource: Resource{Attributes: []Attribute{
+				{Key: "service.name", Value: StringVal(serviceName)},
+				{Key: "service.version", Value: StringVal(version.Version)},
+			}},
+			ScopeLogs: []ScopeLogs{{
+				Scope: Scope{Name: "dash0-agent-plugin", Version: version.Version},
+				LogRecords: []LogRecord{{
+					TimeUnixNano:   strconv.FormatInt(ts.UnixNano(), 10),
+					SeverityNumber: 13, // WARN
+					SeverityText:   "WARN",
+					Body:           StringVal(inc.Kind),
+					Attributes:     attrs,
+					TraceID:        traceID,
+					SpanID:         spanID,
+				}},
+			}},
+		}},
+	}
+
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshalling incident: %w", err)
+	}
+	if cfg.Debug {
+		debugLog(cfg, "incident", payload)
+	}
+	// The second endpoint check is not redundant with the one above: this is the
+	// debug-without-an-endpoint case, where the payload has just been printed and
+	// there is nothing left to send. SendLog and SendRawMetrics do the same.
+	if cfg.OTLPUrl == "" {
+		return nil
+	}
+	return sendOTLP(cfg, "/v1/logs", payload)
+}
+
 // CheckConnectivity verifies the OTLP endpoint is reachable and the auth token
 // is valid by sending an empty traces export. Returns nil on success.
 func CheckConnectivity(cfg Config) error {
@@ -235,10 +353,40 @@ func CheckConnectivity(cfg Config) error {
 		return fmt.Errorf("no OTLP_URL configured")
 	}
 	empty := []byte(`{"resourceSpans":[]}`)
-	return sendOTLP(cfg, "/v1/traces", empty)
+	// Never spool a connectivity probe: it carries no telemetry, and a failed
+	// check would otherwise queue an empty export for every later invocation to
+	// retry. SendOnce ignores SpoolDir for exactly this case.
+	return SendOnce(cfg, "/v1/traces", empty)
 }
 
+// SendOnce sends a payload and never spools it. Use it for payloads that are
+// only meaningful now, and for the drain itself — a spooled payload that fails
+// again must stay where it is, not be written a second time.
+func SendOnce(cfg Config, path string, payload []byte) error {
+	return send(cfg, path, payload)
+}
+
+// ErrSpooled wraps a send that failed but whose payload is now on disk, so it
+// will go out on a later invocation. Callers that hold the only copy of
+// something — the incident breadcrumbs — test for this to know the data is safe
+// before they discard their copy.
+var ErrSpooled = errors.New("kept for a later invocation")
+
+// sendOTLP sends a payload, keeping it in the spool when it cannot be delivered
+// and SpoolDir is set. The error is still returned: the caller decides whether a
+// deferred send is good enough to stay quiet about.
 func sendOTLP(cfg Config, path string, payload []byte) error {
+	err := send(cfg, path, payload)
+	if err == nil || cfg.SpoolDir == "" {
+		return err
+	}
+	if spoolErr := spool.Append(cfg.SpoolDir, path, payload); spoolErr != nil {
+		return fmt.Errorf("%w (and could not spool it: %v)", err, spoolErr)
+	}
+	return fmt.Errorf("%w: %w", ErrSpooled, err)
+}
+
+func send(cfg Config, path string, payload []byte) error {
 	const maxAttempts = 2
 	const retryDelay = 500 * time.Millisecond
 

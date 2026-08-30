@@ -22,6 +22,7 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
 	"github.com/dash0hq/dash0-agent-plugin/internal/source/claude"
+	"github.com/dash0hq/dash0-agent-plugin/internal/spool"
 	"github.com/dash0hq/dash0-agent-plugin/internal/transcript"
 	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
@@ -88,6 +89,15 @@ func ChdirToEventCwd(event map[string]any) {
 func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Time) (Result, error) {
 	var res Result
 
+	// Every send from here on keeps its payload when it cannot be delivered, so
+	// an unreachable endpoint costs this session nothing but latency. Set once:
+	// cfg is a value, and every helper below takes its own copy.
+	cfg.SpoolDir = spool.Dir(dataDir)
+
+	// Catch up before adding to the pile, so telemetry arrives in the order it
+	// happened. Bounded by time and batch size — see flushBacklog.
+	flushBacklog(cfg, dataDir, now)
+
 	event["timestamp"] = now.Format(time.RFC3339Nano)
 
 	hookEvent, _ := event["hook_event_name"].(string)
@@ -120,6 +130,10 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 	startedFile := filepath.Join(sessionDir, "started")
 	sessionAlreadyStarted := false
 	if hookEvent == "SessionStart" {
+		// Once per session, off the per-event path: clear out sessions that ended
+		// without a SessionEnd to delete them. See sweepStaleSessions.
+		sweepStaleSessions(dataDir, now, sessionID)
+
 		if _, err := os.Stat(startedFile); err == nil {
 			sessionAlreadyStarted = true
 		} else {

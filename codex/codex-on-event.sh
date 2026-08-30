@@ -145,5 +145,11 @@ if [ ! -x "$BINARY" ]; then
 fi
 
 # Forward stdin to the binary. The binary itself exits 0 on telemetry errors
-# (see cmd/codex-on-event/main.go) so we don't need to wrap this in a trap.
-exec "$BINARY"
+# (see cmd/codex-on-event/main.go), so the only way this line can produce a
+# nonzero status is a failed exec — the binary deleted, or truncated, between the
+# -x test above and here. Without execfail bash leaves the shell with 126 or 127
+# on that path, and Codex renders any nonzero code in the TUI while discarding
+# our stderr, so the status is the only thing the user ever sees.
+shopt -s execfail
+exec "$BINARY" || true
+exit 0

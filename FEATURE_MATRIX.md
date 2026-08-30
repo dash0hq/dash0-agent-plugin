@@ -126,17 +126,71 @@ demo generator uses them).
 
 ## Error handling
 
-Shared principle: **telemetry never breaks the agent loop.** `pipeline.Process`
-swallows export errors; each hook sends synchronously with a 5s timeout, 2 attempts,
-and a 500ms retry delay.
+Shared principle: **telemetry never breaks the agent loop, and never tells the
+user about itself.** `pipeline.Process` swallows export errors; each hook sends
+synchronously with a 5s timeout, 2 attempts, and a 500ms retry delay.
+
+Every host renders a nonzero hook exit to the user, and Codex renders only the
+number — it discards the hook's stderr for any code other than 0 or 2. So there
+is no such thing as a useful failure exit here: the exit status is always 0.
 
 | | Claude Code | Cursor | Codex | Copilot CLI |
 |---|---|---|---|---|
-| Wrapper on failure | `set -euo pipefail`; may `exit 1` on download/checksum error | fail-open, `exit 0` | fail-open, `exit 0` | fail-open, `exit 0` |
-| Binary on `run()` error | logs stderr, `exit 1` | logs stderr, `exit 0` | logs stderr, `exit 0` | logs stderr, `exit 0` |
-| Rationale | Claude tolerates a non-zero observational-hook exit | Cursor blocks on non-zero when `failClosed` | Codex may block on non-zero | Copilot's tool hooks are fail-closed (non-zero blocks) |
+| Wrapper on failure | fail-open, `exit 0` | fail-open, `exit 0` | fail-open, `exit 0` | fail-open, `exit 0` |
+| Binary on `run()` error | logs stderr, `exit 1`, masked by the wrapper | logs stderr, `exit 0` | logs stderr, `exit 0` | logs stderr, `exit 0` |
+| Handoff to the binary | child process (`exec` cannot be made safe under this wrapper's `set -e`) | `exec` + `execfail` | `exec` + `execfail` | `exec` + `execfail` |
+| Registration guards a missing wrapper | `\|\| true` | n/a — plugin dir is not version-scoped | breadcrumb + `exit 0` | `\|\| true` |
 | Connectivity check (SessionStart) | Yes | Yes | Yes | Yes |
 | Missing `session_id` | random ID + `dash0.warning` | same | same | same |
+
+### Unsent data is kept, not dropped
+
+A hook is a fresh process with no retry budget past its own lifetime, so an
+unreachable endpoint used to mean the telemetry was gone — quietly, which made
+cost analysis short without saying so.
+
+- **Spool** (`internal/spool`). A payload that cannot be sent is written to
+  `<state>/spool`, bounded at 512 files and 32 MiB, oldest evicted first. Every
+  later invocation drains it oldest-first, at most 25 payloads or 3 seconds per
+  invocation, stopping at the first failure. `pipeline.Process` sets
+  `Config.SpoolDir`; a `Config` without it behaves exactly as before.
+- **Incidents** (`internal/incident`). When the wrapper itself is missing, no Go
+  code runs, so the registration appends a line to
+  `<state>/incidents/<session>.log` instead — one file per session, because the
+  shell caps the file it writes to and a shared log would let one broken session
+  silence every other one. The next working invocation reports each one as a
+  `WARN` log record
+  (`dash0.plugin.incident.kind`, `.count`, `.detail`, `.first`, `.last`), which is
+  the only way a session that ran with the plugin mute becomes visible. Derive
+  metrics from those records in the backend rather than emitting metrics here.
+  Each file is claimed by rename and deleted only once every report is sent or
+  spooled, and a claim left behind by a killed hook is adopted after five
+  minutes — reporting an incident twice beats losing the one record that says
+  data is missing. The directory is bounded at 256 files, oldest evicted first,
+  and the reports share the 3-second budget above — whatever does not fit stays
+  claimed for the next invocation.
+- Both live in the per-session state root above, so `uninstall-*.sh` removes them
+  with the rest of it.
+
+### The state directory is bounded
+
+Everything the plugin keeps on disk has an upper bound, so a machine that runs
+agents every day does not accumulate state forever.
+
+- **Session directories.** `SessionEnd` deletes `<state>/<session_id>/`, but
+  Codex has no `SessionEnd` hook and any harness misses it when the agent is
+  killed. `SessionStart` therefore sweeps session directories that nothing has
+  touched in seven days (`pipeline.sweepStaleSessions`). Age is the newest mtime
+  inside the directory, not the directory's own: a long session only appends to
+  `events.jsonl`, which leaves the directory looking untouched since it started.
+  A directory is a session only if it holds an `events.jsonl`. That test has to
+  be positive rather than a list of names to skip, because for an
+  installer-based Codex setup the data root is also where the bootstrap keeps
+  `bin/` — and a binary downloaded once is always older than the window.
+- **`events.jsonl`.** Trimmed to the most recent 100 events once it runs 50 past
+  them. Only recent events are ever read — `FindEvent` searches backwards for the
+  current turn — so this also keeps prompts and tool payloads from sitting on
+  disk for the life of a session.
 
 ## User notifications
 

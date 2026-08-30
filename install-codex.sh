@@ -24,7 +24,8 @@
 #   --team NAME      Team name
 #
 # Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
-#           DASH0_VERSION (pins a specific release).
+#           DASH0_VERSION (pins a specific release),
+#           DASH0_RAW_BASE (where plugin files are fetched from; for tests).
 #
 # What this installs:
 #   ~/.local/state/dash0-agent-plugin/codex/codex-on-event.sh
@@ -137,7 +138,10 @@ mkdir -p "$BIN_DIR" "$HOME/.codex" || die "could not create install directories"
 # 5. Download the binary with checksum verification.
 BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
 BIN_ASSET="codex-on-event-${OS}-${ARCH}"
-RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${VERSION}"
+# Where the plugin files (the bootstrap) are fetched from. Overridable so the
+# install contracts can exercise the upgrade path against a local tree over
+# file:// instead of depending on a published tag.
+RAW_BASE="${DASH0_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/v${VERSION}}"
 
 # The binary path is version-pinned, so an already-present binary is exactly
 # this version — skip the download (idempotent re-install; also lets an offline
@@ -161,20 +165,36 @@ else
   ok "installed binary → $BIN_PATH"
 fi
 
-# 5b. Install the bootstrap script from the tagged ref (skip if already present).
-if [ -f "$SCRIPT_PATH" ]; then
-  chmod +x "$SCRIPT_PATH"
-  ok "bootstrap already present → $SCRIPT_PATH"
-else
-  info "downloading codex-on-event.sh..."
-  # The bootstrap moved from scripts/ to codex/ after v0.1.24, so fall back to
-  # the old path when an older release is pinned via DASH0_VERSION. Drop the
-  # fallback once v0.1.24 is unsupported.
-  fetch "$RAW_BASE/codex/codex-on-event.sh" "$SCRIPT_PATH" \
-    || fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_PATH" \
-    || die "failed to download: $RAW_BASE/codex/codex-on-event.sh"
-  chmod +x "$SCRIPT_PATH"
+# 5b. Install the bootstrap script from the tagged ref.
+#
+# Always re-fetch. Unlike BIN_PATH, SCRIPT_PATH is not version-pinned, so the old
+# "skip if already present" branch made every upgrade a no-op for the bootstrap:
+# the script kept its previous VERSION pin and went on exec'ing the previous
+# binary, while the version this installer just downloaded above was never run.
+# Re-running the installer is the documented upgrade path, so it has to replace
+# the script.
+#
+# Staged through a temp for the same reason the binary is: a half-written file
+# must never replace a working bootstrap. An offline re-install keeps the script
+# that is already there rather than breaking a working install.
+info "downloading codex-on-event.sh..."
+SCRIPT_TMP="$SCRIPT_PATH.tmp.$$"
+# The bootstrap moved from scripts/ to codex/ after v0.1.24, so fall back to
+# the old path when an older release is pinned via DASH0_VERSION. Drop the
+# fallback once v0.1.24 is unsupported.
+if fetch "$RAW_BASE/codex/codex-on-event.sh" "$SCRIPT_TMP" \
+  || fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_TMP"; then
+  chmod +x "$SCRIPT_TMP"
+  mv -f "$SCRIPT_TMP" "$SCRIPT_PATH" \
+    || { rm -f "$SCRIPT_TMP"; die "could not install bootstrap → $SCRIPT_PATH"; }
   ok "installed bootstrap → $SCRIPT_PATH"
+elif [ -f "$SCRIPT_PATH" ]; then
+  rm -f "$SCRIPT_TMP"
+  chmod +x "$SCRIPT_PATH"
+  warn "could not download codex-on-event.sh; keeping the existing bootstrap → $SCRIPT_PATH"
+else
+  rm -f "$SCRIPT_TMP"
+  die "failed to download: $RAW_BASE/codex/codex-on-event.sh"
 fi
 
 # 6. Collect configuration (env var > interactive prompt > skip).
@@ -230,7 +250,17 @@ ok "wrote config → $CONFIG_PATH (chmod 600)"
 #    indices are recomputed against the user's own hooks), then append the fresh
 #    block. User-authored hooks outside the markers are never touched.
 info "registering + pre-trusting hooks in ${CONFIG_TOML}..."
-HOOK_CMD="bash \"$SCRIPT_PATH\""
+# Codex runs this string through `$SHELL -lc`, renders any nonzero exit in the
+# TUI as a bare "hook exited with code N", and discards the hook's stderr. A
+# plain `bash "$SCRIPT_PATH"` therefore turns a missing bootstrap into an error
+# the user sees on every event and can do nothing about. Guard the call so the
+# shell always exits 0, and record a breadcrumb the next working run ships as
+# telemetry — otherwise a plugin that cannot run is silent to us too.
+# The breadcrumb goes to one file per session, not one file per machine: the size
+# cap below is what keeps a broken session from writing forever, and with a shared
+# file the first session to hit it would silence every other one.
+# shellcheck disable=SC2016 # $S/$I/$L, $$ and $(date) must reach Codex's shell unexpanded
+HOOK_CMD='S="'"$SCRIPT_PATH"'"; if [ -r "$S" ]; then bash "$S"; else I="'"$STATE_BASE"'/incidents"; mkdir -p "$I" 2>/dev/null; L="$I/${CODEX_THREAD_ID:-nosession-$$}.log"; if [ ! -s "$L" ] || [ "$(wc -c <"$L" | tr -d " ")" -lt 65536 ]; then printf "%s\thook_script_missing\tcodex\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$S" "${CODEX_THREAD_ID:-}" >>"$L" 2>/dev/null; fi; fi; exit 0'
 
 if [ -f "$CONFIG_TOML" ]; then
   STRIPPED_TMP=$(mktemp)

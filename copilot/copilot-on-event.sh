@@ -149,4 +149,6 @@ if [ ! -x "$BINARY" ]; then
 fi
 
 # Forward the event-name argument(s) and stdin to the binary.
-exec "$BINARY" "$@"
+shopt -s execfail
+exec "$BINARY" "$@" || true
+exit 0

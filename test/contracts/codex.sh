@@ -55,8 +55,11 @@ fail=0
 echo "PASS: config-file and env-var credentials flow through codex-on-event.sh to real OTLP requests"
 
 echo "== install-codex.sh merges hooks + pre-trust into config.toml, preserving user content =="
-# Codex has no release yet, so pre-stage the version-pinned binary + bootstrap;
-# install-codex.sh skips the download when they're present.
+# Pre-stage the version-pinned binary so no release download is needed. The
+# bootstrap is pre-staged too, but the installer always re-fetches it now (see the
+# upgrade contract below), so point it at the working copy over file:// to keep
+# this case offline and testing the code in the tree.
+export DASH0_RAW_BASE="file://$REPO"
 export HOME=/tmp/codex-installer-home XDG_STATE_HOME=/tmp/codex-installer-state
 rm -rf "$HOME" "$XDG_STATE_HOME"
 STATE_BASE="$XDG_STATE_HOME/dash0-agent-plugin/codex"
@@ -105,7 +108,50 @@ PY
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: install-codex.sh merged hooks + pre-trust and preserved user config"
 
+echo "== install-codex.sh replaces an outdated bootstrap on re-install =="
+# Re-running the installer is the documented upgrade path. SCRIPT_PATH is not
+# version-pinned (unlike the binary), so the installer used to skip it when the
+# file existed — leaving the old bootstrap, and with it the old VERSION pin, so
+# the freshly downloaded binary was never the one that ran.
+STALE_HOME=/tmp/codex-upgrade-home
+export HOME=$STALE_HOME XDG_STATE_HOME=/tmp/codex-upgrade-state
+rm -rf "$HOME" "$XDG_STATE_HOME"
+UP_STATE="$XDG_STATE_HOME/dash0-agent-plugin/codex"
+mkdir -p "$UP_STATE/bin" "$HOME/.codex"
+make -C "$REPO" build-binary PKG=./cmd/codex-on-event OUT="$UP_STATE/bin/$BINNAME"
+
+# A bootstrap from an imaginary older release, pinned to a version that is not
+# the one being installed.
+cat > "$UP_STATE/codex-on-event.sh" <<'SH'
+#!/usr/bin/env bash
+VERSION="0.0.1-stale"
+exit 0
+SH
+chmod +x "$UP_STATE/codex-on-event.sh"
+
+DASH0_VERSION="$VERSION" \
+DASH0_RAW_BASE="file://$REPO" \
+DASH0_OTLP_URL=http://localhost:4319 \
+DASH0_AUTH_TOKEN=codex-upgrade-token \
+  bash "$REPO/install-codex.sh" 2>&1 | tail -12
+
+fail=0
+INSTALLED_VERSION=$(grep '^VERSION=' "$UP_STATE/codex-on-event.sh" | sed 's/VERSION="//;s/"//')
+[ "$INSTALLED_VERSION" = "$VERSION" ] \
+  || { echo "ERROR: bootstrap still pinned to '$INSTALLED_VERSION', expected '$VERSION' — the upgrade did not replace it"; fail=1; }
+[ -x "$UP_STATE/codex-on-event.sh" ] \
+  || { echo "ERROR: installed bootstrap is not executable"; fail=1; }
+# The guard has to reach config.toml, or a missing bootstrap surfaces as a bare
+# nonzero exit code in the user's TUI.
+grep -q 'hook_script_missing' "$HOME/.codex/config.toml" \
+  || { echo "ERROR: hook command in config.toml has no missing-bootstrap guard"; fail=1; }
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: re-install replaced the outdated bootstrap and registered a guarded hook command"
+
 echo "== uninstall-codex.sh strips the managed block, preserves user content =="
+# The uninstall case below asserts against the install case's HOME, so restore it.
+export HOME=/tmp/codex-installer-home XDG_STATE_HOME=/tmp/codex-installer-state
+CONFIG_TOML="$HOME/.codex/config.toml"
 # Depends on the install step's merged config.toml above.
 [ -f "$CONFIG_TOML" ] || { echo "ERROR: the install step did not produce a config.toml"; exit 1; }
 bash "$REPO/uninstall-codex.sh" --yes 2>&1 | tail -20

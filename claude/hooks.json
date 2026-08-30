@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -75,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -85,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -95,7 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -115,7 +115,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -125,7 +125,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -135,7 +135,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -145,7 +145,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -155,7 +155,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -165,7 +165,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -175,7 +175,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -185,7 +185,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -195,7 +195,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -205,7 +205,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -215,7 +215,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -225,7 +225,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }
@@ -235,7 +235,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/claude/claude-on-event.sh || true"
           }
         ]
       }

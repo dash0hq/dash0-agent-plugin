@@ -100,6 +100,18 @@ set_version() {
   before=$(pins | cut -f2 | sort -u)
   [ "$before" != "$version" ] \
     || die "every file already pins $version — there is nothing to prepare. If v$version was never published, finish that release instead."
+  # The manifest rewrite is a blanket s/"version": "…"/, so any OTHER key named
+  # "version" would be moved silently and `check` — which only compares the keys
+  # it knows about — would still pass. Counting first turns that into a failure.
+  # jq is not used for the rewrite itself: it reformats four of the five files
+  # (collapsed arrays, \u escapes), which would bury the one line that changed.
+  for f in "${MANIFESTS[@]}"; do
+    want=1
+    [ "$f" != ".github/plugin/marketplace.json" ] || want=2
+    got=$(jq '[paths(scalars) as $p | select($p[-1] == "version")] | length' "$f")
+    [ "$got" = "$want" ] \
+      || die "$f has $got keys named \"version\", expected $want — the blanket rewrite below would move all of them. Add the new one to pins() or exclude it."
+  done
   # `sed -i` takes its backup suffix differently on BSD and GNU; passing one and
   # removing it after is the form both accept.
   for f in "${MANIFESTS[@]}"; do

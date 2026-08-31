@@ -245,6 +245,8 @@ fi
 # corruption after the fact.
 shopt -s execfail
 set +e
+# shellcheck disable=SC2093  # execfail is the point: the lines below run only
+# when exec could not start the binary. Without it bash would exit here.
 exec "$BINARY" "$@"
 rm -f "$BINARY"
 fail_open "cached binary could not be executed — removed it, so the next hook re-downloads"

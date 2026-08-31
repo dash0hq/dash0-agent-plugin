@@ -8,7 +8,7 @@
 #
 #   stdin (JSON) → copilot-on-event.sh <eventName> → copilot-on-event binary → OTLP
 #
-# Per-turn token/cost/model telemetry additionally requires Copilot's native
+# Per-turn token/model telemetry additionally requires Copilot's native
 # OTel written to a per-session file, set up by the `dash0-configure` skill as a
 # shell function that shadows `copilot`. Without it, spans are still emitted,
 # just without usage.
@@ -20,7 +20,7 @@
 set -u
 
 AGENT="copilot"
-VERSION="0.1.25"
+VERSION="0.1.26"
 
 # Where the downloaded binary lives. Copilot sets COPILOT_PLUGIN_DATA for a
 # marketplace install; the XDG path is the fallback for a manual one.

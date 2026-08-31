@@ -117,10 +117,11 @@ def plugin_writes(key):
     it at ingest". Tests are excluded because a test asserting a key must *not*
     be emitted would otherwise class it as an export.
 
-    cmd/ is searched as well as internal/. The entrypoints write attributes of
-    their own -- cmd/copilot-on-event/main.go sets dash0.gen_ai.tool.task.name --
-    and a search that misses them files a real undeclared export under "added at
-    ingest", which is the one class this tool never reports.
+    cmd/ is searched as well as internal/. The entrypoints synthesize events of
+    their own -- cmd/copilot-on-event/main.go builds the tool and sub-agent events
+    a Copilot turn's spans come from -- and a search that misses them files a real
+    undeclared export under "added at ingest", which is the one class this tool
+    never reports.
 
     Still a floor, not a proof: a key assembled from parts (prefix+suffix, or
     fmt.Sprintf) matches no literal and is classed as ingest-added. So a key in

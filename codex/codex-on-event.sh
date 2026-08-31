@@ -14,7 +14,7 @@
 set -u
 
 AGENT="codex"
-VERSION="0.1.25"
+VERSION="0.1.26"
 
 # Where the downloaded binary lives. Resolution order:
 #   1. DASH0_PLUGIN_DATA  — explicit override (dev / tests).

@@ -22,7 +22,12 @@
 //
 // Usage (as a hook command):
 //
-//	QA_RECORD_DIR=qa/runs/<id>/record qa/runs/<id>/recorder
+//	QA_RECORD_DIR=qa/runs/<id>/record qa/runs/<id>/recorder [<eventName>]
+//
+// The event-name argument is for Copilot, whose camelCase payloads carry no
+// event-name field at all — the host passes it as an argv, and the plugin's own
+// entrypoint reads it the same way. Claude Code and Codex both put
+// hook_event_name in the payload, so they pass no argument and the payload wins.
 package main
 
 import (
@@ -97,10 +102,22 @@ func run() error {
 	_ = json.Unmarshal(raw, &event)
 
 	hookEvent, _ := event["hook_event_name"].(string)
+	// The payload wins when it names the event, so a Claude or Codex recording is
+	// exactly what it was before. Copilot names it only in argv.
+	if hookEvent == "" && len(os.Args) > 1 {
+		hookEvent = os.Args[1]
+	}
 	if hookEvent == "" {
 		hookEvent = "unknown"
 	}
 	sessionID, _ := event["session_id"].(string)
+	if sessionID == "" {
+		// Copilot's camelCase payloads carry sessionId. Reading it here rather
+		// than in the comparison keeps the index one shape across runtimes: every
+		// consumer filters on session_id, and a Copilot recording with an empty
+		// one reads as a total recording failure.
+		sessionID, _ = event["sessionId"].(string)
+	}
 	cwd, _ := event["cwd"].(string)
 
 	for _, sub := range []string{"events", "transcripts"} {
@@ -122,7 +139,15 @@ func run() error {
 		return fmt.Errorf("writing event: %w", err)
 	}
 
-	if path, _ := event["transcript_path"].(string); path != "" {
+	transcriptPath, _ := event["transcript_path"].(string)
+	if transcriptPath == "" {
+		// Copilot's transcriptPath points at its own events.jsonl rather than a
+		// Claude transcript, and the plugin deliberately drops it. Snapshotting it
+		// anyway costs one content-addressed copy and gives a Copilot run the same
+		// per-hook "what the session looked like then" record the others have.
+		transcriptPath, _ = event["transcriptPath"].(string)
+	}
+	if path := transcriptPath; path != "" {
 		rec.TranscriptPath = path
 		sha, size, err := snapshot(path, filepath.Join(dir, "transcripts"))
 		switch {

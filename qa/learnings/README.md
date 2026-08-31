@@ -32,6 +32,17 @@ below cost a full redesign of the harness before they were understood.
 - [Some slash commands fire no UserPromptSubmit and no Stop, so they cannot be probed](hooks-some-slash-commands-fire-no-hooks-at-all.md) — `/help` produces no turn at all, so it cannot serve as a negative control.
 - [A Codex SubagentStop ends a task; a Claude one ends the agent](hooks-a-codex-subagent-is-reusable-a-claude-one-is-not.md) — the same Codex agent stops, works again and stops again, with no second `SubagentStart` to notice it by.
 
+## GitHub Copilot CLI
+
+Copilot differs in kind, not in detail. Every entry here is something that reads as a defect
+until you know it.
+
+- [A Copilot run's second channel is also the plugin's input, so agreement proves less](copilot-hooks-carry-no-numbers.md) — its hooks carry no tokens at all, so two of the three columns have one source.
+- [Copilot's own per-turn roll-up excludes sub-agent usage, and the plugin's chat span includes it](copilot-otel-rollup-differs-on-a-delegating-turn.md) — a large, clean-looking divergence that is Copilot's arithmetic.
+- [A Copilot sub-agent gets a partial hook lifecycle, and that is how it is recognised](copilot-subagent-sessions-are-dropped-on-purpose.md) — no sessionStart and no sessionEnd, in either mode; the id shape is not usable and the recording holds more session ids than Dash0, on purpose.
+- [On Copilot a command that exits non-zero is a successful tool call](copilot-non-zero-shell-exit-is-not-a-failed-tool.md) — so the obvious failed-tool spec asserts a defect that is not one.
+- [A Copilot skill is named on its tool span, never on the turn's chat span](copilot-skill-name-lands-on-the-tool-span-only.md) — one route, and it is a tool call.
+
 ## What is actually under test
 
 - [A QA session tests the last published release, not the working tree](binary-a-run-tests-the-installed-release-unless-swapped.md) — the bootstrap downloads it silently; record the binary's digest.

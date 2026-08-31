@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Bootstrap download contracts (runnable locally and in CI):
 #   - every *-on-event.sh downloads via a private temp and renames into place
+#   - neither the scripts nor the Claude binary ends a hook non-zero
+#   - an unrunnable cached binary neither errors nor re-downloads in a loop
 #   - concurrent invocations against a cold cache all succeed and converge
 #
 # Hooks run concurrently — parallel tool calls each fire their own, and every
@@ -49,6 +51,104 @@ done
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: all ${#SCRIPTS[@]} bootstraps stage downloads in a temp and rename"
 
+echo "== No bootstrap ends a hook with a non-zero exit =="
+# Behavioural, not textual: a grep for `exit [1-9]` cannot see a `set -e` exit, a
+# `:?` expansion or a failing exec — which is how two of these shipped. A
+# read-only data directory poisons the first thing every bootstrap does.
+#
+# HOME and cwd are both thrown away: PROJECT_SETTINGS is a relative path, so a
+# config with `enabled: false` in either place exits every script before it
+# reaches the data directory, and this loop would print ok having run nothing.
+fail=0
+ro=$(mktemp -d); chmod a-w "$ro"
+if touch "$ro/probe" 2>/dev/null; then
+  rm -f "$ro/probe"
+  echo "  SKIP: cannot make a directory unwritable here"
+else
+  for s in "${SCRIPTS[@]}"; do
+    status=0
+    ( cd "$ro" && env -i PATH="$PATH" HOME="$ro/nohome" \
+        CLAUDE_PLUGIN_DATA="$ro/d" DASH0_PLUGIN_DATA="$ro/d" COPILOT_PLUGIN_DATA="$ro/d" \
+        bash "$REPO/$s" someEvent <<<'{"hook_event_name":"SessionStart"}' >/dev/null 2>&1 ) \
+      || status=$?
+    if [ "$status" -ne 0 ]; then
+      echo "  FAIL $s: exited $status when its data directory could not be created"; fail=1
+    else
+      echo "  ok $s"
+    fi
+  done
+fi
+chmod u+w "$ro"; rm -rf "$ro"
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: all ${#SCRIPTS[@]} bootstraps fail open"
+
+echo "== The binary itself never ends a hook non-zero =="
+# The check above poisons the *shell's* environment, so it never gets as far as
+# exec'ing a real binary — which is how claude-on-event kept an os.Exit(1) that
+# cursor, codex and copilot do not have. pipeline.go already logs a failed span
+# export rather than raising it; main.go was the outlier.
+bin=$(mktemp -d)/on-event
+if ! go build -o "$bin" "$REPO/cmd/claude-on-event" 2>/dev/null; then
+  echo "SKIP: could not build the binary"
+else
+  fail=0
+  probe() {
+    local name="$1" payload="$2"; shift 2
+    local status=0
+    printf '%s' "$payload" | env -i PATH="$PATH" "$@" "$bin" >/dev/null 2>&1 || status=$?
+    if [ "$status" -ne 0 ]; then
+      echo "  FAIL $name: exited $status"; fail=1
+    else
+      echo "  ok   $name"
+    fi
+  }
+  nowhere=$(mktemp -d); chmod a-w "$nowhere"
+  probe "no CLAUDE_PLUGIN_DATA"     '{"hook_event_name":"SessionStart"}'
+  probe "malformed payload"         'not json'          CLAUDE_PLUGIN_DATA="$(mktemp -d)"
+  probe "null payload"              'null'              CLAUDE_PLUGIN_DATA="$(mktemp -d)"
+  probe "unwritable session dir"    '{"hook_event_name":"SessionStart","session_id":"x"}' \
+                                    CLAUDE_PLUGIN_DATA="$nowhere/d"
+  chmod u+w "$nowhere"; rm -rf "$nowhere"
+  [ "$fail" -eq 0 ] || exit 1
+  echo "PASS: the binary logs and exits 0 on every telemetry failure"
+fi
+
+echo "== A cached binary that will not run does not loop =="
+# Deleting it would make the next hook re-download the whole asset, fail to exec
+# it again, and repeat — a multi-MB fetch per tool call. It is kept instead.
+probe=$(mktemp -d); pdata=$(mktemp -d)
+# Hermetic HOME and cwd, as everywhere else here: with the caller's, a config
+# carrying `enabled: false` exits before the download and this would skip
+# rather than test.
+( cd "$probe" && env -i PATH="$PATH" HOME="$probe/home" \
+    CLAUDE_PLUGIN_DATA="$pdata" DASH0_OTLP_URL=http://127.0.0.1:1 \
+    bash "$REPO/claude/claude-on-event.sh" >/dev/null 2>&1 \
+    <<<'{"hook_event_name":"SessionStart","session_id":"contract"}' ) || true
+# `|| true`: the directory does not exist if the download never ran, and a
+# failing find would end the whole suite under `set -e`.
+cached=$(find "$pdata/bin" -name 'on-event-*' -type f 2>/dev/null | head -1) || true
+# A genuinely foreign binary, built for the other OS. A hand-made fake header
+# does not work: the kernel returns ENOEXEC for it and bash falls back to
+# interpreting the file as a shell script, which is a different failure.
+other=linux; [ "$(uname -s)" = Linux ] && other=darwin
+if [ -z "$cached" ]; then
+  echo "SKIP: could not prime a cached binary"
+elif ! GOOS="$other" GOARCH=amd64 go build -o "$cached" "$REPO/cmd/claude-on-event" 2>/dev/null; then
+  echo "SKIP: could not cross-build a $other binary"
+else
+  chmod +x "$cached"
+  status=0
+  ( cd "$probe" && env -i PATH="$PATH" HOME="$probe/home" CLAUDE_PLUGIN_DATA="$pdata" \
+      bash "$REPO/claude/claude-on-event.sh" \
+      <<<'{"hook_event_name":"SessionStart"}' >/dev/null 2>&1 ) || status=$?
+  [ "$status" -eq 0 ] \
+    || { echo "ERROR: an unrunnable cached binary exited $status" >&2; exit 1; }
+  [ -f "$cached" ] \
+    || { echo "ERROR: the bad binary was deleted — the next hook re-downloads it" >&2; exit 1; }
+  echo "PASS: exits 0 and leaves the cache alone"
+fi
+rm -rf "$probe" "$pdata"
+
 echo "== Concurrent cold-cache invocations all succeed =="
 VERSION=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")
 CHECKSUMS_URL="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${VERSION}/checksums.txt"
@@ -65,6 +165,9 @@ EXPECTED=$(printf '%s\n' "$CHECKSUMS" | awk -v a="claude-on-event-$(os_arch)" '$
 
 DATA=$(mktemp -d)
 export CLAUDE_PLUGIN_DATA="$DATA"
+# Hermetic HOME, as above: an `enabled: false` config exits before any download
+# and every assertion below would measure a directory nothing created.
+export HOME="$DATA/home"; mkdir -p "$HOME"
 # Dead endpoint: the exported telemetry is irrelevant here, and the binary exits
 # 0 when it can't reach a collector, so a nonzero exit means the bootstrap failed.
 export DASH0_OTLP_URL="http://127.0.0.1:1"
@@ -72,16 +175,28 @@ export DASH0_OTLP_URL="http://127.0.0.1:1"
 # while a later one truncates the same path, which a burst of identical starts
 # mostly misses.
 for i in $(seq 8); do
-  ( echo '{"hook_event_name":"SessionStart","session_id":"contract","model":"opus"}' \
+  ( cd "$DATA" \
+    && echo '{"hook_event_name":"SessionStart","session_id":"contract","model":"opus"}' \
       | bash "$REPO/claude/claude-on-event.sh" >/dev/null 2>"$DATA/err.$i"
     echo "$?" >"$DATA/rc.$i" ) &
   sleep 0.35
 done
 wait
 
+# Exit codes no longer signal anything: every failure exits 0 by design now, so
+# the original race — 48 of 48 invocations failing, each on a different checksum
+# — would reach fail_open and pass this check. Measured against the pre-atomic
+# script: 6 non-zero exits AND 6 stderr lines. A successful run is silent, so
+# that is the signal that survived. Both are asserted.
 bad=$(cat "$DATA"/rc.* | grep -vc '^0$' || true)
 if [ "$bad" -ne 0 ]; then
-  echo "ERROR: $bad of 8 concurrent invocations failed" >&2
+  echo "ERROR: $bad of 8 concurrent invocations exited non-zero" >&2
+  cat "$DATA"/err.* | sort -u | sed 's/^/  /' >&2
+  exit 1
+fi
+noisy=$(cat "$DATA"/err.* 2>/dev/null | grep -c . || true)
+if [ "$noisy" -ne 0 ]; then
+  echo "ERROR: $noisy line(s) on stderr — a download failed and failed open" >&2
   cat "$DATA"/err.* | sort -u | sed 's/^/  /' >&2
   exit 1
 fi

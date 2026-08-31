@@ -4,6 +4,16 @@
 
 set -euo pipefail
 
+# Every path below that ends in "we can't safely run the binary" exits 0, as
+# cursor, codex and copilot already do. Claude renders any other non-zero exit
+# as a hook error on *every* event, and none of these is something the user can
+# act on mid-session. It does not mean anything unverified runs: a failed
+# checksum still installs nothing.
+fail_open() {
+  echo "on-event: $*" >&2
+  exit 0
+}
+
 # Load settings from a config file. Returns 1 if file doesn't exist.
 load_settings() {
   local file="$1"
@@ -70,7 +80,8 @@ if [[ -n "$KEYCHAIN_SERVICE" ]] && command -v security &>/dev/null; then
   [[ -n "$keychain_token" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$keychain_token"
 fi
 
-PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
+PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-}"
+[ -n "$PLUGIN_DATA" ] || fail_open "CLAUDE_PLUGIN_DATA is not set"
 BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
 VERSION="0.1.25"
@@ -98,7 +109,7 @@ BINARY="$BIN_DIR/on-event-${VERSION}-${OS}-${ARCH}"
 
 # Download the binary on first run.
 if [ ! -x "$BINARY" ]; then
-  mkdir -p "$BIN_DIR"
+  mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
 
   # Download to a private temp and rename into place. Hooks run concurrently —
   # parallel tool calls each fire their own, and every session on the machine
@@ -125,8 +136,7 @@ if [ ! -x "$BINARY" ]; then
     fetch() { wget -qO "$2" "$1"; }
     fetch_stdout() { wget -qO- "$1"; }
   else
-    echo "on-event: neither curl nor wget found" >&2
-    exit 1
+    fail_open "neither curl nor wget found"
   fi
 
   # Try each asset name this binary has been published under, newest first. The
@@ -145,10 +155,10 @@ if [ ! -x "$BINARY" ]; then
     fi
   done
   if [ -z "$ASSET" ]; then
-    echo "on-event: no release asset for ${OS}-${ARCH} in v${VERSION}" >&2
-    exit 1
+    fail_open "no release asset for ${OS}-${ARCH} in v${VERSION}"
   fi
-  CHECKSUMS=$(fetch_stdout "$CHECKSUMS_URL")
+  CHECKSUMS=$(fetch_stdout "$CHECKSUMS_URL") \
+    || fail_open "could not fetch checksums.txt for v${VERSION}"
 
   # Verify the checksum. A missing entry is fatal, not skipped: the first asset
   # name tried is one that current releases do not publish, so treating "not in
@@ -159,8 +169,7 @@ if [ ! -x "$BINARY" ]; then
   # whether or not it matched.
   EXPECTED=$(printf '%s\n' "$CHECKSUMS" | awk -v want="$ASSET" '$2 == want { print $1 }')
   if [ -z "$EXPECTED" ]; then
-    echo "on-event: ${ASSET} is not listed in checksums.txt for v${VERSION}" >&2
-    exit 1
+    fail_open "${ASSET} is not listed in checksums.txt for v${VERSION} — refusing to run an unverified binary"
   fi
   if command -v sha256sum &>/dev/null; then
     ACTUAL=$(sha256sum "$TMP" | cut -d' ' -f1)
@@ -172,15 +181,29 @@ if [ ! -x "$BINARY" ]; then
     ACTUAL=""
   fi
   if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-    echo "on-event: checksum mismatch (expected $EXPECTED, got $ACTUAL)" >&2
-    exit 1
+    fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
   # Executable before it is visible, so nothing can find $BINARY and fail the
   # -x test that guards this block.
-  chmod +x "$TMP"
-  mv -f "$TMP" "$BINARY"
+  chmod +x "$TMP" || fail_open "could not mark $TMP executable"
+  mv -f "$TMP" "$BINARY" || fail_open "could not move $TMP into place"
 fi
 
 # Forward stdin and arguments to the binary.
+#
+# A cached file can pass the -x test and still not run — a wrong-architecture
+# asset is the realistic case. `set +e` as well as execfail: with `set -e` still
+# on, a failed exec kills the shell before any guard can act. On success exec
+# replaces this process, so the line below runs only on failure.
+#
+# It is deliberately left in place rather than deleted. Deleting it means the
+# next hook re-downloads the whole asset, fails to exec it again, and repeats —
+# a multi-MB fetch on every tool call. This stays quiet until the next release
+# swaps the pinned version, which is when it could start working again.
+shopt -s execfail
+set +e
+# shellcheck disable=SC2093  # execfail is the point: the line below runs only
+# when exec could not start the binary. Without it bash would exit here.
 exec "$BINARY" "$@"
+fail_open "the cached binary could not be executed — telemetry is off until the next release"

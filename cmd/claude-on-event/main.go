@@ -25,9 +25,18 @@ func main() {
 		return
 	}
 
+	// Log and exit 0, as cursor, codex and copilot already do. Claude renders any
+	// other non-zero exit as a hook error on every event, and nothing reachable
+	// here is something a user can act on mid-session: a missing
+	// CLAUDE_PLUGIN_DATA, a malformed payload, an unwritable session directory,
+	// or a span with no trace context. That last one is not hypothetical — it
+	// fires several times a session on sub-agent tool calls.
+	//
+	// It also matches the decision Process already made: an unreachable collector,
+	// the commonest real problem, is reported as a Message and exits 0. There was
+	// no principle separating that from these.
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "on-event: %v\n", err)
-		os.Exit(1)
 	}
 }
 

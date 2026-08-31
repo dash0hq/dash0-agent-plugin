@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +33,13 @@ import (
 func TestE2ECacheCreationTTL(t *testing.T) {
 	pluginDir := findPluginDir(t)
 
-	binary := filepath.Join(t.TempDir(), "on-event-cachettl")
+	name := "on-event-cachettl"
+	if runtime.GOOS == "windows" {
+		// go build honors -o verbatim: without the extension, Windows refuses to
+		// exec the file directly ("executable file not found in %PATH%").
+		name += ".exe"
+	}
+	binary := filepath.Join(t.TempDir(), name)
 	build := exec.Command("go", "build", "-o", binary, "./cmd/claude-on-event")
 	build.Dir = pluginDir
 	out, err := build.CombinedOutput()

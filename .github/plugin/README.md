@@ -5,10 +5,12 @@ Emit GitHub Copilot CLI agent activity as OpenTelemetry spans to your Dash0 endp
 ## Requirements
 
 - **Agent:** the GitHub Copilot CLI.
-- **Operating system:** macOS or Linux (Windows is not supported).
+- **Operating system:** macOS, Linux, or Windows.
 - **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
-- **Shell tooling:** `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
-  bootstrap downloads and checksum-verifies the hook binary on first run.
+- **Shell tooling:**
+  - macOS and Linux: `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
+    bootstrap downloads and checksum-verifies the hook binary on first run.
+  - Windows: nothing extra
 
 ## Installation
 
@@ -33,10 +35,12 @@ Run the configure skill inside Copilot:
 
 It does two things:
 
-1. Writes your Dash0 credentials to `~/.copilot/dash0-agent-plugin.local.md` (chmod 600) — or, if you choose project scope, to `.copilot/dash0-agent-plugin.local.md` in the current workspace.
+1. Writes your Dash0 credentials to `~/.copilot/dash0-agent-plugin.local.md`, restricted to your user (chmod 600, or owner-only ACLs on Windows) — or, if you choose project scope, to `.copilot/dash0-agent-plugin.local.md` in the current workspace.
 2. Installs a **launch shell function** that shadows `copilot` to enable Copilot's native OpenTelemetry into a per-session file. Open a new shell afterward.
 
 **Why the launch function matters:** Copilot's native OTel is the source of per-turn token/cost/model usage, the agent response, and all tool spans — Copilot cannot enable it from a hook, and it does not hand the file path to hooks, so the launcher owns it. A `copilot` started from a shell without the function still emits one `chat` span per turn, just without usage, response, or tool detail (graceful — never an error).
+
+> **Note:** on Windows the skill installs the function into the file `$PROFILE` names, so it applies to PowerShell sessions. A `copilot` started from `cmd.exe` has no equivalent and emits `chat` spans without usage, response, or tool detail.
 
 Prompt mode (`copilot -p`) fires the hooks too, so headless runs are instrumented when launched via the function.
 
@@ -57,7 +61,7 @@ After installing, you'll need:
 
 ### Config file
 
-The config file lives at `~/.copilot/dash0-agent-plugin.local.md` (chmod 600 — it holds your token in cleartext). YAML frontmatter:
+The config file lives at `~/.copilot/dash0-agent-plugin.local.md`, restricted to your user (chmod 600, or owner-only ACLs on Windows) because it holds your token in cleartext. YAML frontmatter:
 
 ```yaml
 ---
@@ -88,7 +92,7 @@ Sub-agent tool calls (spawned via the `task` tool) nest under their spawning `ta
 | Option | Description | Default | Sensitive |
 |---|---|---|---|
 | `otlp_url` | Dash0 OTLP endpoint URL (e.g. `https://ingress.<region>.aws.dash0.com`) | — | No |
-| `auth_token` | Dash0 authentication token | — | Yes (config file, chmod 600) |
+| `auth_token` | Dash0 authentication token | — | Yes (config file, owner-only) |
 | `dataset` | Dash0 dataset name | — | No |
 | `agent_name` | Agent name (used as `service.name`) | `github-copilot-cli` | No |
 | `team_name` | Team name — all spans are tagged with `dash0.team.name` | — | No |
@@ -122,7 +126,7 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 | `DASH0_DEBUG` | Print OTel payloads to stderr (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Write debug output to this file path |
 
-> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field (the bootstrap passes it to the hook as `COPILOT_PLUGIN_OPTION_AUTH_TOKEN`).
+> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field.
 
 ## Privacy defaults
 
@@ -148,10 +152,16 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 ### No telemetry, and the debug log shows a failed binary download
 
 The hook is trying to download a binary for an unsupported platform (the plugin
-fails open, so `copilot` itself keeps working). Run `uname -s -m` — anything
-other than `Darwin` or `Linux` on `x86_64`/`arm64`/`aarch64` is unsupported, in
-particular `MINGW64_NT-…` or `MSYS_NT-…`, which is Windows under Git Bash. See
+fails open, so `copilot` itself keeps working). Releases carry macOS, Linux, and
+Windows binaries for `amd64` and `arm64` only — check what your machine reports
+with `uname -s -m`, or with `$env:PROCESSOR_ARCHITECTURE` on Windows. See
 [Requirements](#requirements).
+
+A refused download looks the same. The bootstrap verifies every binary it fetches
+and never runs one it cannot verify, but it still exits 0, so telemetry just
+stops: look for `refusing to run an unverified binary` (no entry for the asset in
+`checksums.txt`), `checksum mismatch`, or `no sha256 tool` on the hook's stderr or
+in the debug log.
 
 ### No traces arrive
 
@@ -173,9 +183,11 @@ copilot plugin uninstall dash0-agent-plugin
 
 Then remove what the configure step added:
 
-- delete the `# >>> dash0-agent-plugin (copilot) >>>` … `<<<` block from your shell profile (`~/.zshrc`, `~/.bashrc`, …),
+- delete the `# >>> dash0-agent-plugin (copilot) >>>` … `<<<` block from your shell profile (`~/.zshrc`, `~/.bashrc`, … or the file `$PROFILE` names on Windows),
 - `rm ~/.copilot/dash0-agent-plugin.local.md`,
 - `rm -rf ~/.local/state/dash0-agent-plugin/copilot` (cached binary + native-OTel files).
+
+On Windows those two paths are `%USERPROFILE%\.copilot\dash0-agent-plugin.local.md` and `%USERPROFILE%\.local\state\dash0-agent-plugin\copilot`.
 
 ## Development
 

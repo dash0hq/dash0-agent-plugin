@@ -55,8 +55,10 @@ fail=0
 echo "PASS: config-file and env-var credentials flow through codex-on-event.sh to real OTLP requests"
 
 echo "== install-codex.sh merges hooks + pre-trust into config.toml, preserving user content =="
-# Codex has no release yet, so pre-stage the version-pinned binary + bootstrap;
-# install-codex.sh skips the download when they're present.
+# Codex has no release yet, so pre-stage the version-pinned binary + bootstrap.
+# The binary path is version-pinned so the installer skips that download on its
+# own; the bootstrap is now replaced on every run, so DASH0_SKIP_PLUGIN_FILES below
+# is what keeps the copy staged here.
 export HOME=/tmp/codex-installer-home XDG_STATE_HOME=/tmp/codex-installer-state
 rm -rf "$HOME" "$XDG_STATE_HOME"
 STATE_BASE="$XDG_STATE_HOME/dash0-agent-plugin/codex"
@@ -79,6 +81,7 @@ TOML
 DASH0_VERSION="$VERSION" \
 DASH0_OTLP_URL=http://localhost:4319 \
 DASH0_AUTH_TOKEN=codex-install-token \
+DASH0_SKIP_PLUGIN_FILES=1 \
   bash "$REPO/install-codex.sh" 2>&1 | tail -25
 
 CONFIG_TOML="$HOME/.codex/config.toml"

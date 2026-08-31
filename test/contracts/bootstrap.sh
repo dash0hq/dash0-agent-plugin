@@ -27,9 +27,15 @@ SCRIPTS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
 echo "== Every bootstrap writes the binary only by rename =="
 # Static, so it holds regardless of whether a race reproduces on this machine or
 # this runner. Inside the download block the final path may appear only in the
-# guard that opens it, the temp name derived from it, and the closing rename —
-# any other use is a write to a path a concurrent process may already be
-# exec'ing. This is the check that fails if someone restores `-o "$BINARY"`.
+# guard that opens it, the temp name derived from it, the closing rename, and a
+# read-only `-x` test — any other use is a write to a path a concurrent process
+# may already be exec'ing. This is the check that fails if someone restores
+# `-o "$BINARY"`.
+#
+# The `-x` test is allowed because Windows refuses to rename over a running .exe,
+# so a bootstrap that loses that race has to ask whether the winner's file is
+# already in place before it reports a failure. A test cannot damage the file the
+# way a write or a redirect can.
 fail=0
 for s in "${SCRIPTS[@]}"; do
   block=$(awk '/^if \[ ! -x "\$BINARY" \]/,/^fi$/' "$REPO/$s" | sed 's/#.*//')
@@ -40,7 +46,7 @@ for s in "${SCRIPTS[@]}"; do
   fi
   # shellcheck disable=SC2016  # matching the literal string $BINARY, not expanding it
   bad=$(echo "$block" | grep -F '"$BINARY"' \
-    | grep -vE '^if \[ ! -x "\$BINARY" \]|TMP="\$BINARY|mv -f "\$TMP" "\$BINARY"' || true)
+    | grep -vE '\[ ! -x "\$BINARY" \]|\[ -x "\$BINARY" \]|TMP="\$BINARY|mv -f "\$TMP" "\$BINARY"' || true)
   if [ -n "$bad" ]; then
     echo "  FAIL $s: download block touches \$BINARY outside the guard/temp/rename:"
     printf '    %s\n' "$bad"

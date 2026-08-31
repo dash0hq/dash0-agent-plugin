@@ -102,8 +102,10 @@ jobs:
         run: |
           set -euo pipefail
           ( cd dist && sha256sum -c checksums.txt )
-          N=$(find dist -maxdepth 1 -type f -name '*-on-event-*' | wc -l)
-          [ "$N" -eq 16 ] || { echo "::error::built $N binaries, expected 16"; exit 1; }
+          ./scripts/expected-artifacts.sh | sort >expected.txt
+          find dist -maxdepth 1 -type f -name '*-on-event-*' -exec basename {} \; \
+            | sort >built.txt
+          diff expected.txt built.txt || { echo "::error::dist is not what .goreleaser.yaml describes"; exit 1; }
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -189,8 +191,10 @@ jobs:
           # binary catches an artifact that is complete and correctly checksummed
           # but not actually executable on its platform.
           ( cd dist && sha256sum -c checksums.txt )
-          N=$(find dist -maxdepth 1 -type f -name '*-on-event-*' | wc -l)
-          [ "$N" -eq 16 ] || { echo "::error::built $N binaries, expected 16"; exit 1; }
+          ./scripts/expected-artifacts.sh | sort >expected.txt
+          find dist -maxdepth 1 -type f -name '*-on-event-*' -exec basename {} \; \
+            | sort >built.txt
+          diff expected.txt built.txt || { echo "::error::dist is not what .goreleaser.yaml describes"; exit 1; }
           CLAUDE_PLUGIN_DATA=$(mktemp -d) \
           DASH0_OTLP_URL=http://127.0.0.1:1 \
             dist/claude-on-event-linux-amd64 \

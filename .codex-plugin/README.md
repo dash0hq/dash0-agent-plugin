@@ -5,10 +5,13 @@ Emit OpenAI Codex agent activity as OpenTelemetry spans to your Dash0 endpoint �
 ## Requirements
 
 - **Agent:** the OpenAI Codex CLI.
-- **Operating system:** macOS or Linux (Windows is not supported).
+- **Operating system:** macOS, Linux, or Windows.
 - **Architecture:** `amd64` (x86_64) or `arm64` (aarch64).
-- **Shell tooling:** `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
-  bootstrap downloads and checksum-verifies the hook binary on first run.
+- **Shell tooling:**
+  - macOS and Linux: `bash`, `curl` or `wget`, and `sha256sum` or `shasum` — the
+    bootstrap downloads and checksum-verifies the hook binary on first run.
+  - Windows: nothing extra. The plugin runs a PowerShell bootstrap, and both
+    `curl.exe` and `Get-FileHash` ship with Windows.
 
 ## Installation
 
@@ -16,7 +19,13 @@ Emit OpenAI Codex agent activity as OpenTelemetry spans to your Dash0 endpoint �
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-codex.sh | bash
 ```
 
-You'll be prompted for your Dash0 endpoint, token, and dataset. The installer registers the plugin's hooks in `~/.codex/config.toml` (as a managed block, preserving any hooks and config you already have), fetches the `codex-on-event` binary from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) — verifying the checksum — into `~/.local/state/dash0-agent-plugin/codex/bin/`, and writes credentials to `~/.codex/dash0-agent-plugin.local.md` (chmod 600).
+On Windows, run the PowerShell installer instead:
+
+```powershell
+irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-codex.ps1 | iex
+```
+
+You'll be prompted for your Dash0 endpoint, token, and dataset. The installer registers the plugin's hooks in `~/.codex/config.toml` (as a managed block, preserving any hooks and config you already have), fetches the `codex-on-event` binary from [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases) — verifying the checksum — into `~/.local/state/dash0-agent-plugin/codex/bin/`, and writes credentials to `~/.codex/dash0-agent-plugin.local.md`, restricted to your user (chmod 600, or owner-only ACLs on Windows).
 
 After install, **start a new Codex session.**
 
@@ -40,9 +49,21 @@ DASH0_DATASET=default \
   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-codex.sh | bash
 ```
 
+On Windows, `iex` cannot pass arguments, so build the script block first:
+
+```powershell
+$installer = irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-codex.ps1
+& ([scriptblock]::Create($installer)) `
+  -Endpoint https://ingress.<region>.aws.dash0.com `
+  -Token <your-token> `
+  -Dataset default
+```
+
+The same environment variables work there too.
+
 Each flag (and its env-var equivalent) skips the corresponding prompt, so the installer runs fully unattended. The team-name prompt has no flag — set `DASH0_TEAM_NAME` to provide it. `DASH0_VERSION` pins a specific release; the default is the latest. With no credentials supplied, the installer still completes but stays inactive until you fill in `~/.codex/dash0-agent-plugin.local.md`.
 
-> **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.codex/dash0-agent-plugin.local.md` (which the bootstrap script passes to the hook as `CODEX_PLUGIN_OPTION_AUTH_TOKEN`). This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
+> **Note:** `DASH0_AUTH_TOKEN` is read by the installer only — it writes the token into the config file. The runtime hook does **not** read `DASH0_AUTH_TOKEN` from the shell; it reads `auth_token:` from `~/.codex/dash0-agent-plugin.local.md`. This prevents the token from leaking into tool-spawned shell environments where other Dash0 tools might pick it up.
 
 ### Via the Codex plugin marketplace
 
@@ -68,6 +89,8 @@ Re-run the installer:
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-codex.sh | bash
 ```
 
+On Windows, re-run `install-codex.ps1` the same way you installed it.
+
 It fetches the latest release (or the release pinned by `DASH0_VERSION`) and leaves your credentials untouched. Start a new Codex session to pick up the update.
 
 ## Configuration
@@ -79,7 +102,7 @@ After installing, you'll need:
 
 ### Config file
 
-The config file lives at `~/.codex/dash0-agent-plugin.local.md` (chmod 600 — it holds your token in cleartext). YAML frontmatter:
+The config file lives at `~/.codex/dash0-agent-plugin.local.md`, restricted to your user (chmod 600, or owner-only ACLs on Windows) because it holds your token in cleartext. YAML frontmatter:
 
 ```yaml
 ---
@@ -93,7 +116,7 @@ team_name: "<your-team>"      # optional — tagged as dash0.team.name on every 
 
 The installer writes this file for you. To reconfigure later, edit the file directly — see [Options](#options) for every key. Changes take effect on the next hook fire — no restart needed.
 
-Per-project overrides work: drop a `.codex/dash0-agent-plugin.local.md` inside your repo and it takes precedence over the global file (the bootstrap script checks the workspace CWD first, then `$HOME/.codex/`).
+Per-project overrides work: drop a `.codex/dash0-agent-plugin.local.md` inside your repo and it takes precedence over the global file (the binary checks the workspace CWD first, then `$HOME/.codex/`).
 
 ### Verify
 
@@ -110,7 +133,7 @@ Sub-agents appear as `invoke_agent` spans parenting their own tool calls, and MC
 | Option | Description | Default | Sensitive |
 |---|---|---|---|
 | `otlp_url` | Dash0 OTLP endpoint URL (e.g. `https://ingress.<region>.aws.dash0.com`) | — | No |
-| `auth_token` | Dash0 authentication token | — | Yes (config file, chmod 600) |
+| `auth_token` | Dash0 authentication token | — | Yes (config file, owner-only) |
 | `dataset` | Dash0 dataset name | — | No |
 | `agent_name` | Agent name (used as `service.name`) | `codex` | No |
 | `team_name` | Team name — all spans are tagged with `dash0.team.name` | — | No |
@@ -146,7 +169,7 @@ The plugin falls back to `DASH0_*` environment variables when the config file do
 | `DASH0_DEBUG` | Print OTel payloads to stderr (`true`/`false`) |
 | `DASH0_DEBUG_FILE` | Write debug output to this file path |
 
-> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field (the bootstrap passes it to the hook as `CODEX_PLUGIN_OPTION_AUTH_TOKEN`).
+> `auth_token` has **no `DASH0_AUTH_TOKEN` env var fallback** — it is never read from a `DASH0_*` variable to prevent leaking into tool-spawned shell environments. Set it via the config file's `auth_token:` field.
 
 ## Privacy defaults
 
@@ -171,10 +194,16 @@ The OTLP pipeline is shared across runtimes, so the attribute set matches Claude
 
 ### Every hook fails with a 404
 
-The hook is trying to download a binary for an unsupported platform. Run
-`uname -s -m` — anything other than `Darwin` or `Linux` on
-`x86_64`/`arm64`/`aarch64` is unsupported, in particular `MINGW64_NT-…` or
-`MSYS_NT-…`, which is Windows under Git Bash. See [Requirements](#requirements).
+The hook is trying to download a binary for an unsupported platform. Releases
+carry macOS, Linux, and Windows binaries for `amd64` and `arm64` only — check
+what your machine reports with `uname -s -m`, or with
+`$env:PROCESSOR_ARCHITECTURE` on Windows. See [Requirements](#requirements).
+
+A refused download looks the same. The bootstrap verifies every binary it fetches
+and never runs one it cannot verify, but it still exits 0, so telemetry just
+stops: look for `refusing to run an unverified binary` (no entry for the asset in
+`checksums.txt`), `checksum mismatch`, or `no sha256 tool` on the hook's stderr or
+in the debug log.
 
 ### No traces arrive
 
@@ -194,7 +223,13 @@ The hook is trying to download a binary for an unsupported platform. Run
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/uninstall-codex.sh | bash
 ```
 
-Pass `-s -- --yes` to skip the confirmation prompt. The uninstaller removes Dash0's entries from `~/.codex/config.toml` — preserving any hooks and config you added yourself — along with the credential config and the cached binary under `~/.local/state/dash0-agent-plugin/codex/`.
+On Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/uninstall-codex.ps1 | iex
+```
+
+Pass `-s -- --yes` (or `-Yes`, via the script-block form above) to skip the confirmation prompt. The uninstaller removes Dash0's entries from `~/.codex/config.toml` — preserving any hooks and config you added yourself — along with the credential config and the cached binary under `~/.local/state/dash0-agent-plugin/codex/`.
 
 Start a new Codex session afterward.
 

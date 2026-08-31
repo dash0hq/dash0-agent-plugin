@@ -19,7 +19,8 @@ properties can be populated.
 | Per-session state dir | `$CLAUDE_PLUGIN_DATA` (required) | `$CURSOR_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/cursor` | `$CODEX_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/codex` | `$COPILOT_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/copilot` |
 | Hooks registered in | plugin manifest `claude/hooks.json` | `~/.cursor/hooks.json` (merged) | `~/.codex/config.toml` (managed block) | plugin package `copilot/hooks.json` |
 | Wired hook events | 24 | 9 | 10 | 4 |
-| Supported OS/arch | `darwin`,`linux` × `amd64`,`arm64` | same | same | same |
+| Supported OS/arch | `darwin`,`linux`,`windows` × `amd64`,`arm64` | same | same | same |
+| Windows hook invocation | `claude-on-event.sh` under Git Bash (required) | `cursor-on-event.ps1` — Cursor runs hook commands through PowerShell | `codex-on-event.ps1` via `commandWindows` | `copilot-on-event.ps1` via the `powershell` key |
 | Unsupported platform | hook fails | hook fails | hook fails | fails open (untraced) |
 
 `›` reads as "else". Of the three prefixed variables only `COPILOT_PLUGIN_DATA` is
@@ -106,12 +107,12 @@ demo generator uses them).
 | | Claude Code | Cursor | Codex | Copilot CLI |
 |---|---|---|---|---|
 | Marketplace | `/plugin install dash0@…` | No (local-plugin dir scan) | `codex plugin add dash0-agent-plugin@dash0` | `copilot plugin install dash0-agent-plugin@dash0` (after `marketplace add`) |
-| `curl \| bash` installer | No | `install-cursor.sh` | `install-codex.sh` | No (marketplace only) |
-| Uninstaller | via `/plugin` | `uninstall-cursor.sh` | `uninstall-codex.sh` | via `copilot plugin` |
+| `curl \| bash` installer | No | `install-cursor.sh`, `install-cursor.ps1` on Windows | `install-codex.sh`, `install-codex.ps1` on Windows | No (marketplace only) |
+| Uninstaller | via `/plugin` | `uninstall-cursor.sh`, `uninstall-cursor.ps1` on Windows | `uninstall-codex.sh`, `uninstall-codex.ps1` on Windows | via `copilot plugin` |
 | Local dev | `claude --plugin-dir …` ([guide](claude/README.md)) | symlink into `~/.cursor/plugins/local/` ([guide](cursor/README.md)) | `emit-codex-hooks` ([guide](codex/README.md#build--run-locally)) | `copilot-local-dev` skill ([guide](copilot/README.md#build--run-locally)) |
-| Binary delivery | download + checksum (`on-event.sh`) | download + checksum (`cursor-on-event.sh`) | download + checksum (`codex-on-event.sh`) | download + checksum (`copilot-on-event.sh`) |
+| Binary delivery | download + checksum (`on-event.sh`) | download + checksum (`cursor-on-event.sh`, `.ps1` on Windows) | download + checksum (`codex-on-event.sh`, `.ps1` on Windows) | download + checksum (`copilot-on-event.sh`, `.ps1` on Windows) |
 | Hook trust step | None | None | Yes — reproduced trust-hash in `config.toml` (installer) or manual `/hooks` (marketplace path) | None (restart `copilot`) |
-| Extra requirement | — | `jq` | — | launch function (native OTel) via `dash0-configure` |
+| Extra requirement | Git for Windows, on Windows only | `jq`, except on Windows | — | launch function (native OTel) via `dash0-configure`; bash, zsh, or PowerShell |
 
 ## Debugging
 

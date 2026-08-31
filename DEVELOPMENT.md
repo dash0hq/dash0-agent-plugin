@@ -16,9 +16,10 @@ Everything expensive happens while `main` still points at the *old* version, and
 
 1. Check out the commit `main` pointed at when the button was pressed.
 2. Work out the version, write it everywhere, commit and tag — **locally**.
-3. Build all 16 binaries and upload them to a **draft** release.
-4. Verify: checksums, all 16 present, the Linux binary actually runs, and the
-   uploaded asset list matches what was built.
+3. Build every binary `.goreleaser.yaml` describes — 24 today: four agents,
+   three platforms, two architectures — and upload them to a **draft** release.
+4. Verify: checksums, `dist/` matches that list by name, the Linux binary
+   actually runs, and the uploaded assets match what was built.
 5. Push the bump to `main`.
 6. Push the tag, then flip the draft to published.
 7. Check every public download URL, then install the real binary end to end.
@@ -40,8 +41,8 @@ finishes that one instead of starting another, which would skip a version.
 
 ### Dry run
 
-**`dry_run`** — build and check, publish nothing. No tag, no release; the 16
-binaries are attached to the run for 7 days. Safe to run at any time.
+**`dry_run`** — build and check, publish nothing. No tag, no release; the binaries
+are attached to the run for 7 days. Safe to run at any time.
 
 `DASH0_VERSION` points an install at any published release without editing
 anything — a rollback, or a build under test:

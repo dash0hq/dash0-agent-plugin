@@ -9,7 +9,7 @@
 #   scripts/version.sh latest                 the newest published release
 #   scripts/version.sh next patch|minor|major print what comes after it
 #
-# Ten files pin the version. They must agree: a bootstrap left behind asks
+# Twelve files pin the version. They must agree: a bootstrap left behind asks
 # GitHub for a release that was never tagged, and since the Claude marketplace
 # lists this repo with no ref, that reaches users on their next `plugin install`.
 # This is the only list of them, so the bump and the check cannot disagree about
@@ -41,6 +41,13 @@ BOOTSTRAPS=(
   codex/codex-on-event.sh
   copilot/copilot-on-event.sh
 )
+# The Windows bootstraps, which pin the same version in PowerShell syntax. There
+# is no Claude one: its hook runs the POSIX script.
+PS_BOOTSTRAPS=(
+  cursor/cursor-on-event.ps1
+  codex/codex-on-event.ps1
+  copilot/copilot-on-event.ps1
+)
 
 # Tag names of published, non-draft, non-prerelease releases.
 released() {
@@ -65,6 +72,9 @@ pins() {
     # The pinned default only. DASH0_VERSION overrides it at runtime from a
     # separate line, which this deliberately does not match.
     printf '%s\t%s\n' "$f" "$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$f")"
+  done
+  for f in "${PS_BOOTSTRAPS[@]}"; do
+    printf '%s\t%s\n' "$f" "$(sed -n "s/^\$Version = '\(.*\)'/\1/p" "$f")"
   done
 }
 
@@ -98,6 +108,10 @@ set_version() {
   done
   for f in "${BOOTSTRAPS[@]}"; do
     sed -i.bak "s/^VERSION=\"[^\"]*\"/VERSION=\"${version}\"/" "$f"
+    rm -f "$f.bak"
+  done
+  for f in "${PS_BOOTSTRAPS[@]}"; do
+    sed -i.bak "s/^\$Version = '[^']*'/\$Version = '${version}'/" "$f"
     rm -f "$f.bak"
   done
   check

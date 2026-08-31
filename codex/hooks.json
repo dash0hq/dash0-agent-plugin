@@ -1,14 +1,122 @@
 {
   "hooks": {
-    "SessionStart":      [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "PreToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "PostToolUse":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "Stop":              [{ "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "SubagentStart":     [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "SubagentStop":      [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "PreCompact":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "PostCompact":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }],
-    "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh" }] }]
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/codex/codex-on-event.sh",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/codex/codex-on-event.ps1\""
+          }
+        ]
+      }
+    ]
   }
 }

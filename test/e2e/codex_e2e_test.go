@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,15 +96,30 @@ func TestE2EFullFlowWithCodex(t *testing.T) {
 
 	// NOTE: deliberately NO --dangerously-bypass-hook-trust — install-codex.sh
 	// pre-trusted the hooks, exactly as a real install leaves them.
+	//
+	// Sandbox mode: Codex's workspace-write sandbox on Windows has no OS-level
+	// enforcement yet and silently downgrades to read-only, rejecting even the
+	// exec_command below ("blocked by policy") before it runs — so no tool ever
+	// fires and no execute_tool span exists to assert against. That's a Codex
+	// platform gap, not something this plugin can influence; danger-full-access
+	// on Windows only lets the throwaway workDir prompt actually execute so the
+	// test can assert on a real tool span, same as workspace-write does elsewhere.
+	sandbox := "workspace-write"
+	if runtime.GOOS == "windows" {
+		sandbox = "danger-full-access"
+	}
 	cmd := exec.CommandContext(ctx, codexBin, "exec",
-		"-s", "workspace-write",
+		"-s", sandbox,
 		"-c", "approval_policy=\"never\"",
 		"-C", workDir,
 		"Create a file hello.txt containing exactly the text 'hi from codex', then run the shell command 'cat hello.txt'. Keep it brief.",
 	)
-	// The hook (bootstrap → binary) inherits this env: HOME locates the creds
-	// config, XDG_STATE_HOME the installed binary, CODEX_HOME the config.toml.
-	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_STATE_HOME="+state, "CODEX_HOME="+codexHome)
+	// The hook (bootstrap → binary) inherits this env: HOME/USERPROFILE locates the
+	// creds config (os.UserHomeDir reads HOME on Unix, USERPROFILE on Windows — set
+	// both so the binary resolves the hermetic home on either), XDG_STATE_HOME the
+	// installed binary, CODEX_HOME the config.toml.
+	cmd.Env = append(os.Environ(),
+		"HOME="+home, "USERPROFILE="+home, "XDG_STATE_HOME="+state, "CODEX_HOME="+codexHome)
 	out, err := cmd.CombinedOutput()
 	t.Logf("codex exec output (err=%v):\n%s", err, string(out))
 	require.NoError(t, err, "codex exec failed")
@@ -184,6 +200,15 @@ func spanHasPositiveTokenUsage(s otlp.Span) bool {
 func installCodex(t *testing.T, pluginDir, home, state, otlpURL, token string) {
 	t.Helper()
 	ver := codexPluginVersion(t, pluginDir)
+
+	// install-codex.sh hard-refuses any OS other than darwin/linux ("unsupported
+	// OS"), so on Windows this must go through install-codex.ps1 instead — the
+	// two are not interchangeable via Git Bash.
+	if runtime.GOOS == "windows" {
+		installCodexWindows(t, pluginDir, home, state, otlpURL, token, ver)
+		return
+	}
+
 	goos, arch := unameOSArch(t)
 
 	codexState := filepath.Join(state, "dash0-agent-plugin", "codex")
@@ -199,14 +224,57 @@ func installCodex(t *testing.T, pluginDir, home, state, otlpURL, token string) {
 	require.NoError(t, os.WriteFile(filepath.Join(codexState, "codex-on-event.sh"), bootstrap, 0o755))
 
 	cmd := exec.Command("bash", filepath.Join(pluginDir, "install-codex.sh"))
+	// DASH0_SKIP_PLUGIN_FILES keeps the bootstrap written above. Without it the
+	// installer replaces it with the released copy, and this test asserts against
+	// the bootstrap in the working tree.
 	cmd.Env = append(os.Environ(),
 		"HOME="+home, "XDG_STATE_HOME="+state,
 		"DASH0_VERSION="+ver, "DASH0_OTLP_URL="+otlpURL,
 		"DASH0_AUTH_TOKEN="+token, "DASH0_DATASET=default",
+		"DASH0_SKIP_PLUGIN_FILES=1",
 	)
 	out, err := cmd.CombinedOutput()
 	t.Logf("install-codex.sh output:\n%s", string(out))
 	require.NoError(t, err, "install-codex.sh failed")
+}
+
+// installCodexWindows mirrors installCodex's Unix path but drives
+// install-codex.ps1: pre-stage the binary and the bootstrap under the same
+// XDG_STATE_HOME-derived tree the script uses, then run it exactly as a user
+// would from PowerShell, with USERPROFILE pointed at the hermetic home so
+// config.toml and dash0-agent-plugin.local.md land under it rather than the
+// developer's real %USERPROFILE%\.codex.
+func installCodexWindows(t *testing.T, pluginDir, home, state, otlpURL, token, ver string) {
+	t.Helper()
+	arch := runtime.GOARCH
+
+	codexState := filepath.Join(state, "dash0-agent-plugin", "codex")
+	require.NoError(t, os.MkdirAll(filepath.Join(codexState, "bin"), 0o755))
+	binPath := filepath.Join(codexState, "bin", fmt.Sprintf("codex-on-event-%s-windows-%s.exe", ver, arch))
+	build := exec.Command("go", "build", "-o", binPath, "./cmd/codex-on-event")
+	build.Dir = pluginDir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", string(out))
+	}
+	bootstrap, err := os.ReadFile(filepath.Join(pluginDir, "codex", "codex-on-event.ps1"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(codexState, "codex-on-event.ps1"), bootstrap, 0o644))
+
+	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+		"-File", filepath.Join(pluginDir, "install-codex.ps1"),
+		"-Endpoint", otlpURL, "-Token", token, "-Dataset", "default",
+	)
+	// DASH0_SKIP_PLUGIN_FILES keeps the bootstrap written above. Without it the
+	// installer fetches one from the pinned tag, which carries no .ps1 until a
+	// release ships one, and this test exists to exercise the bootstrap in the
+	// working tree rather than a released copy of it.
+	cmd.Env = append(os.Environ(),
+		"USERPROFILE="+home, "XDG_STATE_HOME="+state, "DASH0_VERSION="+ver,
+		"DASH0_SKIP_PLUGIN_FILES=1",
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("install-codex.ps1 output:\n%s", string(out))
+	require.NoError(t, err, "install-codex.ps1 failed")
 }
 
 // codexPluginVersion reads the pinned VERSION from codex/codex-on-event.sh so

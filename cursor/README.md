@@ -8,23 +8,6 @@ and cut releases.
 End-user install / configure / uninstall docs live in
 [.cursor-plugin/README.md](../.cursor-plugin/README.md).
 
-## Contents
-
-| Path | Purpose |
-|---|---|
-| `hooks.json` | Source of truth for which Cursor events the plugin listens to, and the only one of the four `<runtime>/hooks.json` files that is **not** referenced from a plugin manifest — Cursor ignores manifest hooks for local plugins, so this is an installer template rather than something Cursor reads. (Codex also merges hooks into a global config at install time, but its `codex/hooks.json` *is* manifest-referenced for the marketplace path; `install-codex.sh` bypasses it and renders the block from `codex.HookEvents` instead, because each hook needs a `trusted_hash` computed from install-time values.) `install-cursor.sh` reads this file, translates `./cursor/cursor-on-event.sh` to `$HOME/.cursor/plugins/local/dash0-agent-plugin/cursor/cursor-on-event.sh`, and merges the entries into the user's `~/.cursor/hooks.json` (Cursor doesn't fire hooks from local plugins directly). |
-| `cursor-on-event.sh` | Bootstrap wrapper Cursor invokes on each event: loads the config file, downloads + checksum-verifies the `cursor-on-event` binary on first run, then execs it. |
-| `skills/` | Cursor-only agent skills (e.g. `dash0-configure`). Referenced from `.cursor-plugin/plugin.json`. |
-
-The code that consumes Cursor hooks lives elsewhere:
-
-- `cmd/cursor-on-event/` — the binary the bootstrap script execs
-- `internal/source/cursor/` — Cursor-specific event normalization
-- `internal/harness/` — resolves the config from Cursor's environment (shared by all four runtimes)
-- `internal/pipeline/` — shared OTLP span emission (used by all four runtimes)
-- `.cursor-plugin/plugin.json` — native plugin manifest Cursor reads from `~/.cursor/plugins/local/dash0-agent-plugin/.cursor-plugin/plugin.json` (declares `skills`; hooks are wired via `~/.cursor/hooks.json` at install time, not via the manifest)
-- `cursor/skills/dash0-configure/SKILL.md` — agent skill that walks the user through writing the config file
-
 ## Install layout (hybrid)
 
 The `install-cursor.sh` script lays the plugin down at `~/.cursor/plugins/local/dash0-agent-plugin/`, which Cursor scans on startup:

@@ -166,5 +166,9 @@ func TestCopilotBootstrapValidAndForwardsArgs(t *testing.T) {
 	assert.Contains(t, string(body), `exec "$BINARY" "$@"`, "bootstrap must forward args to the binary")
 	info, err := os.Stat(script)
 	require.NoError(t, err)
-	assert.NotZero(t, info.Mode()&0o111, "bootstrap must be executable")
+	// Windows has no executable bit — os.Stat reports 0666 for every regular
+	// file — so the check only means something on POSIX.
+	if runtime.GOOS != "windows" {
+		assert.NotZero(t, info.Mode()&0o111, "bootstrap must be executable")
+	}
 }

@@ -8,82 +8,35 @@
 #
 #   stdin (JSON) → copilot-on-event.sh <eventName> → copilot-on-event binary → OTLP
 #
-# Responsibilities:
-#   - Load config from a YAML-frontmatter file (per-project or global), exposing
-#     DASH0_* env vars (and the sensitive token as
-#     COPILOT_PLUGIN_OPTION_AUTH_TOKEN) for the binary.
-#   - Download the matching binary from GitHub Releases on first run (checksum-verified).
-#   - exec the binary, FORWARDING the event-name argument and stdin.
-#
 # Per-turn token/cost/model telemetry additionally requires Copilot's native
-# OTel to be enabled to a per-session file — set up by the `dash0-configure`
-# skill as a shell function that shadows `copilot`. Without it, spans are still
-# emitted, just without usage.
+# OTel written to a per-session file, set up by the `dash0-configure` skill as a
+# shell function that shadows `copilot`. Without it, spans are still emitted,
+# just without usage.
 #
 # Fail-open: any error before exec logs to stderr and exits 0 so a broken
-# installer never breaks the user's Copilot session. (The binary itself is also
-# strictly fail-open — mandatory, since Copilot's tool hooks are fail-closed.)
-
+# installer never breaks the user's Copilot session. Mandatory here, since
+# Copilot's tool hooks are fail-closed. `set -e` is deliberately absent;
+# fail_open does that job.
 set -u
 
+AGENT="copilot"
+VERSION="0.1.25"
+
+# Where the downloaded binary lives. Copilot sets COPILOT_PLUGIN_DATA for a
+# marketplace install; the XDG path is the fallback for a manual one.
+BASE="${COPILOT_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/copilot}"
+
+# >>> shared bootstrap — byte-identical across cursor, codex and copilot >>>
+# test/consistency asserts these three regions match, so a fix lands in all of
+# them or in none. Everything agent-specific is declared above.
+
 fail_open() {
-  echo "copilot-on-event: $*" >&2
+  echo "${AGENT}-on-event: $*" >&2
   exit 0
 }
 
-load_settings() {
-  local file="$1"
-  [[ -f "$file" ]] || return 1
-
-  local frontmatter
-  frontmatter=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$file")
-
-  local enabled
-  enabled=$(echo "$frontmatter" | grep '^enabled:' | sed 's/enabled: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  if [[ "$enabled" == "false" ]]; then
-    exit 0
-  fi
-
-  local val
-  val=$(echo "$frontmatter" | grep '^otlp_url:' | sed 's/otlp_url: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OTLP_URL="$val"
-  val=$(echo "$frontmatter" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export COPILOT_PLUGIN_OPTION_AUTH_TOKEN="$val"
-  val=$(echo "$frontmatter" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DATASET="$val"
-  val=$(echo "$frontmatter" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_AGENT_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^team_name:' | sed 's/team_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_TEAM_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^omit_io:' | sed 's/omit_io: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_identity_fallback:' | sed 's/omit_identity_fallback: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IDENTITY_FALLBACK="$val"
-  val=$(echo "$frontmatter" | grep '^debug:' | sed 's/debug: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG="$val"
-  val=$(echo "$frontmatter" | grep '^debug_file:' | sed 's/debug_file: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG_FILE="$val"
-
-  return 0
-}
-
-# Project-scoped settings take precedence over global settings. Copilot runs
-# hooks with the workspace as CWD, so the project file resolves relative to it.
-PROJECT_SETTINGS=".copilot/dash0-agent-plugin.local.md"
-GLOBAL_SETTINGS="$HOME/.copilot/dash0-agent-plugin.local.md"
-
-load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
-
-if [ -n "${COPILOT_PLUGIN_DATA:-}" ]; then
-  BASE="$COPILOT_PLUGIN_DATA"
-else
-  BASE="${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/copilot"
-fi
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.25"
 
 # Point this install at a different published release — a -dev prerelease cut
 # from a branch for QA, or a rollback — without editing this file. Same repo and
@@ -105,15 +58,23 @@ if [ -n "${DASH0_VERSION:-}" ]; then
   fi
 fi
 
+# Git Bash, MSYS2 and Cygwin report kernel strings like MINGW64_NT-10.0-26200,
+# never "windows", so the release asset would be requested under a name that does
+# not exist. EXE carries the suffix GoReleaser appends for Windows builds through
+# to both the asset name and the cache filename; it stays empty elsewhere, so a
+# POSIX cache path is unchanged and nothing re-downloads.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+EXE=""
+case "$OS" in
+  mingw*|msys*|cygwin*) OS="windows"; EXE=".exe" ;;
+esac
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64)  ARCH="amd64" ;;
-  aarch64) ARCH="arm64" ;;
-  arm64)   ARCH="arm64" ;;
+  x86_64|amd64)  ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/copilot-on-event-${VERSION}-${OS}-${ARCH}"
+BINARY="$BIN_DIR/${AGENT}-on-event-${VERSION}-${OS}-${ARCH}${EXE}"
 
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
@@ -127,7 +88,7 @@ if [ ! -x "$BINARY" ]; then
   trap 'rm -f "$TMP"' EXIT
 
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
-  ASSET="copilot-on-event-${OS}-${ARCH}"
+  ASSET="${AGENT}-on-event-${OS}-${ARCH}${EXE}"
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
@@ -141,9 +102,11 @@ if [ ! -x "$BINARY" ]; then
     fail_open "neither curl nor wget found"
   fi
 
-  # Fail CLOSED on integrity: if we can't verify the download (no checksum line,
-  # or no sha256 tool), refuse to run it. fail_open still exits 0 so the user's
-  # session isn't broken — we just skip telemetry this run and re-download next.
+  # Fail closed on integrity: a binary that cannot be verified is not run. Every
+  # supported platform ships a hash tool — shasum on macOS, sha256sum on glibc
+  # Linux and on busybox — so reaching either refusal below means the release is
+  # malformed or the host is not one we support. fail_open still exits 0, so the
+  # cost is this run's telemetry, never the user's session.
   EXPECTED=$(echo "$CHECKSUMS" | grep "  ${ASSET}$" | cut -d' ' -f1)
   if [ -z "$EXPECTED" ]; then
     fail_open "no checksum for ${ASSET} — refusing to run an unverified binary"
@@ -163,10 +126,22 @@ if [ ! -x "$BINARY" ]; then
   fi
 
   # Executable before it is visible, so nothing can find $BINARY and fail the
-  # -x test that guards this block.
-  chmod +x "$TMP" || fail_open "could not mark $TMP executable"
-  mv -f "$TMP" "$BINARY" || fail_open "could not move $TMP into place"
+  # -x test that guards this block. Skipped on Windows, which has no executable
+  # bit: a no-op that can still fail would fail_open for no reason.
+  if [ "$OS" != "windows" ]; then
+    chmod +x "$TMP" || fail_open "could not mark $TMP executable"
+  fi
+  # Windows refuses to rename over a .exe that another process is executing, and
+  # a sibling hook that won this race has already started it. Its file is the same
+  # verified build this one just downloaded, so an existing $BINARY is success
+  # rather than an event dropped with the binary sitting right there. The
+  # PowerShell twin of this bootstrap makes the same allowance.
+  if ! mv -f "$TMP" "$BINARY" 2>/dev/null; then
+    [ -x "$BINARY" ] || fail_open "could not move $TMP into place"
+  fi
 fi
 
-# Forward the event-name argument(s) and stdin to the binary.
+# Forward stdin, plus the event-name argument for the agents that pass one. The
+# binary exits 0 on telemetry errors, so no trap is needed around this.
 exec "$BINARY" "$@"
+# <<< shared bootstrap <<<

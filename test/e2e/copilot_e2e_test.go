@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -61,12 +60,31 @@ func (c *otlpCapture) snapshot() ([][]byte, []string) {
 
 func buildCopilotBinary(t *testing.T, pluginDir string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "copilot-on-event")
+	name := "copilot-on-event"
+	if runtime.GOOS == "windows" {
+		// go build honors -o verbatim: without the extension, Windows refuses to
+		// exec the file directly ("executable file not found in %PATH%").
+		name += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	build := exec.Command("go", "build", "-o", bin, "./cmd/copilot-on-event")
 	build.Dir = pluginDir
 	out, err := build.CombinedOutput()
 	require.NoError(t, err, "build failed: %s", out)
 	return bin
+}
+
+// copilotBinaryName is the cached-binary name copilot-on-event.sh derives for the
+// running platform. The bootstrap normalizes uname's mingw/msys/cygwin output to
+// "windows" and appends ".exe" there, so a binary staged without the suffix is
+// never found: the script falls through to the release download, 404s, and fails
+// open without sending anything.
+func copilotBinaryName(version string) string {
+	name := fmt.Sprintf("copilot-on-event-%s-%s-%s", version, runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return name
 }
 
 func bootstrapVersion(t *testing.T, pluginDir string) string {
@@ -119,7 +137,7 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+pluginData,
@@ -132,7 +150,7 @@ func TestE2ECopilotPerTurnSpans(t *testing.T) {
 	}
 
 	sid := `"sessionId":"` + copilotConvID + `"`
-	run("sessionStart", `{`+sid+`,"cwd":"`+t.TempDir()+`","source":"new"}`)
+	run("sessionStart", `{`+sid+`,"cwd":`+strconv.Quote(t.TempDir())+`,"source":"new"}`)
 	run("userPromptSubmitted", `{`+sid+`,"prompt":"run echo hi"}`)
 	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
 
@@ -210,7 +228,7 @@ func TestE2ECopilotDefersTurnWhenTraceContextMissing(t *testing.T) {
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+pluginData,
@@ -240,7 +258,7 @@ func TestE2ECopilotDefersTurnWhenTraceContextMissing(t *testing.T) {
 
 	// Phase 1: sessionStart records only SessionID (no TraceID minted), so a Stop
 	// now has no intact context. The turn must be deferred.
-	run("sessionStart", `{`+sid+`,"cwd":"`+t.TempDir()+`","source":"new"}`)
+	run("sessionStart", `{`+sid+`,"cwd":`+strconv.Quote(t.TempDir())+`,"source":"new"}`)
 	run("agentStop", `{`+sid+`,"stopReason":"end_turn"}`)
 
 	time.Sleep(200 * time.Millisecond)
@@ -291,7 +309,7 @@ func TestE2ECopilotVCSAttributes(t *testing.T) {
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
 		cmd.Dir = nonRepo
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+pluginData,
@@ -356,7 +374,7 @@ func TestE2ECopilotDropsSubAgentSessions(t *testing.T) {
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+t.TempDir(),
@@ -392,7 +410,7 @@ func TestE2ECopilotSystemNotificationInput(t *testing.T) {
 
 	run := func(eventName, payload string) {
 		cmd := exec.Command(bin, eventName)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
 			"COPILOT_PLUGIN_DATA="+pluginData,
@@ -450,7 +468,10 @@ func TestE2ECopilotCredentialContracts(t *testing.T) {
 
 	// A SessionStart triggers the connectivity check (an OTLP request with auth),
 	// so we don't need a staged OTel file for the credential path.
-	sessionStart := `{"sessionId":"` + copilotConvID + `","cwd":"` + t.TempDir() + `","source":"new"}`
+	// strconv.Quote, not a bare interpolation: on Windows t.TempDir() is
+	// "C:\Users\...", and \U is not a valid JSON escape, so the binary would
+	// reject the event and fail open before sending anything.
+	sessionStart := `{"sessionId":"` + copilotConvID + `","cwd":` + strconv.Quote(t.TempDir()) + `,"source":"new"}`
 
 	t.Run("config file token to wire", func(t *testing.T) {
 		cap, srv := newOTLPCapture(t)
@@ -464,11 +485,14 @@ func TestE2ECopilotCredentialContracts(t *testing.T) {
 		pdata := t.TempDir()
 		binDir := filepath.Join(pdata, "bin")
 		require.NoError(t, os.MkdirAll(binDir, 0o755))
-		placed := filepath.Join(binDir, fmt.Sprintf("copilot-on-event-%s-%s-%s", version, runtime.GOOS, runtime.GOARCH))
+		placed := filepath.Join(binDir, copilotBinaryName(version))
 		copyExecutable(t, bin, placed)
 
 		cmd := exec.Command("bash", bootstrap, "sessionStart")
-		cmd.Env = append(os.Environ(), "HOME="+home, "COPILOT_PLUGIN_DATA="+pdata)
+		// USERPROFILE as well as HOME: os.UserHomeDir reads HOME on Unix and
+		// USERPROFILE on Windows, and the binary resolves the global config file
+		// relative to it. Without both, this reads the developer's real ~/.copilot.
+		cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "COPILOT_PLUGIN_DATA="+pdata)
 		cmd.Stdin = strings.NewReader(sessionStart)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "bootstrap failed: %s", out)
@@ -497,12 +521,18 @@ func TestE2ECopilotCredentialContracts(t *testing.T) {
 		pdata := t.TempDir()
 		binDir := filepath.Join(pdata, "bin")
 		require.NoError(t, os.MkdirAll(binDir, 0o755))
-		placed := filepath.Join(binDir, fmt.Sprintf("copilot-on-event-%s-%s-%s", version, runtime.GOOS, runtime.GOARCH))
+		placed := filepath.Join(binDir, copilotBinaryName(version))
 		copyExecutable(t, bin, placed)
 
+		// The project file is resolved from the directory the hook runs in, so the
+		// event's `cwd` is deliberately somewhere else: the binary reads the config
+		// before it chdirs into the payload's cwd, and this pins that order.
 		cmd := exec.Command("bash", bootstrap, "sessionStart")
-		cmd.Dir = workspace // bootstrap resolves the project file relative to CWD
-		cmd.Env = append(os.Environ(), "HOME="+home, "COPILOT_PLUGIN_DATA="+pdata)
+		cmd.Dir = workspace
+		// USERPROFILE as well as HOME: os.UserHomeDir reads HOME on Unix and
+		// USERPROFILE on Windows, and the binary resolves the global config file
+		// relative to it. Without both, this reads the developer's real ~/.copilot.
+		cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "COPILOT_PLUGIN_DATA="+pdata)
 		cmd.Stdin = strings.NewReader(sessionStart)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "bootstrap failed: %s", out)
@@ -518,7 +548,7 @@ func TestE2ECopilotCredentialContracts(t *testing.T) {
 		defer srv.Close()
 
 		cmd := exec.Command(bin, "sessionStart")
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(hermeticEnv(t),
 			"DASH0_OTLP_URL="+srv.URL,
 			"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=env-token",
 			"COPILOT_PLUGIN_DATA="+t.TempDir(),
@@ -538,15 +568,25 @@ func TestE2ECopilotCredentialContracts(t *testing.T) {
 // launch wrapper into a hermetic COPILOT_HOME), and asserts the emitted
 // canonical chat spans carry per-turn gen_ai.usage.*. FAILS without a PAT
 // (loud, like the Claude/Codex canaries) so a missing token can't hide a break.
+//
+// It takes TWO `copilot -p` processes over one conversation, not one. Copilot
+// buffers its native-OTel file and starts writing it only as the process shuts
+// down: measured on Windows the file is 0 bytes when agentStop fires and whole
+// only after exit. A single -p run therefore races its own flush for the usage
+// of the turn that just ended, and loses about as often as it wins. The reader
+// is built for that lag ("a span Copilot flushes late folds into the next
+// turn's window"), so the fix is to give it a next turn: the resumed process
+// finds turn 1's file complete whichever way turn 1's own race went.
 func TestE2EFullFlowWithCopilot(t *testing.T) {
 	token := os.Getenv("COPILOT_GITHUB_TOKEN")
 	if token == "" {
 		t.Fatal("COPILOT_GITHUB_TOKEN not set — required for e2e test")
 	}
-	copilotBin, err := exec.LookPath("copilot")
+	copilotBin, err := lookRealCopilot()
 	if err != nil {
 		t.Fatal("copilot CLI not found — install with: npm install -g @github/copilot")
 	}
+	t.Logf("copilot CLI: %s", copilotBin)
 
 	pluginDir := findPluginDir(t)
 	bin := buildCopilotBinary(t, pluginDir)
@@ -555,19 +595,63 @@ func TestE2EFullFlowWithCopilot(t *testing.T) {
 
 	pluginData := t.TempDir()
 	otelDir := t.TempDir()
-	otelFile := filepath.Join(otelDir, "otel.jsonl")
+
+	// Hooks are launched by Copilot, not by this process, so hermeticEnv cannot
+	// reach them — the wrappers below have to move HOME/USERPROFILE themselves.
+	// Without it the binary finds the developer's real
+	// ~/.copilot/dash0-agent-plugin.local.md, whose otlp_url outranks DASH0_OTLP_URL
+	// (see Harness.PluginOption): the capture stays empty and every span goes to
+	// that live dataset instead. CI has no such file, so this only ever failed on a
+	// configured machine.
+	hookHome := t.TempDir()
 
 	// Hook wrapper: sets the binary's env (incl. DASH0_COPILOT_OTEL_DIR so the
 	// reader scans our isolated dir — Copilot doesn't pass env to hooks) and execs
 	// the binary, forwarding the event-name argv.
-	wrapper := filepath.Join(t.TempDir(), "hook.sh")
+	wrapperDir := t.TempDir()
+	wrapper := filepath.Join(wrapperDir, "hook.sh")
 	require.NoError(t, os.WriteFile(wrapper, []byte(fmt.Sprintf(`#!/usr/bin/env bash
+export HOME=%q
+export USERPROFILE=%q
 export DASH0_OTLP_URL=%q
 export COPILOT_PLUGIN_OPTION_AUTH_TOKEN="e2e-copilot-token"
 export COPILOT_PLUGIN_DATA=%q
 export DASH0_COPILOT_OTEL_DIR=%q
 exec %q "$@"
-`, srv.URL, pluginData, otelDir, bin)), 0o755))
+`, hookHome, hookHome, srv.URL, pluginData, otelDir, bin)), 0o755))
+
+	// The PowerShell twin of the wrapper above. copilot/hooks.json declares both a
+	// `bash` and a `powershell` variant per event and Copilot picks one by
+	// platform, so a bash-only registration silently runs nothing on Windows.
+	// Single-quoted PowerShell literals, not %q: a Go-quoted string would escape
+	// the backslashes in a Windows path and PowerShell would keep them doubled.
+	psWrapper := filepath.Join(wrapperDir, "hook.ps1")
+	require.NoError(t, os.WriteFile(psWrapper, []byte(fmt.Sprintf(`$env:HOME = '%s'
+$env:USERPROFILE = '%s'
+$env:DASH0_OTLP_URL = '%s'
+$env:COPILOT_PLUGIN_OPTION_AUTH_TOKEN = 'e2e-copilot-token'
+$env:COPILOT_PLUGIN_DATA = '%s'
+$env:DASH0_COPILOT_OTEL_DIR = '%s'
+# Mirrors the shipped bootstrap: take the event from the pipeline when the
+# harness delivers it that way, otherwise inherit this process's stdin.
+$Payload = (@($input) -join ([string][char]10))
+if ($Payload) {
+  $Psi = New-Object System.Diagnostics.ProcessStartInfo
+  $Psi.FileName = '%s'
+  $Psi.Arguments = ($args -join ' ')
+  $Psi.UseShellExecute = $false
+  $Psi.RedirectStandardInput = $true
+  $Proc = [System.Diagnostics.Process]::Start($Psi)
+  $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Payload)
+  $Proc.StandardInput.BaseStream.Write($Bytes, 0, $Bytes.Length)
+  $Proc.StandardInput.BaseStream.Flush()
+  $Proc.StandardInput.Close()
+  $Proc.WaitForExit()
+  exit $Proc.ExitCode
+}
+& '%s' @args
+exit $LASTEXITCODE
+`, hookHome, hookHome, srv.URL, pluginData, otelDir, bin, bin)), 0o644))
 
 	copilotHome := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(copilotHome, "hooks"), 0o755))
@@ -578,7 +662,8 @@ exec %q "$@"
 		if i > 0 {
 			hookJSON += ","
 		}
-		hookJSON += fmt.Sprintf(`%q:[{"type":"command","bash":%q,"timeoutSec":10}]`, e, wrapper+" "+e)
+		hookJSON += fmt.Sprintf(`%q:[{"type":"command","bash":%q,"powershell":%q,"timeoutSec":10}]`,
+			e, wrapper+" "+e, `& "`+psWrapper+`" `+e)
 	}
 	hookJSON += `}}`
 	require.NoError(t, os.WriteFile(filepath.Join(copilotHome, "hooks", "dash0.json"), []byte(hookJSON), 0o644))
@@ -586,25 +671,60 @@ exec %q "$@"
 	workDir := t.TempDir()
 	gitInit(t, workDir)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, copilotBin, "-p", "Reply with exactly one word: ok", "--allow-all-tools", "-C", workDir)
-	cmd.Env = append(os.Environ(),
-		"COPILOT_HOME="+copilotHome,
-		"COPILOT_GITHUB_TOKEN="+token,
-		"COPILOT_OTEL_ENABLED=true",
-		"COPILOT_OTEL_FILE_EXPORTER_PATH="+otelFile,
-	)
-	// Own process group so copilot's exit-time cleanup (which can signal its
-	// process group) cannot SIGKILL the test binary that spawned it.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	out, err := cmd.CombinedOutput()
-	t.Logf("copilot -p output (err=%v):\n%s", err, out)
-	require.NoError(t, err, "copilot -p failed")
 
-	bodies, _ := cap.snapshot()
-	spans := collectSpans(t, bodies)
-	require.NotEmpty(t, spans, "no spans from a live Copilot session")
+	// runCopilot drives one `copilot -p` process, each with its OWN native-OTel
+	// file inside the shared otelDir the reader scans. Distinct paths are what
+	// keep turn 1's file intact for turn 2 to read; one shared path is truncated
+	// on relaunch. resume is "" for a fresh conversation.
+	runCopilot := func(label, resume, prompt string) {
+		t.Helper()
+		args := []string{"-p", prompt, "--allow-all-tools", "-C", workDir}
+		if resume != "" {
+			args = append(args, "--resume="+resume)
+		}
+		cmd := exec.CommandContext(ctx, copilotBin, args...)
+		cmd.Env = append(os.Environ(),
+			"COPILOT_HOME="+copilotHome,
+			"COPILOT_GITHUB_TOKEN="+token,
+			"COPILOT_OTEL_ENABLED=true",
+			"COPILOT_OTEL_FILE_EXPORTER_PATH="+filepath.Join(otelDir, label+".jsonl"),
+		)
+		// Own process group so copilot's exit-time cleanup (which can signal its
+		// process group) cannot SIGKILL the test binary that spawned it.
+		setNewProcessGroup(cmd)
+		out, err := cmd.CombinedOutput()
+		t.Logf("copilot -p (%s) output (err=%v):\n%s", label, err, out)
+		require.NoError(t, err, "copilot -p (%s) failed", label)
+	}
+
+	runCopilot("turn1", "", "Reply with exactly one word: ok")
+
+	// The conversation id the plugin reported for turn 1. Taking it from our own
+	// span, rather than scraping the CLI's "Resume  copilot --resume=…" line,
+	// keeps the test off a human-facing output format AND proves the id the
+	// plugin tags spans with is the one Copilot accepts back.
+	turn1 := collectSpansFrom(t, cap)
+	require.NotEmpty(t, turn1, "no spans from a live Copilot session")
+	logSpanTree(t, turn1)
+	conv := ""
+	for _, s := range turn1 {
+		if v := spanAttrString(s, "gen_ai.conversation.id"); v != "" {
+			conv = v
+			break
+		}
+	}
+	require.NotEmpty(t, conv, "no turn-1 span carries gen_ai.conversation.id")
+
+	// Resume the same conversation in a second process. Turn 1's file is complete
+	// on disk now, so at turn 2's agentStop the reader finds this conversation's
+	// chat span and attaches its usage — the multi-launch shape it is built for
+	// (see internal/source/copilot/otelfile.go).
+	runCopilot("turn2", conv, "Reply with exactly one word: done")
+
+	spans := collectSpansFrom(t, cap)
+	require.NotEmpty(t, spans, "no spans from the resumed Copilot session")
 	logSpanTree(t, spans)
 
 	chatWithUsage := false
@@ -615,6 +735,73 @@ exec %q "$@"
 	}
 	assert.True(t, chatWithUsage,
 		"expected a canonical chat span carrying per-turn gen_ai.usage.*_tokens sourced from the native-OTel file")
+}
+
+// lookRealCopilot resolves the Copilot CLI, skipping any launcher that is one of
+// our own launch wrappers.
+//
+// dash0-configure installs `copilot.cmd` into ~/.local/bin, which shadows npm's
+// copilot on PATH and forces COPILOT_OTEL_FILE_EXPORTER_PATH to a private file it
+// deletes on exit. A test that runs it gets no native-OTel file at all: the
+// wrapper overrides the path the test asked for. Git Bash never picks the wrapper
+// (it has no extensionless twin there) but exec.LookPath does, via PATHEXT — so
+// this only ever broke on a Windows machine with the plugin installed, which is
+// every developer's and no CI runner's.
+//
+// PATH is walked directly rather than through exec.LookPath, because LookPath
+// returns only the first hit and there is no way to ask it for the next one.
+func lookRealCopilot() (string, error) {
+	exts := []string{""}
+	if runtime.GOOS == "windows" {
+		// PATHEXT only. The extensionless `copilot` npm also installs is a POSIX
+		// shell script that CreateProcess cannot run, so matching it would trade
+		// one wrong resolution for another.
+		pathext := os.Getenv("PATHEXT")
+		if pathext == "" {
+			pathext = ".COM;.EXE;.BAT;.CMD"
+		}
+		exts = strings.Split(strings.ToLower(pathext), ";")
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		for _, ext := range exts {
+			p := filepath.Join(dir, "copilot"+ext)
+			info, err := os.Stat(p)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			// Windows decides by extension, not by mode bits, and reports 0o666
+			// for everything — so only check the bit where it means something.
+			if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+				continue
+			}
+			if body, err := os.ReadFile(p); err == nil &&
+				strings.Contains(string(body), "dash0-agent-plugin") {
+				continue // our launch wrapper, not the CLI
+			}
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("copilot CLI not found on PATH")
+}
+
+// collectSpansFrom decodes every span the capture holds so far.
+func collectSpansFrom(t *testing.T, c *otlpCapture) []otlp.Span {
+	t.Helper()
+	bodies, _ := c.snapshot()
+	return collectSpans(t, bodies)
+}
+
+// spanAttrString returns the span's string-valued attribute, or "".
+func spanAttrString(s otlp.Span, key string) string {
+	for _, a := range s.Attributes {
+		if a.Key == key && a.Value.StringValue != nil {
+			return *a.Value.StringValue
+		}
+	}
+	return ""
 }
 
 // TestE2ECopilotMarketplaceInstall validates the self-hosted Copilot marketplace:
@@ -634,7 +821,7 @@ exec %q "$@"
 // copy), so this needs no COPILOT_GITHUB_TOKEN. Gated behind the e2e build tag;
 // FAILS (not skips) if the copilot CLI is missing so a misconfigured CI is loud.
 func TestE2ECopilotMarketplaceInstall(t *testing.T) {
-	copilotBin, err := exec.LookPath("copilot")
+	copilotBin, err := lookRealCopilot()
 	require.NoError(t, err, "copilot CLI not found — install with: npm install -g @github/copilot")
 
 	repoRoot := findPluginDir(t) // holds .github/plugin/marketplace.json
@@ -821,4 +1008,15 @@ func gitRepoWithRemote(t *testing.T, dir, remote string) {
 		cmd.Dir = dir
 		require.NoError(t, cmd.Run(), "git %v", args)
 	}
+}
+
+// hermeticEnv is os.Environ() with HOME and USERPROFILE pointed at one fresh
+// directory, so a run cannot read the developer's real config. The config file
+// outranks DASH0_*, so without this a real ~/.copilot file decides otlp_url and
+// the case either reads an empty capture or exports to a live dataset.
+// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows, so both move.
+func hermeticEnv(t *testing.T) []string {
+	t.Helper()
+	home := t.TempDir()
+	return append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
 }

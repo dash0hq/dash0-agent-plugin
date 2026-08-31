@@ -26,15 +26,25 @@ MP_NAME="dash0-local"
 PLUGIN="dash0-agent-plugin"
 MP_DIR="$HOME/.local/state/dash0-agent-plugin/copilot-dev-marketplace"
 PLUGIN_DATA="$HOME/.copilot/plugin-data/$MP_NAME/$PLUGIN"
+PLUGIN_ROOT="$HOME/.copilot/installed-plugins/$MP_NAME/$PLUGIN"
 OTEL_DIR="$HOME/.local/state/dash0-agent-plugin/copilot/otel"
+# Left behind by an earlier version of this script, which registered the hooks at
+# user scope. The install itself registers them (the manifest's `hooks` key), so
+# both files firing means every event runs the bootstrap twice.
+STALE_HOOKS_FILE="$HOME/.copilot/hooks/$MP_NAME.json"
 
 command -v copilot >/dev/null || { echo "error: copilot CLI not found — npm install -g @github/copilot" >&2; exit 1; }
 command -v go >/dev/null || { echo "error: go not found" >&2; exit 1; }
-command -v jq >/dev/null || { echo "error: jq not found (needed to derive the dev marketplace)" >&2; exit 1; }
 
 VERSION="$(grep '^VERSION=' "$REPO/copilot/copilot-on-event.sh" | cut -d'"' -f2)"
 OS="$(go env GOOS)"; ARCH="$(go env GOARCH)"
-BIN="$PLUGIN_DATA/bin/copilot-on-event-$VERSION-$OS-$ARCH"
+# EXE mirrors what copilot-on-event.sh derives: GoReleaser appends .exe to the
+# Windows build, and the bootstrap looks for that exact name. Without it the
+# binary is staged under a name nothing resolves, so the bootstrap falls through
+# to the release download and 404s.
+EXE=""
+[ "$OS" = "windows" ] && EXE=".exe"
+BIN="$PLUGIN_DATA/bin/copilot-on-event-$VERSION-$OS-$ARCH$EXE"
 
 build_binary() {
   mkdir -p "$(dirname "$BIN")"
@@ -55,9 +65,28 @@ fi
 echo "→ staging local marketplace at $MP_DIR"
 rm -rf "$MP_DIR"
 mkdir -p "$MP_DIR/.github/plugin" "$MP_DIR/copilot"
-rsync -a "$REPO/copilot/" "$MP_DIR/copilot/"
-jq --arg n "$MP_NAME" '.name = $n' \
-  "$REPO/.github/plugin/marketplace.json" > "$MP_DIR/.github/plugin/marketplace.json"
+# cp, not rsync: Git Bash on Windows ships no rsync, and copying into the empty
+# dir just created makes `rsync -a` and `cp -R` equivalent here.
+cp -R "$REPO/copilot/." "$MP_DIR/copilot/"
+# Only the top-level `name` changes, so jq is the clean way when it is installed.
+# Git Bash has no jq, hence the fallback. It anchors on the two-space indentation,
+# which belongs to the top-level key alone: `owner.name` sits at four spaces and
+# each plugin entry's at six, and those must keep their values. GNU sed's
+# `0,/re/` first-match range would be the obvious way and is the wrong one — BSD
+# sed accepts it, substitutes nothing and still exits 0, so the staged file would
+# keep the name `dash0` and the `marketplace add` below would register itself over
+# the production marketplace.
+if command -v jq >/dev/null; then
+  jq --arg n "$MP_NAME" '.name = $n' \
+    "$REPO/.github/plugin/marketplace.json" > "$MP_DIR/.github/plugin/marketplace.json"
+else
+  sed 's/^  "name": ".*"/  "name": "'"$MP_NAME"'"/' \
+    "$REPO/.github/plugin/marketplace.json" > "$MP_DIR/.github/plugin/marketplace.json"
+fi
+# Verify rather than trust. The failure this guards against was silent, and the
+# consequence of missing it lands on the developer's real marketplace.
+grep -q "^  \"name\": \"$MP_NAME\"" "$MP_DIR/.github/plugin/marketplace.json" \
+  || { echo "error: could not rename the staged marketplace to $MP_NAME" >&2; exit 1; }
 
 # 2. (Re)register the marketplace and (re)install the plugin the real way.
 echo "→ registering marketplace + installing plugin"
@@ -66,8 +95,19 @@ echo "→ registering marketplace + installing plugin"
 # staged $MP_DIR, and reinstall.
 copilot plugin uninstall "$PLUGIN" >/dev/null 2>&1 || true
 copilot plugin marketplace remove "$MP_NAME" --force >/dev/null 2>&1 || true
+# A previous run's files left behind make `plugin install` fail with "Zugriff
+# verweigert / access denied", and since the uninstall above already ran, that
+# would leave no plugin installed at all.
+rm -rf "$PLUGIN_ROOT"
 copilot plugin marketplace add "$MP_DIR" >/dev/null
 copilot plugin install "$PLUGIN@$MP_NAME"
+
+# 2b. Drop the user-scope hooks file an earlier version of this script wrote, so
+#     the install's own hooks are the only ones that fire.
+if [ -f "$STALE_HOOKS_FILE" ]; then
+  echo "→ removing stale user-scope hooks file $STALE_HOOKS_FILE"
+  rm -f "$STALE_HOOKS_FILE"
+fi
 
 # 3. Drop the locally-built binary where the bootstrap expects it, so it skips
 #    the release download (there's no build for a local/unreleased version).

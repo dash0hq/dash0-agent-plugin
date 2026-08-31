@@ -92,6 +92,10 @@ func emitCodexHooks(args []string) error {
 }
 
 func run() error {
+	if !hn.Enabled() {
+		return nil
+	}
+
 	dotenv.Load(".env")
 
 	dataDir, err := hn.DataDir()

@@ -18,7 +18,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $Agent = 'copilot'
-$Version = '0.1.25'
+$Version = '0.1.26'
 
 # Where the downloaded binary lives. Mirrors internal/harness.DataDir, which is
 # XDG-shaped on every platform including Windows, so the wrapper's cache and the

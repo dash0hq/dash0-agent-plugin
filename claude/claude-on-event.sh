@@ -18,7 +18,7 @@ PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-}"
 [ -n "$PLUGIN_DATA" ] || fail_open "CLAUDE_PLUGIN_DATA is not set"
 BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.25"
+VERSION="0.1.26"
 
 # Detect OS and architecture. Git Bash, MSYS2 and Cygwin report kernel strings
 # like MINGW64_NT-10.0-26200, never "windows", so without this the release asset

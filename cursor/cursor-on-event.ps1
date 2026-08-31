@@ -16,7 +16,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $Agent = 'cursor'
-$Version = '0.1.25'
+$Version = '0.1.26'
 
 # Where the downloaded binary lives, matching cursor-on-event.sh. internal/harness
 # also honours CURSOR_PLUGIN_DATA; neither bootstrap does, on either platform.

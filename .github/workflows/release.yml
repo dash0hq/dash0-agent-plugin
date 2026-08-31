@@ -102,7 +102,7 @@ jobs:
         run: |
           set -euo pipefail
           ( cd dist && sha256sum -c checksums.txt )
-          N=$(find dist -maxdepth 1 -name '*-on-event-*' | wc -l)
+          N=$(find dist -maxdepth 1 -type f -name '*-on-event-*' | wc -l)
           [ "$N" -eq 16 ] || { echo "::error::built $N binaries, expected 16"; exit 1; }
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -189,7 +189,7 @@ jobs:
           # binary catches an artifact that is complete and correctly checksummed
           # but not actually executable on its platform.
           ( cd dist && sha256sum -c checksums.txt )
-          N=$(find dist -maxdepth 1 -name '*-on-event-*' | wc -l)
+          N=$(find dist -maxdepth 1 -type f -name '*-on-event-*' | wc -l)
           [ "$N" -eq 16 ] || { echo "::error::built $N binaries, expected 16"; exit 1; }
           CLAUDE_PLUGIN_DATA=$(mktemp -d) \
           DASH0_OTLP_URL=http://127.0.0.1:1 \
@@ -228,8 +228,9 @@ jobs:
           git remote set-url origin \
             "https://x-access-token:${{ steps.app.outputs.token }}@github.com/${GITHUB_REPOSITORY}.git"
           if ! git push origin HEAD:main; then
-            echo "::error::main moved during this run — nothing was published. Re-run."
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" || true
+            echo "::error::could not move main — nothing was published. Usually main moved" \
+                 "during this run, in which case re-running is enough; if it repeats, check" \
+                 "that the App is still a bypass actor on the branch ruleset."
             exit 1
           fi
 
@@ -246,11 +247,102 @@ jobs:
             >>"$GITHUB_STEP_SUMMARY"
 
       - name: Every bootstrap resolves a binary at its public URL
-        run: ./scripts/verify-release-assets.sh --strict "$VERSION"
+        run: |
+          set -euo pipefail
+          # Retried: the release stopped being a draft seconds ago, and the
+          # download host does not always serve it on the first ask. Failing
+          # here leaves a published release nobody can install, so a transient
+          # 404 must not be reported as one.
+          for attempt in 1 2 3 4 5; do
+            if ./scripts/verify-release-assets.sh --strict "$VERSION"; then exit 0; fi
+            echo "attempt $attempt did not resolve every asset; retrying"
+            sleep $((attempt * 10))
+          done
+          echo "::error::the published assets never became reachable"
+          exit 1
 
+      # Reached when any step above failed. Publish is the last one that can, and
+      # it patches draft=false as its final act, so a release still marked draft
+      # here was never reachable and is only in the way of the re-run: the asset
+      # diff takes the newest draft for the tag, and a stale one would be it.
+      - name: Remove the draft this run left behind
+        if: failure() && env.RELEASE_ID != ''
+        run: |
+          set -euo pipefail
+          DRAFT=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .draft 2>/dev/null || echo missing)
+          if [ "$DRAFT" = "true" ]; then
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
+            echo "deleted the draft for $TAG"
+          else
+            echo "release $RELEASE_ID is $DRAFT — leaving it alone"
+          fi
+
+  # Everything above proves the assets resolve and the binary we built runs. This
+  # proves the path a user actually takes: the bootstrap downloading the
+  # published release, verifying its checksum, and exporting a span. It was a
+  # separate workflow reached by workflow_call; folding it in removes the
+  # indirection and — more usefully — removes the way it could pass having
+  # verified the wrong thing. VERSION comes from the plan, so there is no input
+  # to arrive empty and silently fall back to whatever the checkout pins.
   verify:
-    name: Verify
+    name: Verify the published release installs
     needs: [plan, release]
-    uses: ./.github/workflows/e2e-release.yml
-    with:
-      version: ${{ needs.plan.outputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DASH0_VERSION: ${{ needs.plan.outputs.version }}
+      CLAUDE_PLUGIN_DATA: /tmp/e2e-plugin-data
+      DASH0_OTLP_URL: http://localhost:4319
+      CLAUDE_PLUGIN_OPTION_OTLP_URL: http://localhost:4319
+      CLAUDE_PLUGIN_OPTION_AUTH_TOKEN: e2e-release-test-token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: '${{ github.sha }}' }
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Start a mock collector
+        run: |
+          make build-binary PKG=./test/e2e/mock-otlp-server OUT=/tmp/mock-otlp
+          /tmp/mock-otlp &
+          sleep 1
+
+      - name: Install the published release through the bootstrap, and drive a turn
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLAUDE_PLUGIN_DATA"
+          for e in \
+            '{"hook_event_name":"SessionStart","session_id":"e2e","model":"opus"}' \
+            '{"hook_event_name":"UserPromptSubmit","session_id":"e2e","prompt":"hello"}' \
+            '{"hook_event_name":"PostToolUse","session_id":"e2e","tool_name":"Bash","tool_use_id":"tu1","duration_ms":100}' \
+            '{"hook_event_name":"Stop","session_id":"e2e","model":"opus","stop_reason":"end_turn"}'
+          do
+            echo "$e" | bash claude/claude-on-event.sh
+          done
+
+      - name: It installed the version under test, not the one pinned in the checkout
+        run: |
+          set -euo pipefail
+          # Exact, not a substring: 0.1.2 would otherwise be satisfied by
+          # on-event-0.1.25-linux-amd64. And unconditional — the guard this
+          # replaces only fired when DASH0_VERSION was already set, which is the
+          # one case where the fallback cannot happen.
+          [ -n "$DASH0_VERSION" ] || { echo "::error::no version to verify against"; exit 1; }
+          want="on-event-${DASH0_VERSION}-linux-amd64"
+          ls -la "$CLAUDE_PLUGIN_DATA/bin/"
+          [ -x "$CLAUDE_PLUGIN_DATA/bin/$want" ] \
+            || { echo "::error::expected $want in the cache; the bootstrap installed something else"; exit 1; }
+
+      - name: The collector received the spans
+        run: |
+          set -euo pipefail
+          sleep 2
+          RESULT=$(curl -s http://localhost:4319/requests)
+          echo "$RESULT" | jq .
+          COUNT=$(echo "$RESULT" | jq '.count')
+          [ "$COUNT" -ge 3 ] \
+            || { echo "::error::expected at least 3 requests, got $COUNT"; exit 1; }
+          AUTH=$(echo "$RESULT" | jq '[.requests[] | select(.auth == "Bearer e2e-release-test-token")] | length')
+          [ "$AUTH" -ge 1 ] || { echo "::error::no request carried the auth header"; exit 1; }

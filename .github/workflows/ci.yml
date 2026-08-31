@@ -118,7 +118,7 @@ jobs:
         run: ./test/contracts/bootstrap.sh
 
       - name: Release planning contracts
-        run: ./test/contracts/release-plan.sh
+        run: ./test/contracts/release.sh
 
   e2e:
     runs-on: ubuntu-latest

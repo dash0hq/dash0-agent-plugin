@@ -8,7 +8,7 @@
 #
 # A script, not an inline `run:` block, so it can be shellchecked and contract
 # tested — the workflow cannot be dispatched from a PR, so this is the only
-# coverage it gets before merge. See test/contracts/release-plan.sh.
+# coverage it gets before merge. See test/contracts/release.sh.
 #
 # Reads from the environment, as GitHub sets them:
 #   DRY_RUN     inputs.dry_run     — "true" | "false"

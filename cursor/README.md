@@ -76,23 +76,8 @@ go test ./...
 
 ## Package
 
-Releasing is the same two-step flow for every runtime — see
-[DEVELOPMENT.md](../DEVELOPMENT.md#releasing). It ends with GoReleaser
-(`.goreleaser.yaml`) building and publishing:
-
-| Artifact | Source |
-|---|---|
-| `cursor-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/cursor-on-event` (this) |
-| `claude-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/claude-on-event` |
-| `codex-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/codex-on-event` |
-| `copilot-on-event-{darwin,linux}-{amd64,arm64}` | `cmd/copilot-on-event` |
-| `checksums.txt` | sha256 of every artifact |
-
-`cursor/cursor-on-event.sh` and `install-cursor.sh` both fetch the binary from
-GitHub Releases by version and verify it against `checksums.txt`. The installer
-also pulls `cursor-on-event.sh` itself from the matching git tag on
-`raw.githubusercontent.com`, so the install flow needs nothing beyond
-`curl`/`wget` and `sha256sum`/`shasum`.
+GoReleaser builds every runtime's binaries from one tag; `.goreleaser.yaml` is
+the list. See [DEVELOPMENT.md](../DEVELOPMENT.md#releasing) for the flow.
 
 `DASH0_VERSION` pins a release: `install-cursor.sh` reads it when resolving what
 to install, and `cursor-on-event.sh` reads it at runtime to override the version

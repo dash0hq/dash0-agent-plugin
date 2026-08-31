@@ -13,10 +13,10 @@
 # GitHub for a release that was never tagged, and since the Claude marketplace
 # lists this repo with no ref, that reaches users on their next `plugin install`.
 # This is the only list of them, so the bump and the check cannot disagree about
-# what needs bumping. Used by .github/workflows/release-prepare.yml, CI's
+# what needs bumping. Used by .github/workflows/release.yml, CI's
 # consistency-checks job, and `make version-check`.
 #
-# Test hooks, used by test/contracts/release-plan.sh:
+# Test hooks, used by test/contracts/release.sh:
 #   EXISTING_RELEASES  a version list, instead of querying GitHub
 #   PINNED             the manifest version, instead of reading plugin.json
 
@@ -48,7 +48,7 @@ released() {
     printf '%s\n' "$EXISTING_RELEASES" | tr ' ' '\n'
     return
   fi
-  gh api "repos/dash0hq/dash0-agent-plugin/releases" --paginate \
+  gh api "repos/${GITHUB_REPOSITORY:-dash0hq/dash0-agent-plugin}/releases" --paginate \
     --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name'
 }
 
@@ -85,7 +85,7 @@ set_version() {
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
     || die "'$version' is not a version (expected 0.2.0, or 0.2.0-dev.1)"
   # Reachable when a previous release failed after its bump merged: the tag and
-  # branch guards both pass, every sed no-ops, and release-prepare then dies at
+  # branch guards both pass, every sed no-ops, and the release job then dies at
   # `git commit -a` with an opaque "nothing to commit".
   before=$(pins | cut -f2 | sort -u)
   [ "$before" != "$version" ] \

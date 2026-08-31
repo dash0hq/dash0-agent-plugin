@@ -11,7 +11,7 @@ installer) and in CI (the `install-config-contract` job just calls these).
 | `cursor.sh` | creds → OTLP · install layout + hooks merge · uninstall strip | network (install/uninstall resolve the latest release), go/jq/curl | yes |
 | `codex.sh`  | creds → OTLP · install merge + pre-trust · uninstall strip | go/jq/python3/curl | yes (no codex CLI) |
 | `bootstrap.sh` | all four `*-on-event.sh` stage the download in a temp and rename · neither the scripts nor the Claude binary ends a hook non-zero · an unrunnable cached binary neither errors nor re-downloads · concurrent cold-cache runs converge | curl, sha256sum/shasum, go; network for the last two contracts | yes |
-| `release-plan.sh` | every Release dispatch resolves to the right version, tag, bump and prerelease flag, and the guarded combinations are refused | jq, git | yes |
+| `release.sh` | every Release dispatch resolves to the right version, tag, bump and prerelease flag, and the guarded combinations are refused | jq, git | yes |
 
 ## Run
 

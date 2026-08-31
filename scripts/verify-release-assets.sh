@@ -30,7 +30,9 @@ cd "$ROOT"
 
 die() { echo "::error::$1" >&2; exit 1; }
 
-BASE="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${VERSION}"
+# The fork's own releases when this runs in a fork's CI, so --strict does not
+# pass by validating what upstream published.
+BASE="https://github.com/${GITHUB_REPOSITORY:-dash0hq/dash0-agent-plugin}/releases/download/v${VERSION}"
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
 BOOTSTRAPS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
             codex/codex-on-event.sh copilot/copilot-on-event.sh)

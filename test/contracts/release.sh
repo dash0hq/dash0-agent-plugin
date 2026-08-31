@@ -141,5 +141,40 @@ refuse "an unknown part" "expected patch, minor or major" -- \
 refuse "a bump to the version already pinned" "nothing to prepare" -- \
   "$VER" set "$(jq -r '.version' "$REPO/.claude-plugin/plugin.json")"
 
+echo "== What a bump actually writes =="
+
+# `set` is the one command that edits the repo, and every check above only
+# proves it refuses things. This proves it succeeds: the release job runs it on
+# main and commits whatever it produced, so a sed that quietly stops matching
+# would ship a release whose bootstraps ask for a version that was never tagged.
+# It runs against a copy — the script cds to its own parent, so the copy is the
+# only way to exercise the real writes without dirtying the working tree.
+sandbox=$(mktemp -d)
+trap 'rm -rf "$sandbox"' EXIT
+( cd "$REPO" && tar cf - scripts/version.sh \
+    .claude-plugin/plugin.json .cursor-plugin/plugin.json .codex-plugin/plugin.json \
+    copilot/plugin.json .github/plugin/marketplace.json \
+    claude/claude-on-event.sh cursor/cursor-on-event.sh \
+    codex/codex-on-event.sh copilot/copilot-on-event.sh ) | tar xf - -C "$sandbox"
+
+if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
+  case "$out" in
+    *"all 10 pins agree on 9.9.9"*) echo "  ok   a bump rewrites all ten pins" ;;
+    *) echo "  FAIL a bump rewrites all ten pins"; printf '    %s\n' "$out"; fail=1 ;;
+  esac
+  # Named individually, because `check` compares the pins to each other: were a
+  # bootstrap's VERSION= line to stop matching, all ten would still agree — on
+  # the old version — and check would pass.
+  for f in claude/claude-on-event.sh cursor/cursor-on-event.sh \
+           codex/codex-on-event.sh copilot/copilot-on-event.sh; do
+    grep -q '^VERSION="9.9.9"$' "$sandbox/$f" \
+      || { echo "  FAIL $f still pins $(grep -m1 '^VERSION=' "$sandbox/$f")"; fail=1; }
+  done
+  [ "$(jq -r '.metadata.version' "$sandbox/.github/plugin/marketplace.json")" = "9.9.9" ] \
+    || { echo "  FAIL marketplace.json metadata.version was not rewritten"; fail=1; }
+else
+  echo "  FAIL a bump rewrites all ten pins: exited non-zero"; printf '    %s\n' "$out"; fail=1
+fi
+
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: the planner tags, bumps and flags every dispatch as documented"

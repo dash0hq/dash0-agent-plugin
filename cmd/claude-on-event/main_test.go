@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/harness"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
@@ -84,6 +85,11 @@ func feed(t *testing.T, input string) {
 
 // runWithStdin calls run() with the given string on stdin.
 func runWithStdin(input string) error {
+	// Each call stands in for one hook process, and a hook process loads the
+	// configuration once. Without this, a file written by an earlier test in this
+	// process would still be the answer here.
+	harness.ResetConfig()
+
 	oldStdin := os.Stdin
 	defer func() { os.Stdin = oldStdin }()
 
@@ -730,7 +736,7 @@ func TestTokenUsageOnLLMSpan(t *testing.T) {
 
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-tok","model":"claude-sonnet-4-20250514"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-tok","prompt":"hello"}`)
-	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-tok","model":"claude-sonnet-4-20250514","transcript_path":"%s"}`, transcriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-tok","model":"claude-sonnet-4-20250514","transcript_path":%q}`, transcriptPath))
 
 	chatSpan := findSpan(*spans, "chat")
 	require.NotNil(t, chatSpan)
@@ -799,8 +805,8 @@ func TestModelOnToolSpanFromTranscriptWhenSessionStartOmitsModel(t *testing.T) {
 	// SessionStart WITHOUT model — simulates the real-world bug.
 	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-no-model"}`)
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-no-model","prompt":"hello"}`)
-	feed(t, fmt.Sprintf(`{"hook_event_name":"PostToolUse","session_id":"sess-no-model","tool_name":"Bash","tool_use_id":"tu1","tool_response":"ok","transcript_path":"%s"}`, transcriptPath))
-	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-no-model","transcript_path":"%s"}`, transcriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"PostToolUse","session_id":"sess-no-model","tool_name":"Bash","tool_use_id":"tu1","tool_response":"ok","transcript_path":%q}`, transcriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"sess-no-model","transcript_path":%q}`, transcriptPath))
 
 	require.Len(t, *spans, 2, "expected tool span + chat span")
 
@@ -1071,7 +1077,7 @@ func TestSubagentStopEmitsChatSpanWithTokens(t *testing.T) {
 
 	// Sub-agent does its work (tool calls inside sub-agent omitted for brevity).
 	// SubagentStop fires when sub-agent finishes.
-	feed(t, fmt.Sprintf(`{"hook_event_name":"SubagentStop","session_id":"sess-substop","agent_id":"sub1","agent_type":"Explore","agent_transcript_path":"%s"}`, agentTranscriptPath))
+	feed(t, fmt.Sprintf(`{"hook_event_name":"SubagentStop","session_id":"sess-substop","agent_id":"sub1","agent_type":"Explore","agent_transcript_path":%q}`, agentTranscriptPath))
 
 	// Main agent Stop.
 	feed(t, `{"hook_event_name":"Stop","session_id":"sess-substop"}`)
@@ -1161,4 +1167,66 @@ func assertAttrContains(t *testing.T, attrs []otlp.Attribute, key, substr string
 		}
 	}
 	t.Errorf("attribute %q not found", key)
+}
+
+func TestDisabledByConfigWritesNothing(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+
+	project := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(project, ".claude"), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(project, ".claude", "dash0-agent-plugin.local.md"),
+		[]byte("---\nenabled: false\notlp_url: http://127.0.0.1:1/unreachable\nauth_token: t\n---\n"), 0o600))
+	t.Chdir(project)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-off"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-off","prompt":"hi"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-off"}`)
+
+	assert.NoFileExists(t, sessionPath(dataDir, "sess-off", "events.jsonl"))
+	entries, err := os.ReadDir(dataDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "a disabled plugin must not create session state")
+}
+
+// The counterpart: the same file without the flag configures the plugin from
+// disk alone, with no *_PLUGIN_OPTION_* or DASH0_* variable set. This is the path
+// the wrappers used to provide by exporting the file's values.
+func TestConfigFileAloneConfiguresTheExporter(t *testing.T) {
+	var got []otlp.Attribute
+	var authHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		var req otlp.ExportTracesRequest
+		if json.Unmarshal(body, &req) == nil && len(req.ResourceSpans) > 0 {
+			got = req.ResourceSpans[0].Resource.Attributes
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+
+	project := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(project, ".claude"), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(project, ".claude", "dash0-agent-plugin.local.md"),
+		[]byte("---\notlp_url: "+srv.URL+"\nauth_token: file-token\nagent_name: from-file\n---\n"), 0o600))
+	t.Chdir(project)
+
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-file","prompt":"hi"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-file","model":"claude-opus-4-8"}`)
+
+	assert.Equal(t, "Bearer file-token", authHeader)
+	require.NotEmpty(t, got, "no spans reached the collector")
+	var serviceName string
+	for _, a := range got {
+		if a.Key == "service.name" && a.Value.StringValue != nil {
+			serviceName = *a.Value.StringValue
+		}
+	}
+	assert.Equal(t, "from-file", serviceName, "agent_name from the file names the service")
 }

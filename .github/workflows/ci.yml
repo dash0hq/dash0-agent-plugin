@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  lint:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -22,14 +22,37 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: shellcheck version
-        run: shellcheck --version
+      - name: Shellcheck
+        run: make shellcheck-lint
 
       - name: Lint
-        run: make lint
+        run: make golangci-lint
 
-  build-and-test:
-    runs-on: ubuntu-latest
+      - name: Lint (GOOS=windows)
+        run: GOOS=windows make golangci-lint
+
+      - name: Lint (GOOS=darwin)
+        run: GOOS=darwin make golangci-lint
+
+      - name: go-version-check
+        run: make go-version-check
+
+      - name: Diagnostic scripts
+        run: make test-scripts
+
+  build-test:
+    needs: checks
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            test-flags: -race -coverprofile=cover.out
+          - os: macos-latest
+            test-flags: -race
+          - os: windows-latest
+            test-flags: ""
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,10 +63,19 @@ jobs:
           go-version-file: go.mod
 
       - name: Build
-        run: make build
+        run: go build ./...
 
       - name: Test
-        run: make test
+        run: go test ${{ matrix.test-flags }} ./...
+
+  # Marketplace install paths. Linux-only: they drive the real Claude Code CLI
+  # through three install routes, which is a property of the marketplaces and
+  # the CLI, not of the host OS.
+  marketplace-install:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
@@ -89,7 +121,7 @@ jobs:
   # CI, not a rollout. Logic lives in test/contracts/{claude,cursor,codex}.sh
   # (also runnable locally — see test/contracts/README.md), one script per agent.
   # Each covers install, credential delivery, and uninstall for its runtime.
-  # Marketplace installs are covered by the build-and-test job; the binary
+  # Marketplace installs are covered by the marketplace-install job; the binary
   # reading *_PLUGIN_OPTION_AUTH_TOKEN by Go unit tests.
   install-config-contract:
     runs-on: ubuntu-latest
@@ -117,8 +149,32 @@ jobs:
       - name: Bootstrap download contracts
         run: ./test/contracts/bootstrap.sh
 
+  # Runs on Windows as well as Linux. build-test already covers windows-latest,
+  # but only with `go test ./...` — no -tags=e2e — so nothing in test/e2e was
+  # ever compiled, let alone run, on Windows. That is where the whole class of
+  # Windows bugs lived: extensionless binaries the OS refuses to exec, raw
+  # backslash paths interpolated into event JSON, HOME set without USERPROFILE,
+  # and hook registrations naming a shell variant Windows never selects. A
+  # build-tagged test file that does not even compile on Windows (SysProcAttr's
+  # Setpgid) also slips past a plain `go build ./...`.
+  #
+  # Note this doubles the live canaries: the Claude, Codex and Copilot runs each
+  # spend real budget once per OS.
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report both platforms on a failure rather than cancelling the sibling —
+      # a Windows-only break should not hide the Linux result, or vice versa.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            test-cmd: make test-e2e
+          # GNU make is not part of the windows-latest image contract, so invoke
+          # the same command `make test-e2e` wraps. The longer timeout is for the
+          # runner, not the suite: the three live canaries are slower here.
+          - os: windows-latest
+            test-cmd: go test -tags=e2e -v -timeout=600s ./test/e2e/
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     # copilot-requests lets the built-in token authenticate the live Copilot
     # canary (TestE2EFullFlowWithCopilot) — no PAT secret needed; it is passed to
@@ -161,7 +217,11 @@ jobs:
           # have Copilot enabled for Actions, else this canary goes red. Inherits
           # the fork guard above, so a fork PR never runs it.
           COPILOT_GITHUB_TOKEN: ${{ github.token }}
-        run: make test-e2e
+        # shell: bash on both. The Windows default is PowerShell, and the tests
+        # shell out to `bash` for the .sh bootstraps regardless; Git Bash ships
+        # with the windows-latest image and is what supplies it.
+        shell: bash
+        run: ${{ matrix.test-cmd }}
 
   consistency-checks:
     runs-on: ubuntu-latest
@@ -232,8 +292,18 @@ jobs:
           for SCRIPT in claude/claude-on-event.sh cursor/cursor-on-event.sh \
                         codex/codex-on-event.sh copilot/copilot-on-event.sh; do
             VERSION=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$SCRIPT")
-            CANDIDATES=$(grep -oE '"[a-z-]+-\$\{OS\}-\$\{ARCH\}"' "$SCRIPT" \
-              | tr -d '"' | sed 's/-\${OS}-\${ARCH}//' | sort -u)
+            # The fail-open bootstraps build the asset name from $AGENT, so resolve
+            # that before matching. Claude spells its candidates out literally.
+            AGENT=$(sed -n 's/^AGENT="\(.*\)"/\1/p' "$SCRIPT")
+            # ${EXE} is empty off Windows and ".exe" on it, so it is stripped here and
+            # re-applied per platform in the probe loop below.
+            CANDIDATES=$(grep -oE '"[a-zA-Z${}_-]+-\$\{OS\}-\$\{ARCH\}(\$\{EXE\})?"' "$SCRIPT" \
+              | tr -d '"' | sed 's/-\${OS}-\${ARCH}\(\${EXE}\)\{0,1\}//' | sort -u)
+            # Resolve a literal ${AGENT} with bash, not sed. Escaping a literal
+            # $ on sed's left-hand side while expanding a shell variable on its
+            # right needed quoting that silently produced s/\cursor/cursor/ and
+            # matched nothing, so every candidate stayed unresolved.
+            CANDIDATES=${CANDIDATES//'${AGENT}'/$AGENT}
             if [ -z "$VERSION" ] || [ -z "$CANDIDATES" ]; then
               echo "::error::Could not read VERSION or asset names from $SCRIPT — update this parser"
               fail=1
@@ -281,11 +351,9 @@ jobs:
             echo "::error::No plugin-option keys found — update this grep to match the current accessor names"
             exit 1
           fi
-          # Every declared option must be read somewhere, except the two keychain
-          # references, which only the bootstrap script reads.
+          # Every declared option must be read somewhere.
           UNREAD=""
           for key in $(jq -r '.userConfig // {} | keys[]' .claude-plugin/plugin.json); do
-            case "$key" in AUTH_TOKEN_KEYCHAIN_ACCOUNT|AUTH_TOKEN_KEYCHAIN_SERVICE) continue ;; esac
             if ! echo "$USED_KEYS" | grep -qx "$key"; then
               UNREAD="$UNREAD $key"
             fi

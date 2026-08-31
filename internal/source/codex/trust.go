@@ -23,7 +23,7 @@ const (
 
 // Codex enforces hook trust (since v0.129): a hook only runs without a `/hooks`
 // prompt if config.toml carries a matching trusted_hash under
-// [hooks.state."<config-path>:<event_snake>:<group_index>:<handler_index>"].
+// [hooks.state.'<config-path>:<event_snake>:<group_index>:<handler_index>'].
 // There is no supported API to request trust (openai/codex#21615), so the
 // installer reproduces Codex's own hash so a fresh install runs non-interactively.
 //
@@ -131,20 +131,19 @@ func TrustHash(eventKeyLabel string, hasMatcher bool, command, statusMessage str
 // appended group's index (in the state key) is correct even when the user has
 // their own Codex hooks.
 func RenderManagedBlock(configPath, command, existingConfig string) (string, error) {
-	if strings.Contains(command, "'") {
-		return "", fmt.Errorf("hook command contains a single quote, which cannot be written as a TOML literal string: %q", command)
-	}
 
 	var b strings.Builder
 	b.WriteString(ManagedBlockBegin + "\n")
-	b.WriteString("# Managed by dash0-agent-plugin. Re-run install-codex.sh to update; run uninstall-codex.sh to remove.\n")
+	// Naming no script keeps the line right on every platform: the installer is
+	// install-codex.sh on macOS and Linux, install-codex.ps1 on Windows.
+	b.WriteString("# Managed by dash0-agent-plugin. Re-run the Dash0 Codex installer to update; run the uninstaller to remove.\n")
 
 	var state strings.Builder
 	for _, e := range HookEvents {
 		groupIndex := countHookGroups(existingConfig, e.ConfigName)
 
-		fmt.Fprintf(&b, "\n[[hooks.%s]]\nmatcher = \"%s\"\n[[hooks.%s.hooks]]\ntype = \"command\"\ncommand = '%s'\nstatusMessage = \"%s\"\n",
-			e.ConfigName, codexHookMatcher, e.ConfigName, command, codexHookStatusMessage)
+		fmt.Fprintf(&b, "\n[[hooks.%s]]\nmatcher = \"%s\"\n[[hooks.%s.hooks]]\ntype = \"command\"\ncommand = %s\nstatusMessage = \"%s\"\n",
+			e.ConfigName, codexHookMatcher, e.ConfigName, tomlString(command), codexHookStatusMessage)
 
 		// The block writes matcher = "*" uniformly; Codex normalizes it away for
 		// matcher-less events when hashing, so the hash must follow e.HasMatcher.
@@ -152,8 +151,8 @@ func RenderManagedBlock(configPath, command, existingConfig string) (string, err
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&state, "\n[hooks.state.\"%s:%s:%d:0\"]\ntrusted_hash = \"%s\"\n",
-			configPath, e.KeyLabel, groupIndex, hash)
+		fmt.Fprintf(&state, "\n[hooks.state.%s]\ntrusted_hash = \"%s\"\n",
+			tomlString(fmt.Sprintf("%s:%s:%d:0", configPath, e.KeyLabel, groupIndex)), hash)
 	}
 
 	// Group all [hooks.state] tables after the [[hooks]] blocks so the emitted
@@ -190,10 +189,41 @@ func StripManagedBlock(config string) string {
 	return stripped + rest
 }
 
+// tomlString renders s as a TOML string, for both the hook command and the
+// trust-state key.
+//
+// A literal (single-quoted) string is the first choice: on Windows these values
+// carry paths like C:\Users\..., and a basic string would read "\U" and "\l" as
+// (invalid) escapes, so Codex would refuse to parse config.toml at all. TOML has no
+// escape for a single quote inside a literal, so a value that contains one — a home
+// directory like /Users/o'brien or C:\Users\O'Brien — falls back to a basic string
+// with the two characters that matter escaped. Refusing instead would stop the
+// install outright, which is what this replaces.
+//
+// Both forms decode to the same value, and the trust hash is computed over the
+// decoded command, so the choice here never changes it.
+func tomlString(s string) string {
+	if !strings.Contains(s, "'") {
+		return "'" + s + "'"
+	}
+	// Backslashes first: escaping the quotes first would then double the
+	// backslashes this adds in front of them.
+	escaped := strings.ReplaceAll(s, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
+}
+
 // countHookGroups counts array-of-table headers [[hooks.<Event>]] in config for
 // the given PascalCase event name — the number of pre-existing matcher groups,
 // which is the group index our appended group takes.
+//
+// The optional \r matters on Windows. Go's multiline $ matches before \n and at
+// EOF, never before \r, so a CRLF config.toml would count zero groups however
+// many it has. The installer keeps that file's own line endings on purpose, since
+// it is the one file it does not own, so CRLF is the normal case there. Counting
+// zero would key the trust state on group 0: our hooks would stay untrusted, and
+// the entry would claim a hash for whichever group the user already had first.
 func countHookGroups(config, configName string) int {
-	re := regexp.MustCompile(`(?m)^[ \t]*\[\[hooks\.` + regexp.QuoteMeta(configName) + `\]\][ \t]*$`)
+	re := regexp.MustCompile(`(?m)^[ \t]*\[\[hooks\.` + regexp.QuoteMeta(configName) + `\]\][ \t]*\r?$`)
 	return len(re.FindAllString(config, -1))
 }

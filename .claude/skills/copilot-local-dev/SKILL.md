@@ -27,7 +27,12 @@ Run the setup script (idempotent):
 ```
 
 It stages the marketplace, `marketplace add` + `plugin install`s it, and builds
-the binary into `~/.copilot/plugin-data/dash0-local/dash0-agent-plugin/bin/`.
+the binary into
+`~/.copilot/plugin-data/dash0-local/dash0-agent-plugin/bin/`.
+
+The install registers the hooks itself, through the manifest's `hooks` key. If a
+session emits no spans, run with `--log-level debug --log-dir <dir>` and grep the
+log for `hook`: a fired hook logs `[hook stderr] dash0: …`.
 
 Then, **once**, set credentials + enable native OTel — start `copilot` and run:
 
@@ -69,3 +74,9 @@ profile if you added them.)
   `TestCopilotShippedPackageExcludesDevOnlyDirs`).
 - setup.sh reuses the repo's real `.github/plugin/marketplace.json` (only its `name` swapped to
   `dash0-local`), so this exercises the actual marketplace file that ships to users.
+- Hooks come from the manifest, the same as a real install. Verified on macOS
+  against CLI 1.0.80: with no `~/.copilot/hooks/*.json` naming the plugin, a
+  session logged `[hook stderr] dash0: connected (v0.1.22)`. Windows is
+  **unverified** — an earlier version of setup.sh registered the hooks at user
+  scope as a workaround, and that file is now removed on setup and teardown
+  because two registrations run the bootstrap twice per event.

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -133,6 +134,10 @@ func newHookHarness(t *testing.T) *hookHarness {
 	pluginDir := findPluginDir(t)
 
 	binary := filepath.Join(t.TempDir(), "on-event")
+	if runtime.GOOS == "windows" {
+		// Windows refuses to exec a file with no recognized extension.
+		binary += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", binary, "./cmd/claude-on-event")
 	build.Dir = pluginDir
 	out, err := build.CombinedOutput()

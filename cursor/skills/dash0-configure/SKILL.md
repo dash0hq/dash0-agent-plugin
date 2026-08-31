@@ -26,7 +26,7 @@ Cursor has no plugin settings UI and no keychain support, so the config file is 
 
 ## Scope
 
-Ask whether to write user-level (`~/.cursor/dash0-agent-plugin.local.md`, applies to all projects) or project-level (`.cursor/dash0-agent-plugin.local.md`, only the current workspace — overrides the user-level file entirely, does not merge). Default to user-level unless the user asks for project-only.
+Ask whether to write user-level (`~/.cursor/dash0-agent-plugin.local.md`, applies to all projects) or project-level (`.cursor/dash0-agent-plugin.local.md`, only the current workspace — overrides the user-level file entirely, does not merge). Default to user-level unless the user asks for project-only. On Windows the user-level file is `%USERPROFILE%\.cursor\dash0-agent-plugin.local.md`.
 
 > [!WARNING]
 > A project-level file takes over the auth token for every session in that workspace. If that token is wrong or scoped to a different organization, exports fail as a silent 401. Prefer user-level unless the user needs a different dataset or team for one project.
@@ -65,7 +65,7 @@ Ask whether to write user-level (`~/.cursor/dash0-agent-plugin.local.md`, applie
    | `omit_identity_fallback` | Report only a real `git config user.name`, never the OS account | `false` |
    | `enabled` | Set to `false` to turn the plugin off for this scope without uninstalling | `true` |
 
-   For every key above except `enabled`, `true` and `1` are true and any other non-blank value is false, so write `true` or `false` and nothing else. `enabled` is parsed by the shell wrapper instead: only the literal `false` turns the plugin off.
+   For every key above except `enabled`, `true` and `1` are true and any other non-blank value is false, so write `true` or `false` and nothing else. `enabled` is the one key the binary reads strictly: only the literal `false` turns the plugin off.
 
 5. Show the user the exact file you are about to write, with `auth_token` masked to its last 4 chars, and ask them to confirm. Write it only after they agree. Omit every key whose value is blank, and include the `otlp_url` and `auth_token` lines exactly as step 2 settled them.
 
@@ -79,7 +79,12 @@ Ask whether to write user-level (`~/.cursor/dash0-agent-plugin.local.md`, applie
    ---
    ```
 
-6. Run `chmod 600 <file>` so the token isn't world-readable.
+6. Restrict the file to its owner, so the token isn't readable by other accounts.
+
+   - macOS and Linux: `chmod 600 <file>`
+   - Windows: `powershell -NoProfile -Command 'icacls "<file>" /inheritance:r /grant:r "$($env:USERNAME):(F)" "SYSTEM:(F)"'`
+
+   Keep the PowerShell wrapper and the single quotes. A Bash shell rewrites the bare `/inheritance:r` and `/grant:r` flags as file paths, and `%USERNAME%` expands in `cmd.exe` only.
 
 7. Tell the user:
 

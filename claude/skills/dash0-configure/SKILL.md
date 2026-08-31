@@ -29,14 +29,16 @@ Note the precedence order (highest first) so the user isn't surprised when a val
 If the user already has values set via the UI or managed settings, the file this skill writes is ignored for those keys. Ask them to clear the UI config first, or use the UI directly.
 
 > [!IMPORTANT]
-> `auth_token` is the exception to that list. The wrapper loads a config-file token into the same environment variable the UI and managed settings write, so a file token replaces them both, at either level. Never write `auth_token` for a user on a managed rollout without telling them it overrides the org token.
+> `auth_token` follows that list like every other key: a token in `pluginConfigs` or managed settings wins over one in the file. Earlier releases were the other way round, because the wrapper loaded the file's token into the variable the UI writes. So writing `auth_token` for a user on a managed rollout does not override the org token — it has no effect until the UI value is cleared. Say that rather than promising an override.
 
 ## Scope
 
 Ask whether to write user-level (`~/.claude/dash0-agent-plugin.local.md`, applies to all projects) or project-level (`.claude/dash0-agent-plugin.local.md`, only the current project — overrides the user-level file entirely, does not merge). Default to user-level unless the user asks for project-only.
 
+On Windows the user-level file is `%USERPROFILE%\.claude\dash0-agent-plugin.local.md`; the project-level path is the same as everywhere else.
+
 > [!WARNING]
-> Either file sets the auth token in the highest-precedence form, so it takes over the token for every plugin registration the session makes. If that token is wrong or scoped to a different organization, exports fail as a silent 401. A project-level file is the riskier one, because it is the level a user is most likely to point at a one-off token. Prefer user-level unless the user needs a different dataset or team for one project.
+> A wrong or differently scoped token in either file fails as a silent 401, with no error in the session. A project-level file is the riskier one, because it is the level a user is most likely to point at a one-off token, and it replaces the user-level file whole rather than merging with it. Prefer user-level unless the user needs a different dataset or team for one project.
 
 ## Workflow
 
@@ -74,7 +76,7 @@ Ask whether to write user-level (`~/.claude/dash0-agent-plugin.local.md`, applie
    | `auth_token_keychain_service` | macOS keychain service to read the token from instead of storing it | — |
    | `auth_token_keychain_account` | Optional account for that keychain item | — |
 
-   For every key above except `enabled`, `true` and `1` are true and any other non-blank value is false, so write `true` or `false` and nothing else. `enabled` is parsed by the shell wrapper instead: only the literal `false` turns the plugin off.
+   For every key above except `enabled`, `true` and `1` are true and any other non-blank value is false, so write `true` or `false` and nothing else. `enabled` is the one key the binary reads strictly: only the literal `false` turns the plugin off.
 
 5. Show the user the exact file you are about to write, with `auth_token` masked to its last 4 chars, and ask them to confirm. Write it only after they agree. Omit every key whose value is blank, and include the `otlp_url` and `auth_token` lines exactly as step 2 settled them.
 
@@ -88,7 +90,14 @@ Ask whether to write user-level (`~/.claude/dash0-agent-plugin.local.md`, applie
    ---
    ```
 
-6. Run `chmod 600 <file>` so the token isn't world-readable.
+6. Restrict the file to its owner, so the token isn't readable by other accounts.
+
+   - macOS and Linux: `chmod 600 <file>`
+   - Windows: `powershell -NoProfile -Command 'icacls "<file>" /inheritance:r /grant:r "$($env:USERNAME):(F)" "SYSTEM:(F)"'`
+
+   Do not use `chmod` on Windows, even though the Bash tool runs under Git Bash. It sets the read-only bit and leaves the NTFS permissions untouched, so the token stays readable by every account on the machine.
+
+   Keep the PowerShell wrapper and the single quotes. Git Bash rewrites the bare `/inheritance:r` and `/grant:r` flags as file paths, and `%USERNAME%` expands in `cmd.exe` only.
 
 7. Tell the user:
 

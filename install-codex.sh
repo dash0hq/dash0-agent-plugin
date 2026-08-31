@@ -24,7 +24,9 @@
 #   --team NAME      Team name
 #
 # Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
-#           DASH0_VERSION (pins a specific release).
+#           DASH0_VERSION (pins a specific release),
+#           DASH0_SKIP_PLUGIN_FILES=1 (leave the bootstrap on disk alone; for
+#           testing a locally staged build).
 #
 # What this installs:
 #   ~/.local/state/dash0-agent-plugin/codex/codex-on-event.sh
@@ -61,7 +63,8 @@ while [ $# -gt 0 ]; do
 Usage: install-codex.sh [--endpoint URL] [--token TOKEN] [--dataset NAME] [--team NAME]
 
 All flags optional; missing ones are prompted for (or left blank non-interactively).
-Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME, DASH0_VERSION.
+Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME, DASH0_VERSION,
+          DASH0_SKIP_PLUGIN_FILES.
 EOF
       exit 0 ;;
     *) printf "✗ unknown argument: %s (try --help)\n" "$1" >&2; exit 1 ;;
@@ -110,7 +113,10 @@ if command -v sha256sum >/dev/null 2>&1; then
 elif command -v shasum >/dev/null 2>&1; then
   sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 else
-  sha256() { echo ""; }
+  # Fail closed on integrity: without a hash tool the download cannot be
+  # verified, and an unverified binary is not installed. Every supported platform
+  # ships one of these, so this is a stop rather than a fallback.
+  die "sha256sum or shasum is required to verify the download"
 fi
 
 # 3. Resolve VERSION.
@@ -147,33 +153,56 @@ if [ -x "$BIN_PATH" ]; then
 else
   info "downloading codex-on-event v${VERSION}..."
   fetch "$BASE_URL/$BIN_ASSET" "$BIN_PATH" || die "failed to download binary: $BASE_URL/$BIN_ASSET"
-  CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt" || true)
-  if [ -n "$CHECKSUMS" ]; then
-    EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
-    if [ -n "$EXPECTED" ]; then
-      ACTUAL=$(sha256 "$BIN_PATH")
-      if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-        rm -f "$BIN_PATH"; die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
-      fi
-    fi
+  CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt") \
+    || die "failed to download $BASE_URL/checksums.txt"
+
+  # Fail closed on integrity, matching the bootstraps: a binary that cannot be
+  # verified is deleted rather than installed. A missing entry means the release
+  # is malformed, which is not a reason to trust the download.
+  EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
+  if [ -z "$EXPECTED" ]; then
+    rm -f "$BIN_PATH"
+    die "no checksum for $BIN_ASSET in v${VERSION} — refusing to install an unverified binary"
+  fi
+  ACTUAL=$(sha256 "$BIN_PATH")
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    rm -f "$BIN_PATH"
+    die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
   fi
   chmod +x "$BIN_PATH"
   ok "installed binary → $BIN_PATH"
 fi
 
-# 5b. Install the bootstrap script from the tagged ref (skip if already present).
-if [ -f "$SCRIPT_PATH" ]; then
+# 5b. Install the bootstrap script from the tagged ref, replacing whatever is
+#     there. install-cursor.sh has always overwritten its plugin files; this one
+#     skipped when the file existed, which made the upgrade this README documents a
+#     no-op. VERSION is baked into the bootstrap, so a stale one kept resolving the
+#     previous binary — the new one downloaded above and nothing ever ran it.
+#
+#     DASH0_SKIP_PLUGIN_FILES=1 keeps what is on disk. That is how the e2e installs
+#     the bootstrap from its working tree, and nothing else should set it: a failed
+#     download stays fatal, because an upgrade that quietly kept the old file would
+#     report success while the old code kept running.
+if [ "${DASH0_SKIP_PLUGIN_FILES:-}" = "1" ]; then
+  [ -f "$SCRIPT_PATH" ] || die "DASH0_SKIP_PLUGIN_FILES is set but $SCRIPT_PATH is not there"
   chmod +x "$SCRIPT_PATH"
-  ok "bootstrap already present → $SCRIPT_PATH"
+  ok "kept staged bootstrap → $SCRIPT_PATH"
 else
   info "downloading codex-on-event.sh..."
+  # Staged under a private temp name and renamed: curl and wget both create the
+  # destination before they learn the request failed, so writing $SCRIPT_PATH
+  # directly would truncate a bootstrap that works.
+  #
   # The bootstrap moved from scripts/ to codex/ after v0.1.24, so fall back to
   # the old path when an older release is pinned via DASH0_VERSION. Drop the
   # fallback once v0.1.24 is unsupported.
-  fetch "$RAW_BASE/codex/codex-on-event.sh" "$SCRIPT_PATH" \
-    || fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_PATH" \
-    || die "failed to download: $RAW_BASE/codex/codex-on-event.sh"
-  chmod +x "$SCRIPT_PATH"
+  SCRIPT_TMP="$SCRIPT_PATH.tmp.$$"
+  fetch "$RAW_BASE/codex/codex-on-event.sh" "$SCRIPT_TMP" \
+    || fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_TMP" \
+    || { rm -f "$SCRIPT_TMP"; die "failed to download: $RAW_BASE/codex/codex-on-event.sh"; }
+  chmod +x "$SCRIPT_TMP"
+  mv -f "$SCRIPT_TMP" "$SCRIPT_PATH" \
+    || { rm -f "$SCRIPT_TMP"; die "could not move $SCRIPT_TMP into place"; }
   ok "installed bootstrap → $SCRIPT_PATH"
 fi
 
@@ -252,16 +281,26 @@ printf "%s" "$BLOCK" >> "$CONFIG_TOML" || die "failed to write $CONFIG_TOML"
 ok "registered + pre-trusted hooks (managed block in $CONFIG_TOML)"
 
 # 9. Connectivity check.
+#
+#    No credentials are passed in. The binary resolves otlp_url, auth_token and
+#    dataset from the config file written above, exactly as it will on a real hook
+#    fire, so this validates that file rather than the values held in this shell.
+#    Passing the token as CODEX_PLUGIN_OPTION_AUTH_TOKEN would outrank the file
+#    and hide a token the installer wrote but the binary cannot use.
+#
+#    The check runs in an empty scratch directory, which is also its state root.
+#    A project-level config file in the installer's working directory outranks the
+#    user-level one, and this check has no business validating some unrelated
+#    repository's configuration.
 if [ -n "$DASH0_OTLP_URL" ] && [ -n "$DASH0_AUTH_TOKEN" ]; then
   info "running connectivity check..."
+  CHECK_DIR=$(mktemp -d)
   CHECK_OUT=$(
-    echo '{"hook_event_name":"SessionStart","session_id":"install-check","model":"gpt-5.5","source":"startup"}' \
-      | DASH0_OTLP_URL="$DASH0_OTLP_URL" \
-        CODEX_PLUGIN_OPTION_AUTH_TOKEN="$DASH0_AUTH_TOKEN" \
-        DASH0_DATASET="$DASH0_DATASET" \
-        DASH0_PLUGIN_DATA="$(mktemp -d)" \
-        "$BIN_PATH" 2>&1 || true
+    cd "$CHECK_DIR" \
+      && echo '{"hook_event_name":"SessionStart","session_id":"install-check","model":"gpt-5.5","source":"startup"}' \
+      | DASH0_PLUGIN_DATA="$CHECK_DIR" "$BIN_PATH" 2>&1 || true
   )
+  rm -rf "$CHECK_DIR"
   case "$CHECK_OUT" in
     *"connectivity check failed"*) warn "connectivity check failed:"; printf "    %s\n" "$CHECK_OUT" ;;
     *"connected"*)                 ok "connectivity check passed" ;;

@@ -8,95 +8,51 @@
 #
 #   stdin (JSON) → codex-on-event.sh → codex-on-event binary → OTLP
 #
-# Responsibilities:
-#   - Load configuration from a YAML-frontmatter config file (per-project or
-#     global), exposing values as DASH0_* env vars for the binary.
-#   - Detect OS/arch and download the matching codex-on-event binary from
-#     GitHub Releases on first run, verifying the checksum.
-#   - exec the binary, forwarding stdin.
-#
-# Fail-open: any error before exec'ing the binary logs to stderr and exits 0
-# so a broken installer never breaks the user's Codex session.
-
-# We deliberately do NOT use `set -e`; fail_open converts any failure into a
-# stderr log and a clean exit so Codex's agent loop is never blocked by
-# telemetry plumbing.
+# Fail-open: any error before exec'ing the binary logs to stderr and exits 0 so
+# a broken installer never breaks the user's Codex session. `set -e` is
+# deliberately absent; fail_open does that job.
 set -u
 
-fail_open() {
-  echo "codex-on-event: $*" >&2
-  exit 0
-}
+AGENT="codex"
+VERSION="0.1.25"
 
-# Load settings from a YAML-frontmatter config file. Returns 1 if the file
-# doesn't exist so callers can fall through to the next location.
-load_settings() {
-  local file="$1"
-  [[ -f "$file" ]] || return 1
-
-  local frontmatter
-  frontmatter=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$file")
-
-  local enabled
-  enabled=$(echo "$frontmatter" | grep '^enabled:' | sed 's/enabled: *//' || true)
-  if [[ "$enabled" == "false" ]]; then
-    exit 0
-  fi
-
-  local val
-  val=$(echo "$frontmatter" | grep '^otlp_url:' | sed 's/otlp_url: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OTLP_URL="$val"
-  val=$(echo "$frontmatter" | grep '^auth_token:' | sed 's/auth_token: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export CODEX_PLUGIN_OPTION_AUTH_TOKEN="$val"
-  val=$(echo "$frontmatter" | grep '^dataset:' | sed 's/dataset: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DATASET="$val"
-  val=$(echo "$frontmatter" | grep '^agent_name:' | sed 's/agent_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_AGENT_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^team_name:' | sed 's/team_name: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_TEAM_NAME="$val"
-  val=$(echo "$frontmatter" | grep '^omit_io:' | sed 's/omit_io: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
-  val=$(echo "$frontmatter" | grep '^omit_identity_fallback:' | sed 's/omit_identity_fallback: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_OMIT_IDENTITY_FALLBACK="$val"
-  val=$(echo "$frontmatter" | grep '^debug:' | sed 's/debug: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG="$val"
-  val=$(echo "$frontmatter" | grep '^debug_file:' | sed 's/debug_file: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-  [[ -n "$val" ]] && export DASH0_DEBUG_FILE="$val"
-
-  return 0
-}
-
-# Project-scoped settings take precedence over global settings. Codex runs hooks
-# with the workspace as CWD, so the project file resolves relative to it.
-PROJECT_SETTINGS=".codex/dash0-agent-plugin.local.md"
-GLOBAL_SETTINGS="$HOME/.codex/dash0-agent-plugin.local.md"
-
-load_settings "$PROJECT_SETTINGS" || load_settings "$GLOBAL_SETTINGS" || true
-
-# Where the downloaded binary lives. Mirrors the per-source scratch root layout
-# from cmd/codex-on-event/main.go so users can clean up the whole tree at once.
-# Resolution order:
+# Where the downloaded binary lives. Resolution order:
 #   1. DASH0_PLUGIN_DATA  — explicit override (dev / tests).
 #   2. PLUGIN_DATA        — Codex sets this to the plugin's data dir when this
 #                           script runs as an installed marketplace plugin, so
 #                           the cache stays inside the plugin's own state.
 #   3. ~/.local/state/…   — the installer (config.toml) path.
 BASE="${DASH0_PLUGIN_DATA:-${PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/codex}}"
+
+# >>> shared bootstrap — byte-identical across cursor, codex and copilot >>>
+# test/consistency asserts these three regions match, so a fix lands in all of
+# them or in none. Everything agent-specific is declared above.
+
+fail_open() {
+  echo "${AGENT}-on-event: $*" >&2
+  exit 0
+}
+
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.25"
 
+# Git Bash, MSYS2 and Cygwin report kernel strings like MINGW64_NT-10.0-26200,
+# never "windows", so the release asset would be requested under a name that does
+# not exist. EXE carries the suffix GoReleaser appends for Windows builds through
+# to both the asset name and the cache filename; it stays empty elsewhere, so a
+# POSIX cache path is unchanged and nothing re-downloads.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+EXE=""
+case "$OS" in
+  mingw*|msys*|cygwin*) OS="windows"; EXE=".exe" ;;
+esac
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64)  ARCH="amd64" ;;
-  aarch64) ARCH="arm64" ;;
-  arm64)   ARCH="arm64" ;;
+  x86_64|amd64)  ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
 esac
 
-BINARY="$BIN_DIR/codex-on-event-${VERSION}-${OS}-${ARCH}"
+BINARY="$BIN_DIR/${AGENT}-on-event-${VERSION}-${OS}-${ARCH}${EXE}"
 
 if [ ! -x "$BINARY" ]; then
   mkdir -p "$BIN_DIR" 2>/dev/null || fail_open "could not create $BIN_DIR"
@@ -110,7 +66,7 @@ if [ ! -x "$BINARY" ]; then
   trap 'rm -f "$TMP"' EXIT
 
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
-  ASSET="codex-on-event-${OS}-${ARCH}"
+  ASSET="${AGENT}-on-event-${OS}-${ARCH}${EXE}"
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
@@ -124,26 +80,46 @@ if [ ! -x "$BINARY" ]; then
     fail_open "neither curl nor wget found"
   fi
 
+  # Fail closed on integrity: a binary that cannot be verified is not run. Every
+  # supported platform ships a hash tool — shasum on macOS, sha256sum on glibc
+  # Linux and on busybox — so reaching either refusal below means the release is
+  # malformed or the host is not one we support. fail_open still exits 0, so the
+  # cost is this run's telemetry, never the user's session.
   EXPECTED=$(echo "$CHECKSUMS" | grep "  ${ASSET}$" | cut -d' ' -f1)
-  if [ -n "$EXPECTED" ]; then
-    if command -v sha256sum &>/dev/null; then
-      ACTUAL=$(sha256sum "$TMP" | cut -d' ' -f1)
-    elif command -v shasum &>/dev/null; then
-      ACTUAL=$(shasum -a 256 "$TMP" | cut -d' ' -f1)
-    else
-      ACTUAL=""
-    fi
-    if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-      fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
-    fi
+  if [ -z "$EXPECTED" ]; then
+    fail_open "no checksum for ${ASSET} — refusing to run an unverified binary"
+  fi
+  if command -v sha256sum &>/dev/null; then
+    ACTUAL=$(sha256sum "$TMP" | cut -d' ' -f1)
+  elif command -v shasum &>/dev/null; then
+    ACTUAL=$(shasum -a 256 "$TMP" | cut -d' ' -f1)
+  else
+    ACTUAL=""
+  fi
+  if [ -z "$ACTUAL" ]; then
+    fail_open "no sha256 tool (sha256sum/shasum) to verify ${ASSET} — refusing to run an unverified binary"
+  fi
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
   # Executable before it is visible, so nothing can find $BINARY and fail the
-  # -x test that guards this block.
-  chmod +x "$TMP" || fail_open "could not mark $TMP executable"
-  mv -f "$TMP" "$BINARY" || fail_open "could not move $TMP into place"
+  # -x test that guards this block. Skipped on Windows, which has no executable
+  # bit: a no-op that can still fail would fail_open for no reason.
+  if [ "$OS" != "windows" ]; then
+    chmod +x "$TMP" || fail_open "could not mark $TMP executable"
+  fi
+  # Windows refuses to rename over a .exe that another process is executing, and
+  # a sibling hook that won this race has already started it. Its file is the same
+  # verified build this one just downloaded, so an existing $BINARY is success
+  # rather than an event dropped with the binary sitting right there. The
+  # PowerShell twin of this bootstrap makes the same allowance.
+  if ! mv -f "$TMP" "$BINARY" 2>/dev/null; then
+    [ -x "$BINARY" ] || fail_open "could not move $TMP into place"
+  fi
 fi
 
-# Forward stdin to the binary. The binary itself exits 0 on telemetry errors
-# (see cmd/codex-on-event/main.go) so we don't need to wrap this in a trap.
-exec "$BINARY"
+# Forward stdin, plus the event-name argument for the agents that pass one. The
+# binary exits 0 on telemetry errors, so no trap is needed around this.
+exec "$BINARY" "$@"
+# <<< shared bootstrap <<<

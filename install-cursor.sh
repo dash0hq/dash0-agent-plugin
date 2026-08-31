@@ -157,7 +157,10 @@ if command -v sha256sum >/dev/null 2>&1; then
 elif command -v shasum >/dev/null 2>&1; then
   sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 else
-  sha256() { echo ""; }
+  # Fail closed on integrity: without a hash tool the download cannot be
+  # verified, and an unverified binary is not installed. Every supported platform
+  # ships one of these, so this is a stop rather than a fallback.
+  die "sha256sum or shasum is required to verify the download"
 fi
 
 # Merging Dash0 hook entries into a user-owned ~/.cursor/hooks.json needs
@@ -218,16 +221,21 @@ info "downloading cursor-on-event v${VERSION}..."
 fetch "$BASE_URL/$BIN_ASSET" "$BIN_PATH" \
   || die "failed to download binary: $BASE_URL/$BIN_ASSET"
 
-CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt" || true)
-if [ -n "$CHECKSUMS" ]; then
-  EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
-  if [ -n "$EXPECTED" ]; then
-    ACTUAL=$(sha256 "$BIN_PATH")
-    if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-      rm -f "$BIN_PATH"
-      die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
-    fi
-  fi
+CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt") \
+  || die "failed to download $BASE_URL/checksums.txt"
+
+# Fail closed on integrity, matching the bootstraps: a binary that cannot be
+# verified is deleted rather than installed. A missing entry means the release is
+# malformed, which is not a reason to trust the download.
+EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
+if [ -z "$EXPECTED" ]; then
+  rm -f "$BIN_PATH"
+  die "no checksum for $BIN_ASSET in v${VERSION} — refusing to install an unverified binary"
+fi
+ACTUAL=$(sha256 "$BIN_PATH")
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  rm -f "$BIN_PATH"
+  die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
 fi
 chmod +x "$BIN_PATH"
 ok "installed binary → $BIN_PATH"
@@ -392,18 +400,28 @@ rm -f "$DASH0_HOOKS_TMP"
 # 9. Connectivity check.
 #    Pipe a fake sessionStart through the binary. It logs the connectivity
 #    result to stderr; we capture and surface it here.
+#
+#    No credentials are passed in. The binary resolves otlp_url, auth_token and
+#    dataset from the file written in step 7, exactly as it will on a real hook
+#    fire, so this validates that file rather than the values held in this shell.
+#    Passing the token as CURSOR_PLUGIN_OPTION_AUTH_TOKEN would outrank the file
+#    and hide a token the installer wrote but the binary cannot use.
+#
+#    The check runs in an empty scratch directory, which is also its state root.
+#    A project-level config file in the installer's working directory outranks
+#    the user-level one, and this check has no business validating some unrelated
+#    repository's configuration.
 # ---------------------------------------------------------------------------
 
 if [ -n "$DASH0_OTLP_URL" ] && [ -n "$DASH0_AUTH_TOKEN" ]; then
   info "running connectivity check..."
+  CHECK_DIR=$(mktemp -d)
   CHECK_OUT=$(
-    echo '{"hook_event_name":"sessionStart","session_id":"install-check","conversation_id":"install-check","model":"default"}' \
-      | DASH0_OTLP_URL="$DASH0_OTLP_URL" \
-        CURSOR_PLUGIN_OPTION_AUTH_TOKEN="$DASH0_AUTH_TOKEN" \
-        DASH0_DATASET="$DASH0_DATASET" \
-        DASH0_PLUGIN_DATA="$(mktemp -d)" \
-        "$BIN_PATH" 2>&1 || true
+    cd "$CHECK_DIR" \
+      && echo '{"hook_event_name":"sessionStart","session_id":"install-check","conversation_id":"install-check","model":"default"}' \
+      | DASH0_PLUGIN_DATA="$CHECK_DIR" "$BIN_PATH" 2>&1 || true
   )
+  rm -rf "$CHECK_DIR"
   case "$CHECK_OUT" in
     *"connectivity check failed"*)
       warn "connectivity check failed:"

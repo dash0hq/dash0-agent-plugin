@@ -1,9 +1,29 @@
 {
   "version": 1,
   "hooks": {
-    "sessionStart":        [{"type": "command", "bash": "${PLUGIN_ROOT}/copilot-on-event.sh sessionStart", "timeoutSec": 10}],
-    "userPromptSubmitted": [{"type": "command", "bash": "${PLUGIN_ROOT}/copilot-on-event.sh userPromptSubmitted", "timeoutSec": 10}],
-    "agentStop":           [{"type": "command", "bash": "${PLUGIN_ROOT}/copilot-on-event.sh agentStop", "timeoutSec": 10}],
-    "sessionEnd":          [{"type": "command", "bash": "${PLUGIN_ROOT}/copilot-on-event.sh sessionEnd", "timeoutSec": 10}]
+    "sessionStart": [{
+      "type": "command",
+      "bash": "${PLUGIN_ROOT}/copilot-on-event.sh sessionStart",
+      "powershell": "& \"${PLUGIN_ROOT}/copilot-on-event.ps1\" sessionStart",
+      "timeoutSec": 10
+    }],
+    "userPromptSubmitted": [{
+      "type": "command",
+      "bash": "${PLUGIN_ROOT}/copilot-on-event.sh userPromptSubmitted",
+      "powershell": "& \"${PLUGIN_ROOT}/copilot-on-event.ps1\" userPromptSubmitted",
+      "timeoutSec": 10
+    }],
+    "agentStop": [{
+      "type": "command",
+      "bash": "${PLUGIN_ROOT}/copilot-on-event.sh agentStop",
+      "powershell": "& \"${PLUGIN_ROOT}/copilot-on-event.ps1\" agentStop",
+      "timeoutSec": 10
+    }],
+    "sessionEnd": [{
+      "type": "command",
+      "bash": "${PLUGIN_ROOT}/copilot-on-event.sh sessionEnd",
+      "powershell": "& \"${PLUGIN_ROOT}/copilot-on-event.ps1\" sessionEnd",
+      "timeoutSec": 10
+    }]
   }
 }

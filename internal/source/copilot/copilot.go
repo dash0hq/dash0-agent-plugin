@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package copilot normalizes GitHub Copilot CLI hook payloads into the
-// pipeline's canonical event vocabulary, and recovers each turn — token/cost/
-// model/response AND the turn's tool executions — from Copilot's
-// native-OpenTelemetry file.
+// pipeline's canonical event vocabulary, and recovers each turn — tokens, model,
+// response, the turn's tool executions and its sub-agents — from Copilot's
+// native-OpenTelemetry file. The file's own cost figure is deliberately left
+// there; see attachUsage in cmd/copilot-on-event.
 //
 // Copilot's per-turn hook (`agentStop`) fires only under camelCase
 // registration, and camelCase payloads carry no `hook_event_name` field — so
@@ -33,10 +34,13 @@ import "strings"
 //   - preToolUse: Copilot's only fail-closed event; not registering it avoids
 //     the foot-gun of a broken hook blocking the user's tools.
 //   - subagentStart/subagentStop AND every sub-agent lifecycle event: a sub-agent
-//     runs under a synthetic "call_<toolCallId>" session id, not the parent
-//     conversation's UUID, and carries nothing that links back to it (verified
-//     against captured payloads) — so it cannot be nested under the parent from
-//     hook data. We drop these sessions wholesale (the call_ guard in Normalize)
+//     runs under its own session id — "call_<toolCallId>" under `copilot -p`, a
+//     plain UUID interactively — and carries nothing that links back to the
+//     parent (verified against captured payloads), so it cannot be nested under
+//     it from hook data. We drop these sessions wholesale: the call_ guard here
+//     names the ones it can, and the entrypoint drops any session that reaches a
+//     Stop without ever having had a SessionStart, which is what a sub-agent is
+//     in both modes
 //     rather than mint a spurious, token-less trace per sub-agent. Their tokens
 //     still roll into the parent turn via the native-OTel reader (sub-agent chat
 //     spans share the parent's conversation.id), and their tool calls surface as

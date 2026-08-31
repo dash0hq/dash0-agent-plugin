@@ -90,13 +90,16 @@ fi
 
 fail=0
 probe() {
-  local script="$1" platform="$2" name found=""
+  local script="$1" platform="$2" name asset suffix="" found=""
   shift 2
+  # ${EXE} is empty off Windows and ".exe" on it. Stripped by the parser and
+  # re-applied here, so one candidate list covers every platform. It goes on the
+  # END of the asset name — GoReleaser appends it after the os-arch suffix, so
+  # the published file is cursor-on-event-windows-amd64.exe.
+  [ "${platform#windows-}" = "$platform" ] || suffix=".exe"
   for name in "$@"; do
-    # ${EXE} is empty off Windows and ".exe" on it. Stripped by the parser and
-    # re-applied here, so one candidate list covers every platform.
-    [ "${platform#windows-}" = "$platform" ] || name="${name}.exe"
-    if resolves "${BASE}/${name}-${platform}"; then found="${name}-${platform}"; break; fi
+    asset="${name}-${platform}${suffix}"
+    if resolves "${BASE}/${asset}"; then found="$asset"; break; fi
   done
   if [ -n "$found" ]; then
     echo "  ok  $script -> $found"

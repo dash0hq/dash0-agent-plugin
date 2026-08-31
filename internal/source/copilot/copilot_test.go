@@ -394,3 +394,37 @@ func appendLines(t *testing.T, path string, lines ...string) {
 		require.NoError(t, err)
 	}
 }
+
+// The skill tool is the one tool Copilot describes with no
+// gen_ai.tool.call.arguments at all — it names the invoked skill in
+// github.copilot.tool.parameters.skill_name instead. The shared extractor reads
+// the arguments, so without carrying this attribute through, every Copilot skill
+// invocation produced a span saying only "a tool called skill ran".
+func TestReadTurn_skillNameFromVendorAttribute(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", dir)
+
+	const (
+		conv  = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+		trace = "22222222222222222222222222222222"
+	)
+	writeLines(t, filepath.Join(dir, "otel.jsonl"),
+		chatSpanLine("bbbbbbbbbbbbbb01", conv, 10, 5, 0, 0, 0.1, "gpt-5.3-codex"),
+		// Deliberately no gen_ai.tool.call.arguments: that is what Copilot emits.
+		nativeSpanLine(t, trace, "bbbbbbbbbbbbbb02", "bbbbbbbbbbbbbb00", "execute_tool skill", 1001, 1001.5, 0, map[string]any{
+			"gen_ai.conversation.id":                    conv,
+			"gen_ai.tool.name":                          "skill",
+			"gen_ai.tool.call.id":                       "call_skill",
+			"github.copilot.tool.parameters.skill_name": "dash0-e2e-probe",
+		}),
+	)
+
+	turn, _ := ReadTurn(conv, t.TempDir())
+	require.NotNil(t, turn, "the turn must be recovered from the native-OTel file")
+	require.Len(t, turn.Tools, 1, "the skill invocation is one tool call")
+
+	assert.Equal(t, "skill", turn.Tools[0].Name)
+	assert.Empty(t, turn.Tools[0].Arguments, "Copilot ships no arguments for the skill tool")
+	assert.Equal(t, "dash0-e2e-probe", turn.Tools[0].SkillName,
+		"the skill name has to come from the vendor attribute, since the arguments are empty")
+}

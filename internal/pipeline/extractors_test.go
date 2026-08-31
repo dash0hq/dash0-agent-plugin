@@ -311,3 +311,36 @@ func TestExtractAgentIDFromResponse(t *testing.T) {
 		})
 	}
 }
+
+// Copilot ships no arguments for its skill tool and names the skill in a vendor
+// attribute, so its source sets skill_name before this runs. The route still has
+// to be labelled, or Copilot skills land without a skill_source and drop out of
+// any query that splits the two routes.
+func TestEnrichToolEvent_skillSource(t *testing.T) {
+	t.Run("name from the tool arguments", func(t *testing.T) {
+		event := map[string]any{
+			"tool_name":  "Skill",
+			"tool_input": map[string]any{"skill": "code-review"},
+		}
+		EnrichToolEvent(event)
+		assert.Equal(t, "code-review", event["skill_name"])
+		assert.Equal(t, skillSourceModel, event["skill_source"])
+	})
+
+	t.Run("name pre-set by the source, no arguments", func(t *testing.T) {
+		event := map[string]any{
+			"tool_name":  "skill",
+			"skill_name": "dash0-e2e-probe",
+		}
+		EnrichToolEvent(event)
+		assert.Equal(t, "dash0-e2e-probe", event["skill_name"])
+		assert.Equal(t, skillSourceModel, event["skill_source"])
+	})
+
+	t.Run("no skill name anywhere", func(t *testing.T) {
+		event := map[string]any{"tool_name": "skill"}
+		EnrichToolEvent(event)
+		assert.NotContains(t, event, "skill_name")
+		assert.NotContains(t, event, "skill_source")
+	})
+}

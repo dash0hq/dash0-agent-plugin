@@ -16,14 +16,33 @@ REMIND=3600
 fail_open() {
   echo "on-event: $*" >&2
 
-  local marker="${BIN_DIR:-}/.download-failing" now ver notified
-  now=$(date +%s)
-  if [ -n "${BIN_DIR:-}" ] && mkdir -p "$BIN_DIR" 2>/dev/null; then
+  # Every step below is optional: this function's contract is `exit 0`, and the
+  # reminder is a nicety layered on top. It must not be able to fail on its own
+  # account — an earlier version raised an arithmetic error on a corrupt marker,
+  # which RETURNED from here instead of exiting and let the script fall through
+  # to exec a binary it had never downloaded (exit 127).
+  #
+  # VERSION as well as BIN_DIR: the earliest caller is the CLAUDE_PLUGIN_DATA
+  # check, which runs before either is assigned. BIN_DIR alone is not a
+  # "have we got that far" test, because an inherited one from the environment
+  # satisfies it — and then `set -u` kills us on VERSION, after mkdir has
+  # created a directory we do not own.
+  if [ -n "${BIN_DIR:-}" ] && [ -n "${VERSION:-}" ] && mkdir -p "$BIN_DIR" 2>/dev/null; then
+    local marker="$BIN_DIR/.download-failing" now ver notified
+    now=$(date +%s)
     read -r ver notified <<<"$(cat "$marker" 2>/dev/null || true)"
-    if [ "${ver:-}" != "$VERSION" ] || [ $((now - ${notified:-0})) -gt "$REMIND" ]; then
-      echo "$VERSION $now" >"$marker" 2>/dev/null || true
-      # \\n, not \n: printf would emit a real newline, invalid inside JSON.
-      printf '{"systemMessage":"\\ndash0: cannot download the v%s binary, so no telemetry is being sent. Run claude with --debug for the reason."}\n' "$VERSION"
+    # Anything but digits is treated as "never notified". A marker can be a
+    # partial write from a hook the host killed mid-timeout, or hand-edited.
+    case "${notified:-}" in ''|*[!0-9]*) notified=0 ;; esac
+
+    if [ "${ver:-}" != "$VERSION" ] || [ $((now - notified)) -gt "$REMIND" ]; then
+      # Only speak if the reminder was recorded. Otherwise the hourly cap does
+      # not exist — a BIN_DIR that survives from an earlier install but is no
+      # longer writable would repeat this on every hook of every turn.
+      if echo "$VERSION $now" >"$marker" 2>/dev/null; then
+        # \\n, not \n: printf would emit a real newline, invalid inside JSON.
+        printf '{"systemMessage":"\\ndash0: cannot download the v%s binary, so no telemetry is being sent. Run claude with --debug for the reason."}\n' "$VERSION"
+      fi
     fi
   fi
   exit 0
@@ -182,11 +201,16 @@ if [ ! -x "$BINARY" ]; then
   elif command -v shasum &>/dev/null; then
     ACTUAL=$(shasum -a 256 "$TMP" | cut -d' ' -f1)
   else
-    # Neither tool present. The READMEs list one of them as a requirement; the
-    # binary is still used, as before, so a minimal host is not broken by this.
     ACTUAL=""
   fi
-  if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+  # Fail CLOSED on integrity, as copilot-on-event.sh already does. Installing
+  # unverified was the main route to a cached file that passes -x and cannot
+  # run: on a host with neither tool, whatever a proxy served in place of the
+  # asset was written straight into the cache, and never re-downloaded after.
+  if [ -z "$ACTUAL" ]; then
+    fail_open "no sha256 tool (sha256sum/shasum) to verify ${ASSET} — refusing to run an unverified binary"
+  fi
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
     fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
@@ -199,4 +223,28 @@ if [ ! -x "$BINARY" ]; then
 fi
 
 # Forward stdin and arguments to the binary.
+#
+# The last path that could still end a hook non-zero. A cached file can pass the
+# -x test and not be runnable — a wrong-architecture asset, or a body a proxy
+# served in place of the real one on a host with neither sha256sum nor shasum,
+# where ACTUAL="" installs it unverified. Unlike a release window this never
+# heals: the file is never re-downloaded, so it stays broken until the next
+# version bump.
+#
+# execfail keeps the shell alive when exec cannot start the file, so fail_open
+# can remove the bad cache entry and report it. Without it bash exits 126/127
+# here, or worse falls back to interpreting the file as a script.
+# `set +e` as well as execfail: with `set -e` still on, a failed exec kills the
+# shell before any guard can run — including `if ! exec …`. On success exec
+# replaces this process, so everything below it runs only on failure.
+#
+# This covers an exec-format failure, which is what a wrong-architecture asset
+# produces. It does not cover a plain text file in the cache, where bash falls
+# back to interpreting it as a script — but failing closed on integrity above
+# means an unverified body can no longer be installed, so that now requires
+# corruption after the fact.
+shopt -s execfail
+set +e
 exec "$BINARY" "$@"
+rm -f "$BINARY"
+fail_open "cached binary could not be executed — removed it, so the next hook re-downloads"

@@ -66,12 +66,17 @@ if touch "$readonly_root/probe" 2>/dev/null; then
 else
   for s in "${SCRIPTS[@]}"; do
     status=0
-    env -i PATH="$PATH" HOME="$readonly_root/nohome" \
+    # cwd as well as HOME: PROJECT_SETTINGS is the relative path
+    # .claude/dash0-agent-plugin.local.md, so running from a directory holding
+    # one with `enabled: false` exits every bootstrap before it reaches the
+    # data directory, and this loop prints ok having exercised nothing.
+    status=0
+    ( cd "$readonly_root" && env -i PATH="$PATH" HOME="$readonly_root/nohome" \
       CLAUDE_PLUGIN_DATA="$readonly_root/d" \
       DASH0_PLUGIN_DATA="$readonly_root/d" \
       COPILOT_PLUGIN_DATA="$readonly_root/d" \
       bash "$REPO/$s" someEvent <<<'{"hook_event_name":"SessionStart"}' \
-      >/dev/null 2>&1 || status=$?
+      >/dev/null 2>&1 ) || status=$?
     if [ "$status" -ne 0 ]; then
       echo "  FAIL $s: exited $status when its data directory could not be created"
       fail=1
@@ -90,8 +95,12 @@ missing=$(mktemp -d)
 sed 's/^VERSION="[^"]*"/VERSION="9.9.9"/' "$REPO/claude/claude-on-event.sh" >"$missing/probe.sh"
 data=$(mktemp -d)
 status=0
-CLAUDE_PLUGIN_DATA="$data" bash "$missing/probe.sh" \
-  <<<'{"hook_event_name":"SessionStart","session_id":"contract"}' >/dev/null 2>&1 || status=$?
+# Hermetic HOME and cwd, as below: an `enabled: false` in either config exits
+# before any download logic, and both assertions would pass on a path nothing
+# executed.
+( cd "$missing" && env -i PATH="$PATH" HOME="$missing/home" CLAUDE_PLUGIN_DATA="$data" \
+    bash "$missing/probe.sh" <<<'{"hook_event_name":"SessionStart","session_id":"contract"}' \
+    >/dev/null 2>&1 ) || status=$?
 if [ "$status" -ne 0 ]; then
   echo "ERROR: a missing release exited $status — a hook error the user cannot act on" >&2
   exit 1
@@ -172,9 +181,20 @@ for i in $(seq 8); do
 done
 wait
 
+# Exit codes alone no longer signal anything: every bootstrap failure exits 0 by
+# design now, so the original race — 48 of 48 invocations failing, each on a
+# different checksum — would reach fail_open, exit 0, and pass this check. A
+# successful run is also SILENT, so stderr is the signal that survived the
+# flattening. Both are asserted.
 bad=$(cat "$DATA"/rc.* | grep -vc '^0$' || true)
 if [ "$bad" -ne 0 ]; then
-  echo "ERROR: $bad of 8 concurrent invocations failed" >&2
+  echo "ERROR: $bad of 8 concurrent invocations exited non-zero" >&2
+  cat "$DATA"/err.* | sort -u | sed 's/^/  /' >&2
+  exit 1
+fi
+noisy=$(cat "$DATA"/err.* 2>/dev/null | grep -c . || true)
+if [ "$noisy" -ne 0 ]; then
+  echo "ERROR: $noisy line(s) on stderr — a download failed and failed open" >&2
   cat "$DATA"/err.* | sort -u | sed 's/^/  /' >&2
   exit 1
 fi

@@ -270,7 +270,12 @@ jobs:
       # here was never reachable and is only in the way of the re-run: the asset
       # diff takes the newest draft for the tag, and a stale one would be it.
       - name: Remove the draft this run left behind
-        if: failure() && env.RELEASE_ID != ''
+        # cancelled() as well as failure(): a cancelled run leaves the draft
+        # exactly as a failed one does, and `failure()` alone does not fire for
+        # it. Not `always()` — on success the release is published, and the
+        # guard below would be the only thing standing between that and a
+        # delete.
+        if: (failure() || cancelled()) && env.RELEASE_ID != ''
         run: |
           set -euo pipefail
           DRAFT=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .draft 2>/dev/null || echo missing)

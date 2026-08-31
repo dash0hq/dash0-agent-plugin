@@ -24,7 +24,9 @@
 #   --team NAME      Team name
 #
 # Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
-#           DASH0_VERSION (pins a specific release).
+#           DASH0_VERSION (pins a specific release),
+#           DASH0_SKIP_PLUGIN_FILES=1 (leave the bootstrap on disk alone; for
+#           testing a locally staged build).
 #
 # What this installs:
 #   ~/.local/state/dash0-agent-plugin/codex/codex-on-event.sh
@@ -61,7 +63,8 @@ while [ $# -gt 0 ]; do
 Usage: install-codex.sh [--endpoint URL] [--token TOKEN] [--dataset NAME] [--team NAME]
 
 All flags optional; missing ones are prompted for (or left blank non-interactively).
-Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME, DASH0_VERSION.
+Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME, DASH0_VERSION,
+          DASH0_SKIP_PLUGIN_FILES.
 EOF
       exit 0 ;;
     *) printf "✗ unknown argument: %s (try --help)\n" "$1" >&2; exit 1 ;;
@@ -170,23 +173,36 @@ else
   ok "installed binary → $BIN_PATH"
 fi
 
-# 5b. Install the bootstrap script from the tagged ref (skip if already present).
-if [ -f "$SCRIPT_PATH" ]; then
+# 5b. Install the bootstrap script from the tagged ref, replacing whatever is
+#     there. install-cursor.sh has always overwritten its plugin files; this one
+#     skipped when the file existed, which made the upgrade this README documents a
+#     no-op. VERSION is baked into the bootstrap, so a stale one kept resolving the
+#     previous binary — the new one downloaded above and nothing ever ran it.
+#
+#     DASH0_SKIP_PLUGIN_FILES=1 keeps what is on disk. That is how the e2e installs
+#     the bootstrap from its working tree, and nothing else should set it: a failed
+#     download stays fatal, because an upgrade that quietly kept the old file would
+#     report success while the old code kept running.
+if [ "${DASH0_SKIP_PLUGIN_FILES:-}" = "1" ]; then
+  [ -f "$SCRIPT_PATH" ] || die "DASH0_SKIP_PLUGIN_FILES is set but $SCRIPT_PATH is not there"
   chmod +x "$SCRIPT_PATH"
-  ok "bootstrap already present → $SCRIPT_PATH"
+  ok "kept staged bootstrap → $SCRIPT_PATH"
 else
   info "downloading codex-on-event.sh..."
+  # Staged under a private temp name and renamed: curl and wget both create the
+  # destination before they learn the request failed, so writing $SCRIPT_PATH
+  # directly would truncate a bootstrap that works.
+  #
   # The bootstrap moved from scripts/ to codex/ after v0.1.24, so fall back to
   # the old path when an older release is pinned via DASH0_VERSION. Drop the
   # fallback once v0.1.24 is unsupported.
-  # rm on failure: curl and wget both create the file before they learn the
-  # request failed, and the skip above would call an empty one present on every
-  # later run — leaving the hook pointed at a bootstrap that does nothing while
-  # the connectivity check, which runs the binary directly, still passes.
-  fetch "$RAW_BASE/codex/codex-on-event.sh" "$SCRIPT_PATH" \
-    || fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_PATH" \
-    || { rm -f "$SCRIPT_PATH"; die "failed to download: $RAW_BASE/codex/codex-on-event.sh"; }
-  chmod +x "$SCRIPT_PATH"
+  SCRIPT_TMP="$SCRIPT_PATH.tmp.$$"
+  fetch "$RAW_BASE/codex/codex-on-event.sh" "$SCRIPT_TMP" \
+    || fetch "$RAW_BASE/scripts/codex-on-event.sh" "$SCRIPT_TMP" \
+    || { rm -f "$SCRIPT_TMP"; die "failed to download: $RAW_BASE/codex/codex-on-event.sh"; }
+  chmod +x "$SCRIPT_TMP"
+  mv -f "$SCRIPT_TMP" "$SCRIPT_PATH" \
+    || { rm -f "$SCRIPT_TMP"; die "could not move $SCRIPT_TMP into place"; }
   ok "installed bootstrap → $SCRIPT_PATH"
 fi
 

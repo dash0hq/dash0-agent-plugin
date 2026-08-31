@@ -224,10 +224,14 @@ func installCodex(t *testing.T, pluginDir, home, state, otlpURL, token string) {
 	require.NoError(t, os.WriteFile(filepath.Join(codexState, "codex-on-event.sh"), bootstrap, 0o755))
 
 	cmd := exec.Command("bash", filepath.Join(pluginDir, "install-codex.sh"))
+	// DASH0_SKIP_PLUGIN_FILES keeps the bootstrap written above. Without it the
+	// installer replaces it with the released copy, and this test asserts against
+	// the bootstrap in the working tree.
 	cmd.Env = append(os.Environ(),
 		"HOME="+home, "XDG_STATE_HOME="+state,
 		"DASH0_VERSION="+ver, "DASH0_OTLP_URL="+otlpURL,
 		"DASH0_AUTH_TOKEN="+token, "DASH0_DATASET=default",
+		"DASH0_SKIP_PLUGIN_FILES=1",
 	)
 	out, err := cmd.CombinedOutput()
 	t.Logf("install-codex.sh output:\n%s", string(out))

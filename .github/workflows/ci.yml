@@ -1,12 +1,19 @@
 name: CI
 
 on:
-  # PRs are the pre-merge gate (and the only safe path for fork PRs). push is
-  # scoped to main so trunk is validated post-merge without double-running on
-  # every PR-branch push. A branch with no open PR intentionally runs no CI.
-  push:
-    branches:
-      - main
+  # PRs are the pre-merge gate, and the only safe path for fork PRs. A branch
+  # with no open PR intentionally runs no CI.
+  #
+  # There is deliberately no `push: branches: [main]`. It ran 60 times between
+  # 14 July and 31 August and caught nothing — its one red run was a GitHub API
+  # rate limit — while spending four minutes and a live Claude, Codex and
+  # Copilot canary on every merge, twice over since the Windows matrix landed.
+  # Everything it ran had already run on the PR.
+  #
+  # What it covered in principle is a PR merged on a stale base, since the
+  # ruleset sets strict_required_status_checks_policy: false. If that matters,
+  # the fix is to require the checks and turn strict on, not to observe trunk
+  # after the fact.
   pull_request:
   workflow_dispatch:
 
@@ -149,9 +156,6 @@ jobs:
       - name: Bootstrap download contracts
         run: ./test/contracts/bootstrap.sh
 
-      - name: Release planning contracts
-        run: ./test/contracts/release.sh
-
   # Runs on Windows as well as Linux. build-test already covers windows-latest,
   # but only with `go test ./...` — no -tags=e2e — so nothing in test/e2e was
   # ever compiled, let alone run, on Windows. That is where the whole class of
@@ -178,7 +182,12 @@ jobs:
           # runner, not the suite: the three live canaries are slower here.
           - os: windows-latest
             test-cmd: go test -tags=e2e -v -timeout=600s ./test/e2e/
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # Fork PRs only. They get no secrets, so the three live canaries would fail
+    # on missing credentials rather than on anything real. The `push` half of
+    # this condition went with the main-push trigger; a manual dispatch needs to
+    # reach the canaries, which an inverted pull_request test allows and the old
+    # form did not.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # copilot-requests lets the built-in token authenticate the live Copilot
     # canary (TestE2EFullFlowWithCopilot) — no PAT secret needed; it is passed to
     # the test as COPILOT_GITHUB_TOKEN below. Setting a job-level permissions block
@@ -238,6 +247,13 @@ jobs:
         # scripts/version.sh owns the list, and the release workflow bumps through
         # the same file, so the check and the bump cannot disagree.
         run: ./scripts/version.sh check
+
+      - name: Release planning contracts
+        # Here rather than with the install contracts: this is about the version
+        # pins and the release plan, needs no npm and no Go, and takes 3s. The
+        # release workflow cannot be dispatched from a PR, so these contracts are
+        # the only pre-merge coverage its branching gets.
+        run: ./test/contracts/release.sh
 
       - name: Codex marketplace consistency (marketplace.json ↔ plugin manifest)
         run: |

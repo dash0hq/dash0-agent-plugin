@@ -8,7 +8,7 @@
 #
 #   stdin (JSON) → copilot-on-event.sh <eventName> → copilot-on-event binary → OTLP
 #
-# Per-turn token/cost/model telemetry additionally requires Copilot's native
+# Per-turn token/model telemetry additionally requires Copilot's native
 # OTel written to a per-session file, set up by the `dash0-configure` skill as a
 # shell function that shadows `copilot`. Without it, spans are still emitted,
 # just without usage.

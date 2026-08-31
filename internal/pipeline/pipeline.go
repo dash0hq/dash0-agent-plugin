@@ -281,6 +281,20 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 	return res, nil
 }
 
+// IsSafeSessionID reports whether sessionID may be used as a path segment.
+//
+// Process substitutes a random id for one that is missing or unsafe, but it does
+// that inside itself. A caller that joins a path or removes a directory BEFORE
+// handing the event over — cmd/copilot-on-event does both — has to ask first, or
+// an empty id resolves SessionDir to dataDir itself and "../x" escapes it.
+//
+// It answers only "is this a usable path segment". A caller that owns other
+// entries beside the session directories has to rule those names out itself:
+// this says yes to "bin" and to any other real directory name.
+func IsSafeSessionID(sessionID string) bool {
+	return sessionIDPattern.MatchString(sessionID)
+}
+
 // SessionDir returns the per-session scratch directory under dataDir for the
 // given session ID. Source entrypoints can use this to look up state that
 // outlives a single hook invocation (e.g. for cross-event correlation).

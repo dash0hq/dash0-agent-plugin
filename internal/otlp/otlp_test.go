@@ -347,6 +347,40 @@ func TestSendLogDropsCodexTurnID(t *testing.T) {
 	assertNoAttr(t, lr.Attributes, "turn_id")
 }
 
+// TestSendLogDropsCopilotStopReason pins the Copilot equivalent. Every agentStop
+// payload carries stopReason, and it is camelCase, so it reached every Copilot
+// chat span unnamespaced. The span's own status already says whether the turn
+// ended well. The payload below is a real agentStop event from
+// qa/runs/setup-probe-copilot, trimmed to the fields at issue; found by
+// qa/tools/qa-attrs.py on the first Copilot QA run, as the Codex leak above was.
+func TestSendLogDropsCopilotStopReason(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name":  "Stop",
+		"session_id":       "ad6ab0d8-093f-4a85-9fa7-87e0e5480a92",
+		"stopReason":       "end_turn",
+		"stop_hook_active": false,
+		// Interactive sessions add this one. It is a propagation header, and on a
+		// span it names a different trace than the span belongs to.
+		"traceparent": "00-558ca38a5fd1be05a94cf7002271be76-adc5bef1061afc70-01",
+	}
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "ad6ab0d8-093f-4a85-9fa7-87e0e5480a92")
+	assertNoAttr(t, lr.Attributes, "stopReason")
+	assertNoAttr(t, lr.Attributes, "stop_hook_active")
+	assertNoAttr(t, lr.Attributes, "traceparent")
+}
+
 // TestSendLogDropsUnmappedBookkeeping covers the fields that do not reach a span
 // today because InstructionsLoaded maps to no span. Denying them is only useful
 // if it holds when that changes, which is what this asserts. "reason" is in the

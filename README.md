@@ -32,8 +32,7 @@ The dotted directories are fixed by each agent's plugin discovery and cannot mov
 file that pins a version, builds, verifies, moves `main`, tags and publishes. One
 button, no PR.
 
-`dry_run` builds and checks without publishing anything. `channel: dev` cuts a
-prerelease from your branch without touching `main`.
+`dry_run` builds and checks without publishing anything.
 
 Full detail in [DEVELOPMENT.md](./DEVELOPMENT.md#releasing).
 

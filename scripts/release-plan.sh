@@ -11,7 +11,6 @@
 # coverage it gets before merge. See test/contracts/release-plan.sh.
 #
 # Reads from the environment, as GitHub sets them:
-#   CHANNEL     inputs.channel     — stable | dev
 #   DRY_RUN     inputs.dry_run     — "true" | "false"
 #   BUMP        inputs.bump        — patch | minor | major
 #   IN_VERSION  inputs.version     — optional exact version
@@ -23,7 +22,6 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-CHANNEL="${CHANNEL:-stable}"
 DRY_RUN="${DRY_RUN:-false}"
 BUMP="${BUMP:-patch}"
 IN_VERSION="${IN_VERSION:-}"
@@ -55,25 +53,18 @@ fi
 if [ "$DRY_RUN" = "true" ]; then
   MODE=dry-run; VERSION="${IN_VERSION:-$PINNED}"; TAG=""; BUMP_NEEDED=false
 
-elif [ "$CHANNEL" = "dev" ]; then
-  # Cut from whatever branch you are on, and change nothing anywhere else. The
-  # tagged tree keeps pinning the base version — a dev build is consumed through
-  # DASH0_VERSION, not by installing that tag.
-  MODE=release; BUMP_NEEDED=false
-  VERSION="${IN_VERSION:-$PINNED}-dev.${RUN_NUMBER}"
-  TAG="v$VERSION"
-
 else
   MODE=release
   [ "$REF_NAME" = "main" ] \
-    || die "stable releases must be dispatched from main (got '$REF_NAME'); use channel=dev to cut from a branch"
+    || die "releases must be dispatched from main (got '$REF_NAME')"
 
-  # A stable release writes its version into main, and the Claude marketplace
-  # lists this repo with no ref — so every install would then pin a prerelease,
-  # with GitHub's "Latest" pointer still on the last stable and nothing else
-  # signalling it. Prereleases have exactly one route: channel=dev.
+  # A release writes its version into main, and the Claude marketplace lists this
+  # repo with no ref — so every install would then pin whatever this says.
+  # Prereleases have no route here at all: the dev channel that produced them is
+  # not in this workflow, because gating the App credential by branch and cutting
+  # from a feature branch are mutually exclusive without splitting the job graph.
   case "$IN_VERSION" in
-    *-*) die "'$IN_VERSION' is a prerelease — use channel=dev. A stable release writes its version to main, and every install reads it from there." ;;
+    *-*) die "'$IN_VERSION' is a prerelease — this workflow only cuts stable releases from main" ;;
   esac
   case "$PINNED" in
     *-*) die "main pins the prerelease $PINNED — a stable release cannot be cut from it" ;;

@@ -48,16 +48,16 @@ echo "== What each dispatch plans =="
 
 expect "dry run builds nothing releasable" \
   "mode=dry-run,version=0.1.25,tag=,bump_needed=false,latest=true" -- \
-  DRY_RUN=true CHANNEL=stable REF_NAME=some-branch PINNED=0.1.25 "$PLAN"
+  DRY_RUN=true REF_NAME=some-branch PINNED=0.1.25 "$PLAN"
 
-expect "stable bumps main and tags the result" \
+expect "a release bumps main and tags the result" \
   "mode=release,version=0.1.26,tag=v0.1.26,bump_needed=true,latest=true" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.1.25 BUMP=patch \
+  REF_NAME=main PINNED=0.1.25 BUMP=patch \
   EXISTING_RELEASES="v0.1.24 v0.1.25" TAG_STATE=absent "$PLAN"
 
 expect "an explicit version overrides the bump" \
   "mode=release,version=0.2.0,tag=v0.2.0,bump_needed=true,latest=true" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.1.25 IN_VERSION=0.2.0 \
+  REF_NAME=main PINNED=0.1.25 IN_VERSION=0.2.0 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
 
 # The recovery path. A previous run pushed the bump and then failed, so main
@@ -65,54 +65,50 @@ expect "an explicit version overrides the bump" \
 # permanently; this finishes it instead.
 expect "a bump already on main is finished, not repeated" \
   "mode=release,version=0.1.26,tag=v0.1.26,bump_needed=false,latest=true" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.1.26 \
+  REF_NAME=main PINNED=0.1.26 \
   EXISTING_RELEASES="v0.1.24 v0.1.25" TAG_STATE=absent "$PLAN"
-
-expect "dev tags a prerelease off the branch, changing nothing else" \
-  "mode=release,version=0.1.25-dev.41,tag=v0.1.25-dev.41,bump_needed=false,latest=false" -- \
-  CHANNEL=dev REF_NAME=some-branch PINNED=0.1.25 RUN_NUMBER=41 TAG_STATE=absent "$PLAN"
 
 # The tag is created before the build, so a run that fails after it leaves one
 # behind. Re-running must continue from it rather than refuse its own tag.
 expect "a re-run continues from the tag it already made" \
   "mode=release,version=0.1.26,tag=v0.1.26,bump_needed=false,latest=true" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.1.26 \
+  REF_NAME=main PINNED=0.1.26 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=here "$PLAN"
 
 echo "== What it refuses =="
 
 # main is what `claude plugin install` reads, so a stable release cut anywhere
 # else would publish a version no install asks for.
-refuse "stable from a branch" "must be dispatched from main" -- \
-  CHANNEL=stable REF_NAME=some-branch PINNED=0.1.25 "$PLAN"
+refuse "a release from a branch" "must be dispatched from main" -- \
+  REF_NAME=some-branch PINNED=0.1.25 "$PLAN"
 
 refuse "a version that would not move forward" "already published" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.1.25 IN_VERSION=0.1.20 \
+  REF_NAME=main PINNED=0.1.25 IN_VERSION=0.1.20 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
 
 # A stable release writes its version into main, and the marketplace reads main
 # with no ref — so a prerelease there would be pinned by every install, while
 # GitHub's Latest pointer stayed on the last stable and said nothing.
-refuse "a prerelease on the stable channel" "use channel=dev" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.1.25 IN_VERSION=0.2.0-dev.9 \
+refuse "a malformed explicit version" "is not a version" -- \
+  REF_NAME=main IN_VERSION=v0.2.0 PINNED=0.1.25 "$PLAN"
+
+refuse "a prerelease version" "only cuts stable releases" -- \
+  REF_NAME=main PINNED=0.1.25 IN_VERSION=0.2.0-dev.9 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
 
-refuse "a stable release cut from a prerelease pin" "main pins the prerelease" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.2.0-dev.9 \
+refuse "a release cut from a prerelease pin" "main pins the prerelease" -- \
+  REF_NAME=main PINNED=0.2.0-dev.9 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
 
 # Silently publishing 0.1.26 when the operator asked for 0.2.0 is worse than
 # refusing: the plan block is the only place the substitution would show.
 refuse "an explicit version while main carries an unreleased bump" "finish that release" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.1.26 IN_VERSION=0.2.0 \
+  REF_NAME=main PINNED=0.1.26 IN_VERSION=0.2.0 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
 
 refuse "a tag already on another commit" "another commit" -- \
-  CHANNEL=stable REF_NAME=main PINNED=0.1.25 \
+  REF_NAME=main PINNED=0.1.25 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=elsewhere "$PLAN"
-
-refuse "a malformed explicit version" "is not a version" -- \
-  CHANNEL=dev REF_NAME=branch IN_VERSION=v0.2.0 PINNED=0.1.25 "$PLAN"
 
 echo "== What version comes next =="
 

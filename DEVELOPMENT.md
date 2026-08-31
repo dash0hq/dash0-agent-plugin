@@ -36,21 +36,27 @@ that do not match `main`, because the only way to reach step 6 is to have won.
 Release again: the planner sees `main` already carrying an unreleased bump and
 finishes that one instead of starting another, which would skip a version.
 
-### The other two modes
+### Dry run
 
 **`dry_run`** — build and check, publish nothing. No tag, no release; the 16
-binaries are attached to the run for 7 days. Safe from any branch at any time.
+binaries are attached to the run for 7 days. Safe to run at any time.
 
-**`channel: dev`** — tags `v<pinned>-dev.<run number>` on the branch you dispatch
-from, as a prerelease. Bumps nothing, never touches `main`, and *Latest* stays on
-the newest stable. Point an install at one with:
+`DASH0_VERSION` points an install at any published release without editing
+anything — a rollback, or a build under test:
 
 ```bash
-export DASH0_VERSION=0.2.0-dev.41
+export DASH0_VERSION=0.1.24
 ```
 
 Every bootstrap reads it, and the cache filename embeds the version, so it never
-collides with the pinned build. Same repo, same checksum verification.
+collides with the pinned build. It is validated against the same shape a release
+uses, because it reaches both a download URL and a filesystem path.
+
+> **No dev channel yet.** Cutting a prerelease from a feature branch and gating
+> the App credential by branch are mutually exclusive without splitting the job
+> graph: the environment holding the credential is restricted to `main`, so a job
+> declaring it cannot run anywhere else. Adding it back means moving the push
+> into its own job, which is a change worth making on its own.
 
 ### How it is wired
 
@@ -59,10 +65,16 @@ collides with the pinned build. Same repo, same checksum verification.
   about what needs bumping. `next` counts from the newest **published release**,
   not from tags or the manifests, both of which can name a version that was never
   released.
-- **Pushing to `main`** uses the *Dash0 Release Bot* App, for that one step only.
-  Everything else uses the built-in token. GitHub Actions' own token cannot be
-  granted this — GitHub refuses it as a ruleset bypass actor with a 422 — so the
-  App is named in the `Protect Main Branch` bypass list instead.
+- **Pushing to `main`** uses the *Dash0 Release Bot* App, for that one command
+  only. Everything else uses the built-in token. GitHub Actions' own token cannot
+  be granted this — GitHub refuses it as a ruleset bypass actor with a 422 — so
+  the App is named in the `Protect Main Branch` bypass list instead.
+- **The App credentials live in a GitHub Environment restricted to `main`**, not
+  in repo secrets. This is the control that matters: `workflow_dispatch` runs the
+  workflow file *from the branch it is dispatched from*, so a check inside the
+  tree is one an attacker also controls. A job declaring the environment on any
+  other ref is rejected before it starts, and a job that drops the declaration
+  finds nothing to read.
 - **GoReleaser uploads into a draft.** It creates the release before uploading
   and writes `checksums.txt` last, so publishing at creation would leave a window
   where the tag resolves but a binary does not.

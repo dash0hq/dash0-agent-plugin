@@ -16,11 +16,6 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      channel:
-        description: 'stable bumps main and publishes. dev tags a prerelease off this branch and changes nothing else.'
-        type: choice
-        options: [stable, dev]
-        default: stable
       bump:
         description: 'Which part to increment, counted from the newest published release.'
         type: choice
@@ -71,7 +66,6 @@ jobs:
           # version.sh asks GitHub which releases are published; gh needs a token.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Through env, not interpolation: two of these are free text.
-          CHANNEL: ${{ inputs.channel }}
           BUMP: ${{ inputs.bump }}
           DRY_RUN: ${{ inputs.dry_run }}
           IN_VERSION: ${{ inputs.version }}
@@ -124,6 +118,15 @@ jobs:
     needs: plan
     if: needs.plan.outputs.mode == 'release'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The App credentials live only in this environment, which is restricted to
+    # main. That is the control, not the REF_NAME check in release-plan.sh:
+    # workflow_dispatch runs the workflow file from the branch it is dispatched
+    # from, so any guard inside the tree is one an attacker also controls.
+    # Declaring the environment on a job running elsewhere is rejected before it
+    # starts; removing the declaration leaves nothing to read, because these are
+    # not repo secrets.
+    environment: release
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAG: ${{ needs.plan.outputs.tag }}
@@ -132,6 +135,8 @@ jobs:
     steps:
       - name: Mint a token for the one push that needs it
         id: app
+        # Only when there is a bump to push. Nothing else in this job uses it.
+        if: needs.plan.outputs.bump_needed == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
@@ -141,9 +146,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          # The App's token, so the push below carries the identity the ruleset
-          # lets through. Building and publishing still use GITHUB_TOKEN.
-          token: ${{ steps.app.outputs.token }}
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -221,6 +223,10 @@ jobs:
           # plan checked it out, and nothing has been published yet — so a lost
           # race costs one build and no exposure. This is also the only step that
           # uses the App's identity.
+          # The App's identity, for this one command. Everything else in this
+          # job — building, drafting, publishing — uses GITHUB_TOKEN.
+          git remote set-url origin \
+            "https://x-access-token:${{ steps.app.outputs.token }}@github.com/${GITHUB_REPOSITORY}.git"
           if ! git push origin HEAD:main; then
             echo "::error::main moved during this run — nothing was published. Re-run."
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" || true

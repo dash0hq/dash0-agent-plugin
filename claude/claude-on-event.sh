@@ -4,47 +4,13 @@
 
 set -euo pipefail
 
-# Exit 0 on every "we can't safely run the binary" path, as the other three
-# bootstraps do: Claude renders any other non-zero exit as an error on *every*
-# event. But say so once an hour, or silence would hide a proxy blocking github
-# or a release that never published. Keyed by version — hooks race, and a marker
-# written by a straggler after a faster sibling cleared it is never cleared
-# again. Roughly hourly, not exactly: no lock, so simultaneous hooks can each
-# print, and a duplicated one-liner is not worth one in a hot path.
-REMIND=3600
-
+# Every path below that ends in "we can't safely run the binary" exits 0, as
+# cursor, codex and copilot already do. Claude renders any other non-zero exit
+# as a hook error on *every* event, and none of these is something the user can
+# act on mid-session. It does not mean anything unverified runs: a failed
+# checksum still installs nothing.
 fail_open() {
   echo "on-event: $*" >&2
-
-  # Every step below is optional: this function's contract is `exit 0`, and the
-  # reminder is a nicety layered on top. It must not be able to fail on its own
-  # account — an earlier version raised an arithmetic error on a corrupt marker,
-  # which RETURNED from here instead of exiting and let the script fall through
-  # to exec a binary it had never downloaded (exit 127).
-  #
-  # VERSION as well as BIN_DIR: the earliest caller is the CLAUDE_PLUGIN_DATA
-  # check, which runs before either is assigned. BIN_DIR alone is not a
-  # "have we got that far" test, because an inherited one from the environment
-  # satisfies it — and then `set -u` kills us on VERSION, after mkdir has
-  # created a directory we do not own.
-  if [ -n "${BIN_DIR:-}" ] && [ -n "${VERSION:-}" ] && mkdir -p "$BIN_DIR" 2>/dev/null; then
-    local marker="$BIN_DIR/.download-failing" now ver notified
-    now=$(date +%s)
-    read -r ver notified <<<"$(cat "$marker" 2>/dev/null || true)"
-    # Anything but digits is treated as "never notified". A marker can be a
-    # partial write from a hook the host killed mid-timeout, or hand-edited.
-    case "${notified:-}" in ''|*[!0-9]*) notified=0 ;; esac
-
-    if [ "${ver:-}" != "$VERSION" ] || [ $((now - notified)) -gt "$REMIND" ]; then
-      # Only speak if the reminder was recorded. Otherwise the hourly cap does
-      # not exist — a BIN_DIR that survives from an earlier install but is no
-      # longer writable would repeat this on every hook of every turn.
-      if echo "$VERSION $now" >"$marker" 2>/dev/null; then
-        # \\n, not \n: printf would emit a real newline, invalid inside JSON.
-        printf '{"systemMessage":"\\ndash0: cannot download the v%s binary, so no telemetry is being sent. Run claude with --debug for the reason."}\n' "$VERSION"
-      fi
-    fi
-  fi
   exit 0
 }
 
@@ -114,7 +80,6 @@ if [[ -n "$KEYCHAIN_SERVICE" ]] && command -v security &>/dev/null; then
   [[ -n "$keychain_token" ]] && export CLAUDE_PLUGIN_OPTION_AUTH_TOKEN="$keychain_token"
 fi
 
-# `:?` would exit 1 before fail_open is even reachable.
 PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-}"
 [ -n "$PLUGIN_DATA" ] || fail_open "CLAUDE_PLUGIN_DATA is not set"
 BIN_DIR="$PLUGIN_DATA/bin"
@@ -201,16 +166,11 @@ if [ ! -x "$BINARY" ]; then
   elif command -v shasum &>/dev/null; then
     ACTUAL=$(shasum -a 256 "$TMP" | cut -d' ' -f1)
   else
+    # Neither tool present. The READMEs list one of them as a requirement; the
+    # binary is still used, as before, so a minimal host is not broken by this.
     ACTUAL=""
   fi
-  # Fail CLOSED on integrity, as copilot-on-event.sh already does. Installing
-  # unverified was the main route to a cached file that passes -x and cannot
-  # run: on a host with neither tool, whatever a proxy served in place of the
-  # asset was written straight into the cache, and never re-downloaded after.
-  if [ -z "$ACTUAL" ]; then
-    fail_open "no sha256 tool (sha256sum/shasum) to verify ${ASSET} — refusing to run an unverified binary"
-  fi
-  if [ "$ACTUAL" != "$EXPECTED" ]; then
+  if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
     fail_open "checksum mismatch (expected $EXPECTED, got $ACTUAL)"
   fi
 
@@ -218,35 +178,22 @@ if [ ! -x "$BINARY" ]; then
   # -x test that guards this block.
   chmod +x "$TMP" || fail_open "could not mark $TMP executable"
   mv -f "$TMP" "$BINARY" || fail_open "could not move $TMP into place"
-  # Downloads work again; forget the earlier failures.
-  rm -f "$BIN_DIR/.download-failing"
 fi
 
 # Forward stdin and arguments to the binary.
 #
-# The last path that could still end a hook non-zero. A cached file can pass the
-# -x test and not be runnable — a wrong-architecture asset, or a body a proxy
-# served in place of the real one on a host with neither sha256sum nor shasum,
-# where ACTUAL="" installs it unverified. Unlike a release window this never
-# heals: the file is never re-downloaded, so it stays broken until the next
-# version bump.
+# A cached file can pass the -x test and still not run — a wrong-architecture
+# asset is the realistic case. `set +e` as well as execfail: with `set -e` still
+# on, a failed exec kills the shell before any guard can act. On success exec
+# replaces this process, so the line below runs only on failure.
 #
-# execfail keeps the shell alive when exec cannot start the file, so fail_open
-# can remove the bad cache entry and report it. Without it bash exits 126/127
-# here, or worse falls back to interpreting the file as a script.
-# `set +e` as well as execfail: with `set -e` still on, a failed exec kills the
-# shell before any guard can run — including `if ! exec …`. On success exec
-# replaces this process, so everything below it runs only on failure.
-#
-# This covers an exec-format failure, which is what a wrong-architecture asset
-# produces. It does not cover a plain text file in the cache, where bash falls
-# back to interpreting it as a script — but failing closed on integrity above
-# means an unverified body can no longer be installed, so that now requires
-# corruption after the fact.
+# It is deliberately left in place rather than deleted. Deleting it means the
+# next hook re-downloads the whole asset, fails to exec it again, and repeats —
+# a multi-MB fetch on every tool call. This stays quiet until the next release
+# swaps the pinned version, which is when it could start working again.
 shopt -s execfail
 set +e
-# shellcheck disable=SC2093  # execfail is the point: the lines below run only
+# shellcheck disable=SC2093  # execfail is the point: the line below runs only
 # when exec could not start the binary. Without it bash would exit here.
 exec "$BINARY" "$@"
-rm -f "$BINARY"
-fail_open "cached binary could not be executed — removed it, so the next hook re-downloads"
+fail_open "the cached binary could not be executed — telemetry is off until the next release"

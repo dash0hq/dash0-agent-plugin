@@ -10,7 +10,7 @@ installer) and in CI (the `install-config-contract` job just calls these).
 | `claude.sh` | settings.json ≠ install · `--config` credential storage · creds → OTLP | `claude` CLI, network, go/jq/curl | mostly anywhere; the credential-storage contract is **Linux-only** (see below) |
 | `cursor.sh` | creds → OTLP · install layout + hooks merge · uninstall strip | network (install/uninstall resolve the latest release), go/jq/curl | yes |
 | `codex.sh`  | creds → OTLP · install merge + pre-trust · uninstall strip | go/jq/python3/curl | yes (no codex CLI) |
-| `bootstrap.sh` | all four `*-on-event.sh` stage the download in a temp and rename · concurrent cold-cache runs converge | curl, sha256sum/shasum; network for the concurrency contract | yes |
+| `bootstrap.sh` | all four `*-on-event.sh` stage the download in a temp and rename · none ends a hook non-zero · an unrunnable cached binary neither errors nor re-downloads · concurrent cold-cache runs converge | curl, sha256sum/shasum, go; network for the last two contracts | yes |
 
 ## Run
 

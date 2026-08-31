@@ -89,7 +89,18 @@ VERSION="0.1.25"
 # off the VERSION= line above so scripts/version.sh keeps reading the pinned
 # default.
 if [ -n "${DASH0_VERSION:-}" ]; then
-  VERSION="$DASH0_VERSION"
+  # Validated, because VERSION reaches both a download URL and a filesystem path.
+  # curl squashes `..` in a path, so `v../../../owner/repo/releases/download/v9`
+  # retargets BASE_URL at another repository — and checksums.txt comes from the
+  # same base, so verification would pass against the attacker's own manifest
+  # before the binary is exec'd. $BINARY traverses the same way and would write
+  # outside BIN_DIR. The hook runs inside an agent session, so an injected
+  # instruction writing this into a project .envrc is enough to reach it.
+  if [[ "$DASH0_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+    VERSION="$DASH0_VERSION"
+  else
+    fail_open "ignoring DASH0_VERSION='$DASH0_VERSION' — not a version (expected 0.2.0, or 0.2.0-dev.1)"
+  fi
 fi
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

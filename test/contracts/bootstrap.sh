@@ -14,6 +14,10 @@
 #
 # Requires: curl, bash, sha256sum or shasum. Network for the second contract.
 set -euo pipefail
+# The contracts derive expected cache paths from the pinned VERSION in each
+# script. A developer with DASH0_VERSION exported would otherwise see the
+# bootstraps download something else and get a false failure.
+unset DASH0_VERSION
 # shellcheck source=test/contracts/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -81,6 +85,34 @@ fi
 chmod u+w "$ro"; rm -rf "$ro"
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: all ${#SCRIPTS[@]} bootstraps fail open"
+
+echo "== DASH0_VERSION cannot retarget the download or escape BIN_DIR =="
+# It reaches a URL and a filesystem path. curl squashes `..`, so an unvalidated
+# value points BASE_URL — and checksums.txt with it — at another repository,
+# which makes verification pass against the attacker's own manifest. The hook
+# runs inside an agent session, so a project .envrc is a plausible source.
+fail=0
+vdata=$(mktemp -d)
+for bad in '../../../../attacker/repo/releases/download/v9' '../../etc' 'v0.1.25' '0.1.25; id'; do
+  out=$(DASH0_VERSION="$bad" CLAUDE_PLUGIN_DATA="$vdata" \
+        bash "$REPO/claude/claude-on-event.sh" <<<'{}' 2>&1 | head -1)
+  case "$out" in
+    *ignoring*) ;;
+    *) echo "  FAIL accepted: $bad"; fail=1 ;;
+  esac
+done
+for ok in '0.1.26' '0.1.26-dev.7'; do
+  out=$(DASH0_VERSION="$ok" CLAUDE_PLUGIN_DATA="$vdata" \
+        bash "$REPO/claude/claude-on-event.sh" <<<'{}' 2>&1 | head -1)
+  case "$out" in
+    *ignoring*) echo "  FAIL rejected a real version: $ok"; fail=1 ;;
+  esac
+done
+escaped=$(find "$vdata/.." -maxdepth 1 -name 'attacker' 2>/dev/null | wc -l | tr -d ' ')
+[ "$escaped" -eq 0 ] || { echo "  FAIL wrote outside BIN_DIR"; fail=1; }
+rm -rf "$vdata"
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: traversal and injection refused, real versions accepted"
 
 echo "== The binary itself never ends a hook non-zero =="
 # The check above poisons the *shell's* environment, so it never gets as far as

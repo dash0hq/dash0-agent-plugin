@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bootstrap download contracts (runnable locally and in CI):
 #   - every *-on-event.sh downloads via a private temp and renames into place
-#   - none of them ends a hook with a non-zero exit
+#   - neither the scripts nor the Claude binary ends a hook non-zero
 #   - an unrunnable cached binary neither errors nor re-downloads in a loop
 #   - concurrent invocations against a cold cache all succeed and converge
 #
@@ -81,6 +81,37 @@ fi
 chmod u+w "$ro"; rm -rf "$ro"
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: all ${#SCRIPTS[@]} bootstraps fail open"
+
+echo "== The binary itself never ends a hook non-zero =="
+# The check above poisons the *shell's* environment, so it never gets as far as
+# exec'ing a real binary — which is how claude-on-event kept an os.Exit(1) that
+# cursor, codex and copilot do not have. pipeline.go already logs a failed span
+# export rather than raising it; main.go was the outlier.
+bin=$(mktemp -d)/on-event
+if ! go build -o "$bin" "$REPO/cmd/claude-on-event" 2>/dev/null; then
+  echo "SKIP: could not build the binary"
+else
+  fail=0
+  probe() {
+    local name="$1" payload="$2"; shift 2
+    local status=0
+    printf '%s' "$payload" | env -i PATH="$PATH" "$@" "$bin" >/dev/null 2>&1 || status=$?
+    if [ "$status" -ne 0 ]; then
+      echo "  FAIL $name: exited $status"; fail=1
+    else
+      echo "  ok   $name"
+    fi
+  }
+  nowhere=$(mktemp -d); chmod a-w "$nowhere"
+  probe "no CLAUDE_PLUGIN_DATA"     '{"hook_event_name":"SessionStart"}'
+  probe "malformed payload"         'not json'          CLAUDE_PLUGIN_DATA="$(mktemp -d)"
+  probe "null payload"              'null'              CLAUDE_PLUGIN_DATA="$(mktemp -d)"
+  probe "unwritable session dir"    '{"hook_event_name":"SessionStart","session_id":"x"}' \
+                                    CLAUDE_PLUGIN_DATA="$nowhere/d"
+  chmod u+w "$nowhere"; rm -rf "$nowhere"
+  [ "$fail" -eq 0 ] || exit 1
+  echo "PASS: the binary logs and exits 0 on every telemetry failure"
+fi
 
 echo "== A cached binary that will not run does not loop =="
 # Deleting it would make the next hook re-download the whole asset, fail to exec

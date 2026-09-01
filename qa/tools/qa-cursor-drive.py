@@ -134,8 +134,19 @@ class Session:
         return pid != 0
 
     def finish(self):
-        """Ctrl-D, then wait for the process to go. Kill only as a last resort."""
-        os.write(self.fd, b"\x04")
+        """Ctrl-D, then wait for the process to go. Kill only as a last resort.
+
+        Both failure paths below reach here with cursor-agent already gone, and a
+        write to the master of a pty whose child has exited raises EIO. Unguarded,
+        that traceback replaced the diagnosis the caller was about to print and
+        lost the terminal log with it — the one account of what a failed run
+        showed. So the write is allowed to fail, and the log is saved either way.
+        """
+        try:
+            os.write(self.fd, b"\x04")
+        except OSError:
+            self.save()
+            return
         for _ in range(40):
             self.pump(0.5)
             if self.exited():

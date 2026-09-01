@@ -668,6 +668,17 @@ into it, each of which cost a run:
   both leave the process running until it is killed, and a killed session delivers
   no `sessionEnd`, so the pipeline never closes it.
 
+**A failed drive is evidence, and it is never a result.** The driver exits `2`
+when no `sessionStart` arrived, and `1` when a turn produced no
+`afterAgentResponse` or the session ended without `sessionEnd`. The run directory
+is written either way — `tty.log` and `record/` are how such a run gets diagnosed
+— and then `qa-session-cursor.sh` exits with that code, because the session is
+not the stimulus the spec asked for. `qa-compare.py` repeats it as a finding, and
+also compares Dash0's `chat` count against the manifest's requested `turns`. That
+last comparison is the only one that catches a partial run: a two-turn session
+that died after the first turn has one chat span, one `afterAgentResponse` and one
+prompt in the transcript, so all three columns agree with each other.
+
 Four artifacts are specific to this runtime:
 
 | Artifact | Holds | Read it as |

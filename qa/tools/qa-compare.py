@@ -968,6 +968,26 @@ def report(data):
             print(f"  The plugin's debug log holds {manifest['spans_logged']} span(s)."
                   " A span there but not in\n  Dash0 was sent and lost; a span in neither"
                   " was never built.")
+        # A driver that exited non-zero did not deliver the stimulus the spec
+        # asked for, and the counts above can still agree with each other: a
+        # two-turn run that died after the first turn has one chat span, one
+        # afterAgentResponse and one prompt in the transcript. The manifest's
+        # `turns` is the only record of what was requested, so it is the
+        # expectation both other columns lack.
+        drive_rc = manifest.get("drive_exit_code")
+        requested = manifest.get("turns")
+        got_chat = dash0["spans"].get("chat", 0)
+        if drive_rc:
+            print(f"  The driver exited {drive_rc}: the session was not driven to"
+                  " completion, so every\n  count above describes a partial run."
+                  " tty.log is what it looked like.")
+            findings.append(f"driver: exited {drive_rc}, so the session was not"
+                            " driven to completion")
+        if requested and got_chat < requested:
+            print(f"  The run asked for {requested} turn(s) and Dash0 has"
+                  f" {got_chat} chat span(s).")
+            findings.append(f"chat: the run asked for {requested} turn(s),"
+                            f" Dash0 has {got_chat}")
         print(f"  Registration under test: {manifest.get('registered_script')}"
               f" over {manifest.get('registered_events')} event(s).")
         if manifest.get("wrapper_matches_shipped") is False:

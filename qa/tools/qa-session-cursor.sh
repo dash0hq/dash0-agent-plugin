@@ -529,3 +529,15 @@ EOF
 echo "qa: recorded $HOOKS_RECORDED hook invocations, $SPANS_LOGGED span(s) in the debug log"
 echo "qa: run written to $RUN"
 echo "qa: verify with  qa/tools/qa-compare.py $RUN"
+
+# The manifest is written first, because a failed drive is still evidence and its
+# record/, tty.log and plugin-debug.log are how it gets diagnosed. But the run is
+# not the stimulus the spec asked for, and it must not read as one: a two-turn run
+# that died after the first turn agrees with itself at one chat span and one
+# prompt, so the per-turn spec would go green on a session that had one turn.
+if [[ "$DRIVE_RC" != "0" ]]; then
+  echo "qa: the driver exited $DRIVE_RC, so this run is not a valid stimulus." >&2
+  echo "    The artifacts are kept for diagnosis; do not read the comparison as a" >&2
+  echo "    result. qa-compare.py reports the same thing as a finding." >&2
+  exit "$DRIVE_RC"
+fi

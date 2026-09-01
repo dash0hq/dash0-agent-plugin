@@ -47,8 +47,14 @@ from the published version, cut the next one, and skip it permanently.
 **If a run fails before step 7**, `main` still pins the old version and nothing
 downstream changed. The draft goes, and so does the tag if step 5 had got as far
 as pushing it — a tag on a bump commit that never reached `main` would otherwise
-refuse every later run. If it fails after the bump merged but before a release
-exists, run Release again: the planner sees `main` carrying an unreleased bump
+refuse every later run.
+
+> [!IMPORTANT]
+> Recover with a **new dispatch**, never with GitHub's "Re-run jobs". Every job
+> checks out `github.sha`, which a re-run replays unchanged — so it cannot see a
+> `main` that has moved or that already carries the bump, which is exactly what
+> the recovery depends on. A fresh dispatch resolves `github.sha` again. If it fails after the bump merged but before a release
+exists, dispatch Release again: the planner sees `main` carrying an unreleased bump
 and finishes that one instead of starting another.
 
 ### Dry run

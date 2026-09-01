@@ -30,6 +30,11 @@ on:
         type: string
         required: false
 
+# The version is not known until the plan job runs, and a job-level `name:`
+# renders literally when the job is skipped — which is every dry run. `run-name`
+# takes only contexts available at dispatch, so it always resolves.
+run-name: ${{ inputs.dry_run && 'Dry run' || 'Release' }} — ${{ inputs.version || inputs.bump }}
+
 concurrency:
   # GoReleaser runs in `mode: replace`, so two runs on one tag delete each
   # other's uploads and leave a partial asset set.
@@ -116,7 +121,6 @@ jobs:
           retention-days: 7
 
   release:
-    name: Release ${{ needs.plan.outputs.tag }}
     needs: plan
     if: needs.plan.outputs.mode == 'release'
     runs-on: ubuntu-latest
@@ -294,12 +298,19 @@ jobs:
         # it. Not `always()` — on success the release is published, and the
         # guard below would be the only thing standing between that and a
         # delete.
-        if: (failure() || cancelled()) && env.RELEASE_ID != ''
+        if: failure() || cancelled()
         run: |
           set -euo pipefail
-          DRAFT=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .draft 2>/dev/null || echo missing)
-          if [ "$DRAFT" = "true" ]; then
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
+          # Looked up by tag, not from RELEASE_ID. That variable is only written
+          # after the asset diff, so keying on it missed the likeliest failure of
+          # all: GoReleaser creates the release and then uploads, so a failure
+          # part-way through the upload leaves a draft that the guard could not
+          # see. Which is exactly the leftover the "newest draft for this tag"
+          # pick further up exists to survive.
+          ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+                 --jq '.[] | select(.tag_name==env.TAG and .draft) | .id' 2>/dev/null | head -1) || true
+          if [ -n "$ID" ]; then
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/$ID"
             echo "deleted the draft for $TAG"
             # Publish pushes the tag and then flips the draft; if it died between
             # the two, the tag is on this run's bump commit — which is not on
@@ -314,7 +325,7 @@ jobs:
               echo "deleted $TAG, which pointed at a commit that never reached main"
             fi
           else
-            echo "release $RELEASE_ID is $DRAFT — leaving it alone"
+            echo "no draft for $TAG — either none was created, or it is published and stays"
           fi
 
   # Everything above proves the assets resolve and the binary we built runs. This

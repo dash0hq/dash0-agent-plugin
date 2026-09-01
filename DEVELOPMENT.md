@@ -4,8 +4,8 @@
 
 **Actions → Release.** One button, and it is the whole thing: pick `patch`
 (default), `minor` or `major`, and the workflow works out the next version,
-writes it into every file that pins one, builds, verifies, moves `main`, tags
-and publishes.
+writes it into every file that pins one, builds, verifies, publishes, and moves
+`main` last.
 
 There is no prepare step, no bump PR and no merge to wait for.
 
@@ -63,9 +63,24 @@ anything — a rollback, or a build under test:
 export DASH0_VERSION=0.1.24
 ```
 
-Every bootstrap reads it, and the cache filename embeds the version, so it never
-collides with the pinned build. It is validated against the same shape a release
-uses, because it reaches both a download URL and a filesystem path.
+The four POSIX bootstraps read it, and the cache filename embeds the version, so
+it never collides with the pinned build. They validate it against the same shape
+a release uses, because it reaches both a download URL and a filesystem path: a
+value containing `..` retargets the download at another repository, and
+`checksums.txt` comes from the same base, so verification would pass against the
+attacker's own manifest.
+
+Two gaps, neither closed here:
+
+- **The Windows hooks ignore it.** `cursor-on-event.ps1`, `codex-on-event.ps1`
+  and `copilot-on-event.ps1` always use their pinned `$Version`. Confusingly,
+  `install-cursor.ps1` and `install-codex.ps1` *do* read it, so on Windows the
+  variable is honoured at install time and ignored at event time.
+- **The installers do not validate it.** `install-cursor.sh`,
+  `install-codex.sh` and both `.ps1` installers read `DASH0_VERSION` into the
+  same download URL and filesystem path with no check. The bootstrap guard is
+  the second line of defence; by the time a hook runs, the installer has already
+  written the binary.
 
 > **No dev channel yet.** Cutting a prerelease from a feature branch and gating
 > the App credential by branch are mutually exclusive without splitting the job

@@ -35,6 +35,12 @@ fail_open() {
   exit 0
 }
 
+# Says something is wrong and carries on. fail_open() ends the hook; this does
+# not, for the cases where the sensible response is to use the default.
+warn() {
+  echo "on-event: $*" >&2
+}
+
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
 
@@ -54,7 +60,13 @@ if [ -n "${DASH0_VERSION:-}" ]; then
   if [[ "$DASH0_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
     VERSION="$DASH0_VERSION"
   else
-    fail_open "ignoring DASH0_VERSION='$DASH0_VERSION' — not a version (expected 0.2.0, or 0.2.0-dev.1)"
+    # Warn and carry on with the pinned version, rather than end the hook.
+    # DASH0_VERSION is a convenience for a rollback or a QA build, and the
+    # realistic bad value is a typo — `v0.1.26` for `0.1.26`. Exiting here
+    # turned that into a silent session with no telemetry at all, which is a
+    # much worse outcome than ignoring the override, and the message already
+    # said "ignoring".
+    warn "ignoring DASH0_VERSION='$DASH0_VERSION' — not a version (expected 0.2.0, or 0.2.0-dev.1)"
   fi
 fi
 

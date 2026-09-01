@@ -29,7 +29,7 @@ The dotted directories are fixed by each agent's plugin discovery and cannot mov
 ## Releasing
 
 **Actions → Release.** Pick `patch`, `minor` or `major`; the workflow bumps every
-file that pins a version, builds, verifies, moves `main`, tags and publishes. One
+file that pins a version, builds, verifies, publishes, and moves `main` last. One
 button, no PR.
 
 `dry_run` builds and checks without publishing anything.

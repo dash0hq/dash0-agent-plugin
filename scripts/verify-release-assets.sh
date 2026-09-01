@@ -49,14 +49,27 @@ status() { curl -sI -o /dev/null -w '%{http_code}' -L "$1" || true; }
 # 404 is a real miss and lets the next candidate name be tried. Anything else is
 # a failure to ask, which must not be reported as a missing asset — a strict
 # release run would otherwise fail claiming a binary is absent when it is there.
+#
+# 429 and 5xx are retried here rather than left to the caller. This makes 24
+# unauthenticated requests per run against github.com, and the caller's retry
+# cannot help: `die` exits the whole script, so one throttled HEAD would end the
+# step on its first attempt. Past this point the release is already published,
+# so a rate limit must not be what decides it failed.
 resolves() {
-  local s
-  s=$(status "$1")
-  case "$s" in
-    200) return 0 ;;
-    404) return 1 ;;
-    *)   die "could not reach $1 (HTTP $s)" ;;
-  esac
+  local s attempt
+  for attempt in 1 2 3 4; do
+    s=$(status "$1")
+    case "$s" in
+      200) return 0 ;;
+      404) return 1 ;;
+      429|5??|000)
+        echo "  .. HTTP $s for $1, retrying" >&2
+        sleep $((attempt * 5))
+        ;;
+      *) die "could not reach $1 (HTTP $s)" ;;
+    esac
+  done
+  die "gave up on $1 after 4 attempts (last HTTP $s)"
 }
 
 CHECKSUMS_STATUS=$(status "${BASE}/checksums.txt")
@@ -83,9 +96,18 @@ fi
 # Never skipped under --strict, where the release was just built and must be
 # complete.
 WINDOWS=1
-if [ "$STRICT" -eq 0 ] && ! curl -sS -L "${BASE}/checksums.txt" | grep -q -- '-windows-'; then
-  echo "::warning::v${VERSION} predates the Windows binaries — Windows assets not checked"
-  WINDOWS=0
+if [ "$STRICT" -eq 0 ]; then
+  # Body and status captured separately. `! curl … | grep -q` would report a
+  # connection failure as "no windows entries", which is the one answer this
+  # must not guess: it would skip ten probes and still print PASS.
+  MANIFEST=$(curl -sS -L -w '\n%{http_code}' "${BASE}/checksums.txt") \
+    || die "could not fetch ${BASE}/checksums.txt to decide whether it has Windows assets"
+  [ "${MANIFEST##*$'\n'}" = "200" ] \
+    || die "unexpected HTTP ${MANIFEST##*$'\n'} for ${BASE}/checksums.txt"
+  if ! printf '%s' "$MANIFEST" | grep -q -- '-windows-'; then
+    echo "::warning::v${VERSION} predates the Windows binaries — Windows assets not checked"
+    WINDOWS=0
+  fi
 fi
 
 fail=0

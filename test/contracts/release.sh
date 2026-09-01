@@ -173,7 +173,13 @@ printf '%s\n' "$art" | grep -q 'linux.*\.exe' \
 # Derived, not transcribed: dropping a platform from .goreleaser.yaml must drop
 # its four binaries. A transcribed list would keep reporting all 24 and the
 # workflow would then diff dist/ against binaries nobody asked it to build.
-gr=$(mktemp -d); trap 'rm -rf "$gr"' EXIT
+# One trap for the whole script. `trap … EXIT` is not additive: a second one
+# silently replaces this, and this one already replaces lib.sh's _cleanup, which
+# kills the background PIDs it collects. Nothing here starts one today, which is
+# exactly why a later contract that does would not notice.
+gr=$(mktemp -d)
+sandbox=$(mktemp -d)
+trap 'rm -rf "$gr" "$sandbox"; _cleanup' EXIT
 mkdir -p "$gr/scripts"
 cp "$REPO/scripts/expected-artifacts.sh" "$gr/scripts/"
 grep -v '^      - darwin$' "$REPO/.goreleaser.yaml" >"$gr/.goreleaser.yaml"
@@ -194,8 +200,6 @@ echo "== What a bump actually writes =="
 # script did — exactly the drift this catches.
 # It runs against a copy — the script cds to its own parent, so the copy is the
 # only way to exercise the real writes without dirtying the working tree.
-sandbox=$(mktemp -d)
-trap 'rm -rf "$sandbox"' EXIT
 ( cd "$REPO" && tar cf - scripts/version.sh \
     .claude-plugin/plugin.json .cursor-plugin/plugin.json .codex-plugin/plugin.json \
     copilot/plugin.json .github/plugin/marketplace.json \

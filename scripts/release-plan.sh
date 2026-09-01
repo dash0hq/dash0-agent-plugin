@@ -111,6 +111,12 @@ if [ -n "$TAG" ]; then
     elsewhere) die "tag $TAG already exists on another commit, left by a run that failed after tagging. Nothing references it: delete it with \`git push origin :refs/tags/$TAG\` and dispatch again." ;;
     # An earlier run of this same release tagged and then failed. Nothing to
     # create; GoReleaser's `mode: replace` makes the rebuild safe.
+    #
+    # Only meaningful when bump_needed=false. This compares against the plan
+    # job's HEAD, which is pre-bump, while the workflow compares against the
+    # post-bump commit — so on a bump run a tag sitting on main's head passes
+    # here and is then refused by the workflow's own guard. Loud and safe, but
+    # the diagnostic blames the tag rather than the plan.
     here)      ;;
   esac
 fi

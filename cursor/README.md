@@ -64,7 +64,8 @@ the list. See [DEVELOPMENT.md](../DEVELOPMENT.md#releasing) for the flow.
 
 `DASH0_VERSION` pins a release: `install-cursor.sh` reads it when resolving what
 to install, and `cursor-on-event.sh` reads it at runtime to override the version
-it was installed with.
+it was installed with. Only the bootstrap validates it — see
+[DEVELOPMENT.md](../DEVELOPMENT.md#releasing) for what the installer does not.
 
 ## Install in a local Cursor instance
 

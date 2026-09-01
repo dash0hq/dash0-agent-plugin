@@ -99,17 +99,36 @@ echo "== DASH0_VERSION cannot retarget the download or escape BIN_DIR =="
 # runs inside an agent session, so a project .envrc is a plausible source.
 fail=0
 vdata=$(mktemp -d)
+# The pinned default, which a rejected override must fall back to.
+pinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")
 for bad in '../../../../attacker/repo/releases/download/v9' '../../etc' 'v0.1.25' '0.1.25; id'; do
-  out=$(DASH0_VERSION="$bad" CLAUDE_PLUGIN_DATA="$vdata" \
-        bash "$REPO/claude/claude-on-event.sh" <<<'{}' 2>&1 | head -1)
+  bdata=$(mktemp -d)
+  out=$(DASH0_VERSION="$bad" CLAUDE_PLUGIN_DATA="$bdata" \
+        bash "$REPO/claude/claude-on-event.sh" <<<'{}' 2>&1) || true
   case "$out" in
     *ignoring*) ;;
     *) echo "  FAIL accepted: $bad"; fail=1 ;;
   esac
+  # Behaviour, not wording. Rejecting the value must leave the hook running on
+  # the pinned version — the message says "ignoring", and for a long time the
+  # code exited instead, turning a typo like v0.1.25 into a session with no
+  # telemetry at all. Asserting only on the message could not tell the two apart.
+  cached=$(find "$bdata/bin" -type f -name "*-${pinned}-*" 2>/dev/null | head -1) || true
+  [ -n "$cached" ] \
+    || { echo "  FAIL '$bad' stopped the hook instead of falling back to $pinned"; fail=1; }
+  # And the rejected value must reach neither a path nor a URL.
+  find "$bdata" -path '*attacker*' -o -name "*${bad##*/}*" 2>/dev/null | grep -q . \
+    && { echo "  FAIL '$bad' reached the filesystem"; fail=1; }
+  rm -rf "$bdata"
 done
 for ok in '0.1.26' '0.1.26-dev.7'; do
+  # `|| true`, matching the download probe below: a valid DASH0_VERSION means
+  # the script runs on into settings and the download, so it keeps writing after
+  # head -1 has exited. Under `set -o pipefail` that is a 141 which ends the
+  # whole suite with no diagnostic — and how much it writes depends on the
+  # machine, so it would reproduce on a laptop and not in CI.
   out=$(DASH0_VERSION="$ok" CLAUDE_PLUGIN_DATA="$vdata" \
-        bash "$REPO/claude/claude-on-event.sh" <<<'{}' 2>&1 | head -1)
+        bash "$REPO/claude/claude-on-event.sh" <<<'{}' 2>&1 | head -1) || true
   case "$out" in
     *ignoring*) echo "  FAIL rejected a real version: $ok"; fail=1 ;;
   esac

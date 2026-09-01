@@ -2,8 +2,8 @@
 
 What a GitHub Copilot CLI session looks like in Dash0 once it ends. One area per runtime, because a
 run is one driver, one credential and one cost profile — `## Runtimes` in
-[../../setup.md](../../setup.md) is the table, and [../claude](../claude/README.md) and
-[../codex](../codex/README.md) are the other two.
+[../../setup.md](../../setup.md) is the table, and [../claude](../claude/README.md),
+[../codex](../codex/README.md) and [../cursor](../cursor/README.md) are the other three.
 
 | Topic | Covers |
 | --- | --- |
@@ -44,7 +44,7 @@ about a developer's or a customer's install.
 per-turn roll-up next to the sum of that turn's `chat` spans, which catches Copilot disagreeing with
 itself, and that is the closest this runtime gets.
 
-**Anything about Claude Code or Codex.** A fix verified here is unverified there, and the reverse.
-The three runtimes share the pipeline but not the payloads, and Copilot shares less than the other
-two share with each other: different event names, different field names, and a second source the
-others do not have at all.
+**Anything about Claude Code, Codex or Cursor.** A fix verified here is unverified there, and the
+reverse. The four runtimes share the pipeline but not the payloads, and Copilot shares less than
+Claude and Codex share with each other: different event names, different field names, and a second
+source none of the others has at all.

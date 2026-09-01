@@ -381,6 +381,14 @@ var attrSkipKeys = map[string]bool{
 	// "error", which the span's own ERROR status and exception.message already
 	// say, and it arrives unnamespaced like the rest.
 	"failure_type": true,
+
+	// UserPromptSubmit bookkeeping, denied for the InstructionsLoaded reason
+	// above: no span today, so this only has to hold when that changes.
+	// attachments is Cursor's, and is user content. chat_span_id is no source's
+	// — pipeline.go stamps it on every UserPromptSubmit — so it would leak on
+	// all four runtimes at once.
+	"attachments":  true,
+	"chat_span_id": true,
 }
 
 // MaxContentBytes is the maximum size for content attributes (tool I/O, prompts).

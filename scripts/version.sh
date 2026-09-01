@@ -9,9 +9,10 @@
 #   scripts/version.sh latest                 the newest published release
 #   scripts/version.sh next patch|minor|major print what comes after it
 #
-# Twelve files pin the version. They must agree: a bootstrap left behind asks
-# GitHub for a release that was never tagged, and since the Claude marketplace
-# lists this repo with no ref, that reaches users on their next `plugin install`.
+# Twelve files carry thirteen pins (marketplace.json has two). They must agree:
+# a bootstrap left behind asks GitHub for a release that was never tagged, and
+# since the Claude marketplace lists this repo with no ref, that reaches users
+# on their next `plugin install`.
 # This is the only list of them, so the bump and the check cannot disagree about
 # what needs bumping. Used by .github/workflows/release.yml, CI's
 # consistency-checks job, and `make version-check`.

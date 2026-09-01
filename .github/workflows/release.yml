@@ -158,9 +158,9 @@ jobs:
           set -euo pipefail
           git config user.name "dash0-release-bot[bot]"
           git config user.email "dash0-release-bot[bot]@users.noreply.github.com"
-          # bump_needed is false when main already carries this version — an
-          # earlier run pushed the bump and then failed — and for dev cuts, which
-          # change nothing outside their own tag.
+          # bump_needed is false only on the recovery path, where main already
+          # carries this version: an earlier run landed the bump and then failed
+          # before a release existed.
           if [ "$BUMP_NEEDED" = "true" ]; then
             ./scripts/version.sh set "$VERSION"
             git commit -aqm "release: $TAG"
@@ -259,6 +259,15 @@ jobs:
           #
           # A plain push, not --force: it is still a compare-and-swap, and the
           # App's ruleset bypass does not weaken a non-fast-forward rejection.
+          #
+          # actions/checkout persists its own credential as an http.extraheader,
+          # which git sends on every request to github.com whatever the remote
+          # URL says. Left in place it can win over the userinfo below, making
+          # this push GITHUB_TOKEN's — which the ruleset rejects, and the error
+          # would look exactly like a lost race. Removed so the identity is
+          # unambiguous. `|| true` because --unset-all exits 5 when the key is
+          # absent, which is a valid state, not a failure.
+          git config --unset-all "http.https://github.com/.extraheader" 2>/dev/null || true
           # The App's identity, for this one command. Everything else in this
           # job — building, drafting, publishing — uses GITHUB_TOKEN.
           git remote set-url origin \
@@ -273,10 +282,12 @@ jobs:
             exit 1
           fi
 
-      # Reached when any step above failed. Publish is the last one that can, and
-      # it patches draft=false as its final act, so a release still marked draft
-      # here was never reachable and is only in the way of the re-run: the asset
-      # diff takes the newest draft for the tag, and a stale one would be it.
+      # Reached when any step above failed. Publish patches draft=false as its
+      # final act, so a release still marked draft here never became reachable —
+      # the failure was at or before Publish. It is only in the way of the
+      # re-run: the asset diff takes the newest draft for the tag, and a stale
+      # one would be it. A failure AFTER Publish leaves a published release,
+      # which this deliberately does not touch.
       - name: Remove the draft this run left behind
         # cancelled() as well as failure(): a cancelled run leaves the draft
         # exactly as a failed one does, and `failure()` alone does not fire for

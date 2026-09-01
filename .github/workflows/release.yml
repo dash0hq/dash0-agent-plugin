@@ -219,25 +219,6 @@ jobs:
           diff expected.txt uploaded.txt \
             || { echo "::error::the draft's assets do not match the build"; exit 1; }
 
-      - name: Move main to the new version
-        if: needs.plan.outputs.bump_needed == 'true'
-        run: |
-          set -euo pipefail
-          # The compare-and-swap. A plain push is rejected if main moved since the
-          # plan checked it out, and nothing has been published yet — so a lost
-          # race costs one build and no exposure. This is also the only step that
-          # uses the App's identity.
-          # The App's identity, for this one command. Everything else in this
-          # job — building, drafting, publishing — uses GITHUB_TOKEN.
-          git remote set-url origin \
-            "https://x-access-token:${{ steps.app.outputs.token }}@github.com/${GITHUB_REPOSITORY}.git"
-          if ! git push origin HEAD:main; then
-            echo "::error::could not move main — nothing was published. Usually main moved" \
-                 "during this run, in which case re-running is enough; if it repeats, check" \
-                 "that the App is still a bypass actor on the branch ruleset."
-            exit 1
-          fi
-
       - name: Publish
         env:
           MAKE_LATEST: ${{ needs.plan.outputs.latest }}
@@ -264,6 +245,33 @@ jobs:
           done
           echo "::error::the published assets never became reachable"
           exit 1
+
+      - name: Move main to the new version
+        if: needs.plan.outputs.bump_needed == 'true'
+        run: |
+          set -euo pipefail
+          # Last, so main never names a version whose assets are not downloadable
+          # yet. The cost is that this is the one step that can be rejected by
+          # someone else merging, and by now the release is public: a lost race
+          # leaves v$VERSION published while main still pins the old version.
+          # The planner refuses to cut anything in that state and says to land
+          # the bump as a PR, so the version cannot be silently skipped.
+          #
+          # A plain push, not --force: it is still a compare-and-swap, and the
+          # App's ruleset bypass does not weaken a non-fast-forward rejection.
+          # The App's identity, for this one command. Everything else in this
+          # job — building, drafting, publishing — uses GITHUB_TOKEN.
+          git remote set-url origin \
+            "https://x-access-token:${{ steps.app.outputs.token }}@github.com/${GITHUB_REPOSITORY}.git"
+          if ! git push origin HEAD:main; then
+            echo "::error::v${VERSION} IS PUBLISHED but main could not be moved," \
+                 "so main still pins the previous version. Usually main moved during" \
+                 "this run; if it repeats, check that the App is still a bypass actor" \
+                 "on the branch ruleset. Fix by opening a PR that runs" \
+                 "./scripts/version.sh set ${VERSION} and merging it — do not delete" \
+                 "the release, installs may already have taken it."
+            exit 1
+          fi
 
       # Reached when any step above failed. Publish is the last one that can, and
       # it patches draft=false as its final act, so a release still marked draft

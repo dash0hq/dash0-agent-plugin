@@ -75,6 +75,15 @@ else
   # other. `higher` compares numerically per component and would otherwise rank
   # 0.2.0-dev.1 above 0.2.0.
   PUBLISHED=$(./scripts/version.sh latest)
+  # main behind a published release. The publish now happens BEFORE the push to
+  # main, so this is what a lost race leaves: v$PUBLISHED is public and Latest,
+  # but the bump that names it never landed. Left alone, the next run counts from
+  # the published release and cuts $PUBLISHED+1, skipping it permanently and
+  # leaving main pointing at an older version than the one people install.
+  # Refused loudly instead, because the fix is a bump PR and not another release.
+  if [ "$PINNED" != "$PUBLISHED" ] && [ "$(higher "$PINNED" "$PUBLISHED")" = "$PUBLISHED" ]; then
+    die "v$PUBLISHED is published but main still pins $PINNED — a previous run published and then could not move main. Open a PR running \`./scripts/version.sh set $PUBLISHED\` and merge it, then release again."
+  fi
   if [ "$PINNED" != "$PUBLISHED" ] && [ "$(higher "$PINNED" "$PUBLISHED")" = "$PINNED" ]; then
     # main already carries a bump that was never released — an earlier run pushed
     # it and then failed. Finish that release rather than starting another, which

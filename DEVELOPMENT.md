@@ -11,8 +11,8 @@ There is no prepare step, no bump PR and no merge to wait for.
 
 ### Why the order is what it is
 
-Everything expensive happens while `main` still points at the *old* version, and
-`main` only learns the new one once the binaries are already on GitHub:
+Everything happens while `main` still points at the *old* version. `main` learns
+the new one last, once the binaries are published and proven downloadable:
 
 1. Check out the commit `main` pointed at when the button was pressed.
 2. Work out the version, write it everywhere, commit and tag — **locally**.
@@ -20,24 +20,34 @@ Everything expensive happens while `main` still points at the *old* version, and
    three platforms, two architectures — and upload them to a **draft** release.
 4. Verify: checksums, `dist/` matches that list by name, the Linux binary
    actually runs, and the uploaded assets match what was built.
-5. Push the bump to `main`.
-6. Push the tag, then flip the draft to published.
-7. Check every public download URL, then install the real binary end to end.
+5. Push the tag, then flip the draft to published.
+6. Check every public download URL a bootstrap can build.
+7. Push the bump to `main`, last.
 
-Steps 1 to 5 publish nothing, and a failure in any of them deletes the draft.
-Step 6 is where the release becomes real; step 7 is the check that it did.
-Steps 5 to 6 are two API calls. Before this, the gap between `main` naming a
-version and that version existing was 57 seconds when a merge triggered the
-build, and unbounded before that, when a human had to remember to push the tag.
+Steps 1 to 4 publish nothing, and a failure in any of them deletes the draft.
+Step 5 is where the release becomes real, step 6 proves it is downloadable, and
+only then does `main` name it.
 
-**If someone merges mid-release**, step 5 is a plain `git push` and is rejected —
-it is a compare-and-swap. Nothing was published, so the run deletes its draft and
-stops. Re-run and it picks up the new `main`. There is no way to publish binaries
-that do not match `main`, because the only way to reach step 6 is to have won.
+**`main` never names a version you cannot install.** That is the point of putting
+step 7 last: the assets are public and verified before anything an install reads
+mentions them. Before this, the gap between `main` naming a version and that
+version existing was 57 seconds when a merge triggered the build, and unbounded
+before that, when a human had to remember to push the tag.
 
-**If a run fails after step 5**, `main` names a version with no release. Just run
-Release again: the planner sees `main` already carrying an unreleased bump and
-finishes that one instead of starting another, which would skip a version.
+**If someone merges mid-release**, step 7 is a plain `git push` and is rejected —
+it is a compare-and-swap, and the App's ruleset bypass does not weaken that. The
+release is already public at that point, so `main` is left pinning the previous
+version. Do not delete the release; installs may already have taken it. Instead
+open a PR running `./scripts/version.sh set <version>` and merge it.
+
+The planner refuses to cut anything while `main` is behind a published release,
+so this cannot be papered over by pressing Release again — which would count
+from the published version, cut the next one, and skip it permanently.
+
+**If a run fails before step 7**, `main` still pins the old version and nothing
+downstream changed. If it fails after the bump merged but before a release
+exists, run Release again: the planner sees `main` carrying an unreleased bump
+and finishes that one instead of starting another.
 
 ### Dry run
 

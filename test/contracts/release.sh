@@ -106,6 +106,14 @@ refuse "an explicit version while main carries an unreleased bump" "finish that 
   REF_NAME=main PINNED=0.1.26 IN_VERSION=0.2.0 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=absent "$PLAN"
 
+# The publish now happens before the push to main, so a lost race leaves the
+# release public and main still on the old version. Counting from the published
+# release would then cut PUBLISHED+1 and skip it permanently, with main naming an
+# older version than the one people install.
+refuse "a release while main is behind a published one" "could not move main" -- \
+  REF_NAME=main PINNED=0.1.25 \
+  EXISTING_RELEASES="v0.1.25 v0.1.26" TAG_STATE=absent "$PLAN"
+
 refuse "a tag already on another commit" "another commit" -- \
   REF_NAME=main PINNED=0.1.25 \
   EXISTING_RELEASES="v0.1.25" TAG_STATE=elsewhere "$PLAN"

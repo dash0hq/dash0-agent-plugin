@@ -104,7 +104,11 @@ fi
 
 if [ -n "$TAG" ]; then
   case "$(tag_state "$TAG")" in
-    elsewhere) die "tag $TAG already exists on another commit" ;;
+    # Normally unreachable: a run that pushes the tag and then fails deletes it
+    # again along with its draft. Reachable if that cleanup did not run — a
+    # hard-killed runner — and then it wedges every future release, so the
+    # message has to name the way out.
+    elsewhere) die "tag $TAG already exists on another commit, left by a run that failed after tagging. Nothing references it: delete it with \`git push origin :refs/tags/$TAG\` and dispatch again." ;;
     # An earlier run of this same release tagged and then failed. Nothing to
     # create; GoReleaser's `mode: replace` makes the rebuild safe.
     here)      ;;

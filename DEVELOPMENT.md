@@ -45,7 +45,9 @@ so this cannot be papered over by pressing Release again — which would count
 from the published version, cut the next one, and skip it permanently.
 
 **If a run fails before step 7**, `main` still pins the old version and nothing
-downstream changed. If it fails after the bump merged but before a release
+downstream changed. The draft goes, and so does the tag if step 5 had got as far
+as pushing it — a tag on a bump commit that never reached `main` would otherwise
+refuse every later run. If it fails after the bump merged but before a release
 exists, run Release again: the planner sees `main` carrying an unreleased bump
 and finishes that one instead of starting another.
 

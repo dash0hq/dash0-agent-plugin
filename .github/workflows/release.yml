@@ -301,6 +301,18 @@ jobs:
           if [ "$DRAFT" = "true" ]; then
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
             echo "deleted the draft for $TAG"
+            # Publish pushes the tag and then flips the draft; if it died between
+            # the two, the tag is on this run's bump commit — which is not on
+            # main and, since the bump is pushed last, never will be. Left
+            # behind it wedges the release permanently: the planner refuses
+            # every future run with "tag already exists on another commit", and
+            # so does the local `git tag` guard, because the next run builds a
+            # different bump commit. It goes with the draft, both being remains
+            # of a release that never happened. The `if` because the tag is not
+            # pushed on most failure paths, and a 422 there is not an error.
+            if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" 2>/dev/null; then
+              echo "deleted $TAG, which pointed at a commit that never reached main"
+            fi
           else
             echo "release $RELEASE_ID is $DRAFT — leaving it alone"
           fi

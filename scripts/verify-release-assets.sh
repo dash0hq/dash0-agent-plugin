@@ -41,50 +41,67 @@ BOOTSTRAPS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
 PS_BOOTSTRAPS=(cursor/cursor-on-event.ps1 codex/codex-on-event.ps1
                copilot/copilot-on-event.ps1)
 
+# Retries live here, in the one place every request goes through, so the
+# checksums gate below gets them too. It used to be the only unretried request
+# in the strict path — and it is the first one, so a single 429 killed the run
+# reporting "release has no checksums.txt", which is a lie about a published
+# release.
+#
+# Bounded by one deadline for the whole script rather than per request. Thirty
+# probes each willing to sleep independently is minutes of unbounded wait, and
+# the job calling this has a 20-minute timeout it would blow through — after
+# Publish, which is the worst place to be killed.
+RETRY_DEADLINE=${RETRY_DEADLINE:-180}
+START=$SECONDS
+
 # `|| true` because a DNS or connection failure exits curl 6/7, which under
-# `set -e` would abort at the assignment below — skipping the classification that
+# `set -e` would abort at the assignment — skipping the classification that
 # distinguishes "not published" from "could not ask". curl still writes 000.
-status() { curl -sI -o /dev/null -w '%{http_code}' -L "$1" || true; }
+status() {
+  local s attempt
+  for attempt in 1 2 3 4; do
+    s=$(curl -sI -o /dev/null -w '%{http_code}' -L "$1" || true)
+    case "$s" in
+      429|5??|000)
+        [ $((SECONDS - START)) -lt "$RETRY_DEADLINE" ] || break
+        echo "  .. HTTP $s for $1, retrying" >&2
+        sleep $((attempt * 3))
+        ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$s"
+}
 
 # 404 is a real miss and lets the next candidate name be tried. Anything else is
 # a failure to ask, which must not be reported as a missing asset — a strict
 # release run would otherwise fail claiming a binary is absent when it is there.
-#
-# 429 and 5xx are retried here rather than left to the caller. This makes 24
-# unauthenticated requests per run against github.com, and the caller's retry
-# cannot help: `die` exits the whole script, so one throttled HEAD would end the
-# step on its first attempt. Past this point the release is already published,
-# so a rate limit must not be what decides it failed.
 resolves() {
-  local s attempt
-  for attempt in 1 2 3 4; do
-    s=$(status "$1")
-    case "$s" in
-      200) return 0 ;;
-      404) return 1 ;;
-      429|5??|000)
-        echo "  .. HTTP $s for $1, retrying" >&2
-        sleep $((attempt * 5))
-        ;;
-      *) die "could not reach $1 (HTTP $s)" ;;
-    esac
-  done
-  die "gave up on $1 after 4 attempts (last HTTP $s)"
+  local s
+  s=$(status "$1")
+  case "$s" in
+    200) return 0 ;;
+    404) return 1 ;;
+    *)   die "could not reach $1 (HTTP $s)" ;;
+  esac
 }
 
+# Classified once, for both modes. Only a 404 means "not published". Anything
+# else is a failure to ask, and saying "has no checksums.txt" about a 503 is the
+# same lie in strict mode that the skip would be in CI — it blames the release
+# for the network.
 CHECKSUMS_STATUS=$(status "${BASE}/checksums.txt")
-if [ "$CHECKSUMS_STATUS" != "200" ]; then
-  [ "$STRICT" -eq 0 ] \
-    || die "release v${VERSION} has no checksums.txt at ${BASE} (HTTP $CHECKSUMS_STATUS)"
-  # Only a 404 means "not published yet". A 5xx, a rate limit or a connection
-  # failure (000) must not read as a clean skip — that is how a genuinely broken
-  # asset set passes CI behind one flaky request.
-  [ "$CHECKSUMS_STATUS" = "404" ] \
-    || die "could not reach ${BASE}/checksums.txt (HTTP $CHECKSUMS_STATUS)"
-  # Expected on a version-bump PR. Validated for real by the release workflow.
-  echo "::warning::release v${VERSION} is not published yet — asset check skipped"
-  exit 0
-fi
+case "$CHECKSUMS_STATUS" in
+  200) ;;
+  404)
+    [ "$STRICT" -eq 0 ] \
+      || die "release v${VERSION} is not published — no checksums.txt at ${BASE}"
+    # Expected on a version-bump PR. Validated for real by the release workflow.
+    echo "::warning::release v${VERSION} is not published yet — asset check skipped"
+    exit 0
+    ;;
+  *) die "could not reach ${BASE}/checksums.txt (HTTP $CHECKSUMS_STATUS) — this says nothing about whether v${VERSION} is published" ;;
+esac
 
 # probe <script> <platform> <candidate names…> — at least one must resolve. More
 # than one is how a published asset can be renamed without coordinating the

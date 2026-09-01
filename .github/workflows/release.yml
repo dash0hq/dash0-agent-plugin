@@ -3,11 +3,10 @@ name: Release
 # One button. The workflow bumps the version itself, so there is no prepare step,
 # no bump PR and no merge to wait for.
 #
-# The order matters: everything expensive happens while main still points at the
-# old version, and main only learns about the new one once the binaries are
-# already sitting on GitHub. That closes the window in which main named a version
-# whose assets did not exist yet — measured at 57s when a merge triggered the
-# build, and unbounded before that, when a human pushed the tag.
+# The order matters: main is moved LAST, after the release is published and every
+# public download URL has been checked. So main never names a version you cannot
+# install — the window where it did was 57s when a merge triggered the build, and
+# unbounded before that, when a human pushed the tag.
 #
 # Pushing to main needs an identity the ruleset lets through. GitHub Actions'
 # own token cannot be granted that (GitHub refuses it as a bypass actor with a
@@ -48,6 +47,7 @@ jobs:
   plan:
     name: Plan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       mode: ${{ steps.plan.outputs.mode }}
       version: ${{ steps.plan.outputs.version }}
@@ -75,7 +75,6 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           IN_VERSION: ${{ inputs.version }}
           REF_NAME: ${{ github.ref_name }}
-          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
           PLAN=$(./scripts/release-plan.sh)
@@ -88,6 +87,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.mode == 'dry-run'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: '${{ github.sha }}', fetch-depth: 0 }
@@ -242,7 +242,12 @@ jobs:
           # download host does not always serve it on the first ask. Failing
           # here leaves a published release nobody can install, so a transient
           # 404 must not be reported as one.
-          for attempt in 1 2 3 4 5; do
+          # Three attempts, not five: this loop only covers propagation lag,
+          # which resolves in seconds. A 429 or a 5xx is retried inside the
+          # script against its own deadline, so the total wait here is bounded
+          # well under the job's 20-minute timeout — being killed by that after
+          # Publish is the worst outcome available.
+          for attempt in 1 2 3; do
             if ./scripts/verify-release-assets.sh --strict "$VERSION"; then exit 0; fi
             echo "attempt $attempt did not resolve every asset; retrying"
             sleep $((attempt * 10))

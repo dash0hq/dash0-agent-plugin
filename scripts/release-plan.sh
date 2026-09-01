@@ -15,7 +15,6 @@
 #   BUMP        inputs.bump        — patch | minor | major
 #   IN_VERSION  inputs.version     — optional exact version
 #   REF_NAME    github.ref_name    — the branch dispatched from
-#   RUN_NUMBER  github.run_number  — the dev build counter
 #   PINNED      the version in .claude-plugin/plugin.json (defaults to reading it)
 
 set -euo pipefail
@@ -26,7 +25,6 @@ DRY_RUN="${DRY_RUN:-false}"
 BUMP="${BUMP:-patch}"
 IN_VERSION="${IN_VERSION:-}"
 REF_NAME="${REF_NAME:-}"
-RUN_NUMBER="${RUN_NUMBER:-0}"
 PINNED="${PINNED:-$(jq -r '.version' .claude-plugin/plugin.json)}"
 
 die() { echo "::error::$1" >&2; exit 1; }

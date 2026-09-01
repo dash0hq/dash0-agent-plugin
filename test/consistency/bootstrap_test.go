@@ -185,9 +185,9 @@ func powerShellVersion(t *testing.T, agent string) string {
 }
 
 // Each pair of bootstraps pins its own version, outside the shared region because
-// the syntax differs. scripts/release.sh bumps all seven together, but nothing
-// stopped a hand edit or a dropped line in that script from moving one and not the
-// other. The cost of drift is silent and total: the version is in the cache
+// the syntax differs. scripts/version.sh bumps all thirteen pins together, but
+// nothing stopped a hand edit or a dropped line in that script from moving one and
+// not the other. The cost of drift is silent and total: the version is in the cache
 // filename and the asset name, so Windows would fetch a release asset that does
 // not exist, and the local-dev setup would stage a binary under a name the
 // PowerShell bootstrap never looks for.
@@ -196,7 +196,7 @@ func TestBootstrapVersionsMatchAcrossPlatforms(t *testing.T) {
 		t.Run(agent, func(t *testing.T) {
 			assert.Equal(t, bootstrapVersion(t, agent), powerShellVersion(t, agent),
 				"%s-on-event.sh and %s-on-event.ps1 pin different versions — "+
-					"bump both (scripts/release.sh does)", agent, agent)
+					"bump both (scripts/version.sh does)", agent, agent)
 		})
 	}
 }

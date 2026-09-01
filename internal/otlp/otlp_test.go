@@ -381,6 +381,45 @@ func TestSendLogDropsCopilotStopReason(t *testing.T) {
 	assertNoAttr(t, lr.Attributes, "traceparent")
 }
 
+// TestSendLogDropsCursorBookkeeping pins the Cursor equivalent. Cursor puts
+// conversation_id, generation_id, cursor_version and workspace_roots on every
+// hook payload, and failure_type on postToolUseFailure only, so all five reached
+// the spans unnamespaced. Note that conversation_id is not the field the plugin
+// reads for the conversation id: session_id is, and the assertion below pins
+// that the denial does not take the mapped attribute with it. The payload is a
+// real postToolUseFailure event from qa/runs/probe-cursor-tool-failure2, trimmed
+// to the fields at issue; found by qa/tools/qa-attrs.py on the first two Cursor
+// QA runs, as the Codex and Copilot leaks above were.
+func TestSendLogDropsCursorBookkeeping(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "PostToolUseFailure",
+		"session_id":      "0ae0d1a2-3b1e-4c8d-9f77-6c2b0f4a5d31",
+		"conversation_id": "0ae0d1a2-3b1e-4c8d-9f77-6c2b0f4a5d31",
+		"generation_id":   "2f4c8a91-77b3-4e0a-8d15-9b6e3c1f0a24",
+		"cursor_version":  "2026.08.31-4057e58",
+		"workspace_roots": []any{"/tmp/qa-project"},
+		"failure_type":    "toolCallError",
+	}
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "0ae0d1a2-3b1e-4c8d-9f77-6c2b0f4a5d31")
+	for _, key := range []string{
+		"conversation_id", "generation_id", "cursor_version", "workspace_roots", "failure_type",
+	} {
+		assertNoAttr(t, lr.Attributes, key)
+	}
+}
+
 // TestSendLogDropsUnmappedBookkeeping covers the fields that do not reach a span
 // today because InstructionsLoaded maps to no span. Denying them is only useful
 // if it holds when that changes, which is what this asserts. "reason" is in the

@@ -452,6 +452,38 @@ func TestSendLogDropsUnmappedBookkeeping(t *testing.T) {
 	}
 }
 
+// TestSendLogDropsPromptBookkeeping is the same argument for UserPromptSubmit:
+// no span today, so what this pins is the day one appears. prompt is asserted
+// present because it is the one field on the event that is meant to travel, and
+// sendLLMTrace lifting it is why the others must not come along.
+func TestSendLogDropsPromptBookkeeping(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "UserPromptSubmit",
+		"session_id":      "aed69ea7-1f2c-4b60-9d8e-3a7c05b41e92",
+		"prompt":          "summarize the attached file",
+		"attachments":     []any{map[string]any{"type": "file", "path": "/Users/someone/notes.md"}},
+		"chat_span_id":    "9b6e3c1f0a24d158",
+	}
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "aed69ea7-1f2c-4b60-9d8e-3a7c05b41e92")
+	assertAttr(t, lr.Attributes, "gen_ai.input.messages",
+		`[{"parts":[{"content":"summarize the attached file","type":"text"}],"role":"user"}]`)
+	for _, key := range []string{"attachments", "chat_span_id"} {
+		assertNoAttr(t, lr.Attributes, key)
+	}
+}
+
 func TestTruncateContent(t *testing.T) {
 	t.Run("short content is not truncated", func(t *testing.T) {
 		result := truncateContent("hello world")

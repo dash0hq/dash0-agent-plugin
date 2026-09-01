@@ -103,7 +103,9 @@ vdata=$(mktemp -d)
 # cwd exits the script before it reaches the regex, and every assertion here
 # would then pass having tested nothing.
 export HOME="$vdata/home"; mkdir -p "$HOME"
-cd "$vdata"
+# The cwd is thrown away per invocation, in a subshell. A bare `cd` here leaks
+# into the contracts below, which `go build` from the repo root — they then fail
+# to build and skip_or_fail turns that into a red CI run.
 
 # The pinned default, which a rejected override must fall back to.
 pinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")
@@ -118,7 +120,7 @@ curl -fsSL -o /dev/null "$CHECKSUMS_URL" 2>/dev/null && published=1
 
 for bad in '../../../../attacker/repo/releases/download/v9' '../../etc' 'v0.1.25' '0.1.25; id'; do
   bdata=$(mktemp -d)
-  out=$(DASH0_VERSION="$bad" CLAUDE_PLUGIN_DATA="$bdata" \
+  out=$(cd "$vdata" && DASH0_VERSION="$bad" CLAUDE_PLUGIN_DATA="$bdata" \
         bash "$REPO/claude/claude-on-event.sh" <<<'{}' 2>&1) || true
   case "$out" in
     *ignoring*) ;;
@@ -144,7 +146,7 @@ for ok in "$pinned" "${pinned}-dev.7"; do
   # head -1 has exited. Under `set -o pipefail` that is a 141 which ends the
   # whole suite with no diagnostic — and how much it writes depends on the
   # machine, so it would reproduce on a laptop and not in CI.
-  out=$(DASH0_VERSION="$ok" CLAUDE_PLUGIN_DATA="$vdata" \
+  out=$(cd "$vdata" && DASH0_VERSION="$ok" CLAUDE_PLUGIN_DATA="$vdata" \
         bash "$REPO/claude/claude-on-event.sh" <<<'{}' 2>&1 | head -1) || true
   case "$out" in
     *ignoring*) echo "  FAIL rejected a real version: $ok"; fail=1 ;;

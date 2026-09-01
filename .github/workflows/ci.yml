@@ -182,7 +182,7 @@ jobs:
           # runner, not the suite: the three live canaries are slower here.
           - os: windows-latest
             test-cmd: go test -tags=e2e -v -timeout=600s ./test/e2e/
-    # Fork PRs only. They get no secrets, so the three live canaries would fail
+    # Skipped for fork PRs. They get no secrets, so the three live canaries would fail
     # on missing credentials rather than on anything real. The `push` half of
     # this condition went with the main-push trigger; a manual dispatch needs to
     # reach the canaries, which an inverted pull_request test allows and the old

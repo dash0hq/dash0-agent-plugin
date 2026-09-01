@@ -91,7 +91,7 @@ Two gaps, neither closed here:
 ### How it is wired
 
 - **`scripts/version.sh`** — `check`, `set`, `latest`, `next`. The only list of
-  the ten places a version is pinned, so the bump and the check cannot disagree
+  the thirteen places a version is pinned, so the bump and the check cannot disagree
   about what needs bumping. `next` counts from the newest **published release**,
   not from tags or the manifests, both of which can name a version that was never
   released.

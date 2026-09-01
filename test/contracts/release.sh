@@ -144,8 +144,8 @@ refuse "an unknown part" "expected patch, minor or major" -- \
   EXISTING_RELEASES="v0.1.25" PINNED=0.1.25 "$VER" next sideways
 
 # $PINNED, never a literal: `set` reads and writes the real files, so a stale
-# literal would stop being a no-op after the next release and rewrite all ten
-# pins in the working tree instead of being refused.
+# literal would stop being a no-op after the next release and rewrite every
+# pin in the working tree instead of being refused.
 refuse "a bump to the version already pinned" "nothing to prepare" -- \
   "$VER" set "$(jq -r '.version' "$REPO/.claude-plugin/plugin.json")"
 
@@ -214,7 +214,7 @@ if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
     *) echo "  FAIL a bump rewrites every pin"; printf '    %s\n' "$out"; fail=1 ;;
   esac
   # Named individually, because `check` compares the pins to each other: were a
-  # bootstrap's VERSION= line to stop matching, all ten would still agree — on
+  # bootstrap's VERSION= line to stop matching, all thirteen would still agree — on
   # the old version — and check would pass.
   for f in claude/claude-on-event.sh cursor/cursor-on-event.sh \
            codex/codex-on-event.sh copilot/copilot-on-event.sh; do

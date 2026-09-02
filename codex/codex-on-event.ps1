@@ -16,7 +16,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $Agent = 'codex'
-$Version = '0.1.27'
+$Version = '0.1.28'
 
 # Where the downloaded binary lives. Resolution order matches codex-on-event.sh:
 # DASH0_PLUGIN_DATA, then PLUGIN_DATA (which Codex sets for a marketplace install,

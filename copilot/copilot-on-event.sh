@@ -20,7 +20,7 @@
 set -u
 
 AGENT="copilot"
-VERSION="0.1.27"
+VERSION="0.1.28"
 
 # Where the downloaded binary lives. Copilot sets COPILOT_PLUGIN_DATA for a
 # marketplace install; the XDG path is the fallback for a manual one.

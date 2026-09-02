@@ -43,6 +43,17 @@ until you know it.
 - [On Copilot a command that exits non-zero is a successful tool call](copilot-non-zero-shell-exit-is-not-a-failed-tool.md) — so the obvious failed-tool spec asserts a defect that is not one.
 - [A Copilot skill is named on its tool span, never on the turn's chat span](copilot-skill-name-lands-on-the-tool-span-only.md) — one route, and it is a tool call.
 
+## Cursor
+
+Cursor's payloads are close to Claude Code's, and every entry here is a place where that
+resemblance misleads.
+
+- [Cursor's headless mode fires no beforeSubmitPrompt and no afterAgentResponse](cursor-print-mode-fires-no-turn-hooks.md) — so `cursor-agent -p` produces tool spans and no turn, and the driver has to type into a terminal.
+- [A pre-0.1.25 Cursor wrapper overwrites the QA token with the developer's own](cursor-stale-wrapper-overwrites-the-qa-token.md) — the run looks perfectly healthy and reports zero spans.
+- [A Cursor transcript corroborates turns and nothing else](cursor-transcript-carries-no-usage-and-counts-tools-differently.md) — no token count anywhere in it, and a tool count that is a superset in another vocabulary.
+- [Cursor's turn_ended marker fires once per agent loop, not once per turn](cursor-turn-ended-is-per-loop-not-per-turn.md) — a two-turn session carries one of them.
+- [A Cursor sub-agent's session id is indistinguishable from a real session](cursor-subagent-session-looks-like-a-real-one.md) — no `call_` prefix to match on, so the run reads as a reused run id.
+
 ## What is actually under test
 
 - [A QA session tests the last published release, not the working tree](binary-a-run-tests-the-installed-release-unless-swapped.md) — the bootstrap downloads it silently; record the binary's digest.

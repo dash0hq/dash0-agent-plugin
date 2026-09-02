@@ -21,6 +21,12 @@ the runtime and this tool follows it:
   copilot     transcript  qa-otel.py over Copilot's native-OTel file
               harness     what `copilot --output-format json` reported, plus the
                           plugin's debug log
+  cursor      transcript  qa-transcript-cursor.py over Cursor's agent transcript:
+                          turns and tool calls, and no usage — no token count
+                          appears in it, so those cells read `-`
+              harness     nothing but the plugin's debug log. The TUI has no
+                          machine-readable output, and print mode, which has one,
+                          fires no afterAgentResponse and so produces no turn
 
 The Copilot runtime inverts one thing, and reading its table without knowing
 that is how a healthy run gets filed as a bug. Its hooks carry no numbers and no
@@ -100,6 +106,19 @@ SPAN_FROM_HOOK = {
         # imply nothing about invoke_agent spans either. The OTel file does.
         "invoke_agent": None,
     },
+    # Cursor's own lowerCamel names, which internal/source/cursor renames into the
+    # shared vocabulary: afterAgentResponse becomes Stop, postToolUse and
+    # postToolUseFailure keep their meaning, subagentStop becomes SubagentStop.
+    # subagentStart is dropped by the normalizer, so it implies no span.
+    #
+    # Every one of these is a real expectation, as on Claude and Codex: the hook
+    # payload is the pipeline's whole input on this runtime too. What Cursor
+    # cannot corroborate is the token counts inside them.
+    "cursor": {
+        "execute_tool": ("postToolUse", "postToolUseFailure"),
+        "chat": ("afterAgentResponse",),
+        "invoke_agent": ("subagentStop",),
+    },
 }
 SPAN_FROM_HOOK["codex"] = SPAN_FROM_HOOK["claude"]
 
@@ -110,6 +129,9 @@ TOOL_HOOKS = {
     "claude": ("PostToolUse",),
     "codex": ("PostToolUse",),
     "copilot": ("postToolUse",),
+    # The match is a substring one, so this also picks up postToolUseFailure,
+    # which is the same as `PostToolUse` covering `PostToolUseFailure` above.
+    "cursor": ("postToolUse",),
 }
 
 
@@ -229,6 +251,11 @@ def span_tool_name(raw):
     """
     if raw.endswith("spawn_agent"):
         return "Agent"
+    # Cursor spells an MCP call MCP:<tool> and internal/source/cursor strips that
+    # prefix, moving the server onto its own attribute exactly as the mcp__ form
+    # does. Without this every Cursor MCP call printed as two differing rows.
+    if raw.startswith("MCP:"):
+        return raw.removeprefix("MCP:")
     return mcp_tool_name(raw)
 
 
@@ -282,7 +309,24 @@ def dash0_summary(spans):
             "orphans": orphans(spans)}
 
 
-def hooks_summary(run_dir, session_id, runtime):
+def is_subagent_session(sid, declared):
+    """Whether a recorded session id belongs to a sub-agent rather than the run.
+
+    Two runtimes put a sub-agent's own hook lifecycle under a session id of its
+    own, and they are told apart differently.
+
+    Copilot mints a synthetic `call_<toolCallId>`, recognisable from the id alone.
+    Cursor mints a plain UUID that looks exactly like a real session — measured
+    2026-09-01 on qa/runs/probe-cursor-subagent — so the driver identifies it
+    instead: the main session is the one that fired sessionStart, and the driver
+    lists the rest in the manifest. Without that list every delegating Cursor run
+    reported "the run id was reused", which sends the reader after a driver bug
+    that is not there.
+    """
+    return sid.startswith("call_") or sid in declared
+
+
+def hooks_summary(run_dir, session_id, runtime, subagent_sessions=()):
     """The expectation the plugin's own input implies, with no plugin involved.
 
     Scoped to one session, because the recorder appends and a reused run id
@@ -302,8 +346,9 @@ def hooks_summary(run_dir, session_id, runtime):
     # internal/source/copilot drops those wholesale rather than mint a
     # token-less conversation per sub-agent, so they are expected in the
     # recording and must not be reported as "the run id was reused".
+    declared = set(subagent_sessions)
     subagents = sum(1 for r in all_rows
-                    if (r.get("session_id") or "").startswith("call_"))
+                    if is_subagent_session(r.get("session_id") or "", declared))
     # A payload that did not parse has no session id, so it cannot be attributed.
     # Counting it separately keeps a recording failure visible instead of
     # dropping it as somebody else's session.
@@ -514,6 +559,92 @@ def otel_summary(root, run_dir, session_id):
     }
 
 
+def cursor_transcript_summary(root, run_dir):
+    """The cursor runtime's second channel: Cursor's own agent transcript.
+
+    qa-transcript-cursor.py is run as a subprocess rather than imported, for the
+    same reason qa-rollout.py and qa-otel.py are: it is a separate reader of a
+    separate format, and keeping the process boundary keeps that visible.
+
+    It carries turns and tool calls, both independently — the plugin never reads
+    this file — and no usage at all. So it supplies a chat and execute_tool
+    expectation, no invoke_agent one, and no token column.
+
+    The missing token column is the cursor runtime's defining limit, not an
+    oversight in this reader. Cursor exposes a token count in exactly one place,
+    the afterAgentResponse payload, which is also the plugin's input. A cursor
+    token figure has no second reading behind it; say so rather than printing a
+    zero that reads as a disagreement.
+    """
+    script = os.path.join(root, "qa", "tools", "qa-transcript-cursor.py")
+    proc = subprocess.run([sys.executable, script, run_dir, "--json"],
+                          capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return {
+            "unavailable": proc.stderr.strip() or
+                           f"qa-transcript-cursor.py exited {proc.returncode}",
+            "no_span_counts": True,
+            "no_usage": True,
+            "total": {},
+        }
+    data = json.loads(proc.stdout)
+    return {
+        "total": {},
+        "no_usage": True,
+        "expected_spans": {
+            "chat": data["turns"],
+            # NOT an expectation, and this is the one thing to know about this
+            # channel. Measured 2026-09-01 on qa/runs/probe-cursor-mcp: the
+            # transcript held 15 tool_use blocks where the hooks and Dash0 both
+            # held 11, and the difference is not a lost span. Cursor's transcript
+            # names some tools differently from its hooks — Glob and Grep in the
+            # transcript are both `Grep` to a hook — and it records internal
+            # plumbing that fires no hook at all: GetDynamicTools and
+            # CallDynamicTool carried the MCP call, which reached the hooks once,
+            # as MCP:echo_text. So the transcript's tool count is a superset in a
+            # different vocabulary. Comparing it reported four phantom missing
+            # spans on a healthy run.
+            "execute_tool": None,
+            # The transcript records a sub-agent's work inline rather than as a
+            # delegation, so it implies nothing about invoke_agent. The hooks do,
+            # through subagentStop, and that column carries it.
+            "invoke_agent": None,
+            "total": None,
+        },
+        # Kept for printing, never for comparing. See execute_tool above.
+        "tools": data["tools"],
+        "tool_calls": data["tool_calls"],
+        "turns": data["turns"],
+        "loop_ends": data["loop_ends"],
+        "loop_status": data["loop_status"],
+        "entries": data["entries"],
+        "files": data["files"],
+        "user_messages": data["user_messages"],
+    }
+
+
+def cursor_summary(manifest):
+    """The cursor runtime has no harness-figures channel, and this says so.
+
+    The interactive TUI is the only mode that fires afterAgentResponse, and it has
+    no machine-readable output. `cursor-agent -p` has --output-format json and
+    fires no afterAgentResponse, so a print-mode run produces no turn to report
+    figures about. Every cell here is therefore absent rather than zero; the one
+    real number is the plugin's own debug log, which is the product's output and
+    never an expectation.
+    """
+    out = {
+        "num_turns": manifest.get("turns"),
+        "is_error": manifest.get("drive_exit_code") not in (0, None),
+        "cost_usd": None,
+        "models": [],
+        "spans_logged": manifest.get("spans_logged"),
+    }
+    for key in ("input", "output", "cache_read", "cache_write", "reasoning"):
+        out[key] = None
+    return out
+
+
 def copilot_summary(run_dir, manifest):
     """The Copilot runtime's own figures, from `copilot --output-format json`.
 
@@ -664,7 +795,18 @@ def report(data):
     print(f"hooks     : {hooks['invocations']} invocations recorded, "
           f"{hooks['transcript_snapshots']} distinct transcript snapshots, "
           f"{hooks['absent']} before the transcript existed")
-    if hooks.get("subagent_sessions"):
+    if hooks.get("subagent_sessions") and runtime == "cursor":
+        # A finding, not a note. The counts above are the parent turn's and they
+        # reconcile perfectly, so nothing else in this report would fail — and the
+        # sub-agent's work is missing from telemetry entirely.
+        print(f"            {hooks['subagent_sessions']} invocation(s) belong to a"
+              " sub-agent's own session.\n            Cursor gives a sub-agent a fresh"
+              " UUID and no link back, and fires no sessionStart\n            for it, so"
+              " those hooks reach a pipeline with no trace context and produce\n"
+              "            NO SPAN. The counts below are the parent turn's alone.")
+        findings.append(f"sub-agent: {hooks['subagent_sessions']} hook invocation(s) ran"
+                        " under a sub-agent session and produced no span")
+    elif hooks.get("subagent_sessions"):
         print(f"            {hooks['subagent_sessions']} invocation(s) belong to a"
               " sub-agent's own call_ session.\n            The plugin drops those"
               " wholesale; the sub-agent's work arrives through the OTel file.")
@@ -680,7 +822,8 @@ def report(data):
     # The second channel is a transcript, a rollout or an OTel file depending on
     # the runtime. The column keeps one width and changes its name, so a report
     # never claims a Copilot run had a transcript.
-    tx_label = {"claude": "transcript", "codex": "rollout", "copilot": "otel"}[runtime]
+    tx_label = {"claude": "transcript", "codex": "rollout", "copilot": "otel",
+                "cursor": "transcript"}[runtime]
     print("\nSpan counts")
     print(f"  {'type':<14}{'dash0':>8}{'hooks':>8}{tx_label:>12}")
     tx_expected = transcript.get("expected_spans", {})
@@ -771,7 +914,15 @@ def report(data):
             findings.append(f"{key} tokens: Dash0 {d0[key]}, {tx_label} {want}")
         print(f"  {key:<14}{d0[key]:>10}{'-' if want is None else want:>12}"
               f"{own if own is not None else '-':>10}{flag}")
-    if not tx_usage:
+    if not tx_usage and runtime == "cursor":
+        # Available and silent, which is not the same as unavailable. Saying
+        # "unavailable" here would send the reader after a broken driver.
+        print("  A Cursor transcript carries no token count, so those cells are `-`"
+              " rather than 0.\n  Usage reaches the plugin through the"
+              " afterAgentResponse payload only, which is\n  the plugin's own input:"
+              " this runtime has NO independent reading of a token\n  count. Do not"
+              " report a cursor token figure as corroborated.")
+    elif not tx_usage:
         print(f"  The {tx_label} channel is unavailable, so those cells are `-` rather"
               " than 0 and\n  nothing is compared against them:"
               f" {transcript.get('unavailable')}")
@@ -790,6 +941,62 @@ def report(data):
             print(f"  The plugin's debug log holds {manifest['spans_logged']} span(s)."
                   " A span there but not in\n  Dash0 was sent and lost; a span in neither was"
                   " never built.")
+
+    if runtime == "cursor":
+        if transcript.get("unavailable"):
+            print(f"\nTranscript: unavailable — {transcript['unavailable']}")
+        else:
+            print(f"\nTranscript: {transcript.get('files')} file(s),"
+                  f" {transcript.get('entries')} entries,"
+                  f" {transcript.get('turns')} submitted prompt(s),"
+                  f" {transcript.get('loop_ends')} loop end(s)"
+                  f" {transcript.get('loop_status')}.")
+            print("  Cursor writes it and the plugin never reads it, so its turn count is"
+                  " independent.\n  That count is the submitted prompts: `turn_ended`"
+                  " fires once per agent loop, so a\n  two-turn session carries one of"
+                  " them and reading it as a turn count reported a\n  healthy run as a"
+                  " chat span too many.")
+            print(f"  Its {transcript.get('tool_calls')} tool_use block(s)"
+                  f" {transcript.get('tools')} are a second opinion, not an"
+                  "\n  expectation. Cursor names some tools differently there than in"
+                  " its hooks — Glob\n  and Grep are both `Grep` to a hook — and records"
+                  " internal plumbing that fires no\n  hook at all, so the count is a"
+                  " superset in another vocabulary. The execute_tool\n  cell therefore"
+                  " reads `-`, and so does invoke_agent: the file records a"
+                  " sub-agent's\n  work inline rather than as a delegation.")
+        if manifest.get("spans_logged") is not None:
+            print(f"  The plugin's debug log holds {manifest['spans_logged']} span(s)."
+                  " A span there but not in\n  Dash0 was sent and lost; a span in neither"
+                  " was never built.")
+        # A driver that exited non-zero did not deliver the stimulus the spec
+        # asked for, and the counts above can still agree with each other: a
+        # two-turn run that died after the first turn has one chat span, one
+        # afterAgentResponse and one prompt in the transcript. The manifest's
+        # `turns` is the only record of what was requested, so it is the
+        # expectation both other columns lack.
+        drive_rc = manifest.get("drive_exit_code")
+        requested = manifest.get("turns")
+        got_chat = dash0["spans"].get("chat", 0)
+        if drive_rc:
+            print(f"  The driver exited {drive_rc}: the session was not driven to"
+                  " completion, so every\n  count above describes a partial run."
+                  " tty.log is what it looked like.")
+            findings.append(f"driver: exited {drive_rc}, so the session was not"
+                            " driven to completion")
+        if requested and got_chat < requested:
+            print(f"  The run asked for {requested} turn(s) and Dash0 has"
+                  f" {got_chat} chat span(s).")
+            findings.append(f"chat: the run asked for {requested} turn(s),"
+                            f" Dash0 has {got_chat}")
+        print(f"  Registration under test: {manifest.get('registered_script')}"
+              f" over {manifest.get('registered_events')} event(s).")
+        if manifest.get("wrapper_matches_shipped") is False:
+            print("  WARNING: that wrapper is not the one the checkout ships"
+                  " (QA_CURSOR_ALLOW_STALE).\n  A pre-0.1.25 wrapper re-exports"
+                  " CURSOR_PLUGIN_OPTION_AUTH_TOKEN from the user's own\n  config file,"
+                  " which overwrites the QA token — every export 401s and this report"
+                  "\n  reads as total telemetry loss. Fix the install before believing"
+                  " a zero here.")
 
     if runtime == "copilot" and transcript.get("no_usage"):
         print("\nNative OTel: no file for this run. The plugin's documented degradation"
@@ -901,6 +1108,9 @@ def main():
     elif runtime == "copilot":
         transcript = otel_summary(root, run_dir, manifest["session_id"])
         harness = copilot_summary(run_dir, manifest)
+    elif runtime == "cursor":
+        transcript = cursor_transcript_summary(root, run_dir)
+        harness = cursor_summary(manifest)
     elif runtime == "claude":
         transcript = transcript_summary(root, manifest["session_id"])
         harness = claude_summary(run_dir)
@@ -921,7 +1131,9 @@ def main():
         "manifest": manifest,
         "dash0": dash0_summary(spans or []),
         "dash0_error": error,
-        "hooks": hooks_summary(run_dir, manifest["session_id"], runtime),
+        "hooks": hooks_summary(
+            run_dir, manifest["session_id"], runtime,
+            [s for s in (manifest.get("subagent_sessions") or "").split(",") if s]),
         "transcript": transcript,
         "harness": harness,
     }

@@ -12,3 +12,4 @@ cover.out
 __pycache__/
 qa/runs/
 qa/config.local.json
+.amp/portals/*

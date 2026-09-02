@@ -14,6 +14,10 @@
 #
 # Requires: curl, bash, sha256sum or shasum. Network for the second contract.
 set -euo pipefail
+# The contracts derive expected cache paths from the pinned VERSION in each
+# script. A developer with DASH0_VERSION exported would otherwise see the
+# bootstraps download something else and get a false failure.
+unset DASH0_VERSION
 # shellcheck source=test/contracts/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -87,6 +91,80 @@ fi
 chmod u+w "$ro"; rm -rf "$ro"
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: all ${#SCRIPTS[@]} bootstraps fail open"
+
+echo "== DASH0_VERSION cannot retarget the download or escape BIN_DIR =="
+# It reaches a URL and a filesystem path. curl squashes `..`, so an unvalidated
+# value points BASE_URL — and checksums.txt with it — at another repository,
+# which makes verification pass against the attacker's own manifest. The hook
+# runs inside an agent session, so a project .envrc is a plausible source.
+fail=0
+vdata=$(mktemp -d)
+# Hermetic HOME and cwd, both per invocation and both inside the subshell. An
+# `enabled: false` in either exits the script before it reaches the regex and
+# every assertion here would pass having tested nothing.
+#
+# Neither may be set globally. `rm -rf "$vdata"` at the end of this block would
+# then delete the HOME the two contracts below inherit, and they `go build` —
+# with a HOME that does not exist the module and toolchain caches are cold, the
+# build needs the network, and on a miss they print SKIP and assert nothing.
+mkdir -p "$vdata/home"
+
+# The pinned default, which a rejected override must fall back to.
+pinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")
+# Whether that version is downloadable decides how much can be asserted. On a
+# bump PR main pins a release that does not exist yet, and "the hook did not
+# cache anything" then means "there was nothing to cache", not "the hook stopped".
+CHECKSUMS_URL="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${pinned}/checksums.txt"
+published=0
+curl -fsSL -o /dev/null "$CHECKSUMS_URL" 2>/dev/null && published=1
+[ "$published" -eq 1 ] \
+  || echo "  note: v$pinned is not published — asserting refusal only, not the fallback"
+
+# All four, not just claude. The block is duplicated in each bootstrap, so a
+# fix applied to one and missed in another is exactly the drift worth catching —
+# and three of them were carrying this untested.
+for s in "${SCRIPTS[@]}"; do
+  spinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/$s")
+  for bad in '../../../../attacker/repo/releases/download/v9' '../../etc' 'v0.1.25' '0.1.25; id'; do
+    bdata=$(mktemp -d)
+    out=$(cd "$vdata" && HOME="$vdata/home" DASH0_VERSION="$bad" \
+          CLAUDE_PLUGIN_DATA="$bdata" DASH0_PLUGIN_DATA="$bdata" COPILOT_PLUGIN_DATA="$bdata" \
+          bash "$REPO/$s" <<<'{}' 2>&1) || true
+    case "$out" in
+      *ignoring*) ;;
+      *) echo "  FAIL $s accepted: $bad"; fail=1 ;;
+    esac
+    # Behaviour, not wording. Rejecting the value must leave the hook running on
+    # the pinned version — the message says "ignoring", and for a long time the
+    # code exited instead, turning a typo like v0.1.25 into a session with no
+    # telemetry at all. Asserting only on the message could not tell them apart.
+    if [ "$published" -eq 1 ]; then
+      cached=$(find "$bdata" -type f -name "*-${spinned}-*" 2>/dev/null | head -1) || true
+      [ -n "$cached" ] \
+        || { echo "  FAIL $s: '$bad' stopped the hook instead of falling back to $spinned"; fail=1; }
+    fi
+    rm -rf "$bdata"
+  done
+  # A real version must still be accepted, or the guard is just an off switch.
+  out=$(cd "$vdata" && HOME="$vdata/home" DASH0_VERSION="$spinned" \
+        CLAUDE_PLUGIN_DATA="$vdata" DASH0_PLUGIN_DATA="$vdata" COPILOT_PLUGIN_DATA="$vdata" \
+        bash "$REPO/$s" <<<'{}' 2>&1 | head -1) || true
+  case "$out" in
+    *ignoring*) echo "  FAIL $s rejected a real version: $spinned"; fail=1 ;;
+    *) echo "  ok $s" ;;
+  esac
+done
+
+# There is deliberately no `find … -name attacker` check here. Two were, and
+# neither could ever fire: the traversal resolves through `on-event-..`, a
+# directory that does not exist, so curl writes nothing anywhere — with or
+# without the guard. The assertion that actually covers traversal is the
+# fallback one above. Without the guard, VERSION becomes the traversal value,
+# the download targets another repository, and no file named for the pinned
+# version appears. Confirmed by stripping the guard from each bootstrap in turn.
+rm -rf "$vdata"
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: all ${#SCRIPTS[@]} bootstraps refuse traversal and keep the pinned version"
 
 echo "== The binary itself never ends a hook non-zero =="
 # The check above poisons the *shell's* environment, so it never gets as far as

@@ -26,6 +26,16 @@ This repo ships one shared Go pipeline (`cmd/`, `internal/`) and runtime-specifi
 
 The dotted directories are fixed by each agent's plugin discovery and cannot move. Keeping every other runtime asset under `claude/`, `cursor/`, `codex/`, and `copilot/` stops one marketplace from auto-discovering another runtime's components. `scripts/` is repo tooling only (release, version checks, the Docker test harness) — nothing there is shipped to a user.
 
+## Releasing
+
+**Actions → Release.** Pick `patch`, `minor` or `major`; the workflow bumps every
+file that pins a version, builds, verifies, publishes, and moves `main` last. One
+button, no PR.
+
+`dry_run` builds and checks without publishing anything.
+
+Full detail in [DEVELOPMENT.md](./DEVELOPMENT.md#releasing).
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).

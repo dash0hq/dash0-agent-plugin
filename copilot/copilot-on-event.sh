@@ -35,8 +35,40 @@ fail_open() {
   exit 0
 }
 
+# Says something is wrong and carries on. fail_open() ends the hook; this does
+# not, for the cases where the sensible response is to use the default.
+warn() {
+  echo "on-event: $*" >&2
+}
+
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
+
+# Point this install at a different published release — a -dev prerelease cut
+# from a branch for QA, or a rollback — without editing this file. Same repo and
+# the same checksum verification; only which release is asked for changes. Kept
+# off the VERSION= line above so scripts/version.sh keeps reading the pinned
+# default.
+if [ -n "${DASH0_VERSION:-}" ]; then
+  # Validated, because VERSION reaches both a download URL and a filesystem path.
+  # curl squashes `..` in a path, so `v../../../owner/repo/releases/download/v9`
+  # retargets BASE_URL at another repository — and checksums.txt comes from the
+  # same base, so verification would pass against the attacker's own manifest
+  # before the binary is exec'd. $BINARY traverses the same way and would write
+  # outside BIN_DIR. The hook runs inside an agent session, so an injected
+  # instruction writing this into a project .envrc is enough to reach it.
+  if [[ "$DASH0_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+    VERSION="$DASH0_VERSION"
+  else
+    # Warn and carry on with the pinned version, rather than end the hook.
+    # DASH0_VERSION is a convenience for a rollback or a QA build, and the
+    # realistic bad value is a typo — `v0.1.26` for `0.1.26`. Exiting here
+    # turned that into a silent session with no telemetry at all, which is a
+    # much worse outcome than ignoring the override, and the message already
+    # said "ignoring".
+    warn "ignoring DASH0_VERSION='$DASH0_VERSION' — not a version (expected 0.2.0, or 0.2.0-dev.1)"
+  fi
+fi
 
 # Git Bash, MSYS2 and Cygwin report kernel strings like MINGW64_NT-10.0-26200,
 # never "windows", so the release asset would be requested under a name that does

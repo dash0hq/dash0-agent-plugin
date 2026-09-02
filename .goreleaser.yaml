@@ -95,6 +95,13 @@ checksum:
   name_template: "checksums.txt"
 
 release:
+  # Upload into a draft; .github/workflows/release.yml publishes it once every
+  # asset is present and verified. GoReleaser creates the release first and then
+  # uploads, with checksums.txt last, so publishing at creation leaves a window
+  # in which the tag resolves but the binary or its checksum does not. Measured
+  # at ~4s on v0.1.24 — small, but every install that lands in it fails, and a
+  # draft removes it entirely rather than shrinking it.
+  draft: true
   prerelease: auto
   mode: replace
 

@@ -10,12 +10,13 @@ installer) and in CI (the `install-config-contract` job just calls these).
 | `claude.sh` | settings.json ≠ install · `--config` credential storage · creds → OTLP | `claude` CLI, network, go/jq/curl | mostly anywhere; the credential-storage contract is **Linux-only** (see below) |
 | `cursor.sh` | creds → OTLP · install layout + hooks merge · uninstall strip | network (install/uninstall resolve the latest release), go/jq/curl | yes |
 | `codex.sh`  | creds → OTLP · install merge + pre-trust · uninstall strip | go/jq/python3/curl | yes (no codex CLI) |
-| `bootstrap.sh` | all four `*-on-event.sh` stage the download in a temp and rename · neither the scripts nor the Claude binary ends a hook non-zero · an unrunnable cached binary neither errors nor re-downloads · concurrent cold-cache runs converge | curl, sha256sum/shasum, go; network for the last two contracts | yes |
+| `bootstrap.sh` | all four `*-on-event.sh` stage the download in a temp and rename · neither the scripts nor the Claude binary ends a hook non-zero · `DASH0_VERSION` cannot retarget the download or escape `BIN_DIR` · an unrunnable cached binary neither errors nor re-downloads · concurrent cold-cache runs converge | curl, sha256sum/shasum, go; network for the contracts that download | yes |
+| `release.sh` | every Release dispatch resolves to the right version, tag and bump, and the guarded combinations are refused · the artifact list follows `.goreleaser.yaml` · a bump rewrites all thirteen pins | jq, git | yes |
 
 ## Run
 
 ```bash
-./test/contracts/run.sh            # all four
+./test/contracts/run.sh            # all five
 ./test/contracts/run.sh codex      # one agent
 ```
 

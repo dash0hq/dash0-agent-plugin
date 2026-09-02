@@ -2,53 +2,131 @@
 
 ## Releasing
 
-> `scripts/release.sh <version>` executes the following release steps in one go.
->
-Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub Actions. To create a new release, update the version in:
+**Actions → Release.** One button, and it is the whole thing: pick `patch`
+(default), `minor` or `major`, and the workflow works out the next version,
+writes it into every file that pins one, builds, verifies, publishes, and moves
+`main` last.
 
-- `.claude-plugin/plugin.json` — `version` field
-- `.cursor-plugin/plugin.json` — `version` field
-- `copilot/plugin.json` — `version` field
-- `.github/plugin/marketplace.json` — `metadata.version` and the plugin entry `version` (Copilot marketplace)
-- `claude/claude-on-event.sh` — `VERSION=` line (Claude Code binary downloader)
-- `cursor/cursor-on-event.sh` — `VERSION=` line (Cursor binary downloader)
-- `codex/codex-on-event.sh` — `VERSION=` line (Codex binary downloader)
-- `copilot/copilot-on-event.sh` — `VERSION=` line (Copilot binary downloader; vendored inside the `copilot/` subpath-install package)
+There is no prepare step, no bump PR and no merge to wait for.
 
-> **Renaming a published asset.** The Claude marketplace lists this repo with no
-> ref, so `claude plugin install` and `update` take the default branch. A
-> checked-in bootstrap is therefore paired with the *last published* release, and a
-> script that asks for a name that release does not carry breaks every fresh
-> install until the next tag.
->
-> `claude/claude-on-event.sh` handles this by trying each name it may have been
-> published under, newest first, and using the first that resolves. Each installed
-> script asks its own pinned release, and that release carries whichever name it
-> was built with, so no commit on the default branch is ever inconsistent.
->
-> The Claude asset is already switched: releases from v0.1.25 on publish
-> `claude-on-event-<os>-<arch>`, and v0.1.24 and earlier carry the unprefixed
-> `on-event-<os>-<arch>`. Drop the `on-event-<os>-<arch>` candidate from the script
-> once no supported install can still be pinned to v0.1.24 or earlier. The local
-> cache filename stays `on-event-<version>-<os>-<arch>` on purpose, because
-> changing it would force every existing install to download again.
->
-> The CI job "Release assets exist for configured version" reads the candidates out
-> of each bootstrap and requires at least one to exist per platform, so a name that
-> nothing publishes cannot pass unnoticed.
+### Why the order is what it is
 
-`main` is protected, so the script commits the version bump on a `release/v<version>` branch and pushes it — it does **not** push a tag. Open a PR from that branch and merge it.
+Everything happens while `main` still points at the *old* version. `main` learns
+the new one last, once the binaries are published and proven downloadable:
 
-After the PR is merged, tag the merged commit on `main` manually:
+1. Check out the commit `main` pointed at when the button was pressed.
+2. Work out the version, write it everywhere, commit and tag — **locally**.
+3. Build every binary `.goreleaser.yaml` describes — 24 today: four agents,
+   three platforms, two architectures — and upload them to a **draft** release.
+4. Verify: checksums, `dist/` matches that list by name, the Linux binary
+   actually runs, and the uploaded assets match what was built.
+5. Push the tag, then flip the draft to published.
+6. Check every public download URL a bootstrap can build.
+7. Push the bump to `main`, last.
+
+Steps 1 to 4 publish nothing, and a failure in any of them deletes the draft.
+Step 5 is where the release becomes real, step 6 proves it is downloadable, and
+only then does `main` name it.
+
+**`main` never names a version you cannot install.** That is the point of putting
+step 7 last: the assets are public and verified before anything an install reads
+mentions them. Before this, the gap between `main` naming a version and that
+version existing was 57 seconds when a merge triggered the build, and unbounded
+before that, when a human had to remember to push the tag.
+
+**If someone merges mid-release**, step 7 is a plain `git push` and is rejected —
+it is a compare-and-swap, and the App's ruleset bypass does not weaken that. The
+release is already public at that point, so `main` is left pinning the previous
+version. Do not delete the release; installs may already have taken it. Instead
+open a PR running `./scripts/version.sh set <version>` and merge it.
+
+The planner refuses to cut anything while `main` is behind a published release,
+so this cannot be papered over by pressing Release again — which would count
+from the published version, cut the next one, and skip it permanently.
+
+**If a run fails before step 7**, `main` still pins the old version and nothing
+downstream changed. The draft goes, and so does the tag if step 5 had got as far
+as pushing it — a tag on a bump commit that never reached `main` would otherwise
+refuse every later run.
+
+**If a run fails after the bump landed but before a release exists**, dispatch
+Release again. The planner sees `main` carrying an unreleased bump and finishes
+that one rather than starting another, which would skip a version.
+
+> [!IMPORTANT]
+> Recover with a **new dispatch**, never with GitHub's "Re-run jobs". Every job
+> checks out `github.sha`, which a re-run replays unchanged, so it cannot see a
+> `main` that has moved or that already carries the bump — which is exactly what
+> the recovery depends on. A fresh dispatch resolves `github.sha` again.
+>
+> "Re-run failed jobs" is worse still: it does not re-run `plan`, so the release
+> job reuses the cached plan and every guard in `release-plan.sh` is skipped.
+> The release job carries its own check for this and refuses outright when the
+> version is already published.
+
+### Dry run
+
+**`dry_run`** — build and check, publish nothing. No tag, no release; the binaries
+are attached to the run for 7 days. Safe to run at any time.
+
+`DASH0_VERSION` points an install at any published release without editing
+anything — a rollback, or a build under test:
 
 ```bash
-git checkout main && git pull
-git tag v<version>
-git push origin v<version>
+export DASH0_VERSION=0.1.24
 ```
 
-The tag push triggers the release workflow which cross-compiles binaries for `darwin/linux × amd64/arm64` and publishes them to [GitHub Releases](https://github.com/dash0hq/dash0-agent-plugin/releases).
-The `on-event-<agent>.sh` scripts download the matching binaries on first run.
+The four POSIX bootstraps read it, and the cache filename embeds the version, so
+it never collides with the pinned build. They validate it against the same shape
+a release uses, because it reaches both a download URL and a filesystem path: a
+value containing `..` retargets the download at another repository, and
+`checksums.txt` comes from the same base, so verification would pass against the
+attacker's own manifest.
+
+Two gaps, neither closed here:
+
+- **The Windows hooks ignore it.** `cursor-on-event.ps1`, `codex-on-event.ps1`
+  and `copilot-on-event.ps1` always use their pinned `$Version`. Confusingly,
+  `install-cursor.ps1` and `install-codex.ps1` *do* read it, so on Windows the
+  variable is honoured at install time and ignored at event time.
+- **The installers do not validate it.** `install-cursor.sh`,
+  `install-codex.sh` and both `.ps1` installers read `DASH0_VERSION` into the
+  same download URL and filesystem path with no check. The bootstrap guard is
+  the second line of defence; by the time a hook runs, the installer has already
+  written the binary.
+
+> **No dev channel yet.** Cutting a prerelease from a feature branch and gating
+> the App credential by branch are mutually exclusive without splitting the job
+> graph: the environment holding the credential is restricted to `main`, so a job
+> declaring it cannot run anywhere else. Adding it back means moving the push
+> into its own job, which is a change worth making on its own.
+
+### How it is wired
+
+- **`scripts/version.sh`** — `check`, `set`, `latest`, `next`. The only list of
+  the thirteen places a version is pinned, so the bump and the check cannot disagree
+  about what needs bumping. `next` counts from the newest **published release**,
+  not from tags or the manifests, both of which can name a version that was never
+  released.
+- **Pushing to `main`** uses the *Dash0 Release Bot* App, for that one command
+  only. Everything else uses the built-in token. GitHub Actions' own token cannot
+  be granted this — GitHub refuses it as a ruleset bypass actor with a 422 — so
+  the App is named in the `Protect Main Branch` bypass list instead.
+- **The App credentials live in a GitHub Environment restricted to `main`**, not
+  in repo secrets. This is the control that matters: `workflow_dispatch` runs the
+  workflow file *from the branch it is dispatched from*, so a check inside the
+  tree is one an attacker also controls. A job declaring the environment on any
+  other ref is rejected before it starts, and a job that drops the declaration
+  finds nothing to read.
+- **GoReleaser uploads into a draft.** It creates the release before uploading
+  and writes `checksums.txt` last, so publishing at creation would leave a window
+  where the tag resolves but a binary does not.
+- **`concurrency: release`** serializes runs; `mode: replace` means two runs on
+  one tag would delete each other's uploads.
+- **After publishing**, `scripts/verify-release-assets.sh --strict` checks every
+  asset name a bootstrap can ask for at its public URL, then the end-to-end job
+  installs the real binary through `claude-on-event.sh`. CI runs the same script
+  non-strict, where a 404 is a warning — the normal state of a PR.
 
 ## Feature support matrix
 

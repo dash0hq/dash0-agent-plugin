@@ -60,6 +60,10 @@ go-mod-tidy: ## Run go mod tidy and fail if go.mod/go.sum change.
 go-version-check: ## Check go.mod Go version matches scripts/docker/Dockerfile.
 	./scripts/go-version-check.sh
 
+.PHONY: version-check
+version-check: ## Check every manifest and bootstrap pins the same release version.
+	./scripts/version.sh check
+
 .PHONY: golangci-lint-install
 golangci-lint-install: $(LOCALBIN)
 	@[ -f $(GOLANGCI_LINT) ] || { \
@@ -95,4 +99,7 @@ shellcheck-lint: shellcheck-install ## Lint all shell scripts with shellcheck.
 	find . -name '*.sh' -not -path './bin/*' -print0 | xargs -0 $(SHELLCHECK) -x
 
 .PHONY: lint
-lint: go-version-check golangci-lint shellcheck-lint ## Run all static analysis (Go, shell, version sync).
+lint: go-version-check version-check golangci-lint shellcheck-lint ## Run all static analysis (Go, shell, version sync).
+
+.PHONY: ci
+ci: lint test ## Run the full CI check set locally.

@@ -128,7 +128,7 @@ func TestCopilotMarketplaceConsistency(t *testing.T) {
 	assert.Equal(t, manifestName, entry["name"],
 		"marketplace plugin name must match copilot/plugin.json name (the install id)")
 	assert.Equal(t, manifestVersion, entry["version"],
-		"marketplace plugin version must match copilot/plugin.json (release.sh keeps these in sync)")
+		"marketplace plugin version must match copilot/plugin.json (scripts/version.sh keeps these in sync)")
 
 	meta, _ := mp["metadata"].(map[string]any)
 	assert.Equal(t, manifestVersion, meta["version"],

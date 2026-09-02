@@ -36,8 +36,8 @@ ships. `stopReason` did exactly that, on every `chat` span, alongside the alread
 carry a `traceparent` that prompt-mode payloads do not, and it reached every `chat` span the same
 way — worse than redundant, since it named Copilot's native trace while the span belonged to the
 plugin's own. The driver runs prompt mode, so no run of this spec could ever have seen it. It is
-denied now and locked by `TestE2ECopilotPerTurnSpans`, which drives the interactive payload shape
-through the built binary. Until the driver can run interactive sessions, **a clean result here is a
+denied now and locked by the deny-list assertions in `internal/otlp/otlp_test.go`; the interactive
+payload shape reaches the entrypoint in `cmd/copilot-on-event/main_test.go`. Until the driver can run interactive sessions, **a clean result here is a
 statement about prompt mode only** — say so when quoting it.
 
 ## When
@@ -74,8 +74,8 @@ plugin deliberately does not carry it through — it would sit one attribute awa
 the key is namespaced, a reintroduction would be classed as an "undocumented export" rather than a
 raw payload field, which is exactly the signal this check gives. Nothing denies the key, and
 nothing needs to: it reaches the plugin only through the native-OTel file, so the guard is that
-neither `internal/source/copilot` nor `attachUsage` carries it across. `TestE2ECopilotPerTurnSpans`
-asserts the same absence end to end, on a fixture whose native chat span has it.
+neither `internal/source/copilot` nor `attachUsage` carries it across. No test asserts that absence
+directly, so this check is the only thing watching it.
 
 ## Oracle
 

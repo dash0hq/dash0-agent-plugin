@@ -44,17 +44,19 @@ plugin-data + OTel dirs, and the config.
 Deterministic Copilot tests (no auth):
 
 ```bash
-go test ./internal/source/copilot/ ./test/consistency/
-go test -tags=e2e -run 'TestE2ECopilot' ./test/e2e/          # L2 + fail-open + L3 credential contracts
+go test ./internal/source/copilot/ ./cmd/copilot-on-event/ ./test/consistency/
+go test -tags=e2e -run 'TestE2EFullFlowWithCopilot' ./test/e2e/   # the live canary
 ```
 
 The live canary `TestE2EFullFlowWithCopilot` runs the real `copilot` CLI and
 **fails** unless `COPILOT_GITHUB_TOKEN` is set (loud, like the Claude/Codex
 canaries), so scope the `-run` filter above to the deterministic tests when you
-have no token. It installs the camelCase hooks
-into a hermetic `COPILOT_HOME`, enables native OTel into a per-session file, runs
-`copilot -p`, and asserts the emitted canonical `chat` span carries per-turn
-`gen_ai.usage.*` sourced from that file. To run it:
+have no token. It installs the plugin into a hermetic `COPILOT_HOME` the way a
+customer does, through `plugin marketplace add` and `plugin install` against the
+in-repo marketplace, enables native OTel into a per-session file, drives
+one interactive `copilot` session over a pty with two typed turns, and asserts the
+emitted canonical `chat` spans carry per-turn `gen_ai.usage.*` sourced from that
+file. To run it:
 
 ```bash
 npm install -g @github/copilot   # if needed
@@ -63,7 +65,8 @@ COPILOT_GITHUB_TOKEN=<pat-with-Copilot-Requests> \
 ```
 
 To also exercise the real `:copilot` subpath install + the `dash0-configure`
-launch function (not just the test's hook injection), after pushing this branch:
+launch function (the canary installs from the in-repo marketplace, not the subpath
+route), after pushing this branch:
 `copilot plugin install dash0hq/dash0-agent-plugin:copilot`, run `/dash0-configure`,
 open a new shell, and confirm per-turn spans reach your Dash0 dataset.
 

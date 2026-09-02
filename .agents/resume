@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# This repository has no services or per-thread authentication to restore.
+echo "No orb services require reconnecting."

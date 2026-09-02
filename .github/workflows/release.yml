@@ -124,7 +124,10 @@ jobs:
     needs: plan
     if: needs.plan.outputs.mode == 'release'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # GoReleaser cross-compiles 24 targets and uploads them, which is 6-10min on
+    # its own, and the strict asset check can spend minutes more on retries. The
+    # budget below is sized so the two together cannot reach this.
+    timeout-minutes: 30
     # The App credentials live only in this environment, which is restricted to
     # main. That is the control, not the REF_NAME check in release-plan.sh:
     # workflow_dispatch runs the workflow file from the branch it is dispatched
@@ -156,6 +159,30 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Refuse to redo a release that already published
+        run: |
+          set -euo pipefail
+          # GitHub's "Re-run failed jobs" does not re-run `plan` — this job
+          # reuses the cached outputs, so every guard in release-plan.sh is
+          # bypassed, including the one that refuses to act while main is behind
+          # a published release. And a re-run is the obvious thing to click
+          # after the two failures that happen AFTER Publish: a lost race on
+          # main, or the asset check. So the guard has to live here too.
+          #
+          # Today the tag guard below happens to stop it, because the tag points
+          # at the previous run's bump commit and this run builds a different
+          # one. That is incidental, and it reports a tag mismatch rather than
+          # what actually happened.
+          ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+                 --jq '.[] | select(.tag_name==env.TAG and (.draft|not)) | .id' 2>/dev/null | head -1) || true
+          if [ -n "$ID" ]; then
+            echo "::error::v${VERSION} is already published — this run has nothing left to do" \
+                 "that is safe. Re-running would rebuild and republish a release people may" \
+                 "already have. If main still pins the previous version, open a PR running" \
+                 "./scripts/version.sh set ${VERSION} and merge it. Do not delete the release."
+            exit 1
+          fi
 
       - name: Write the version and tag it, locally
         run: |
@@ -242,11 +269,13 @@ jobs:
           # download host does not always serve it on the first ask. Failing
           # here leaves a published release nobody can install, so a transient
           # 404 must not be reported as one.
-          # Three attempts, not five: this loop only covers propagation lag,
-          # which resolves in seconds. A 429 or a 5xx is retried inside the
-          # script against its own deadline, so the total wait here is bounded
-          # well under the job's 20-minute timeout — being killed by that after
-          # Publish is the worst outcome available.
+          # Bounded on purpose: 3 attempts, and RETRY_DEADLINE caps the
+          # transient retries inside each one. Worst case is about 3 minutes,
+          # against a 30-minute job that has already spent 6-10 on the build.
+          # Being killed by the job timeout here is the worst outcome available
+          # — the release is public and main has not moved — so this budget has
+          # to be provably smaller than what is left, not just "small".
+          export RETRY_DEADLINE=40
           for attempt in 1 2 3; do
             if ./scripts/verify-release-assets.sh --strict "$VERSION"; then exit 0; fi
             echo "attempt $attempt did not resolve every asset; retrying"
@@ -315,8 +344,14 @@ jobs:
           ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
                  --jq '.[] | select(.tag_name==env.TAG and .draft) | .id' 2>/dev/null | head -1) || true
           if [ -n "$ID" ]; then
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/$ID"
-            echo "deleted the draft for $TAG"
+            # Not allowed to abort the step: under `set -e` a transient 5xx here
+            # would skip the tag deletion below, which is the half that wedges
+            # every future run.
+            if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/$ID"; then
+              echo "deleted the draft for $TAG"
+            else
+              echo "::warning::could not delete the draft for $TAG — remove it by hand"
+            fi
             # Publish pushes the tag and then flips the draft; if it died between
             # the two, the tag is on this run's bump commit — which is not on
             # main and, since the bump is pushed last, never will be. Left
@@ -333,13 +368,20 @@ jobs:
             echo "no draft for $TAG — either none was created, or it is published and stays"
           fi
 
-  # Everything above proves the assets resolve and the binary we built runs. This
-  # proves the path a user actually takes: the bootstrap downloading the
-  # published release, verifying its checksum, and exporting a span. It was a
-  # separate workflow reached by workflow_call; folding it in removes the
-  # indirection and — more usefully — removes the way it could pass having
-  # verified the wrong thing. VERSION comes from the plan, so there is no input
-  # to arrive empty and silently fall back to whatever the checkout pins.
+  # The path a user actually takes: the bootstrap downloading the published
+  # release, verifying its checksum, and exporting a span.
+  #
+  # This does NOT gate the release. It needs the whole release job, and moving
+  # main is the last step inside that job, so by the time this runs the release
+  # is public and main already names it. What gates main is
+  # verify-release-assets.sh --strict, which proves every URL resolves — this
+  # proves the binary behind those URLs actually installs and reports. A job
+  # cannot run between two steps of another job; closing that would mean moving
+  # the install probe into the release job, before Move main.
+  #
+  # It was a separate workflow reached by workflow_call; folding it in removed
+  # the way it could pass having verified the wrong thing. VERSION comes from
+  # the plan, so there is no input to arrive empty and fall back to the pin.
   verify:
     name: Verify the published release installs
     needs: [plan, release]

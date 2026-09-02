@@ -41,6 +41,11 @@ BOOTSTRAPS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
 PS_BOOTSTRAPS=(cursor/cursor-on-event.ps1 codex/codex-on-event.ps1
                copilot/copilot-on-event.ps1)
 
+# 403 is retried alongside 429 and 5xx: it is what github.com answers for
+# anonymous rate limiting, and this script makes about thirty unauthenticated
+# requests per run. Treating it as unclassifiable would hard-fail the strict
+# check after the release is already public.
+#
 # Retries live here, in the one place every request goes through, so the
 # checksums gate below gets them too. It used to be the only unretried request
 # in the strict path — and it is the first one, so a single 429 killed the run
@@ -62,7 +67,7 @@ status() {
   for attempt in 1 2 3 4; do
     s=$(curl -sI -o /dev/null -w '%{http_code}' -L "$1" || true)
     case "$s" in
-      429|5??|000)
+      429|403|5??|000)
         [ $((SECONDS - START)) -lt "$RETRY_DEADLINE" ] || break
         echo "  .. HTTP $s for $1, retrying" >&2
         sleep $((attempt * 3))

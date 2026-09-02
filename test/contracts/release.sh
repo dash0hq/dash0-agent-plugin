@@ -143,11 +143,14 @@ refuse "no published release to count from" "no published stable release" -- \
 refuse "an unknown part" "expected patch, minor or major" -- \
   EXISTING_RELEASES="v0.1.25" PINNED=0.1.25 "$VER" next sideways
 
-# $PINNED, never a literal: `set` reads and writes the real files, so a stale
-# literal would stop being a no-op after the next release and rewrite every
-# pin in the working tree instead of being refused.
-refuse "a bump to the version already pinned" "nothing to prepare" -- \
-  "$VER" set "$(jq -r '.version' "$REPO/.claude-plugin/plugin.json")"
+# Against the sandbox copy, not the checkout. `set` writes to the tree it lives
+# in, and its no-op guard compares the version against the set of DISTINCT pins
+# — so on a tree where the pins already disagree, the guard does not fire and
+# this case rewrites all thirteen files for real while reporting "accepted it".
+# CI never reaches that state (version.sh check runs first in the same job), but
+# a bare ./test/contracts/release.sh on a half-bumped tree would.
+# Its own pinned version, never a literal: a literal stops being a no-op after
+# the next release.
 
 echo "== What a release must contain =="
 
@@ -229,6 +232,9 @@ if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
   done
   [ "$(jq -r '.metadata.version' "$sandbox/.github/plugin/marketplace.json")" = "9.9.9" ] \
     || { echo "  FAIL marketplace.json metadata.version was not rewritten"; fail=1; }
+  # The refusal, now that every pin in the sandbox reads 9.9.9.
+  refuse "a bump to the version already pinned" "nothing to prepare" -- \
+    "$sandbox/scripts/version.sh" set 9.9.9
 else
   echo "  FAIL a bump rewrites every pin: exited non-zero"; printf '    %s\n' "$out"; fail=1
 fi

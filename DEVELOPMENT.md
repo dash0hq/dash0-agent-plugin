@@ -49,13 +49,20 @@ downstream changed. The draft goes, and so does the tag if step 5 had got as far
 as pushing it — a tag on a bump commit that never reached `main` would otherwise
 refuse every later run.
 
+**If a run fails after the bump landed but before a release exists**, dispatch
+Release again. The planner sees `main` carrying an unreleased bump and finishes
+that one rather than starting another, which would skip a version.
+
 > [!IMPORTANT]
 > Recover with a **new dispatch**, never with GitHub's "Re-run jobs". Every job
-> checks out `github.sha`, which a re-run replays unchanged — so it cannot see a
-> `main` that has moved or that already carries the bump, which is exactly what
-> the recovery depends on. A fresh dispatch resolves `github.sha` again. If it fails after the bump merged but before a release
-exists, dispatch Release again: the planner sees `main` carrying an unreleased bump
-and finishes that one instead of starting another.
+> checks out `github.sha`, which a re-run replays unchanged, so it cannot see a
+> `main` that has moved or that already carries the bump — which is exactly what
+> the recovery depends on. A fresh dispatch resolves `github.sha` again.
+>
+> "Re-run failed jobs" is worse still: it does not re-run `plan`, so the release
+> job reuses the cached plan and every guard in `release-plan.sh` is skipped.
+> The release job carries its own check for this and refuses outright when the
+> version is already published.
 
 ### Dry run
 

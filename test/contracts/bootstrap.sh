@@ -99,13 +99,15 @@ echo "== DASH0_VERSION cannot retarget the download or escape BIN_DIR =="
 # runs inside an agent session, so a project .envrc is a plausible source.
 fail=0
 vdata=$(mktemp -d)
-# Hermetic, like the probes below: an `enabled: false` in the caller's HOME or
-# cwd exits the script before it reaches the regex, and every assertion here
-# would then pass having tested nothing.
-export HOME="$vdata/home"; mkdir -p "$HOME"
-# The cwd is thrown away per invocation, in a subshell. A bare `cd` here leaks
-# into the contracts below, which `go build` from the repo root — they then fail
-# to build and skip_or_fail turns that into a red CI run.
+# Hermetic HOME and cwd, both per invocation and both inside the subshell. An
+# `enabled: false` in either exits the script before it reaches the regex and
+# every assertion here would pass having tested nothing.
+#
+# Neither may be set globally. `rm -rf "$vdata"` at the end of this block would
+# then delete the HOME the two contracts below inherit, and they `go build` —
+# with a HOME that does not exist the module and toolchain caches are cold, the
+# build needs the network, and on a miss they print SKIP and assert nothing.
+mkdir -p "$vdata/home"
 
 # The pinned default, which a rejected override must fall back to.
 pinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")
@@ -125,7 +127,7 @@ for s in "${SCRIPTS[@]}"; do
   spinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/$s")
   for bad in '../../../../attacker/repo/releases/download/v9' '../../etc' 'v0.1.25' '0.1.25; id'; do
     bdata=$(mktemp -d)
-    out=$(cd "$vdata" && DASH0_VERSION="$bad" \
+    out=$(cd "$vdata" && HOME="$vdata/home" DASH0_VERSION="$bad" \
           CLAUDE_PLUGIN_DATA="$bdata" DASH0_PLUGIN_DATA="$bdata" COPILOT_PLUGIN_DATA="$bdata" \
           bash "$REPO/$s" <<<'{}' 2>&1) || true
     case "$out" in
@@ -141,13 +143,10 @@ for s in "${SCRIPTS[@]}"; do
       [ -n "$cached" ] \
         || { echo "  FAIL $s: '$bad' stopped the hook instead of falling back to $spinned"; fail=1; }
     fi
-    # And the rejected value must reach neither a path nor a URL.
-    find "$bdata" -path '*attacker*' 2>/dev/null | grep -q . \
-      && { echo "  FAIL $s: '$bad' reached the filesystem"; fail=1; }
     rm -rf "$bdata"
   done
   # A real version must still be accepted, or the guard is just an off switch.
-  out=$(cd "$vdata" && DASH0_VERSION="$spinned" \
+  out=$(cd "$vdata" && HOME="$vdata/home" DASH0_VERSION="$spinned" \
         CLAUDE_PLUGIN_DATA="$vdata" DASH0_PLUGIN_DATA="$vdata" COPILOT_PLUGIN_DATA="$vdata" \
         bash "$REPO/$s" <<<'{}' 2>&1 | head -1) || true
   case "$out" in
@@ -156,8 +155,13 @@ for s in "${SCRIPTS[@]}"; do
   esac
 done
 
-escaped=$(find "$vdata/.." -maxdepth 1 -name 'attacker' 2>/dev/null | wc -l | tr -d ' ')
-[ "$escaped" -eq 0 ] || { echo "  FAIL wrote outside BIN_DIR"; fail=1; }
+# There is deliberately no `find … -name attacker` check here. Two were, and
+# neither could ever fire: the traversal resolves through `on-event-..`, a
+# directory that does not exist, so curl writes nothing anywhere — with or
+# without the guard. The assertion that actually covers traversal is the
+# fallback one above. Without the guard, VERSION becomes the traversal value,
+# the download targets another repository, and no file named for the pinned
+# version appears. Confirmed by stripping the guard from each bootstrap in turn.
 rm -rf "$vdata"
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: all ${#SCRIPTS[@]} bootstraps refuse traversal and keep the pinned version"

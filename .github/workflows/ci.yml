@@ -456,3 +456,34 @@ jobs:
           done
           if [ "$fail" -ne 0 ]; then exit 1; fi
           echo "PASS: cursor/hooks.json commands all resolve to executable files"
+
+  # The one required status check. Everything above is required through this
+  # rather than by name, because most of the names cannot be relied on: the
+  # matrix jobs report as `build-test (ubuntu-latest, -race -coverprofile=…)`,
+  # so editing a flag renames the check, the ruleset waits forever for a context
+  # nobody produces, and every PR in the repo blocks until someone notices.
+  #
+  # Adding a job to CI now makes it blocking by adding it to `needs`, in this
+  # file, in the same PR — instead of in a ruleset nobody reads.
+  gate:
+    name: All checks passed
+    # always(), or a failed dependency skips this and the ruleset sees a missing
+    # context rather than a failure.
+    if: always()
+    needs: [checks, build-test, marketplace-install, install-config-contract, e2e, consistency-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job this gates succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS" | jq -r 'to_entries[] | "  \(.value.result)\t\(.key)"'
+          # `skipped` passes: e2e is deliberately skipped for fork PRs, which get
+          # no secrets and could only fail the live canaries on missing
+          # credentials. `failure` and `cancelled` do not.
+          if echo "$RESULTS" | jq -e 'to_entries[] | select(.value.result != "success" and .value.result != "skipped")' >/dev/null; then
+            echo "::error::a gated job did not pass"
+            exit 1
+          fi

@@ -155,6 +155,17 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          # The App's token, so the push to main below carries the identity the
+          # ruleset lets through. It has to be here: checkout persists whatever
+          # token it is given into a temp config file included via
+          # `includeIf.gitdir`, and git sends that Authorization header on every
+          # request to github.com no matter what a remote URL says. Rewriting
+          # the remote with credentials in it does NOT win — v0.1.27 was
+          # published and then rejected with GH013 proving exactly that.
+          #
+          # Falls back to GITHUB_TOKEN on the recovery path, where the App token
+          # is not minted because there is no bump to push.
+          token: ${{ steps.app.outputs.token || secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -297,19 +308,8 @@ jobs:
           #
           # A plain push, not --force: it is still a compare-and-swap, and the
           # App's ruleset bypass does not weaken a non-fast-forward rejection.
-          #
-          # actions/checkout persists its own credential as an http.extraheader,
-          # which git sends on every request to github.com whatever the remote
-          # URL says. Left in place it can win over the userinfo below, making
-          # this push GITHUB_TOKEN's — which the ruleset rejects, and the error
-          # would look exactly like a lost race. Removed so the identity is
-          # unambiguous. `|| true` because --unset-all exits 5 when the key is
-          # absent, which is a valid state, not a failure.
-          git config --unset-all "http.https://github.com/.extraheader" 2>/dev/null || true
-          # The App's identity, for this one command. Everything else in this
-          # job — building, drafting, publishing — uses GITHUB_TOKEN.
-          git remote set-url origin \
-            "https://x-access-token:${{ steps.app.outputs.token }}@github.com/${GITHUB_REPOSITORY}.git"
+          # The identity comes from checkout's persisted credential — see the
+          # `token:` there for why it cannot be swapped in at this point.
           if ! git push origin HEAD:main; then
             echo "::error::v${VERSION} IS PUBLISHED but main could not be moved," \
                  "so main still pins the previous version. Usually main moved during" \

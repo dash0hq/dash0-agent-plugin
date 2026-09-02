@@ -106,9 +106,23 @@ for the reasons above. No runtime's result carries over to another: a fix
 verified on `claude` is unverified on `codex` until a `codex` spec says
 otherwise, and the same for `copilot` and `cursor`.
 
-`test/contracts/cursor.sh` and `test/e2e/` still own what no session can reach on
-this runtime: the installer's own behaviour, the uninstaller's, and the bytes on
-the wire.
+`test/installers/` covers Cursor's installer and uninstaller, and
+`test/consistency/` its shipped files. What no layer below QA reaches on this
+runtime is a session: the bytes on the wire from a real turn.
+
+`test/e2e/` excludes Cursor on authentication, not on telemetry. The interactive
+TUI fires the full event set including usage, so the canary's own pty driver
+could type into it. What it cannot do is run hermetically: a copied
+`cli-config.json` does not authenticate, and `CURSOR_CONFIG_DIR` moves the
+config directory without moving where hooks are read from. A canary would have
+to write the machine's real `~/.cursor/hooks.json`, which is what the QA driver
+does and what a test in CI must not. `cursor-agent -p` avoids none of that and
+fires no turn hooks at all. The package doc in `test/e2e/main_test.go` records
+this against a pinned CLI version.
+
+`test/marketplaces/` excludes Cursor for an unrelated reason: `cursor-agent
+plugin` has no install verb, and `add` takes a git URL with no local-source
+variant.
 
 ## Layout
 

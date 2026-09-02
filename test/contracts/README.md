@@ -1,42 +1,42 @@
-# Install / config contracts
+# Release planning contracts
 
-Executable contract tests for the plugin install, credential-delivery, and
-uninstall flows — the behaviour the runtime READMEs' *Installation* and
-*Configuration* sections depend on. They run **locally** (while iterating on an
-installer) and in CI (the `install-config-contract` job just calls these).
+One script, covering `scripts/release-plan.sh`, `scripts/version.sh` and
+`scripts/expected-artifacts.sh`. The Release workflow cannot be dispatched from
+a PR, so its branching gets no other pre-merge coverage.
 
-| Script | Contracts | Needs | Local? |
-|---|---|---|---|
-| `claude.sh` | settings.json ≠ install · `--config` credential storage · creds → OTLP | `claude` CLI, network, go/jq/curl | mostly anywhere; the credential-storage contract is **Linux-only** (see below) |
-| `cursor.sh` | creds → OTLP · install layout + hooks merge · uninstall strip | network (install/uninstall resolve the latest release), go/jq/curl | yes |
-| `codex.sh`  | creds → OTLP · install merge + pre-trust · uninstall strip | go/jq/python3/curl | yes (no codex CLI) |
-| `bootstrap.sh` | all four `*-on-event.sh` stage the download in a temp and rename · neither the scripts nor the Claude binary ends a hook non-zero · `DASH0_VERSION` cannot retarget the download or escape `BIN_DIR` · an unrunnable cached binary neither errors nor re-downloads · concurrent cold-cache runs converge | curl, sha256sum/shasum, go; network for the contracts that download | yes |
-| `release.sh` | every Release dispatch resolves to the right version, tag and bump, and the guarded combinations are refused · the artifact list follows `.goreleaser.yaml` · a bump rewrites all thirteen pins | jq, git | yes |
-
-## Run
+| Script | Contracts | Needs |
+|---|---|---|
+| `release.sh` | every Release dispatch resolves to the right version, tag and bump, and the guarded combinations are refused · the artifact list follows `.goreleaser.yaml` · a bump rewrites all thirteen pins | jq, git |
 
 ```bash
-./test/contracts/run.sh            # all five
-./test/contracts/run.sh codex      # one agent
+./test/contracts/release.sh
 ```
 
-Each script is hermetic — it uses throwaway `HOME`s under `/tmp` and a mock OTLP
-server on `:4319`, so it never touches your real `~/.claude` / `~/.cursor` /
-`~/.codex`.
+CI runs the same line in the `release-checks` job.
 
-## Notes
+## Where the rest went
 
-- **The `claude.sh` credential-storage contract is Linux-only.** It pins *where*
-  `claude plugin install --config` persists credentials (non-sensitive →
-  `settings.json`, `AUTH_TOKEN` → the secrets store, with a `.credentials.json`
-  fallback on Linux). macOS uses the Keychain and a different layout, so it
-  **skips** off Linux; CI (Linux) validates it.
-- **`bootstrap.sh`'s concurrency contract skips when the pinned release isn't
-  published**, including in CI — that is the normal state of a version-bump PR,
-  and turning every one of those red would just train people to ignore it. The
-  static contract in the same script runs unconditionally and is the one that
-  actually holds the line.
-- The `cursor.sh` install/uninstall contracts download the latest published
-  release's Cursor binary, so they need network and an existing release. If the
-  release can't be resolved they **skip locally but fail in CI** (`$CI` set) —
-  a silently skipped contract would report green while testing nothing.
+This directory used to hold the install, credential and bootstrap contracts as
+shell, one script per runtime. Each covered whichever runtime its author had in
+hand, so a check that named one file only ever guarded that file. They are Go
+packages now:
+
+| Was | Is | Runs in |
+|---|---|---|
+| `cursor.sh`, `codex.sh` (install) | [`test/installers`](../installers/README.md), which runs the real installer against a throwaway home and parses what comes out | `go test ./...`, all three operating systems |
+| `claude.sh` (install) | [`test/marketplaces`](../marketplaces), because Claude has no installer script — it installs through the CLI's own marketplace verbs | `make test-marketplaces`, ubuntu only, behind the `marketplace` tag because it needs the real CLI |
+| the credential half of all three | [`test/credentials`](../credentials), which drives each entrypoint and reads the Authorization header off a real request | `go test ./...`, all three operating systems |
+| `bootstrap.sh` | [`test/consistency`](../consistency), driven off one `Agents` table so every check runs against all four runtimes, and against the `.ps1` bootstraps as well as the `.sh` ones | `go test ./...`, all three operating systems |
+
+One half did not move. `claude.sh` also checked that
+`claude plugin install --config` persists a token, and nothing covers that now,
+on purpose: the plugin deliberately does not use `--config`, because it stores
+the token in the OS secrets store, which on macOS means a Keychain no throwaway
+`HOME` can hold. `test/installers/README.md` records the same decision.
+
+`release.sh` stays in shell because what it drives is shell, and because it
+needs neither Go nor a runtime CLI: `jq`, `git`, and three seconds.
+
+`lib.sh` still carries `os_arch`, `force_https`, `skip_or_fail` and
+`start_mock_otlp`, which nothing sources any more. `release.sh` uses only
+`$REPO` and `_cleanup`.

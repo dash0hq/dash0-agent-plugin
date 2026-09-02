@@ -28,7 +28,8 @@ until the config file is filled in.
 
 Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
 DASH0_VERSION (pins a specific release), DASH0_RAW_REF (pins the git ref the
-plugin files come from; for testing before a release),
+plugin files come from; for testing before a release), DASH0_SOURCE_DIR
+(install the plugin files from a local checkout),
 DASH0_SKIP_PLUGIN_FILES=1 (leave the plugin files on disk alone; for testing a
 locally staged build).
 
@@ -246,6 +247,18 @@ $RawRef = $env:DASH0_RAW_REF
 if (-not $RawRef) { $RawRef = "v$Version" }
 $RawBase = "https://raw.githubusercontent.com/$Repo/$RawRef"
 
+# DASH0_SOURCE_DIR installs the plugin files from a local checkout instead of the
+# ref above. With a pre-staged binary that makes the whole install offline, and it
+# is what lets the install contract test THIS checkout's bootstrap rather than the
+# last release's. Mirrors install-codex.sh.
+$SourceDir = $env:DASH0_SOURCE_DIR
+if ($SourceDir) {
+  if (-not (Test-Path -LiteralPath $SourceDir -PathType Container)) {
+    Stop-WithError "DASH0_SOURCE_DIR is not a directory: $SourceDir"
+  }
+  Write-Info "installing plugin files from $SourceDir"
+}
+
 # Set DASH0_SKIP_PLUGIN_FILES=1 to leave the plugin files on disk untouched. That
 # is how a locally built plugin is tested before a release carries the Windows
 # files; nothing else should set it. Without it every run fetches and replaces, so
@@ -314,6 +327,25 @@ function Install-PluginFile {
       Stop-WithError "DASH0_SKIP_PLUGIN_FILES is set but $Destination is not there"
     }
     Write-Ok "kept staged file -> $Destination"
+    return
+  }
+  if ($SourceDir) {
+    # $Source is repo-relative with forward slashes; make it a native path so the
+    # -LiteralPath below is not asked to interpret a mixed separator.
+    $Local = Join-Path $SourceDir ($Source -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $Local -PathType Leaf)) {
+      Stop-WithError "not found in ${SourceDir}: $Source"
+    }
+    Write-Info "copying $Source from $SourceDir..."
+    try {
+      Copy-Item -LiteralPath $Local -Destination $Destination -Force
+    } catch {
+      # The same locked destination the download branch below tolerates, and
+      # Copy-Item throws on it under $ErrorActionPreference = 'Stop'.
+      Write-Warn "could not replace $Destination (a running hook may hold it open) - quit Codex and re-run to refresh it"
+      return
+    }
+    Write-Ok "installed -> $Destination"
     return
   }
   Write-Info "downloading $Source..."

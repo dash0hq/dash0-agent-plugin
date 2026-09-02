@@ -14,7 +14,7 @@
 set -u
 
 AGENT="cursor"
-VERSION="0.1.26"
+VERSION="0.1.27"
 
 # Where the downloaded binary lives. Mirrors the per-source scratch root layout
 # from internal/harness so a user can clean up the whole tree at once.

@@ -24,7 +24,7 @@ PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-}"
 [ -n "$PLUGIN_DATA" ] || fail_open "CLAUDE_PLUGIN_DATA is not set"
 BIN_DIR="$PLUGIN_DATA/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.26"
+VERSION="0.1.27"
 
 # Point this install at a different published release — a -dev prerelease cut
 # from a branch for QA, or a rollback — without editing this file. Same repo and

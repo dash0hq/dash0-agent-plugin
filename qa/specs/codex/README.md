@@ -2,7 +2,8 @@
 
 What an OpenAI Codex session looks like in Dash0 once it ends. One area per runtime, because a run is
 one driver, one credential and one cost profile — `## Runtimes` in [../../setup.md](../../setup.md)
-is the table, and [../claude](../claude/README.md) is the other half.
+is the table, and [../claude](../claude/README.md), [../copilot](../copilot/README.md) and
+[../cursor](../cursor/README.md) are the other three.
 
 | Topic | Covers |
 | --- | --- |

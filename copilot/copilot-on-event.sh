@@ -14,8 +14,9 @@
 # just without usage.
 #
 # Fail-open: any error before exec logs to stderr and exits 0 so a broken
-# installer never breaks the user's Copilot session. Mandatory here, since
-# Copilot's tool hooks are fail-closed. `set -e` is deliberately absent;
+# installer never breaks the user's Copilot session. hooks.json registers
+# lifecycle events only, so a non-zero exit gates no tool call - it prints a hook
+# error into the session on every turn instead. `set -e` is deliberately absent;
 # fail_open does that job.
 set -u
 

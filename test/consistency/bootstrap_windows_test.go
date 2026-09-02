@@ -16,6 +16,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/test/helpers/hookcheck"
+	"github.com/dash0hq/dash0-agent-plugin/test/helpers/pluginrepo"
 )
 
 // The behavioural bootstrap contracts, run against the PowerShell bootstraps.
@@ -39,14 +42,21 @@ import (
 // The data directory is placed under a regular file, where New-Item fails. That
 // is the Windows equivalent of the mode bits the .sh twin uses.
 func TestPowerShellBootstrapsFailOpenWhenTheDataDirectoryIsUnwritable(t *testing.T) {
-	blocker := filepath.Join(t.TempDir(), "blocker")
-	require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o644))
-
 	for _, a := range windowsBootstraps(t) {
 		t.Run(a.Label, func(t *testing.T) {
+			// The bin directory itself is the file, not an ancestor of it. The POSIX
+			// twin blocks an ancestor, which `mkdir -p` refuses; New-Item -Force
+			// creates intermediate directories and got past the same layout here,
+			// leaving the run to report a failed download and this contract to
+			// assert nothing. A file with the name the bootstrap wants for a
+			// directory is what it cannot work around.
+			dataDir := t.TempDir()
+			blocker := filepath.Join(dataDir, "bin")
+			require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o644))
+
 			// The shim serves an empty directory, so a run that somehow got past the
 			// mkdir still cannot reach the real network.
-			env := servedEnv(t, filepath.Join(blocker, "data"), t.TempDir())
+			env := servedEnv(t, dataDir, t.TempDir())
 
 			out, err := psExec(abs(t, a.WindowsBootstrap), env, "someEvent")
 			// Before the assertions below, so an environment fault reports itself
@@ -61,6 +71,17 @@ func TestPowerShellBootstrapsFailOpenWhenTheDataDirectoryIsUnwritable(t *testing
 			assert.Contains(t, out, "could not create",
 				"%s exited 0 without reporting the failed mkdir, so this asserted "+
 					"nothing about the fail-open path:\n%s", a.WindowsBootstrap, out)
+
+			// The premise, checked rather than assumed. A New-Item that replaced the
+			// file with a directory would leave the message above missing for a
+			// reason that has nothing to do with failing open, and the assertion
+			// would read as a regression in the bootstrap.
+			info, statErr := os.Stat(blocker)
+			if assert.NoError(t, statErr, "the blocking file is gone, so the mkdir was not refused") {
+				assert.False(t, info.IsDir(),
+					"New-Item -Force replaced the blocking file with a directory, so this "+
+						"contract no longer blocks anything and needs a different blocker")
+			}
 		})
 	}
 }
@@ -250,6 +271,96 @@ func TestPowerShellPipelineDeliveryPreservesThePayload(t *testing.T) {
 				"the payload reached the binary altered; a PowerShell 5.1 pipeline re-encodes "+
 					"text through $OutputEncoding, so the branch has to write UTF-8 bytes to the "+
 					"child's raw stdin:\n%s", out)
+		})
+	}
+}
+
+// A hook must never end non-zero, against the real binary under the .ps1 a hook
+// actually invokes. The .sh twin is TestBootstrapsExitZeroForTheRealBinary, and
+// it covers four runtimes because Claude ships no .ps1.
+//
+// The rejected payload is the case that matters. On a payload run() serves it
+// returns nil and main falls off the end, so every exit-code check passes whether
+// or not the error branch carries an os.Exit.
+//
+// Windows adds a second failure the POSIX side cannot have: these bootstraps end
+// in `exit $Proc.ExitCode` rather than in an `exec` that replaces the shell, so
+// the code has to be carried back by hand.
+func TestPowerShellBootstrapsExitZeroForTheRealBinary(t *testing.T) {
+	for _, a := range windowsBootstraps(t) {
+		t.Run(a.Label, func(t *testing.T) {
+			spec, ok := hookcheck.Specs[a.Label]
+			require.True(t, ok,
+				"no hookcheck.Spec for %s, so this runtime's payload cannot be built", a.Label)
+
+			dataDir := t.TempDir()
+			cached := filepath.Join(dataDir, "bin", a.cacheName(t))
+			require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0o755))
+			pluginrepo.CopyExecutable(t,
+				pluginrepo.BuildBinary(t, pluginrepo.Root(t), "./cmd/"+a.Label+"-on-event"),
+				cached)
+
+			// servedEnv rather than psEnv, so the curl shim is on PATH serving an
+			// empty directory: a bootstrap that derived a different name 404s
+			// instead of fetching the published release and asserting the exit code
+			// of shipped code.
+			//
+			// No endpoint by any route either, so a run cannot export for real or
+			// stall on a connectivity timeout.
+			env := append(servedEnv(t, dataDir, t.TempDir()),
+				"DASH0_OTLP_URL=",
+				a.Harness.EnvPrefix+"_PLUGIN_OPTION_OTLP_URL=",
+			)
+
+			var args []string
+			if spec.ArgvEvent != "" {
+				args = append(args, spec.ArgvEvent)
+			}
+
+			for i, c := range []struct {
+				name, payload  string
+				servesSession  bool
+				wantParseError bool
+			}{
+				{name: "a payload run() rejects", payload: badPayload, wantParseError: true},
+				{name: "a payload it can serve", servesSession: true},
+			} {
+				t.Run(c.name, func(t *testing.T) {
+					require.NotEqual(t, c.servesSession, c.wantParseError,
+						"%q must either serve a session or expect a parse error", c.name)
+
+					payload := c.payload
+					if c.servesSession {
+						payload = spec.SessionStart(fmt.Sprintf("exit-code-%d", i))
+					}
+
+					// Inside the data directory, so a relative <ConfigDir>/… lookup
+					// cannot reach this checkout. The POSIX twin does the same.
+					out, err := psExecIn(abs(t, a.WindowsBootstrap), dataDir, env, payload, args...)
+					requirePastTheArchitectureGate(t, out)
+					assert.NoError(t, err,
+						"%s exited non-zero. Cursor and Codex register a tool-gating hook and "+
+							"read that as a refusal, and Copilot prints it as a hook error on "+
+							"every event:\n%s", a.WindowsBootstrap, out)
+
+					want := "telemetry is not active"
+					if c.wantParseError {
+						want = "parsing JSON from stdin"
+					}
+					assert.Contains(t, out, want,
+						"the staged binary never said %q, so %s exited 0 without "+
+							"running it:\n%s", want, a.WindowsBootstrap, out)
+					entries, err := os.ReadDir(filepath.Dir(cached))
+					require.NoError(t, err)
+					names := make([]string, 0, len(entries))
+					for _, e := range entries {
+						names = append(names, e.Name())
+					}
+					assert.Equal(t, []string{a.cacheName(t)}, names,
+						"%s left something other than the staged binary in its cache",
+						a.WindowsBootstrap)
+				})
+			}
 		})
 	}
 }

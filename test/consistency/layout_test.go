@@ -6,9 +6,11 @@ package consistency
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestNoAutoDiscoveredRootDirs keeps the runtime assets isolated per agent.
@@ -26,6 +28,41 @@ func TestNoAutoDiscoveredRootDirs(t *testing.T) {
 				"root %s/ must not exist; runtime assets belong under the per-agent directories", dir)
 		})
 	}
+}
+
+// TestEveryEntrypointDrivesTheSharedContracts keeps the fail-open and credential
+// contracts applied to all four runtimes.
+//
+// They cannot be table-driven from here: run() and main() are unexported members
+// of a package main, so each entrypoint calls test/helpers/hookcheck from its own
+// package. Coverage is then one file per directory, and a fifth runtime that
+// forgets the file is uncovered in silence rather than red. This is the check that
+// makes it red.
+func TestEveryEntrypointDrivesTheSharedContracts(t *testing.T) {
+	for _, a := range Agents {
+		t.Run(a.Label, func(t *testing.T) {
+			path := filepath.Join("cmd", a.Label+"-on-event", "hookcheck_test.go")
+			body, err := os.ReadFile(abs(t, path))
+			require.NoError(t, err,
+				"%s is missing, so nothing asserts that this entrypoint fails open or "+
+					"that a configured token reaches the wire", path)
+
+			// Named individually: a file that only routes TestMain would satisfy a
+			// FileExists, and each of these is a separate contract.
+			for _, contract := range []string{
+				"hookcheck.FailOpen", "hookcheck.Credentials",
+				"hookcheck.Dash0AuthTokenIsNotHonoured",
+			} {
+				assert.Contains(t, string(body), contract+"(t, hookcheck."+capitalize(a.Label),
+					"%s does not drive %s for this runtime", path, contract)
+			}
+		})
+	}
+}
+
+// capitalize maps a runtime label to its hookcheck.Spec name.
+func capitalize(label string) string {
+	return strings.ToUpper(label[:1]) + label[1:]
 }
 
 // TestRuntimePackagesShipNoCaptureHarness keeps the dev-only capture harness out

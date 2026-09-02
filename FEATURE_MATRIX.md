@@ -135,7 +135,7 @@ and a 500ms retry delay.
 |---|---|---|---|---|
 | Wrapper on failure | `set -euo pipefail`; may `exit 1` on download/checksum error | fail-open, `exit 0` | fail-open, `exit 0` | fail-open, `exit 0` |
 | Binary on `run()` error | logs stderr, `exit 1` | logs stderr, `exit 0` | logs stderr, `exit 0` | logs stderr, `exit 0` |
-| Rationale | Claude tolerates a non-zero observational-hook exit | Cursor blocks on non-zero when `failClosed` | Codex may block on non-zero | Copilot's tool hooks are fail-closed (non-zero blocks) |
+| Rationale | Claude tolerates a non-zero observational-hook exit | Cursor blocks on non-zero when `failClosed` | Codex may block on non-zero | no tool hook registered; a non-zero exit prints a hook error every turn |
 | Connectivity check (SessionStart) | Yes | Yes | Yes | Yes |
 | Missing `session_id` | random ID + `dash0.warning` | same | same | same |
 

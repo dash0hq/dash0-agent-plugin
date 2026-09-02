@@ -76,8 +76,8 @@ Nothing extra on Windows: the `.ps1` pair merges with `ConvertFrom-Json`, and
 - **Credential delivery.** `dash0-agent-plugin.local.md` is parsed by the
   binary, so the parse is a Go unit test and the resolution order is covered by
   `internal/harness`. That a configured token reaches the Authorization header of
-  a real request is [`test/credentials`](../credentials), for all four runtimes
-  and both sources.
+  a real request is [`test/helpers/hookcheck`](../helpers/hookcheck), driven
+  from each `cmd/*-on-event` package, for all four runtimes and both sources.
 - **Claude and Copilot.** Neither ships an `install-*` script; both install
   through their CLI's own marketplace verbs, which is
   [`test/marketplaces`](../marketplaces).

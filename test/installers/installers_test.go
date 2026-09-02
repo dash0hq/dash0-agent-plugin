@@ -73,8 +73,8 @@ func installerEnv(home, state, version string, extra ...string) []string {
 // environment variable, and an installer that dropped one, or that fell through
 // to its own default, still writes a file: the hook then resolves a token that
 // is empty or somebody else's, the collector answers 401, and every hook still
-// exits 0. test/credentials covers a token reaching the wire once it is in the
-// file; this covers it getting into the file.
+// exits 0. test/helpers/hookcheck covers a token reaching the wire once it is in
+// the file; this covers it getting into the file.
 func requireConfigCarriesTheCredentials(t *testing.T, path string) {
 	t.Helper()
 

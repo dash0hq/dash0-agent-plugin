@@ -13,8 +13,9 @@
 // the native tree chat -> execute_tool task -> invoke_agent -> execute_tool bash.
 //
 // Telemetry failures never break the user's session: errors go to stderr and the
-// process always exits 0. Mandatory here, because Copilot's tool-gating hooks read
-// a non-zero exit as a block.
+// process always exits 0. copilot/hooks.json registers lifecycle events only, so
+// a non-zero exit gates no tool call; it prints a hook error into the session on
+// every turn instead.
 package main
 
 import (

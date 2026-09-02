@@ -19,6 +19,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/test/helpers/hookcheck"
+	"github.com/dash0hq/dash0-agent-plugin/test/helpers/pluginrepo"
 )
 
 // The bootstrap contracts only a POSIX host can run, and the fixtures they need.
@@ -297,8 +300,15 @@ func TestAnUnrunnableCachedBinaryIsKept(t *testing.T) {
 			out, err := cmd.CombinedOutput()
 
 			// The two assertions at the end hold on a bootstrap that did nothing at
-			// all, so bash naming the missing interpreter is what proves it tried.
-			require.Contains(t, string(out), interpreter,
+			// all, so bash reporting the file it could not run is what proves it tried.
+			//
+			// The path, not the interpreter. bash's wording for a missing interpreter
+			// is not portable: it names it on macOS ("bad interpreter:
+			// /nonexistent/interpreter") and does not on the GNU/Linux runners
+			// ("cannot execute: required file not found"). Both name the file they
+			// were asked to run, and no other message here carries this absolute
+			// path — a download reports the asset name and the URL.
+			require.Contains(t, string(out), cached,
 				"the bootstrap never tried to exec the cached binary, so this asserted "+
 					"nothing about what it does when the exec fails:\n%s", out)
 
@@ -418,6 +428,103 @@ func TestBootstrapsRefuseAVersionOverrideThatIsNotAVersion(t *testing.T) {
 					"%s rejected %s, its own pinned version", a.Bootstrap, pinned)
 				assert.Contains(t, out, "STUB-RAN", "the binary never ran:\n%s", out)
 			})
+		})
+	}
+}
+
+// A hook must never end non-zero, and the exit code is what only another process
+// can see.
+//
+// hookcheck.FailOpen calls each run() in-process and proves it returns an error
+// rather than exiting. The other half is that main drops that error instead of
+// re-raising it, and no in-process call can observe it: main ends its process
+// either way. So this runs the real binary, under the bootstrap a hook actually
+// invokes, which is the exit code the agent sees.
+//
+// The rejected payload is the case that matters. On a payload run() serves it
+// returns nil and main falls off the end, so every exit-code check passes whether
+// or not the error branch carries an os.Exit. Claude's did once.
+//
+// Claude has no .ps1 twin, so bootstrap_windows_test.go covers three runtimes
+// there and this covers four here.
+func TestBootstrapsExitZeroForTheRealBinary(t *testing.T) {
+	for _, a := range Agents {
+		t.Run(a.Label, func(t *testing.T) {
+			spec, ok := hookcheck.Specs[a.Label]
+			require.True(t, ok,
+				"no hookcheck.Spec for %s, so this runtime's payload cannot be built", a.Label)
+
+			// Staged under the name the bootstrap derives, so the cache is warm and
+			// the download path is not reached.
+			dataDir := t.TempDir()
+			cached := filepath.Join(dataDir, "bin", a.cacheName(t))
+			require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0o755))
+			pluginrepo.CopyExecutable(t,
+				pluginrepo.BuildBinary(t, pluginrepo.Root(t), "./cmd/"+a.Label+"-on-event"),
+				cached)
+
+			for i, c := range []struct {
+				name, payload  string
+				servesSession  bool
+				wantParseError bool
+			}{
+				{name: "a payload run() rejects", payload: badPayload, wantParseError: true},
+				{name: "a payload it can serve", servesSession: true},
+			} {
+				t.Run(c.name, func(t *testing.T) {
+					require.NotEqual(t, c.servesSession, c.wantParseError,
+						"%q must either serve a session or expect a parse error", c.name)
+
+					payload := c.payload
+					if c.servesSession {
+						payload = spec.SessionStart(fmt.Sprintf("exit-code-%d", i))
+					}
+
+					var args []string
+					if spec.ArgvEvent != "" {
+						args = append(args, spec.ArgvEvent)
+					}
+					cmd := exec.Command("bash", append([]string{abs(t, a.Bootstrap)}, args...)...)
+					cmd.Stdin = strings.NewReader(payload)
+					// No endpoint, so nothing leaves the machine and no case waits out
+					// the connectivity timeout.
+					// The curl shim serves an empty directory, so a bootstrap that
+					// derived a different name 404s instead of fetching the published
+					// release and asserting the exit code of shipped code.
+					cmd.Env = append(hookEnv(t, dataDir),
+						"PATH="+fakeCurl(t, t.TempDir())+string(os.PathListSeparator)+os.Getenv("PATH"),
+						"DASH0_OTLP_URL=",
+						a.Harness.EnvPrefix+"_PLUGIN_OPTION_OTLP_URL=",
+					)
+					// Inside the data directory, so a relative <ConfigDir>/… lookup
+					// cannot reach this checkout.
+					cmd.Dir = dataDir
+
+					out, err := cmd.CombinedOutput()
+					assert.NoError(t, err,
+						"%s exited non-zero. Claude and Copilot print that as a hook error on "+
+							"every event, Cursor reads it from a tool-gating hook as a refusal, "+
+							"and Codex sits between the user and their own tool calls:\n%s",
+						a.Bootstrap, out)
+
+					want := "telemetry is not active"
+					if c.wantParseError {
+						want = "parsing JSON from stdin"
+					}
+					assert.Contains(t, string(out), want,
+						"the staged binary never said %q, so %s exited 0 without "+
+							"running it:\n%s", want, a.Bootstrap, out)
+					entries, err := os.ReadDir(filepath.Dir(cached))
+					require.NoError(t, err)
+					names := make([]string, 0, len(entries))
+					for _, e := range entries {
+						names = append(names, e.Name())
+					}
+					assert.Equal(t, []string{a.cacheName(t)}, names,
+						"%s left something other than the staged binary in its cache",
+						a.Bootstrap)
+				})
+			}
 		})
 	}
 }

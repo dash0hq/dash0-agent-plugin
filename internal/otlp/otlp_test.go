@@ -755,3 +755,38 @@ func TestConfigValidateURLClearingStopsExport(t *testing.T) {
 	require.NoError(t, SendLog(map[string]any{"hook_event_name": "SessionStart"}, bad))
 	assert.Equal(t, 1, got, "a cleared URL must send nothing")
 }
+
+// The deny list protects a span, not only a log record.
+//
+// One list serves both: eventAttributes applies attrSkipKeys, and SendLog and
+// NewLLMSpan both call it. So this fails together with
+// TestSendLogDropsCopilotStopReason above rather than independently, and what it
+// buys is the shape rather than a second chance at the same regression. An
+// agentStop payload becomes a chat span, which is where these two keys actually
+// reached Dash0, and asserting them on the span means a future span-only
+// attribute builder cannot bypass the deny list unnoticed.
+//
+// The payload is the same real agentStop event, so a key denied for the log is
+// asserted denied for the span from the same input.
+func TestChatSpanDropsCopilotAgentStopBookkeeping(t *testing.T) {
+	event := map[string]any{
+		"hook_event_name":  "Stop",
+		"session_id":       "ad6ab0d8-093f-4a85-9fa7-87e0e5480a92",
+		"stopReason":       "end_turn",
+		"stop_hook_active": false,
+		"traceparent":      "00-558ca38a5fd1be05a94cf7002271be76-adc5bef1061afc70-01",
+	}
+
+	ts := time.Now().UTC()
+	span := NewLLMSpan("trace", "span", "", ts, ts, event, false, Config{})
+
+	assertNoAttr(t, span.Attributes, "stopReason")
+	assertNoAttr(t, span.Attributes, "stop_hook_active")
+	// A propagation header on a span names a trace the span does not belong to.
+	assertNoAttr(t, span.Attributes, "traceparent")
+
+	// The positive control: a span that carried no attribute at all would satisfy
+	// every assertion above.
+	assertAttr(t, span.Attributes, "gen_ai.conversation.id",
+		"ad6ab0d8-093f-4a85-9fa7-87e0e5480a92")
+}

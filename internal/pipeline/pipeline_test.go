@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -1854,4 +1855,88 @@ func TestIsSafeSessionID(t *testing.T) {
 	for _, bad := range []string{"", "..", "../victim", "a/b", "a.b", "x\x00y"} {
 		assert.False(t, IsSafeSessionID(bad), "%q must not reach filepath.Join", bad)
 	}
+}
+
+// The repository a turn happened in reaches the emitted span.
+//
+// Resolving it and stamping it live in different packages: vcs.Detect shells out
+// to git, and internal/otlp turns the result into attributes. Each has its own
+// unit test, and neither shows that a turn carries the pair. The live canary that
+// did was dropped, so this covers it deterministically instead.
+//
+// The process working directory is what git reads, so this runs from a throwaway
+// repo rather than the checkout: asserting against this repo's own origin would
+// hold on a Detect that ignored the directory entirely. The other way in is the
+// cwd a payload names, which the entrypoints apply before calling Process; that
+// half is TestChdirToEventCwd.
+func TestProcess_Stop_ChatSpanCarriesTheRepository(t *testing.T) {
+	const origin = "https://github.com/dash0hq/pipeline-vcs-contract.git"
+
+	repo := t.TempDir()
+
+	// The ambient git configuration is switched off for the whole test, not only
+	// for the calls below, because vcs.Detect shells out to git from this process
+	// too. Two developer settings reach this otherwise: commit.gpgsign = true
+	// fails the throwaway commit whenever the key is unavailable, and a global
+	// `insteadOf` rewrite — a corporate mirror, or a CI token injected into
+	// https://github.com/ — changes the URL the span carries and fails the
+	// assertions below on the developer's own machine. core.hooksPath and
+	// init.templateDir are the same class of input.
+	//
+	// os.DevNull, so this is NUL on Windows. Safe as process state: this package
+	// has no t.Parallel.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		// The output, because cmd.Run() alone reports "exit status 128" and drops
+		// the reason.
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+
+	git("init", "-q")
+	git("config", "user.email", "contract@dash0.com")
+	git("config", "user.name", "Dash0 Contract")
+	git("commit", "-q", "--allow-empty", "-m", "init")
+	git("remote", "add", "origin", origin)
+	t.Chdir(repo)
+
+	// Read back rather than hardcoded: the default branch follows
+	// init.defaultBranch, so "main" is wrong on half the hosts.
+	branch := git("rev-parse", "--abbrev-ref", "HEAD")
+	revision := git("rev-parse", "HEAD")
+
+	url, spans, mu := mockOTLPServer(t)
+	s := newSetup(t, url)
+
+	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1", "model": "opus"})
+	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "hi"})
+	s.feed(t, map[string]any{"hook_event_name": "Stop", "session_id": "sess-1", "transcript_path": claudeTranscript(t)})
+
+	mu.Lock()
+	require.Len(t, *spans, 1)
+	span := (*spans)[0]
+	mu.Unlock()
+
+	for key, want := range map[string]string{
+		"dash0.gen_ai.vcs.repository.url.full": "https://github.com/dash0hq/pipeline-vcs-contract",
+		"dash0.gen_ai.vcs.repository.name":     "pipeline-vcs-contract",
+		"dash0.gen_ai.vcs.owner.name":          "dash0hq",
+		"dash0.gen_ai.vcs.provider.name":       "github",
+		"dash0.gen_ai.vcs.ref.head.name":       branch,
+		"dash0.gen_ai.vcs.ref.head.revision":   revision,
+		"dash0.gen_ai.vcs.ref.head.type":       "branch",
+	} {
+		assert.Equal(t, want, stringAttrOf(t, span, key))
+	}
+
+	// The identity half of the same git call. A span attributed to the OS account
+	// means the repository was never read, whatever the attributes above say.
+	assert.Equal(t, "git", stringAttrOf(t, span, "dash0.gen_ai.user.identity.source"))
+	assert.Equal(t, "Dash0 Contract", stringAttrOf(t, span, "user.name"))
 }

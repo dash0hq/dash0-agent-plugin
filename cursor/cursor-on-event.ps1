@@ -43,8 +43,9 @@ function Exit-FailOpen {
 # failure into a terminating error, and an unhandled one exits non-zero: a
 # Get-FileHash on a file the virus scanner still holds open, a Process.Start on a
 # binary being scanned, an `& $Binary` whose file went away after Test-Path saw it.
-# Cursor and Copilot both read a non-zero hook exit as a refusal, so trouble
-# fetching telemetry would block the user's prompt or tool call. The shell twin
+# Cursor and Codex both register a tool-gating hook and read a non-zero exit as a
+# refusal, so trouble fetching telemetry would block the user's tool call; Copilot
+# registers lifecycle events only and prints a hook error instead. The shell twin
 # leaves `set -e` off and routes everything through fail_open; this trap is how the
 # same posture is reached here, and it covers the paths with no try of their own.
 # The two deliberate `exit` calls below are unaffected, since an exit is not an

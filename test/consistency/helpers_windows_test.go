@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dash0hq/dash0-agent-plugin/test/helpers/testenv"
@@ -38,14 +39,29 @@ import (
 // only from the goroutine running the test. Callers resolve script with abs and
 // check the returned output themselves, on the test goroutine.
 func psExec(script string, env []string, args ...string) (string, error) {
+	return psExecIn(script, "", env, `{"hook_event_name":"SessionStart"}`, args...)
+}
+
+// psExecIn is psExec with the payload and the working directory chosen by the
+// caller: one contract needs a payload the entrypoint rejects, and one needs to
+// run from somewhere other than this package.
+//
+// An empty dir inherits the test's, which is the package directory. That matters
+// for any contract that runs the REAL binary rather than a stub: harness's
+// configFile reads a RELATIVE <ConfigDir>/dash0-agent-plugin.local.md before the
+// copy under the home, so a .cursor, .codex or .copilot directory dropped in the
+// checkout would hand it a live endpoint and token. The POSIX twin sets cmd.Dir
+// for the same reason; see TestBootstrapsExitZeroForTheRealBinary.
+func psExecIn(script, dir string, env []string, payload string, args ...string) (string, error) {
 	argv := append([]string{
 		"-NoProfile", "-ExecutionPolicy", "Bypass",
 		"-File", script,
 	}, args...)
 
 	cmd := exec.Command("powershell", argv...)
-	cmd.Stdin = strings.NewReader(`{"hook_event_name":"SessionStart"}`)
+	cmd.Stdin = strings.NewReader(payload)
 	cmd.Env = env
+	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 
 	if gateErr := architectureGateErr(string(out)); gateErr != nil {
@@ -88,10 +104,10 @@ func architectureGateErr(out string) error {
 // windir, and exec.Cmd replaces the environment outright, adding back only
 // SYSTEMROOT. Enumerating what startup needs is a list nobody can keep correct.
 //
-// CleanEnv's suffix rule matches CODEX_PLUGIN_DATA and misses a bare
+// Clean's suffix rule matches CODEX_PLUGIN_DATA and misses a bare
 // PLUGIN_DATA, so the names below are set explicitly rather than trusted to it.
 //
-// The architecture variables survive CleanEnv anyway, so naming them documents a
+// The architecture variables survive Clean anyway, so naming them documents a
 // dependency rather than fixing one: the shared region reads
 // PROCESSOR_ARCHITEW6432 then PROCESSOR_ARCHITECTURE, and fails open when both
 // are empty. architectureGateErr catches that.
@@ -261,4 +277,44 @@ func servedEnv(t *testing.T, dataDir, serveDir string) []string {
 func requireExecutable(t *testing.T, path, what string) {
 	t.Helper()
 	require.FileExists(t, path, "%s does not resolve to a file", what)
+}
+
+// TestPsEnvCanRunTheCmdletsTheBootstrapsUse checks that the environment psEnv
+// builds can still resolve the cmdlets a bootstrap calls.
+//
+// A missing cmdlet is not a visible failure. Every bootstrap here traps the
+// unforeseen and exits 0, so a CommandNotFoundException reads as a fail-open and
+// each download-path contract passes having asserted nothing. This is what a
+// runner did with Get-FileHash, so the checksum step never ran and the two
+// concurrency contracts reported a bootstrap that had stopped before reaching
+// them.
+//
+// It also records the startup inputs a Windows PowerShell child resolves its
+// modules from, because the environment is subtracted from the parent's and a
+// value the parent shell mangled is invisible from the message alone.
+func TestPsEnvCanRunTheCmdletsTheBootstrapsUse(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "probe.ps1")
+	require.NoError(t, os.WriteFile(script, []byte(`
+$ErrorActionPreference = 'Continue'
+[Console]::Out.WriteLine("edition=" + $PSVersionTable.PSEdition + " version=" + $PSVersionTable.PSVersion)
+[Console]::Out.WriteLine("PSModulePath=" + $env:PSModulePath)
+[Console]::Out.WriteLine("PSHOME=" + $PSHOME)
+foreach ($Name in 'Get-FileHash','New-Item','Remove-Item','Move-Item','Test-Path','Out-Null') {
+  $Cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($Cmd) {
+    [Console]::Out.WriteLine("HAVE " + $Name + " from " + $Cmd.ModuleName)
+  } else {
+    [Console]::Out.WriteLine("MISSING " + $Name)
+  }
+}
+`), 0o644))
+
+	out, err := psExec(script, psEnv(t, t.TempDir()))
+	require.NoError(t, err, "the probe itself could not run:\n%s", out)
+	t.Logf("the environment a bootstrap starts in:\n%s", out)
+
+	assert.NotContains(t, out, "MISSING",
+		"a cmdlet the bootstraps call cannot be resolved in the environment psEnv "+
+			"builds, so every contract that reaches it passes on a bootstrap that "+
+			"trapped a CommandNotFoundException and exited 0:\n%s", out)
 }

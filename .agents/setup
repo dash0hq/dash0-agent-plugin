@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="$HOME/.local/bin:$PATH"
+
 step() {
   local label=$1
   shift
@@ -35,14 +37,8 @@ install_go() {
   version=$(awk '$1 == "go" { print $2; exit }' go.mod)
 
   case "$(uname -m)" in
-    x86_64 | amd64)
-      arch=amd64
-      checksum=2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613
-      ;;
-    aarch64 | arm64)
-      arch=arm64
-      checksum=05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae
-      ;;
+    x86_64 | amd64) arch=amd64 ;;
+    aarch64 | arm64) arch=arm64 ;;
     *)
       echo "Unsupported architecture: $(uname -m)" >&2
       return 1
@@ -52,15 +48,24 @@ install_go() {
   install_root="$HOME/.local/share/go/$version"
   mkdir -p "$HOME/.local/bin" "$(dirname "$install_root")"
 
-  if [ ! -x "$install_root/bin/go" ]; then
+  if [ "$("$install_root/bin/go" version 2>/dev/null || true)" != "go version go${version} linux/${arch}" ]; then
     archive="go${version}.linux-${arch}.tar.gz"
     temp_dir=$(mktemp -d)
     trap 'rm -rf "$temp_dir"' RETURN
+    checksum=$(curl --fail --location --retry 3 --silent --show-error \
+      'https://go.dev/dl/?mode=json&include=all' \
+      | jq -r --arg archive "$archive" \
+        '.[] | .files[] | select(.filename == $archive) | .sha256')
+    if [ -z "$checksum" ]; then
+      echo "No official checksum found for $archive" >&2
+      return 1
+    fi
     curl --fail --location --retry 3 --output "$temp_dir/$archive" \
       "https://go.dev/dl/$archive"
     printf '%s  %s\n' "$checksum" "$temp_dir/$archive" | sha256sum --check -
     mkdir -p "$temp_dir/go-root"
     tar -xzf "$temp_dir/$archive" -C "$temp_dir/go-root" --strip-components=1
+    rm -rf "$install_root"
     mv "$temp_dir/go-root" "$install_root"
     rm -rf "$temp_dir"
     trap - RETURN
@@ -68,33 +73,49 @@ install_go() {
 
   ln -sfn "$install_root/bin/go" "$HOME/.local/bin/go"
   ln -sfn "$install_root/bin/gofmt" "$HOME/.local/bin/gofmt"
-  go version
+  "$install_root/bin/go" version
+}
+
+version_at_least() {
+  local actual=$1 minimum=$2
+  [ "$(printf '%s\n' "$minimum" "$actual" | sort -V | head -n 1)" = "$minimum" ]
 }
 
 install_agent_clis() {
+  local claude_min=2.1.258 codex_min=0.152.1 copilot_min=1.0.82 cursor_min=2026.08.31-4057e58
+  local actual
   local -a packages=()
 
-  command -v claude >/dev/null || packages+=(@anthropic-ai/claude-code)
-  command -v codex >/dev/null || packages+=(@openai/codex)
-  command -v copilot >/dev/null || packages+=(@github/copilot)
+  actual=$(claude --version 2>/dev/null | awk '{print $1; exit}' || true)
+  version_at_least "$actual" "$claude_min" || packages+=(@anthropic-ai/claude-code@latest)
+  actual=$(codex --version 2>/dev/null | awk '{print $2; exit}' || true)
+  version_at_least "$actual" "$codex_min" || packages+=(@openai/codex@latest)
+  actual=$(copilot --version 2>/dev/null | awk 'NR == 1 {sub(/\.$/, "", $4); print $4}' || true)
+  version_at_least "$actual" "$copilot_min" || packages+=(@github/copilot@latest)
   if ((${#packages[@]} > 0)); then
     npm install --global "${packages[@]}"
+    version_at_least "$(claude --version | awk '{print $1; exit}')" "$claude_min"
+    version_at_least "$(codex --version | awk '{print $2; exit}')" "$codex_min"
+    version_at_least "$(copilot --version | awk 'NR == 1 {sub(/\.$/, "", $4); print $4}')" "$copilot_min"
   else
-    echo "npm agent CLIs are already installed."
+    echo "npm agent CLIs satisfy their minimum versions."
   fi
 
-  if ! command -v cursor-agent >/dev/null; then
+  actual=$(cursor-agent --version 2>/dev/null | awk '{print $1; exit}' || true)
+  if ! version_at_least "$actual" "$cursor_min"; then
     curl --fail --silent --show-error https://cursor.com/install | bash
+    version_at_least "$(cursor-agent --version | awk '{print $1; exit}')" "$cursor_min"
   else
-    echo "Cursor agent CLI is already installed."
+    echo "Cursor agent CLI satisfies its minimum version."
   fi
 }
 
 install_dash0_cli() {
-  local arch release_json tag version archive temp_dir
+  local minimum=1.17.0 actual arch release_json tag version archive temp_dir
 
-  if command -v dash0 >/dev/null; then
-    echo "Dash0 CLI is already installed."
+  actual=$(dash0 version 2>/dev/null | awk '{print $3; exit}' || true)
+  if version_at_least "$actual" "$minimum"; then
+    echo "Dash0 CLI satisfies its minimum version."
     return
   fi
 
@@ -126,6 +147,7 @@ install_dash0_cli() {
   install -m 0755 "$temp_dir/dash0" "$HOME/.local/bin/dash0"
   rm -rf "$temp_dir"
   trap - RETURN
+  version_at_least "$(dash0 version | awk '{print $3; exit}')" "$minimum"
 }
 
 configure_login_shell() {

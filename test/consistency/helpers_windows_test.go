@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -279,42 +281,85 @@ func requireExecutable(t *testing.T, path, what string) {
 	require.FileExists(t, path, "%s does not resolve to a file", what)
 }
 
-// TestPsEnvCanRunTheCmdletsTheBootstrapsUse checks that the environment psEnv
-// builds can still resolve the cmdlets a bootstrap calls.
+// TestEveryCmdletABootstrapCallsResolvesInAHooksEnvironment checks that each
+// cmdlet the shipped .ps1 files call can be resolved in the environment a hook
+// hands them.
 //
-// A missing cmdlet is not a visible failure. Every bootstrap here traps the
-// unforeseen and exits 0, so a CommandNotFoundException reads as a fail-open and
-// each download-path contract passes having asserted nothing. This is what a
-// runner did with Get-FileHash, so the checksum step never ran and the two
-// concurrency contracts reported a bootstrap that had stopped before reaching
-// them.
+// A cmdlet that cannot be resolved is invisible here. Every bootstrap traps the
+// unforeseen and exits 0, so a CommandNotFoundException reads as a fail-open:
+// the binary is never installed, telemetry is off, and nothing says why. This
+// caught Get-FileHash, which lives in Microsoft.PowerShell.Utility and does not
+// autoload in a Windows PowerShell 5.1 child whose inherited PSModulePath lists
+// PowerShell 7's module directories first. That is a runner, and it is also a hook
+// started from a pwsh terminal.
 //
-// It also records the startup inputs a Windows PowerShell child resolves its
-// modules from, because the environment is subtracted from the parent's and a
-// value the parent shell mangled is invisible from the message alone.
-func TestPsEnvCanRunTheCmdletsTheBootstrapsUse(t *testing.T) {
-	script := filepath.Join(t.TempDir(), "probe.ps1")
-	require.NoError(t, os.WriteFile(script, []byte(`
-$ErrorActionPreference = 'Continue'
-[Console]::Out.WriteLine("edition=" + $PSVersionTable.PSEdition + " version=" + $PSVersionTable.PSVersion)
-[Console]::Out.WriteLine("PSModulePath=" + $env:PSModulePath)
-[Console]::Out.WriteLine("PSHOME=" + $PSHOME)
-foreach ($Name in 'Get-FileHash','New-Item','Remove-Item','Move-Item','Test-Path','Out-Null') {
-  $Cmd = Get-Command $Name -ErrorAction SilentlyContinue
-  if ($Cmd) {
-    [Console]::Out.WriteLine("HAVE " + $Name + " from " + $Cmd.ModuleName)
-  } else {
-    [Console]::Out.WriteLine("MISSING " + $Name)
-  }
-}
-`), 0o644))
+// The list is read from the scripts rather than written here, so a cmdlet added
+// later is covered without anyone remembering to add it.
+func TestEveryCmdletABootstrapCallsResolvesInAHooksEnvironment(t *testing.T) {
+	for _, a := range windowsBootstraps(t) {
+		t.Run(a.Label, func(t *testing.T) {
+			called := cmdletsCalled(t, abs(t, a.WindowsBootstrap))
+			require.NotEmpty(t, called, "no cmdlet calls found, so this asserted nothing")
+			t.Logf("cmdlets called: %v", called)
 
-	out, err := psExec(script, psEnv(t, t.TempDir()))
-	require.NoError(t, err, "the probe itself could not run:\n%s", out)
-	t.Logf("the environment a bootstrap starts in:\n%s", out)
+			var probe strings.Builder
+			probe.WriteString("$ErrorActionPreference = 'Continue'\n")
+			// The startup inputs a 5.1 child resolves modules from, because the
+			// environment is subtracted from the parent's and a value the parent
+			// shell mangled cannot be seen from the verdict alone.
+			probe.WriteString("[Console]::Out.WriteLine('version=' + $PSVersionTable.PSVersion)\n")
+			probe.WriteString("[Console]::Out.WriteLine('PSModulePath=' + $env:PSModulePath)\n")
+			for _, name := range called {
+				fmt.Fprintf(&probe,
+					"if (Get-Command %[1]s -ErrorAction SilentlyContinue) "+
+						"{ [Console]::Out.WriteLine('HAVE %[1]s') } "+
+						"else { [Console]::Out.WriteLine('MISSING %[1]s') }\n", name)
+			}
 
-	assert.NotContains(t, out, "MISSING",
-		"a cmdlet the bootstraps call cannot be resolved in the environment psEnv "+
-			"builds, so every contract that reaches it passes on a bootstrap that "+
-			"trapped a CommandNotFoundException and exited 0:\n%s", out)
+			script := filepath.Join(t.TempDir(), "probe.ps1")
+			require.NoError(t, os.WriteFile(script, []byte(probe.String()), 0o644))
+
+			out, err := psExec(script, psEnv(t, t.TempDir()))
+			require.NoError(t, err, "the probe itself could not run:\n%s", out)
+
+			assert.NotContains(t, out, "MISSING",
+				"%s calls a cmdlet that cannot be resolved in the environment psEnv "+
+					"builds, so the bootstrap traps a CommandNotFoundException and exits 0 "+
+					"having installed nothing:\n%s", a.WindowsBootstrap, out)
+		})
+	}
 }
+
+// cmdletsCalled returns the Verb-Noun names a script calls, minus the ones it
+// defines itself. Comments are excluded, or the prose naming a cmdlet the script
+// deliberately stopped calling would be probed for.
+func cmdletsCalled(t *testing.T, file string) []string {
+	t.Helper()
+
+	code := strings.Join(powerShellCodeLines(t, file), "\n")
+
+	own := map[string]bool{}
+	for _, m := range psFunctionDecl.FindAllStringSubmatch(code, -1) {
+		own[m[1]] = true
+	}
+
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range psVerbNoun.FindAllString(code, -1) {
+		if own[m] || seen[m] {
+			continue
+		}
+		seen[m] = true
+		names = append(names, m)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// psFunctionDecl matches a function the script declares, and psVerbNoun a
+// PowerShell command name. The noun allows no digits, which keeps a version or an
+// asset name out of the results.
+var (
+	psFunctionDecl = regexp.MustCompile(`(?m)^\s*function\s+([A-Z][a-zA-Z]*-[A-Z][a-zA-Z]*)`)
+	psVerbNoun     = regexp.MustCompile(`\b([A-Z][a-z]+-[A-Z][a-zA-Z]*)\b`)
+)

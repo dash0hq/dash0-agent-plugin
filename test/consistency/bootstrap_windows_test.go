@@ -39,48 +39,48 @@ import (
 // error, and reading the file will not settle whether the trap covers the first
 // thing it does.
 //
-// The data directory is placed under a regular file, where New-Item fails. That
-// is the Windows equivalent of the mode bits the .sh twin uses.
+// A regular file takes the name the bootstrap wants for its bin directory, which
+// is the Windows counterpart of the mode bits the .sh twin uses.
+//
+// The message is not asserted, unlike in that twin, because the branch it comes
+// from is unreachable here: New-Item -ItemType Directory -Force does not fail on a
+// name already taken by a file, so the catch that prints "could not create" never
+// runs and the write fails later instead. Which message arrives is then an accident
+// of how far the run got. That the session survives an unusable data directory is
+// the guarantee, and it holds either way.
 func TestPowerShellBootstrapsFailOpenWhenTheDataDirectoryIsUnwritable(t *testing.T) {
 	for _, a := range windowsBootstraps(t) {
 		t.Run(a.Label, func(t *testing.T) {
-			// The bin directory itself is the file, not an ancestor of it. The POSIX
-			// twin blocks an ancestor, which `mkdir -p` refuses; New-Item -Force
-			// creates intermediate directories and got past the same layout here,
-			// leaving the run to report a failed download and this contract to
-			// assert nothing. A file with the name the bootstrap wants for a
-			// directory is what it cannot work around.
 			dataDir := t.TempDir()
 			blocker := filepath.Join(dataDir, "bin")
 			require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o644))
 
-			// The shim serves an empty directory, so a run that somehow got past the
-			// mkdir still cannot reach the real network.
+			// The shim serves an empty directory, so a run that got further than
+			// expected still cannot reach the real network.
 			env := servedEnv(t, dataDir, t.TempDir())
 
 			out, err := psExec(abs(t, a.WindowsBootstrap), env, "someEvent")
 			// Before the assertions below, so an environment fault reports itself
-			// rather than being blamed on the mkdir this test is about.
+			// rather than being blamed on the data directory this test is about.
 			requirePastTheArchitectureGate(t, out)
 			assert.NoError(t, err,
-				"%s exited non-zero when its data directory could not be created, which "+
+				"%s exited non-zero when its data directory could not be used, which "+
 					"the user's session pays for: Cursor and Codex register a tool-gating hook "+
 					"and read it as a refusal, and Copilot prints a hook error on every "+
 					"event:\n%s",
 				a.WindowsBootstrap, out)
-			assert.Contains(t, out, "could not create",
-				"%s exited 0 without reporting the failed mkdir, so this asserted "+
-					"nothing about the fail-open path:\n%s", a.WindowsBootstrap, out)
+			assert.Contains(t, out, a.Label+"-on-event:",
+				"%s exited 0 saying nothing, so a broken install is indistinguishable "+
+					"from a working one:\n%s", a.WindowsBootstrap, out)
 
-			// The premise, checked rather than assumed. A New-Item that replaced the
-			// file with a directory would leave the message above missing for a
-			// reason that has nothing to do with failing open, and the assertion
-			// would read as a regression in the bootstrap.
+			// The premise, checked rather than assumed. A run that turned the file
+			// into a directory would have had a usable data directory after all, and
+			// the assertions above would be reporting on a different situation.
 			info, statErr := os.Stat(blocker)
-			if assert.NoError(t, statErr, "the blocking file is gone, so the mkdir was not refused") {
+			if assert.NoError(t, statErr, "the blocking file is gone, so nothing blocked the run") {
 				assert.False(t, info.IsDir(),
-					"New-Item -Force replaced the blocking file with a directory, so this "+
-						"contract no longer blocks anything and needs a different blocker")
+					"the blocking file became a directory, so this contract no longer "+
+						"blocks anything and needs a different blocker")
 			}
 		})
 	}

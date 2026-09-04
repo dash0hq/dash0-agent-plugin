@@ -45,7 +45,7 @@ function Exit-FailOpen {
 # Fail open on the unforeseen too, which on this platform is most of it.
 # Set-StrictMode with $ErrorActionPreference = 'Stop' turns any cmdlet or .NET
 # failure into a terminating error, and an unhandled one exits non-zero: a
-# Get-FileHash on a file the virus scanner still holds open, a Process.Start on a
+# a ReadAllBytes on a file the virus scanner still holds open, a Process.Start on a
 # binary being scanned, an `& $Binary` whose file went away after Test-Path saw it.
 # Cursor and Codex both register a tool-gating hook and read a non-zero exit as a
 # refusal, so trouble fetching telemetry would block the user's tool call; Copilot
@@ -110,8 +110,8 @@ if (-not (Test-Path -LiteralPath $Binary)) {
     Exit-FailOpen "checksums fetch failed"
   }
 
-  # Fail closed on integrity: a binary that cannot be verified is not run.
-  # Get-FileHash is built in, so unlike the shell bootstraps there is no
+  # Fail closed on integrity: a binary that cannot be verified is not run. The
+  # digest comes from .NET, so unlike the shell bootstraps there is no
   # missing-hash-tool case to refuse.
   $Expected = ''
   foreach ($Line in $Checksums) {
@@ -123,9 +123,18 @@ if (-not (Test-Path -LiteralPath $Binary)) {
     Exit-FailOpen "no checksum for $Asset - refusing to run an unverified binary"
   }
 
-  $Actual = (Get-FileHash -LiteralPath $Tmp -Algorithm SHA256).Hash
-  # -ne on strings is case-insensitive, which is what pairs Get-FileHash's
-  # upper-case digest with the lower-case one in checksums.txt.
+  # System.Security.Cryptography rather than Get-FileHash. That cmdlet lives in
+  # Microsoft.PowerShell.Utility, and a 5.1 child cannot autoload it when it
+  # inherits a PSModulePath that lists PowerShell 7's module directories first -
+  # what a hook started from a pwsh terminal gets, and what a GitHub runner has.
+  # The trap above then reads the CommandNotFoundException as trouble and exits 0,
+  # so the binary is never installed and telemetry is off with nothing said about
+  # why. .NET needs no module.
+  $Actual = [System.BitConverter]::ToString(
+    [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+      [System.IO.File]::ReadAllBytes($Tmp))).Replace('-', '')
+  # -ne on strings is case-insensitive, which is what pairs the upper-case digest
+  # .NET returns with the lower-case one in checksums.txt.
   if ($Actual -ne $Expected) {
     Remove-Item -LiteralPath $Tmp -Force -ErrorAction SilentlyContinue
     Exit-FailOpen "checksum mismatch (expected $Expected, got $Actual)"

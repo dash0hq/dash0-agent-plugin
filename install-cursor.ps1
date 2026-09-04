@@ -12,7 +12,7 @@ be compared side by side.
 Windows PowerShell 5.1 is the target, because that is the version every Windows
 install has: no ternary, no null-coalescing, no Join-Path with several child
 paths. Everything it needs ships with Windows - curl.exe for downloads,
-Get-FileHash for checksums, ConvertFrom-Json in place of jq.
+System.Security.Cryptography for checksums, ConvertFrom-Json in place of jq.
 
 .EXAMPLE
 irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-cursor.ps1 | iex
@@ -267,9 +267,15 @@ if (Test-Path -LiteralPath $BinPath) {
     Remove-Item -LiteralPath $BinPath -Force -ErrorAction SilentlyContinue
     Stop-WithError "no checksum for $BinAsset in v$Version - refusing to install an unverified binary"
   }
-  $Actual = (Get-FileHash -LiteralPath $BinPath -Algorithm SHA256).Hash
-  # -ne on strings is case-insensitive, which pairs Get-FileHash's upper-case digest
-  # with the lower-case one in checksums.txt.
+  # System.Security.Cryptography rather than Get-FileHash, which lives in
+  # Microsoft.PowerShell.Utility and does not autoload in a 5.1 child that inherited
+  # a PSModulePath listing PowerShell 7's module directories first - what an install
+  # run from a pwsh terminal gets. .NET needs no module.
+  $Actual = [System.BitConverter]::ToString(
+    [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+      [System.IO.File]::ReadAllBytes($BinPath))).Replace('-', '')
+  # -ne on strings is case-insensitive, which pairs the upper-case digest .NET
+  # returns with the lower-case one in checksums.txt.
   if ($Actual -ne $Expected) {
     Remove-Item -LiteralPath $BinPath -Force -ErrorAction SilentlyContinue
     Stop-WithError "checksum mismatch for $BinAsset (expected $Expected, got $Actual)"

@@ -61,16 +61,16 @@ func TestNormalizeRemoteURLStripsCredentials(t *testing.T) {
 			secret: "ghp_BARETOKEN",
 		},
 		{
-			name:   "ssh scheme carries a user",
-			input:  "ssh://git@github.com/dash0hq/probe.git",
-			want:   "ssh://github.com/dash0hq/probe",
-			secret: "git@",
+			name:   "token in the query string",
+			input:  "https://gitlab.com/grp/probe.git?private_token=s3cr3t-pat",
+			want:   "https://gitlab.com/grp/probe",
+			secret: "s3cr3t-pat",
 		},
 		{
-			name:   "scp form with a non-default user",
-			input:  "deploy@github.com:dash0hq/probe.git",
+			name:   "token in both userinfo and query",
+			input:  "https://oauth2:ghp_SECRETTOKEN@github.com/dash0hq/probe.git?token=ghs_INSTALLTOKEN",
 			want:   "https://github.com/dash0hq/probe",
-			secret: "deploy@",
+			secret: "TOKEN",
 		},
 		{
 			name:   "unparseable remote is dropped rather than leaked",
@@ -78,12 +78,44 @@ func TestNormalizeRemoteURLStripsCredentials(t *testing.T) {
 			want:   "",
 			secret: "ghp_SECRETTOKEN",
 		},
+		{
+			name:   "unparseable remote with a query token is dropped too",
+			input:  "https://github.com:notaport/dash0hq/probe.git?private_token=s3cr3t-pat",
+			want:   "",
+			secret: "s3cr3t-pat",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := normalizeRemoteURL(tt.input)
 			assert.NotContains(t, got, tt.secret, "credential must not survive normalization")
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestNormalizeRemoteURLStripsBenignUserinfo covers the userinfo that is not a
+// secret. It comes off anyway: the scrub is by position, not by value, because
+// telling a username from a token would need an allowlist that the next
+// benign-looking token walks straight through.
+//
+// The accepted cost is that ssh://git@host/o/r now emits ssh://host/o/r, so the
+// value changes for an SSH user who never embedded a credential and no longer
+// round-trips through `git clone`. That is the same trade the scp form has always
+// made: it drops git@ on its way to https.
+func TestNormalizeRemoteURLStripsBenignUserinfo(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ssh scheme carries a user", "ssh://git@github.com/dash0hq/probe.git", "ssh://github.com/dash0hq/probe"},
+		{"scp form, default user", "git@github.com:dash0hq/probe.git", "https://github.com/dash0hq/probe"},
+		{"scp form, custom user", "deploy@github.com:dash0hq/probe.git", "https://github.com/dash0hq/probe"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeRemoteURL(tt.input))
 		})
 	}
 }
@@ -97,6 +129,7 @@ func TestNormalizeRemoteURLKeepsDerivedAttributes(t *testing.T) {
 		"https://ghp_BARETOKEN@github.com/dash0hq/probe.git",
 		"ssh://git@github.com/dash0hq/probe.git",
 		"deploy@github.com:dash0hq/probe.git",
+		"https://github.com/dash0hq/probe.git?private_token=s3cr3t-pat",
 	} {
 		t.Run(input, func(t *testing.T) {
 			normalized := normalizeRemoteURL(input)

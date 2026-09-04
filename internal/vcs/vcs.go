@@ -63,20 +63,55 @@ func gitOutput(args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// normalizeRemoteURL converts SSH URLs to HTTPS for a consistent
-// vcs.repository.url.full value.
+// normalizeRemoteURL converts SSH URLs to HTTPS and removes any credential the
+// remote embeds, for a consistent vcs.repository.url.full value.
+//
+// A remote such as https://x-access-token:ghs_TOKEN@github.com/owner/repo is
+// what a CI checkout or a manual clone produces. The URL is stamped on every
+// span, so the userinfo comes off here: the repository identity is the reportable
+// part, the credential is not.
 func normalizeRemoteURL(remote string) string {
 	remote = strings.TrimSpace(remote)
 
-	// git@github.com:owner/repo.git → https://github.com/owner/repo
-	if strings.HasPrefix(remote, "git@") {
-		remote = strings.TrimPrefix(remote, "git@")
-		remote = strings.Replace(remote, ":", "/", 1)
-		remote = "https://" + remote
+	// scp-form ([user@]host:path) is not a URL — url.Parse rejects it — so the
+	// userinfo comes off here. git@github.com:owner/repo.git →
+	// https://github.com/owner/repo. The '@' must precede the first ':' so that
+	// a local Windows path (C:\src\repo) is left alone.
+	if !strings.Contains(remote, "://") {
+		if colon := strings.Index(remote, ":"); colon > 0 {
+			if at := strings.LastIndex(remote[:colon], "@"); at >= 0 {
+				remote = "https://" + strings.Replace(remote[at+1:], ":", "/", 1)
+			}
+		}
+	}
+
+	// https://oauth2:ghp_TOKEN@github.com/owner/repo → https://github.com/owner/repo.
+	// Only rewrite when there is userinfo, so every other remote keeps the exact
+	// spelling git reports.
+	if u, err := url.Parse(remote); err == nil && u.User != nil {
+		u.User = nil
+		remote = u.String()
 	}
 
 	remote = strings.TrimSuffix(remote, ".git")
+
+	// A remote we failed to parse must never ship a credential. Report nothing
+	// rather than a secret.
+	if hasUserinfo(remote) {
+		return ""
+	}
 	return remote
+}
+
+// hasUserinfo reports whether the authority of remote still carries a "user@"
+// part. It ignores the path, where an '@' is legitimate.
+func hasUserinfo(remote string) bool {
+	authority := remote
+	if _, rest, ok := strings.Cut(remote, "://"); ok {
+		authority = rest
+	}
+	authority, _, _ = strings.Cut(authority, "/")
+	return strings.Contains(authority, "@")
 }
 
 // parseOwnerRepo extracts owner and repo name from an HTTPS URL.

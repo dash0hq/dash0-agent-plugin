@@ -72,6 +72,7 @@ func gitOutput(args ...string) string {
 // part, the credential is not.
 func normalizeRemoteURL(remote string) string {
 	remote = strings.TrimSpace(remote)
+	remote = strings.TrimSuffix(remote, ".git")
 
 	// scp-form ([user@]host:path) is not a URL — url.Parse rejects it — so the
 	// userinfo comes off here. git@github.com:owner/repo.git →
@@ -92,8 +93,6 @@ func normalizeRemoteURL(remote string) string {
 		u.User = nil
 		remote = u.String()
 	}
-
-	remote = strings.TrimSuffix(remote, ".git")
 
 	// A remote we failed to parse must never ship a credential. Report nothing
 	// rather than a secret.

@@ -654,7 +654,7 @@ func injectTurnUsage(event map[string]any, usage *transcript.Usage) {
 	event["dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens"] = usage.CacheCreation5mInputTokens
 	event["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"] = usage.CacheCreation1hInputTokens
 	// Emitted only when the turn did some thinking, matching Copilot's
-	// emission of the same key (cmd/copilot-on-event/main.go). The two
+	// emission of the same key (internal/source/copilot/turn.go). The two
 	// runtimes share the key so one query spans both, and a key that is
 	// always present in one and conditional in the other would defeat
 	// that. Unlike the counts above, a zero here carries no information:

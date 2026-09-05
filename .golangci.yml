@@ -3,6 +3,9 @@ version: "2"
 run:
   timeout: 5m
   allow-parallel-runners: true
+  build-tags:
+    - e2e
+    - marketplace
 
 formatters:
   enable:
@@ -23,6 +26,10 @@ linters:
     - misspell
     - nakedret
     - staticcheck
+    # A helper that omits t.Helper() reports failures at its own line, so every
+    # assertion made through the shared test tree points at the helper instead
+    # of the case that failed.
+    - thelper
     - unconvert
     - unused
   settings:

@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,7 +21,7 @@ import (
 //   - `codex plugin add` reads codex/hooks.json, referenced from
 //     .codex-plugin/plugin.json.
 //   - install-codex.sh writes a config.toml block rendered by
-//     `emit-codex-hooks`, which uses codex.HookEvents — it cannot read
+//     `emit-codex-hooks`, which uses codex.HookEvents. It cannot read
 //     codex/hooks.json, because the installer only fetches the bootstrap script,
 //     and it needs Go anyway to compute each hook's trusted_hash from
 //     install-time values (absolute command path, group index).
@@ -30,19 +29,19 @@ import (
 // Nothing else ties the two together, so adding an event to one and forgetting
 // the other would silently leave that install path uninstrumented.
 func TestCodexHookEventsMatchManifest(t *testing.T) {
-	root := repoRoot(t)
+	a := agentByLabel(t, "codex")
 
-	raw, err := os.ReadFile(filepath.Join(root, "codex", "hooks.json"))
+	raw, err := os.ReadFile(abs(t, a.Hooks))
 	require.NoError(t, err)
 
-	// json.Unmarshal into a map loses ordering, so decode the object key order
-	// from the token stream instead — the two lists are asserted order-sensitive
-	// so the config.toml block and the manifest stay readable side by side.
+	// json.Unmarshal into a map loses ordering, so decode the key order from the
+	// token stream. The two lists are compared order-sensitive, which keeps the
+	// config.toml block and the manifest readable side by side.
 	var doc struct {
 		Hooks json.RawMessage `json:"hooks"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &doc))
-	require.NotEmpty(t, doc.Hooks, "codex/hooks.json has no hooks object")
+	require.NotEmpty(t, doc.Hooks, "%s has no hooks object", a.Hooks)
 
 	manifestEvents := jsonObjectKeys(t, doc.Hooks)
 
@@ -52,7 +51,7 @@ func TestCodexHookEventsMatchManifest(t *testing.T) {
 	}
 
 	assert.Equal(t, manifestEvents, goEvents,
-		"codex/hooks.json and codex.HookEvents must declare the same events in the same order — "+
+		a.Hooks+" and codex.HookEvents must declare the same events in the same order; "+
 			"the marketplace install reads the JSON, install-codex.sh renders from HookEvents")
 }
 

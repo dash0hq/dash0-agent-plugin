@@ -191,8 +191,8 @@ func TestReadTurn_resumeRotatedFile(t *testing.T) {
 //
 // This asserts the cursor's location rather than simulating the wipe, because
 // there is no longer a session directory in the path to wipe — which is the
-// property that makes the wipe survivable. The wipe itself is driven end to end
-// by TestE2ECopilotDefersTurnWhenTraceContextMissing.
+// property that makes the wipe survivable. Nothing drives the wipe end to end any
+// more, so this location check is the whole of that coverage.
 func TestReadTurn_cursorSurvivesSessionEnd(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
@@ -205,8 +205,7 @@ func TestReadTurn_cursorSurvivesSessionEnd(t *testing.T) {
 	// The cursor is keyed by conversation and lives beside the OTel files, so it
 	// is reachable with nothing but the session id — no session directory is
 	// consulted, which is precisely why the SessionEnd wipe can no longer reach
-	// it. The path itself is asserted end to end by the e2e's
-	// TestE2ECopilotDefersTurnWhenTraceContextMissing.
+	// it. This is the only assertion on that path; the e2e that drove it is gone.
 	require.FileExists(t, filepath.Join(otelDir, "cursor-conv-1.json"))
 
 	// The resumed launch appends to the same file.

@@ -31,6 +31,10 @@
 # Optional env vars: DASH0_DATASET, DASH0_TEAM_NAME.
 #   DASH0_VERSION pins a specific release (e.g. "0.1.9"); without it, the
 #   installer resolves the latest GitHub release at runtime.
+#   DASH0_SOURCE_DIR installs the plugin files from a local checkout instead of
+#   the tagged release ref (development and test use).
+#   DASH0_SKIP_PLUGIN_FILES=1 leaves the plugin files on disk alone, for testing
+#   a locally staged build.
 #
 # What this installs:
 #   ~/.cursor/plugins/local/dash0-agent-plugin/
@@ -97,7 +101,9 @@ Flags (each provided flag skips the corresponding prompt):
   --team NAME      Team name
 
 Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
-          DASH0_VERSION (pins a specific release).
+          DASH0_VERSION (pins a specific release),
+          DASH0_SOURCE_DIR (install plugin files from a local checkout),
+          DASH0_SKIP_PLUGIN_FILES (leave the plugin files on disk alone).
 EOF
       exit 0 ;;
     *)
@@ -186,6 +192,22 @@ if [ -z "$VERSION" ]; then
 fi
 ok "using v${VERSION}"
 
+# DASH0_SOURCE_DIR installs the plugin files from a local checkout instead of the
+# tagged release ref. With a pre-staged binary (see step 5) that makes the whole
+# install offline, and it is what lets the install contract test THIS checkout's
+# plugin.json, hooks.json and bootstrap rather than the last release's.
+SOURCE_DIR="${DASH0_SOURCE_DIR:-}"
+if [ -n "$SOURCE_DIR" ]; then
+  [ -d "$SOURCE_DIR" ] || die "DASH0_SOURCE_DIR is not a directory: $SOURCE_DIR"
+  info "installing plugin files from $SOURCE_DIR"
+fi
+
+# DASH0_SKIP_PLUGIN_FILES=1 leaves every plugin file exactly as it is on disk, so
+# a test can stage one from its working tree. Nothing else should set it: a
+# failed download stays fatal, because an install that quietly kept the old files
+# would report success while the previous release kept running.
+KEEP_PLUGIN_FILES="${DASH0_SKIP_PLUGIN_FILES:-}"
+
 # ---------------------------------------------------------------------------
 # 4. Resolve install paths.
 # ---------------------------------------------------------------------------
@@ -217,28 +239,42 @@ BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
 BIN_ASSET="cursor-on-event-${OS}-${ARCH}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${VERSION}"
 
-info "downloading cursor-on-event v${VERSION}..."
-fetch "$BASE_URL/$BIN_ASSET" "$BIN_PATH" \
-  || die "failed to download binary: $BASE_URL/$BIN_ASSET"
+# An already-present binary is left alone, which makes a re-install idempotent and
+# an offline or pre-staged install possible. A version bump changes BIN_PATH,
+# forcing a fetch.
+#
+# Note what this costs: the path is version-pinned, so presence proves the NAME is
+# this version and says nothing about the bytes. A truncated download or a
+# tampered file is adopted without being hashed, and repairing exactly that is one
+# reason a user re-runs an installer. Deleting the file first is the repair, and
+# no README says so. Changing it here would need a signal for "the binary is pre-staged" that
+# is narrower than DASH0_SKIP_PLUGIN_FILES, which also holds back the plugin files.
+if [ -x "$BIN_PATH" ]; then
+  ok "binary already present → $BIN_PATH"
+else
+  info "downloading cursor-on-event v${VERSION}..."
+  fetch "$BASE_URL/$BIN_ASSET" "$BIN_PATH" \
+    || die "failed to download binary: $BASE_URL/$BIN_ASSET"
 
-CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt") \
-  || die "failed to download $BASE_URL/checksums.txt"
+  CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt") \
+    || die "failed to download $BASE_URL/checksums.txt"
 
-# Fail closed on integrity, matching the bootstraps: a binary that cannot be
-# verified is deleted rather than installed. A missing entry means the release is
-# malformed, which is not a reason to trust the download.
-EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
-if [ -z "$EXPECTED" ]; then
-  rm -f "$BIN_PATH"
-  die "no checksum for $BIN_ASSET in v${VERSION} — refusing to install an unverified binary"
+  # Fail closed on integrity, matching the bootstraps: a binary that cannot be
+  # verified is deleted rather than installed. A missing entry means the release
+  # is malformed, which is not a reason to trust the download.
+  EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
+  if [ -z "$EXPECTED" ]; then
+    rm -f "$BIN_PATH"
+    die "no checksum for $BIN_ASSET in v${VERSION} — refusing to install an unverified binary"
+  fi
+  ACTUAL=$(sha256 "$BIN_PATH")
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    rm -f "$BIN_PATH"
+    die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
+  fi
+  chmod +x "$BIN_PATH"
+  ok "installed binary → $BIN_PATH"
 fi
-ACTUAL=$(sha256 "$BIN_PATH")
-if [ "$ACTUAL" != "$EXPECTED" ]; then
-  rm -f "$BIN_PATH"
-  die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
-fi
-chmod +x "$BIN_PATH"
-ok "installed binary → $BIN_PATH"
 
 # ---------------------------------------------------------------------------
 # 5b. Install plugin files.
@@ -252,13 +288,39 @@ install_plugin_file() {
   # A legacy-source is tried when the primary path 404s, so pinning an older
   # release (DASH0_VERSION) still resolves files that have since moved.
   local src="$1" dest="$2" flag="${3:-}" legacy="${4:-}"
-  info "downloading ${src}..."
-  if ! fetch "$RAW_BASE/$src" "$dest"; then
-    if [ -n "$legacy" ] && fetch "$RAW_BASE/$legacy" "$dest"; then
+  if [ "$KEEP_PLUGIN_FILES" = "1" ]; then
+    [ -f "$dest" ] || die "DASH0_SKIP_PLUGIN_FILES is set but $dest is not there"
+    if [ "$flag" = "--executable" ]; then
+      chmod +x "$dest"
+    fi
+    ok "kept staged → $dest"
+    return
+  fi
+  if [ -n "$SOURCE_DIR" ]; then
+    info "copying ${src} from ${SOURCE_DIR}..."
+    if [ -f "$SOURCE_DIR/$src" ]; then
+      cp "$SOURCE_DIR/$src" "$dest" || die "failed to copy: $SOURCE_DIR/$src"
+    elif [ -n "$legacy" ] && [ -f "$SOURCE_DIR/$legacy" ]; then
+      cp "$SOURCE_DIR/$legacy" "$dest" || die "failed to copy: $SOURCE_DIR/$legacy"
       info "fell back to legacy path ${legacy}"
     else
-      die "failed to download: $RAW_BASE/$src"
+      die "not found in $SOURCE_DIR: $src"
     fi
+  else
+    # Staged under a private temp name and renamed into place: curl and wget both
+    # create the destination before they learn the request failed, so writing
+    # $dest directly would truncate a file that works.
+    local tmp="$dest.tmp.$$"
+    info "downloading ${src}..."
+    if ! fetch "$RAW_BASE/$src" "$tmp"; then
+      if [ -n "$legacy" ] && fetch "$RAW_BASE/$legacy" "$tmp"; then
+        info "fell back to legacy path ${legacy}"
+      else
+        rm -f "$tmp"
+        die "failed to download: $RAW_BASE/$src"
+      fi
+    fi
+    mv -f "$tmp" "$dest" || { rm -f "$tmp"; die "could not move $tmp into place"; }
   fi
   if [ "$flag" = "--executable" ]; then
     chmod +x "$dest"

@@ -24,36 +24,37 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
-// binaryPath holds the path to the compiled on-event binary, built once in TestMain.
+// binaryPath is the hook binary the tests spawn, built once in TestMain.
 var binaryPath string
 
 func TestMain(m *testing.M) {
-	// Build the binary once for integration tests.
+	// Built once, so a spawned hook is a plain binary.
+	//
+	// Re-executing this test binary as main() would work and save the build, but
+	// this package spawns about thirty hook events and under -race the child would
+	// carry the instrumentation too. Measured on the whole package, that is 7.7s
+	// against 38.9s, and -race is what the ubuntu leg of build-test runs.
 	tmpDir, err := os.MkdirTemp("", "on-event-test-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create temp dir: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(tmpDir)
-
 	binaryPath = filepath.Join(tmpDir, "on-event")
 	if runtime.GOOS == "windows" {
-		// Windows needs the .exe, both to build to a name it will run and to name
-		// the file the tests then exec.
+		// Both to build to a name it will run and to name the file the tests exec.
 		binaryPath += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", binaryPath, ".")
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	build := exec.Command("go", "build", "-o", binaryPath, ".")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to build binary: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Point the home and working directories at empty temp directories. Config
 	// lookups fall back to .claude/dash0-agent-plugin.local.md in the project and
-	// in the user's home, and the tests below call run() in-process, so without
-	// this a developer who has the plugin configured runs them against their own
-	// endpoint and token.
+	// in the user's home, so without this a developer who has the plugin
+	// configured runs these against their own endpoint and token.
 	home, err := os.MkdirTemp("", "on-event-test-home-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create temp home: %v\n", err)
@@ -73,9 +74,12 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// execBinary runs the compiled binary with the given JSON event on stdin
-// and the provided environment variables.
-func execBinary(t *testing.T, event string, env []string) (stdout, stderr string) {
+// execHook runs one hook event in its own process, with the given environment.
+//
+// A process per event, because that is what Claude Code does and what the two
+// concurrency tests below are about: run() reads os.Stdin, a process global, so
+// two events running at once cannot each have their own payload in-process.
+func execHook(t *testing.T, event string, env []string) (stdout, stderr string) {
 	t.Helper()
 	cmd := exec.Command(binaryPath)
 	cmd.Stdin = strings.NewReader(event)
@@ -87,12 +91,12 @@ func execBinary(t *testing.T, event string, env []string) (stdout, stderr string
 
 	err := cmd.Run()
 	if err != nil {
-		t.Logf("binary stderr: %s", errBuf.String())
+		t.Logf("hook stderr: %s", errBuf.String())
 	}
 	return outBuf.String(), errBuf.String()
 }
 
-// makeEnv builds the environment for a subprocess invocation.
+// makeEnv builds the environment for one hook process.
 func makeEnv(dataDir, otlpURL string) []string {
 	return append(os.Environ(),
 		"CLAUDE_PLUGIN_DATA="+dataDir,
@@ -151,14 +155,14 @@ func TestIntegrationParallelSessionsIsolated(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for _, event := range eventsA {
-			execBinary(t, event, env)
+			execHook(t, event, env)
 		}
 	}()
 
 	go func() {
 		defer wg.Done()
 		for _, event := range eventsB {
-			execBinary(t, event, env)
+			execHook(t, event, env)
 		}
 	}()
 
@@ -222,19 +226,19 @@ func TestIntegrationParallelToolCallsWithinSession(t *testing.T) {
 	env := makeEnv(dataDir, srv.URL)
 
 	// Session setup.
-	execBinary(t, `{"hook_event_name":"SessionStart","session_id":"parallel-tools","model":"opus"}`, env)
-	execBinary(t, `{"hook_event_name":"UserPromptSubmit","session_id":"parallel-tools","prompt":"do stuff"}`, env)
+	execHook(t, `{"hook_event_name":"SessionStart","session_id":"parallel-tools","model":"opus"}`, env)
+	execHook(t, `{"hook_event_name":"UserPromptSubmit","session_id":"parallel-tools","prompt":"do stuff"}`, env)
 
 	// Two PreToolUse events in parallel (simulating Claude calling two tools at once).
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		execBinary(t, `{"hook_event_name":"PreToolUse","session_id":"parallel-tools","tool_name":"Read","tool_use_id":"tu-p1"}`, env)
+		execHook(t, `{"hook_event_name":"PreToolUse","session_id":"parallel-tools","tool_name":"Read","tool_use_id":"tu-p1"}`, env)
 	}()
 	go func() {
 		defer wg.Done()
-		execBinary(t, `{"hook_event_name":"PreToolUse","session_id":"parallel-tools","tool_name":"Grep","tool_use_id":"tu-p2"}`, env)
+		execHook(t, `{"hook_event_name":"PreToolUse","session_id":"parallel-tools","tool_name":"Grep","tool_use_id":"tu-p2"}`, env)
 	}()
 	wg.Wait()
 
@@ -242,15 +246,15 @@ func TestIntegrationParallelToolCallsWithinSession(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		execBinary(t, `{"hook_event_name":"PostToolUse","session_id":"parallel-tools","tool_name":"Read","tool_use_id":"tu-p1","tool_response":"file content"}`, env)
+		execHook(t, `{"hook_event_name":"PostToolUse","session_id":"parallel-tools","tool_name":"Read","tool_use_id":"tu-p1","tool_response":"file content"}`, env)
 	}()
 	go func() {
 		defer wg.Done()
-		execBinary(t, `{"hook_event_name":"PostToolUse","session_id":"parallel-tools","tool_name":"Grep","tool_use_id":"tu-p2","tool_response":"grep result"}`, env)
+		execHook(t, `{"hook_event_name":"PostToolUse","session_id":"parallel-tools","tool_name":"Grep","tool_use_id":"tu-p2","tool_response":"grep result"}`, env)
 	}()
 	wg.Wait()
 
-	execBinary(t, `{"hook_event_name":"Stop","session_id":"parallel-tools"}`, env)
+	execHook(t, `{"hook_event_name":"Stop","session_id":"parallel-tools"}`, env)
 
 	mu.Lock()
 	allSpans := make([]otlp.Span, len(*spans))
@@ -285,7 +289,7 @@ func TestIntegrationInvalidOTLPUrlLogsWarning(t *testing.T) {
 		"DASH0_OTLP_URL=not-a-url",
 	)
 
-	_, stderr := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-badurl","model":"opus"}`, env)
+	_, stderr := execHook(t, `{"hook_event_name":"SessionStart","session_id":"sess-badurl","model":"opus"}`, env)
 	assert.Contains(t, stderr, `OTLP URL is not valid: "not-a-url"`)
 }
 
@@ -348,7 +352,7 @@ func TestIntegrationClaudeBillingModeFromConfig(t *testing.T) {
 				`{"hook_event_name":"UserPromptSubmit","session_id":"bill-1","prompt":"hi"}`,
 				fmt.Sprintf(`{"hook_event_name":"Stop","session_id":"bill-1","transcript_path":%q}`, tp),
 			} {
-				execBinary(t, ev, env)
+				execHook(t, ev, env)
 			}
 
 			mu.Lock()

@@ -81,7 +81,7 @@ is Copilot checking its own arithmetic rather than the plugin's. On a delegating
 diverge by design; see [../subagents](../subagents/README.md).
 
 **With no OTel file, the expectation is a `chat` span carrying no usage keys at all.** Not zeros:
-`attachUsage` in `cmd/copilot-on-event/main.go` is never reached, so nothing is set.
+`attachUsage` in `internal/source/copilot/turn.go` is never reached, so nothing is set.
 
 ## Oracle
 

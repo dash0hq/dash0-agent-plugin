@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,47 +17,36 @@ import (
 // frontmatter matches the YAML block a SKILL.md opens with.
 var frontmatter = regexp.MustCompile(`(?s)\A---\n(.*?)\n---\n`)
 
-// skillManifests lists every plugin manifest that declares a skills directory.
-// A manifest's "skills" value resolves against base, which is the repository
-// root for Claude and Cursor and the package directory for Copilot.
-var skillManifests = []struct {
-	label    string
-	manifest string
-	base     string
-}{
-	{"claude", ".claude-plugin/plugin.json", "."},
-	{"cursor", ".cursor-plugin/plugin.json", "."},
-	{"copilot", "copilot/plugin.json", "copilot"},
+// skillFiles returns every SKILL.md a runtime ships, and fails when a runtime
+// that declares a skills directory ships none. The directory comes from the
+// descriptor rather than being re-read here: manifest_test.go already pins the
+// manifest's own "skills" value against it.
+func (a Agent) skillFiles(t *testing.T) []string {
+	t.Helper()
+
+	files, err := filepath.Glob(filepath.Join(a.pkgPath(t, a.ManifestSkills), "*", "SKILL.md"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files,
+		"%s declares skills at %s but ships no SKILL.md there", a.Manifest, a.ManifestSkills)
+	return files
 }
 
 // TestSkillFrontmatterParses parses the frontmatter of every shipped skill with
 // a real YAML parser.
 //
-// This is the check that a colon costs you. An unquoted YAML scalar ends at the
-// first ": ", so a description that quotes a message containing one — such as
-// "dash0: no team configured" — is not a long string, it is a parse error. The
-// runtime then drops the whole skill rather than the description alone: Copilot
-// reports "the following skills failed to load" in a startup line that scrolls
-// past, and /dash0-configure simply does not exist. Nothing else here would
-// notice, because every other check reads the file as text.
+// An unquoted YAML scalar ends at the first ": ", so a description quoting a
+// message such as "dash0: no team configured" is a parse error rather than a long
+// string. The runtime then drops the whole skill: Copilot reports "the following
+// skills failed to load" in a startup line that scrolls past, and
+// /dash0-configure does not exist. Every other check here reads the file as text
+// and would miss it.
 //
-// A parser rather than a "no bare colon" regexp: quoting is a legitimate fix, so
-// the rule is that it parses, not that it avoids a character.
+// A parser rather than a "no bare colon" regexp, because quoting is a legitimate
+// fix. The rule is that it parses, not that it avoids a character.
 func TestSkillFrontmatterParses(t *testing.T) {
-	root := repoRoot(t)
-
-	for _, m := range skillManifests {
-		t.Run(m.label, func(t *testing.T) {
-			declared, ok := readJSON(t, filepath.Join(root, m.manifest))["skills"].(string)
-			require.True(t, ok, "%s declares no skills directory", m.manifest)
-
-			dir := filepath.Join(root, m.base, filepath.Clean(strings.TrimPrefix(declared, "./")))
-			files, err := filepath.Glob(filepath.Join(dir, "*", "SKILL.md"))
-			require.NoError(t, err)
-			require.NotEmpty(t, files,
-				"%s declares skills at %s but ships no SKILL.md there", m.manifest, declared)
-
-			for _, file := range files {
+	for _, a := range agentsWith(t, 3, func(a Agent) bool { return a.ManifestSkills != "" }) {
+		t.Run(a.Label, func(t *testing.T) {
+			for _, file := range a.skillFiles(t) {
 				name := filepath.Base(filepath.Dir(file))
 
 				t.Run(name, func(t *testing.T) {
@@ -75,11 +63,10 @@ func TestSkillFrontmatterParses(t *testing.T) {
 					require.NoError(t, yaml.Unmarshal(match[1], &fm),
 						"%s has unparseable frontmatter — a description holding \": \" needs quoting", file)
 
-					// Both keys are what a runtime matches a skill on: the name is how
-					// the user invokes it, the description is what the model selects it
-					// by. A truncated description is the quiet half of the same bug —
-					// YAML would accept "Configure the plugin" and silently drop
-					// everything after the colon.
+					// A runtime matches on both keys: the name is how the user invokes
+					// the skill, the description is what the model selects it by. YAML
+					// would accept "Configure the plugin" and drop everything after
+					// the colon.
 					assert.Equal(t, name, fm.Name,
 						"%s declares name %q but lives in a directory named %q, so the runtime resolves neither",
 						file, fm.Name, name)

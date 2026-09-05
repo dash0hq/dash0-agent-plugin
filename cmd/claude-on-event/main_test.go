@@ -532,7 +532,7 @@ func TestSessionStartHintWhenNotConfigured(t *testing.T) {
 		"DASH0_OTLP_URL=",
 		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
 	)
-	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-unconfigured","model":"opus"}`, env)
+	stdout, _ := execHook(t, `{"hook_event_name":"SessionStart","session_id":"sess-unconfigured","model":"opus"}`, env)
 	assert.Contains(t, stdout, `"systemMessage"`)
 	assert.Contains(t, stdout, "telemetry is not active")
 	assert.Contains(t, stdout, "/reload-plugins")
@@ -545,7 +545,7 @@ func TestSessionStartHintSuppressedWhenConfigured(t *testing.T) {
 		"CLAUDE_PLUGIN_DATA="+dataDir,
 		"DASH0_OTLP_URL="+srv.URL,
 	)
-	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-configured","model":"opus"}`, env)
+	stdout, _ := execHook(t, `{"hook_event_name":"SessionStart","session_id":"sess-configured","model":"opus"}`, env)
 	assert.NotContains(t, stdout, "telemetry is not active")
 	assert.Contains(t, stdout, `"systemMessage"`)
 	assert.Contains(t, stdout, "dash0: connected")
@@ -560,7 +560,7 @@ func TestSessionStartHintWhenTeamMissing(t *testing.T) {
 		"DASH0_TEAM_NAME=",
 		"CLAUDE_PLUGIN_OPTION_TEAM_NAME=",
 	)
-	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-noteam","model":"opus"}`, env)
+	stdout, _ := execHook(t, `{"hook_event_name":"SessionStart","session_id":"sess-noteam","model":"opus"}`, env)
 
 	// Claude Code parses stdout as one hook response and discards everything when
 	// a second JSON object follows, so both parts must ride in one systemMessage.
@@ -585,7 +585,7 @@ func TestSessionStartTeamHintSuppressedWhenTeamSet(t *testing.T) {
 		"DASH0_OTLP_URL="+srv.URL,
 		"DASH0_TEAM_NAME=platform",
 	)
-	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-team-set","model":"opus"}`, env)
+	stdout, _ := execHook(t, `{"hook_event_name":"SessionStart","session_id":"sess-team-set","model":"opus"}`, env)
 	assert.Contains(t, stdout, "dash0: connected")
 	assert.NotContains(t, stdout, "no team configured")
 }
@@ -599,7 +599,7 @@ func TestSessionStartTeamHintSuppressedWhenNotConfigured(t *testing.T) {
 		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
 		"DASH0_TEAM_NAME=",
 	)
-	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-noteam-off","model":"opus"}`, env)
+	stdout, _ := execHook(t, `{"hook_event_name":"SessionStart","session_id":"sess-noteam-off","model":"opus"}`, env)
 	assert.Contains(t, stdout, "telemetry is not active")
 	assert.NotContains(t, stdout, "no team configured")
 }
@@ -611,7 +611,7 @@ func TestSessionStartConnectivityFailure(t *testing.T) {
 		"DASH0_OTLP_URL=http://localhost:1", // unreachable port
 		"CLAUDE_PLUGIN_OPTION_OTLP_URL=",
 	)
-	stdout, _ := execBinary(t, `{"hook_event_name":"SessionStart","session_id":"sess-connfail","model":"opus"}`, env)
+	stdout, _ := execHook(t, `{"hook_event_name":"SessionStart","session_id":"sess-connfail","model":"opus"}`, env)
 	assert.Contains(t, stdout, "connectivity check failed")
 }
 
@@ -622,7 +622,7 @@ func TestHintNotEmittedOnNonSessionStartEvents(t *testing.T) {
 		"CLAUDE_PLUGIN_DATA="+dataDir,
 		"DASH0_OTLP_URL=",
 	)
-	stdout, _ := execBinary(t, `{"hook_event_name":"PreToolUse","session_id":"sess-x","tool_name":"Bash","tool_use_id":"tu1"}`, env)
+	stdout, _ := execHook(t, `{"hook_event_name":"PreToolUse","session_id":"sess-x","tool_name":"Bash","tool_use_id":"tu1"}`, env)
 	assert.NotContains(t, stdout, "systemMessage")
 }
 

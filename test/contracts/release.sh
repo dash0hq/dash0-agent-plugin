@@ -9,8 +9,9 @@
 # Requires: jq, git, bash. No network — EXISTING_RELEASES and TAG_STATE stand in
 # for the two things the planner would otherwise ask GitHub and git.
 set -euo pipefail
-# shellcheck source=test/contracts/lib.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+# Repo root (override with REPO=... for out-of-tree runs).
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
 PLAN="$REPO/scripts/release-plan.sh"
 VER="$REPO/scripts/version.sh"
@@ -177,12 +178,11 @@ printf '%s\n' "$art" | grep -q 'linux.*\.exe' \
 # its four binaries. A transcribed list would keep reporting all 24 and the
 # workflow would then diff dist/ against binaries nobody asked it to build.
 # One trap for the whole script. `trap … EXIT` is not additive: a second one
-# silently replaces this, and this one already replaces lib.sh's _cleanup, which
-# kills the background PIDs it collects. Nothing here starts one today, which is
-# exactly why a later contract that does would not notice.
+# silently replaces this, so a later contract that starts a background process
+# has to extend this line rather than add its own.
 gr=$(mktemp -d)
 sandbox=$(mktemp -d)
-trap 'rm -rf "$gr" "$sandbox"; _cleanup' EXIT
+trap 'rm -rf "$gr" "$sandbox"' EXIT
 mkdir -p "$gr/scripts"
 cp "$REPO/scripts/expected-artifacts.sh" "$gr/scripts/"
 grep -v '^      - darwin$' "$REPO/.goreleaser.yaml" >"$gr/.goreleaser.yaml"

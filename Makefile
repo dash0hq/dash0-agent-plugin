@@ -42,16 +42,36 @@ vet: ## Run go vet.
 	go vet ./...
 
 .PHONY: test
-test: test-scripts ## Run Go unit + integration tests with the race detector.
+test: test-scripts ## Run every test that needs no agent CLI (unit + consistency + install contracts). Needs jq.
 	go test -race -coverprofile=cover.out ./...
 
 .PHONY: test-scripts
 test-scripts: ## Run the unit tests for the Python diagnostic scripts.
 	python3 -m unittest discover -s claude/tools -p '*_test.py'
 
+.PHONY: test-marketplaces
+test-marketplaces: ## Drive a real agent CLI through a plugin install. Needs the claude, codex and copilot CLIs and network, no credentials.
+	go test -tags=marketplace -v -timeout=600s ./test/marketplaces/
+
 .PHONY: test-e2e
-test-e2e: ## Run the build-tagged end-to-end tests.
-	go test -tags=e2e -v -timeout=300s ./test/e2e/
+test-e2e: ## Drive each real agent CLI through a two-turn interactive session. Needs the CLIs AND their API keys.
+	go test -tags=e2e -v -timeout=2700s ./test/e2e/
+
+# One agent at a time. These tests are slow and cost real tokens, so iterating on
+# a single runtime is the common case. Pass the package, not the file: the tests
+# share the timeout constants in test/e2e/main_test.go, and naming one .go file
+# compiles it alone and fails on those.
+.PHONY: test-e2e-claude
+test-e2e-claude: ## Run only the Claude e2e session. Needs the claude CLI and ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.
+	go test -tags=e2e -v -timeout=1800s -run TestE2EFullFlowWithClaude ./test/e2e/
+
+.PHONY: test-e2e-codex
+test-e2e-codex: ## Run only the Codex e2e session. Needs the codex CLI and OPENAI_API_KEY (or a local codex login).
+	go test -tags=e2e -v -timeout=1800s -run TestE2EFullFlowWithCodex ./test/e2e/
+
+.PHONY: test-e2e-copilot
+test-e2e-copilot: ## Run only the Copilot e2e session. Needs the copilot CLI and COPILOT_GITHUB_TOKEN.
+	go test -tags=e2e -v -timeout=1800s -run TestE2EFullFlowWithCopilot ./test/e2e/
 
 .PHONY: go-mod-tidy
 go-mod-tidy: ## Run go mod tidy and fail if go.mod/go.sum change.

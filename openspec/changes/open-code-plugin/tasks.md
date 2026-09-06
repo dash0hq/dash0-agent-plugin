@@ -52,12 +52,12 @@ Each of these clones an established pattern rather than inventing one.
 
 ## 6. Installation and release
 
-- [ ] 6.1 Add the `opencode-on-event` build id to `.goreleaser.yaml` and a step publishing `dash0-opencode-plugin.js` as a release asset; verify `goreleaser build --snapshot --clean` produces all five binaries and the JS asset
-- [ ] 6.2 Stamp the pinned binary version into `opencode-on-event.sh` at release time exactly as the other four are stamped; verify the released script carries the tag and not a placeholder
-- [ ] 6.3 Publish `@dash0/opencode-plugin` (containing the bundle and the wrapper) from the tagged release workflow with provenance and the `NPM_TOKEN` secret, versioned in lockstep with the Go release; verify a dry-run publish succeeds in CI
-- [ ] 6.4 Write `install-opencode.sh` (download plugin + wrapper, write a config file if absent, no npm required) and `uninstall-opencode.sh` (remove plugin, wrapper, and cached binaries; leave the user config in place); verify both pass `make shellcheck-lint` and a round-trip leaves no plugin files behind
-- [ ] 6.5 Verify the npm path end to end: add the package to `opencode.json`'s `plugin` array in a scratch project, run a session, confirm spans arrive
-- [ ] 6.6 Verify the script path end to end on a machine with no npm registry access and confirm it produces the same spans as 6.5
+- [x] 6.1 Add the `opencode-on-event` build id to `.goreleaser.yaml` and a step publishing `dash0-opencode-plugin.js` as a release asset; verify `goreleaser build --snapshot --clean` produces all five binaries and the JS asset — 28 binaries, matching `scripts/expected-artifacts.sh` exactly, plus the bundle. `checksums.txt` verifies and lists `dash0-opencode-plugin.js`, which is the name `install-opencode.sh` looks up
+- [x] 6.2 Stamp the pinned binary version into `opencode-on-event.sh` at release time exactly as the other four are stamped; verify the released script carries the tag and not a placeholder — `scripts/version.sh` carries `opencode/opencode-on-event.sh` plus the two npm pins (16 pins, all `0.1.28`), and the release job runs `version.sh set` before it tags and builds. The released-artifact half of the check is only observable after a release exists
+- [x] 6.3 Publish `@dash0/opencode-plugin` (containing the bundle and the wrapper) from the tagged release workflow with provenance and the `NPM_TOKEN` secret, versioned in lockstep with the Go release; verify a dry-run publish succeeds in CI — `npm publish --dry-run` packs 4 files: the bundle, the wrapper, `package.json` and the README. The `npm` job needs `plan` and `release`, so npm can never name a GitHub release that does not exist, and it fails if `package.json`'s version differs from the release version
+- [x] 6.4 Write `install-opencode.sh` (download plugin + wrapper, write a config file if absent, no npm required) and `uninstall-opencode.sh` (remove plugin, wrapper, and cached binaries; leave the user config in place); verify both pass `make shellcheck-lint` and a round-trip leaves no plugin files behind — shellcheck clean; round-tripped against a locally served copy of the snapshot release, which left only `dash0-agent-plugin.local.md` and the empty `opencode.json` behind, as designed
+- [ ] 6.5 Verify the npm path end to end: add the package to `opencode.json`'s `plugin` array in a scratch project, run a session, confirm spans arrive — blocked until `@dash0/opencode-plugin` is published; the name is unregistered on npm today. `opencode plugin @dash0/opencode-plugin --global` is the CLI's own install command and fails cleanly on the 404 without writing config
+- [ ] 6.6 Verify the script path end to end on a machine with no npm registry access and confirm it produces the same spans as 6.5 — rehearsed against a local HTTP server serving the snapshot release: binary, bundle and wrapper all downloaded and checksum-verified, config written `chmod 600`, connectivity check reached. The real run is blocked on the same missing release as 6.5
 
 ## 7. Live-session test layer (new — OpenCode is the first runtime that can be driven headlessly)
 
@@ -90,11 +90,11 @@ proves Dash0 actually received what we think it did.
 
 ## 10. Documentation
 
-- [ ] 10.1 Add a fifth column to `FEATURE_MATRIX.md` covering runtimes, config options, config sources, transferred span properties, installation, debugging, error handling, and user notifications; verify every row has an OpenCode entry
-- [ ] 10.2 Write `opencode/README.md` with local-dev instructions following `cursor/README.md`, plus the 1.3–1.6 findings and the 8.7 verification recipe; verify by following it from a clean checkout
-- [ ] 10.3 Link the OpenCode guide from `DEVELOPMENT.md#per-runtime-developer-guides` and add both install paths to `README.md`; verify no other runtime's docs changed
-- [ ] 10.4 Record the resolved minimum supported OpenCode version in `opencode/README.md` and the package's `peerDependencies` range; verify it matches the oldest release whose plugin types carry every field the mapping reads
-- [ ] 10.5 Open a follow-up issue for the wrapper centralization described in design.md Decision 6, naming both candidate shapes and the Codex single-file delivery constraint; verify the issue links back to this change
+- [x] 10.1 Add a fifth column to `FEATURE_MATRIX.md` covering runtimes, config options, config sources, transferred span properties, installation, debugging, error handling, and user notifications; verify every row has an OpenCode entry — 66 rows across 8 tables, checked mechanically for a filled OpenCode cell. The user-notifications table is one row per agent, so OpenCode is a row there rather than a column
+- [x] 10.2 Write `opencode/README.md` with local-dev instructions following `cursor/README.md`, plus the 1.3–1.6 findings and the 8.7 verification recipe; verify by following it from a clean checkout
+- [x] 10.3 Link the OpenCode guide from `DEVELOPMENT.md#per-runtime-developer-guides` and add both install paths to `README.md`; verify no other runtime's docs changed
+- [x] 10.4 Record the resolved minimum supported OpenCode version in `opencode/README.md` and the package's `peerDependencies` range; verify it matches the oldest release whose plugin types carry every field the mapping reads — 1.18.0, unchanged, but resolved on behaviour rather than types. `tsc --noEmit` passes against `@opencode-ai/plugin` as far back as 1.0.0, because the translator reads bus payloads as `Record<string, unknown>`, so the types establish no floor at all. The floor that holds is the version every finding in "Observed OpenCode behavior" was recorded against. 1.18.28, the newest release, also typechecks
+- [x] 10.5 Open a follow-up issue for the wrapper centralization described in design.md Decision 6, naming both candidate shapes and the Codex single-file delivery constraint; verify the issue links back to this change — [#244](https://github.com/dash0hq/dash0-agent-plugin/issues/244)
 
 ## 11. Final verification
 

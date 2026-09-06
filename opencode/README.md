@@ -2,7 +2,10 @@
 
 Sends OpenTelemetry traces for OpenCode sessions to Dash0.
 
-> Under construction — see `openspec/changes/open-code-plugin/`.
+This is the developer reference: how the plugin is put together, how to sideload
+local changes, and what was observed about OpenCode itself. End users install it
+with `install-opencode.sh` or the npm package; both are described under
+[Install layout](#install-layout).
 
 ## The plugin package
 
@@ -68,6 +71,185 @@ toasted.
 
 Only the `SessionStart` spawn reads the child's stderr at all; every other
 spawn discards it, so the notification path costs one pipe per session.
+
+## Supported OpenCode versions
+
+**1.18.0 and newer.** That is what `peerDependencies` declares (`>=1.18.0 <2`)
+and what the devDependency pins.
+
+The floor is a behavioural claim, not a type one. Everything under [Observed
+OpenCode behavior](#observed-opencode-behavior) was recorded against 1.18.0, and
+the mapping depends on those observations: that `session.idle` fires for child
+sessions, that a terminal tool part arrives once per call id, that an MCP tool is
+named after its config key. The types cannot stand in for that check — `tsc
+--noEmit` passes against `@opencode-ai/plugin` as far back as 1.0.0, because the
+translator reads the bus payloads as `Record<string, unknown>` rather than
+through the published types.
+
+1.18.28, the newest release at the time of writing, typechecks. Re-run the
+capture harness on a major upgrade rather than trusting that it still does.
+
+## Install layout
+
+`install-opencode.sh` lays down four files and a binary:
+
+```
+~/.config/opencode/plugin/dash0-opencode-plugin.js     the bundle OpenCode loads
+~/.config/opencode/plugin/opencode-on-event.sh         the wrapper the plugin spawns
+~/.config/opencode/dash0-agent-plugin.local.md         config (chmod 600)
+~/.config/opencode/opencode.json                       written only when absent, and empty
+~/.local/state/dash0-agent-plugin/opencode/bin/…       the binary, pre-downloaded
+```
+
+Everything in `~/.config/opencode/plugin/` is loaded automatically, so there is
+no registration step and no trust prompt. The wrapper sits beside the bundle
+because that is the first place the plugin looks for it. The empty
+`opencode.json` exists only so a first-time user has a file to edit; an existing
+one is never touched, since the plugin needs no entry in it.
+
+OpenCode's docs name the global plugin directory `plugins/`, plural. Both
+spellings are scanned: a marker plugin dropped in `plugin/` and one in
+`plugins/` both loaded on 1.18.20. The installer writes the singular one, which
+is also where the plugin looks for its wrapper.
+
+The npm path is the other way in:
+
+```bash
+opencode plugin @dash0/opencode-plugin --global
+```
+
+That resolves the package, adds it to `opencode.json`'s `plugin` array and
+caches it under `~/.cache/opencode/node_modules/`. Same two files, out of the
+package instead of the plugin directory. The entry it writes carries no version,
+so OpenCode resolves the newest on every start; the release workflow refuses to
+publish a package whose version does not match the release, so the wrapper in it
+always asks for a binary that exists. Pin a different one with `DASH0_VERSION`.
+
+`DASH0_VERSION` pins a release. The installer reads it when resolving what to
+download, and `opencode-on-event.sh` reads it at runtime to override the version
+it was installed with.
+
+## Build & run locally
+
+Sideloads a locally-built binary and bundle instead of downloading a release.
+`test/live/opencode/session.sh` does exactly this in a sandbox; the steps below
+are the same thing against your real `~/.config/opencode`.
+
+**1. Build the bundle and the binary:**
+
+```bash
+./build.sh                                    # → opencode/dist/dash0-opencode-plugin.js
+VERSION=$(grep '^VERSION=' opencode-on-event.sh | cut -d'"' -f2)
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+BIN_DIR="$HOME/.local/state/dash0-agent-plugin/opencode/bin"
+mkdir -p "$BIN_DIR"
+go build -o "$BIN_DIR/opencode-on-event-${VERSION}-${OS}-${ARCH}" ../cmd/opencode-on-event
+```
+
+The wrapper re-verifies a cached binary's checksum on every run, but only
+against a digest file it wrote itself at download time. A hand-built binary has
+none, so the check is skipped rather than failed.
+
+`build.sh` bundles with `bun` when it is installed and `npx esbuild` otherwise,
+and the two write different bytes for the same source. Bun also stamps each
+module's path relative to the working directory, so building from the repo root
+(which is what the release does, through the goreleaser `before` hook) and
+building from `opencode/` differ too. Each is reproducible on its own terms and
+the release checksums whatever it built, so nothing breaks. It does mean a local
+bundle will not match a release digest unless you match the bundler and the
+directory.
+
+**2. Copy both files into the plugin directory:**
+
+```bash
+mkdir -p ~/.config/opencode/plugin
+cp dist/dash0-opencode-plugin.js ~/.config/opencode/plugin/
+cp opencode-on-event.sh ~/.config/opencode/plugin/
+chmod +x ~/.config/opencode/plugin/opencode-on-event.sh
+```
+
+Copy rather than symlink: the plugin resolves the wrapper relative to its own
+file, and a symlinked bundle resolves against the link's target, which is the
+repo rather than the plugin directory. To point at a wrapper somewhere else
+entirely, set `$DASH0_OPENCODE_ON_EVENT`.
+
+**3. Write a config file** at `~/.config/opencode/dash0-agent-plugin.local.md`:
+
+```yaml
+---
+otlp_url: "https://ingress.<region>.aws.dash0.com"
+auth_token: "your-dash0-auth-token"
+dataset: "default"
+agent_name: "opencode"
+# For local debugging — every emitted span is also appended to this file:
+# debug: true
+# debug_file: /tmp/dash0-opencode-debug.log
+---
+```
+
+```bash
+chmod 600 ~/.config/opencode/dash0-agent-plugin.local.md
+```
+
+**4. Start a session.** OpenCode loads the plugin directory at startup, so a new
+`opencode` or `opencode run "…"` picks up step 2. A rebuilt binary (step 1) takes
+effect on the next event with no restart, since the wrapper `exec`s a fresh one
+each time. A rebuilt bundle needs a restart.
+
+Tear the sideload down with:
+
+```bash
+rm ~/.config/opencode/plugin/dash0-opencode-plugin.js
+rm ~/.config/opencode/plugin/opencode-on-event.sh
+rm ~/.config/opencode/dash0-agent-plugin.local.md
+rm -rf ~/.local/state/dash0-agent-plugin/opencode
+```
+
+## Verify
+
+With `debug: true` set, every emitted span lands in the debug file as one
+`[dash0:trace] {...}` line:
+
+```bash
+tail -F /tmp/dash0-opencode-debug.log
+```
+
+Run a prompt that calls at least one tool. You should see:
+
+- one `execute_tool <name>` span per tool call
+- one `chat <model>` span at turn end carrying `gen_ai.usage.input_tokens`,
+  `output_tokens` and `cache_read.input_tokens`
+- the same `traceId` on every span in the turn
+- each tool span's `parentSpanId` matching the chat span's `spanId`
+
+A delegated sub-task adds an `invoke_agent` span, and the sub-agent's own tool
+spans parent to it rather than to the chat span. `make test-live` asserts all of
+this against a scripted model; [Verifying against a live
+Dash0](#verifying-against-a-live-dash0) is the same check against a real
+backend.
+
+If nothing appears at all, the ordered failures to rule out are: no config file
+(the plugin loads and does nothing), no wrapper beside the bundle (same), and a
+plugin directory OpenCode never scanned (restart it).
+
+## Switch to capture mode
+
+To collect new fixture payloads instead of emitting spans, use the capture
+harness in [`test/capture/opencode/`](../test/capture/opencode/). It runs a
+throwaway plugin, a mock model and a mock MCP server in a sandboxed `HOME`, and
+writes `captured/` alongside the schema dump the [On-disk session
+storage](#on-disk-session-storage) findings come from.
+
+## Uninstall
+
+```bash
+./uninstall-opencode.sh --yes
+```
+
+It removes the bundle, the wrapper and the cached binaries, and leaves
+`dash0-agent-plugin.local.md` in place so a reinstall does not ask for the token
+again.
 
 ## Telemetry privacy
 

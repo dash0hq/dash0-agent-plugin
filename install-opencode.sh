@@ -4,10 +4,10 @@
 
 # Dash0 — OpenCode telemetry installer.
 #
-# The npm path (adding "@dash0/opencode-plugin" to opencode.json's plugin array)
-# is the other supported way in. This script is the one that needs no npm
-# registry access: it downloads the same two files from GitHub Releases and drops
-# them where OpenCode auto-loads plugins.
+# The npm path (`opencode plugin @dash0/opencode-plugin --global`) is the other
+# supported way in. This script is the one that needs no npm registry access: it
+# downloads the same two files from GitHub Releases and drops them where OpenCode
+# auto-loads plugins.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-opencode.sh | bash

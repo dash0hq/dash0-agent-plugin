@@ -74,13 +74,13 @@ Golden and consistency tests compare our output against our own expectations, so
 they cannot catch a mapping that is wrong in both places. This layer is what
 proves Dash0 actually received what we think it did.
 
-- [ ] 8.1 Run the scripted session from 7.2 against the Dash0 dev ingress with a real auth token and a dedicated dataset; verify the wrapper's connectivity check succeeds and the session completes
-- [ ] 8.2 Confirm the target dataset with `listDatasets`, then use `getSpans` filtered on `gen_ai.harness.name is opencode` and `gen_ai.conversation.id is <session id>` over the run's time range; verify the expected span set arrived and no span is missing
-- [ ] 8.3 Use `getTraceDetails` on the returned trace id; verify the hierarchy matches 7.4 — chat span at the root, tool spans beneath it, `invoke_agent` with the sub-agent's own tool spans beneath that
-- [ ] 8.4 Use `sql` (D0QL) to assert the token sums match the scripted usage and that the identity, VCS, and team attributes are populated; verify content attributes read `<REDACTED>` under the default `omit_io`
-- [ ] 8.5 Use `getAttributeKeys` scoped to spans to diff the OpenCode attribute key set against a Claude Code session's in the same dataset; verify every key Claude Code produces for an equivalent event is either present or listed as a documented OpenCode gap in `FEATURE_MATRIX.md`
-- [ ] 8.6 Rerun 8.2–8.5 with `omit_io: false` and `omit_user_info: true`; verify content attributes carry real content and `user.name` is a 16-hex-char hash with `user.email` absent
-- [ ] 8.7 Document the whole recipe in `opencode/README.md` as a repeatable checklist including the filter expressions and the D0QL queries; verify by following it from scratch and recording the session id, dataset, and time range in the PR evidence
+- [x] 8.1 Run the scripted session from 7.2 against the Dash0 dev ingress with a real auth token and a dedicated dataset; verify the wrapper's connectivity check succeeds and the session completes
+- [x] 8.2 Confirm the target dataset with `listDatasets`, then use `getSpans` filtered on `gen_ai.harness.name is opencode` and `gen_ai.conversation.id is <session id>` over the run's time range; verify the expected span set arrived and no span is missing
+- [x] 8.3 Use `getTraceDetails` on the returned trace id; verify the hierarchy matches 7.4 — chat span at the root, tool spans beneath it, `invoke_agent` with the sub-agent's own tool spans beneath that
+- [x] 8.4 Use `sql` (D0QL) to assert the token sums match the scripted usage and that the identity, VCS, and team attributes are populated; verify content attributes read `<REDACTED>` under the default `omit_io`
+- [x] 8.5 Use `getAttributeKeys` scoped to spans to diff the OpenCode attribute key set against a Claude Code session's in the same dataset; verify every key Claude Code produces for an equivalent event is either present or listed as a documented OpenCode gap — recorded in `opencode/README.md` rather than `FEATURE_MATRIX.md`, which still has no OpenCode column (task 10.1). Six gaps, all accounted for
+- [x] 8.6 Rerun 8.2–8.5 with `omit_io: false` and `omit_user_info: true`; verify content attributes carry real content and `user.name` is a 16-hex-char hash with `user.email` absent — identity confirmed in Dash0; content confirmed in the locally written payload, because the Dash0 ingest redacts the three GenAI content keys regardless of what is sent (documented in `opencode/README.md`)
+- [x] 8.7 Document the whole recipe in `opencode/README.md` as a repeatable checklist including the filter expressions and the D0QL queries; verify by following it from scratch and recording the session id, dataset, and time range in the PR evidence
 
 ## 9. Commands and skill
 

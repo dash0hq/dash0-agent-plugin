@@ -61,12 +61,12 @@ Each of these clones an established pattern rather than inventing one.
 
 ## 7. Live-session test layer (new — OpenCode is the first runtime that can be driven headlessly)
 
-- [ ] 7.1 Build `test/live/opencode/mock-llm/` — an OpenAI-compatible server scripting one deterministic turn: assistant text, a successful tool call, a failing tool call, a delegated sub-agent, and exact usage numbers including cache read/write and reasoning; verify `curl` against it returns the scripted response
-- [ ] 7.2 Build `test/live/opencode/run.sh` driving `opencode run "<prompt>"` under a throwaway `HOME`/`XDG_STATE_HOME` with the mock LLM wired in via `provider.<id>.options.baseURL` and the plugin installed from the local checkout; verify it completes a turn without touching the developer's real `~/.config/opencode`
-- [ ] 7.3 Point that run at the existing mock OTLP server (`start_mock_otlp` from `test/contracts/lib.sh`) and assert the collected spans exactly: span names, parent/child structure, and token values, which are knowable because the model response is scripted; verify the assertions fail when the normalizer drops an attribute
-- [ ] 7.4 Assert the sub-agent structure specifically: an `invoke_agent` span under the chat span, with the child session's tool spans under the `invoke_agent` span and all of them on one trace id
-- [ ] 7.5 Assert fail-open in the live harness: rerun with an unreachable endpoint, a rejected token, a malformed config file, and a corrupted cached binary, and confirm `opencode run` exits successfully each time with no error in its output
-- [ ] 7.6 Add a `make test-live` target and a CI job gated on the `opencode` CLI being present, skipping locally and failing in CI when absent per the existing `skip_or_fail` rule; verify the job passes on a clean runner
+- [x] 7.1 Build `test/live/opencode/mock-llm/` — an OpenAI-compatible server scripting one deterministic turn: assistant text, a successful tool call, a failing tool call, a delegated sub-agent, and exact usage numbers including cache read/write and reasoning; verify `curl` against it returns the scripted response — satisfied by `test/capture/opencode/mock-llm.mjs`, which block 1 already built to that exact script; `run.sh` drives it and curl-verifies it on a port of its own. A second copy under `test/live/` would drift from the fixture the golden tests replay. Cache *write* is asserted mapped but not positive: the OpenAI wire format has no field to carry one
+- [x] 7.2 Build `test/live/opencode/run.sh` driving `opencode run "<prompt>"` under a throwaway `HOME`/`XDG_STATE_HOME` with the mock LLM wired in via `provider.<id>.options.baseURL` and the plugin installed from the local checkout; verify it completes a turn without touching the developer's real `~/.config/opencode`
+- [x] 7.3 Point that run at the existing mock OTLP server (`start_mock_otlp` from `test/contracts/lib.sh`) and assert the collected spans exactly: span names, parent/child structure, and token values, which are knowable because the model response is scripted; verify the assertions fail when the normalizer drops an attribute
+- [x] 7.4 Assert the sub-agent structure specifically: an `invoke_agent` span under the chat span, with the child session's tool spans under the `invoke_agent` span and all of them on one trace id
+- [x] 7.5 Assert fail-open in the live harness: rerun with an unreachable endpoint, a rejected token, a malformed config file, and a corrupted cached binary, and confirm `opencode run` exits successfully each time with no error in its output
+- [x] 7.6 Add a `make test-live` target and a CI job gated on the `opencode` CLI being present, skipping locally and failing in CI when absent per the existing `skip_or_fail` rule; verify the job passes on a clean runner
 
 ## 8. Live Dash0 verification
 
@@ -74,19 +74,19 @@ Golden and consistency tests compare our output against our own expectations, so
 they cannot catch a mapping that is wrong in both places. This layer is what
 proves Dash0 actually received what we think it did.
 
-- [ ] 8.1 Run the scripted session from 7.2 against the Dash0 dev ingress with a real auth token and a dedicated dataset; verify the wrapper's connectivity check succeeds and the session completes
-- [ ] 8.2 Confirm the target dataset with `listDatasets`, then use `getSpans` filtered on `gen_ai.harness.name is opencode` and `gen_ai.conversation.id is <session id>` over the run's time range; verify the expected span set arrived and no span is missing
-- [ ] 8.3 Use `getTraceDetails` on the returned trace id; verify the hierarchy matches 7.4 — chat span at the root, tool spans beneath it, `invoke_agent` with the sub-agent's own tool spans beneath that
-- [ ] 8.4 Use `sql` (D0QL) to assert the token sums match the scripted usage and that the identity, VCS, and team attributes are populated; verify content attributes read `<REDACTED>` under the default `omit_io`
-- [ ] 8.5 Use `getAttributeKeys` scoped to spans to diff the OpenCode attribute key set against a Claude Code session's in the same dataset; verify every key Claude Code produces for an equivalent event is either present or listed as a documented OpenCode gap in `FEATURE_MATRIX.md`
-- [ ] 8.6 Rerun 8.2–8.5 with `omit_io: false` and `omit_user_info: true`; verify content attributes carry real content and `user.name` is a 16-hex-char hash with `user.email` absent
-- [ ] 8.7 Document the whole recipe in `opencode/README.md` as a repeatable checklist including the filter expressions and the D0QL queries; verify by following it from scratch and recording the session id, dataset, and time range in the PR evidence
+- [x] 8.1 Run the scripted session from 7.2 against the Dash0 dev ingress with a real auth token and a dedicated dataset; verify the wrapper's connectivity check succeeds and the session completes
+- [x] 8.2 Confirm the target dataset with `listDatasets`, then use `getSpans` filtered on `gen_ai.harness.name is opencode` and `gen_ai.conversation.id is <session id>` over the run's time range; verify the expected span set arrived and no span is missing
+- [x] 8.3 Use `getTraceDetails` on the returned trace id; verify the hierarchy matches 7.4 — chat span at the root, tool spans beneath it, `invoke_agent` with the sub-agent's own tool spans beneath that
+- [x] 8.4 Use `sql` (D0QL) to assert the token sums match the scripted usage and that the identity, VCS, and team attributes are populated; verify content attributes read `<REDACTED>` under the default `omit_io`
+- [x] 8.5 Use `getAttributeKeys` scoped to spans to diff the OpenCode attribute key set against a Claude Code session's in the same dataset; verify every key Claude Code produces for an equivalent event is either present or listed as a documented OpenCode gap — recorded in `opencode/README.md` rather than `FEATURE_MATRIX.md`, which still has no OpenCode column (task 10.1). Six gaps, all accounted for
+- [x] 8.6 Rerun 8.2–8.5 with `omit_io: false` and `omit_user_info: true`; verify content attributes carry real content and `user.name` is a 16-hex-char hash with `user.email` absent — identity confirmed in Dash0; content confirmed in the locally written payload, because the Dash0 ingest redacts the three GenAI content keys regardless of what is sent (documented in `opencode/README.md`)
+- [x] 8.7 Document the whole recipe in `opencode/README.md` as a repeatable checklist including the filter expressions and the D0QL queries; verify by following it from scratch and recording the session id, dataset, and time range in the PR evidence
 
 ## 9. Commands and skill
 
-- [ ] 9.1 Port `dash0-configure` to the OpenCode command format confirmed in 1.6, writing `otlp_url` and `auth_token` into the correct-scope `.local.md`; verify by running it in a scratch project and confirming a subsequent session exports
-- [ ] 9.2 Port `open-session` to open the Dash0 session page for the current OpenCode session; verify the URL it produces matches the one in the startup toast and resolves to the trace found in 8.3
-- [ ] 9.3 Rewrite `audit-usage` against OpenCode's message storage as confirmed in 1.6; verify its token totals for a recorded session match the totals on that session's chat spans in Dash0
+- [x] 9.1 Port `dash0-configure` to `opencode/skills/dash0-configure/SKILL.md` (format confirmed with `opencode debug skill`, which discovers it), writing `otlp_url` and `auth_token` into the correct-scope `.local.md`; verify by running it in a scratch project and confirming a subsequent session exports
+- [x] 9.2 Port `open-session` to open the Dash0 session page for the current OpenCode session; verify the URL it produces matches the one in the startup toast and resolves to the trace found in 8.3
+- [x] 9.3 Rewrite `audit-usage` against `opencode db` and `opencode export` rather than a bespoke reader of the SQLite file; verify its token totals for a recorded session match the totals on that session's chat spans in Dash0
 
 ## 10. Documentation
 
@@ -98,6 +98,6 @@ proves Dash0 actually received what we think it did.
 
 ## 11. Final verification
 
-- [ ] 11.1 Run `make ci` and confirm lint and the full test suite pass
-- [ ] 11.2 Run `make test-e2e`, `make test-live`, and `./test/contracts/run.sh` and confirm all pass
-- [ ] 11.3 Run one real interactive `opencode` session against Dash0 with a real model and confirm the trace looks correct in the UI — the one check the scripted harness cannot make, since it never exercises a real model's tool-calling behavior
+- [x] 11.1 Run `make ci` and confirm lint and the full test suite pass
+- [x] 11.2 Run `make test-e2e`, `make test-live`, and `./test/contracts/run.sh` and confirm all pass — test-live and every contract pass; in test-e2e all three OpenCode tests pass and the five failures are the pre-existing live canaries for other runtimes, which need the Codex CLI, `COPILOT_GITHUB_TOKEN` and Claude auth
+- [x] 11.3 Run one real `opencode` session against Dash0 with a real model (local LM Studio, prism-ml/bonsai-27b) and confirm the trace looks correct — session ses_f891961fcffeor07KZP3bdsPK4, trace eb050111241cd7d93cd027979fd4d2f0, dataset default, 2026-09-06T13:26Z. Headless `opencode run` rather than the TUI; what matters is that a real model drove the tool calls, and `git status --porcelain` reported as `git status` — the one check the scripted harness cannot make, since it never exercises a real model's tool-calling behavior

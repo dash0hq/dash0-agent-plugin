@@ -214,6 +214,13 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 
 	switch hookEvent {
 	case "PostToolUse", "PostToolUseFailure":
+		// The level that governs this call — Skills for a skill invocation,
+		// Tools otherwise — can drop the span outright. Deciding it here rather
+		// than in the exporter skips resolving a parent and waiting on the
+		// transcript for a model no span will carry.
+		if cfg.ToolSpanSuppressed(event) {
+			break
+		}
 		if err := sendToolTrace(event, cfg, now, sessionDir, hookEvent == "PostToolUseFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
@@ -249,8 +256,14 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 				markedConsumed = true
 			}
 		}
-		if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
-			fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
+		// At agents: disabled the delegation reports nothing of its own. The
+		// snapshot below still carries the delegating turn's span id, which is
+		// what sendToolTrace parents the sub-agent's tool calls onto, so
+		// suppressing the span here drops no work beneath it.
+		if agentID == "" || !cfg.AgentSpanSuppressed() {
+			if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
+				fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
+			}
 		}
 		if markedConsumed {
 			otlp.ClearAgentTraceContext(sessionDir, agentID)
@@ -394,7 +407,12 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	// agent_id at all: the id of the agent it launches arrives in the response,
 	// and is read above. So agent_id here always names the caller, never the
 	// callee, and nesting survives instead of being flattened onto the turn.
-	if agentID != "" {
+	//
+	// Unless the delegation reports no span of its own — either its Agent tool
+	// span was suppressed by tools: disabled, or agents: disabled suppressed the
+	// invoke_agent span — in which case ctx.SpanID, the delegating turn's chat
+	// span carried in the per-agent snapshot, stands in for it.
+	if agentID != "" && !cfg.AgentToolSpanSuppressed() && !cfg.AgentSpanSuppressed() {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
 	}
 
@@ -569,7 +587,13 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 
 	parentSpanID := ""
 	if agentID != "" {
+		// The Agent tool call's span is this span's parent; when Tools: disabled
+		// dropped it, the delegating turn's chat span takes its place so the
+		// invoke_agent span names a parent that was actually exported.
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
+		if cfg.AgentToolSpanSuppressed() {
+			parentSpanID = ctx.SpanID
+		}
 		newSpanID, err := otlp.GenerateSpanID()
 		if err != nil {
 			return fmt.Errorf("generating sub-agent span ID: %w", err)
@@ -899,9 +923,106 @@ func ExtractLinesCounts(v any) (added, removed int) {
 	return added, removed
 }
 
-// ExtractBashCommandFamily extracts the leading binary name from a Bash tool
-// input, skipping environment variable assignments (KEY=val prefixes).
-// Input may be a string ("git status") or a map with a "command" field.
+// subcommands is the allowlist of command shapes. The outer key is a binary;
+// its value maps each subcommand word that binary may report to the number of
+// further tokens that word admits. A binary absent from the table, or a word
+// absent from its vocabulary, reports the binary name alone, so an unrecognized
+// CLI and an unrecognized subcommand both fail closed.
+//
+// A word may only carry a non-zero depth when that CLI requires a further word
+// from its own fixed vocabulary after it — `gh repo` is always followed by a
+// verb, `tools invoke` by a tool name. Anything that can be followed by a path,
+// URL, pattern, package, script name or free text is 0: `npm run` takes a
+// package script name, `bun` takes a file, `gh api` takes an endpoint.
+var subcommands = map[string]map[string]int{
+	"bun": {
+		"add": 0, "audit": 0, "build": 0, "create": 0, "exec": 0, "i": 0,
+		"init": 0, "install": 0, "link": 0, "outdated": 0, "patch": 0, "pm": 1,
+		"publish": 0, "remove": 0, "repl": 0, "rm": 0, "run": 0, "test": 0,
+		"unlink": 0, "update": 0, "upgrade": 0, "why": 0, "x": 0,
+	},
+	"curl": {},
+	"gh": {
+		"alias": 1, "api": 0, "attestation": 1, "auth": 1, "browse": 0,
+		"cache": 1, "codespace": 1, "completion": 0, "config": 1,
+		"extension": 1, "gist": 1, "issue": 1, "label": 1, "org": 1,
+		"project": 1, "pr": 1, "release": 1, "repo": 1, "ruleset": 1,
+		"run": 1, "search": 1, "secret": 1, "status": 0, "variable": 1,
+		"version": 0, "workflow": 1,
+	},
+	"git": {
+		"add": 0, "am": 0, "apply": 0, "archive": 0, "bisect": 0, "blame": 0,
+		"branch": 0, "bundle": 0, "checkout": 0, "cherry-pick": 0, "clean": 0,
+		"clone": 0, "commit": 0, "config": 0, "describe": 0, "diff": 0,
+		"fetch": 0, "gc": 0, "grep": 0, "init": 0, "log": 0, "ls-files": 0,
+		"ls-remote": 0, "merge": 0, "mv": 0, "notes": 0, "pull": 0, "push": 0,
+		"rebase": 0, "reflog": 0, "remote": 0, "reset": 0, "restore": 0,
+		"revert": 0, "rm": 0, "shortlog": 0, "show": 0, "stash": 0,
+		"status": 0, "submodule": 0, "switch": 0, "tag": 0, "worktree": 0,
+	},
+	"glab": {
+		"alias": 1, "api": 0, "auth": 1, "changelog": 1, "check-update": 0,
+		"ci": 1, "cluster": 1, "completion": 0, "config": 1, "duo": 1,
+		"incident": 1, "issue": 1, "iteration": 1, "label": 1, "milestone": 1,
+		"mr": 1, "pipeline": 1, "release": 1, "repo": 1, "schedule": 1,
+		"securefile": 1, "snippet": 1, "ssh-key": 1, "stack": 1, "token": 1,
+		"user": 1, "variable": 1, "version": 0,
+	},
+	"jq":   {},
+	"less": {},
+	"lsof": {},
+	"node": {},
+	"npm": {
+		"access": 1, "audit": 0, "bin": 0, "cache": 1, "ci": 0, "config": 1,
+		"dedupe": 0, "deprecate": 0, "dist-tag": 1, "doctor": 0, "exec": 0,
+		"i": 0, "init": 0, "install": 0, "link": 0, "list": 0, "login": 0,
+		"logout": 0, "ls": 0, "outdated": 0, "owner": 1, "pack": 0, "ping": 0,
+		"prune": 0, "publish": 0, "rebuild": 0, "remove": 0, "root": 0,
+		"run": 0, "run-script": 0, "start": 0, "team": 1, "test": 0,
+		"token": 1, "uninstall": 0, "update": 0, "version": 0, "view": 0,
+		"whoami": 0, "why": 0,
+	},
+	"opencode": {
+		"agent": 1, "auth": 1, "debug": 1, "export": 0, "github": 1,
+		"help": 0, "mcp": 1, "models": 0, "plugin": 1, "run": 0, "serve": 0,
+		"stats": 0, "tui": 0, "upgrade": 0, "version": 0,
+	},
+	"pip": {
+		"cache": 1, "check": 0, "config": 1, "debug": 0, "download": 0,
+		"freeze": 0, "hash": 0, "index": 1, "inspect": 0, "install": 0,
+		"list": 0, "show": 0, "uninstall": 0, "wheel": 0,
+	},
+	"pnpm": {
+		"add": 0, "audit": 0, "bin": 0, "config": 1, "create": 0, "dedupe": 0,
+		"deploy": 0, "doctor": 0, "env": 1, "exec": 0, "dlx": 0, "fetch": 0,
+		"i": 0, "import": 0, "init": 0, "install": 0, "licenses": 1,
+		"link": 0, "list": 0, "ls": 0, "outdated": 0, "pack": 0, "patch": 0,
+		"patch-commit": 0, "prune": 0, "publish": 0, "rebuild": 0, "remove": 0,
+		"rm": 0, "root": 0, "run": 0, "server": 1, "setup": 0, "start": 0,
+		"store": 1, "test": 0, "unlink": 0, "up": 0, "update": 0, "why": 0,
+	},
+	"ps":      {},
+	"python3": {},
+	"rg":      {},
+	"tools":   {"invoke": 1, "list": 0},
+	"tree":    {},
+	"unzip":   {},
+	"xz":      {},
+	"yq":      {},
+	"zstd":    {},
+}
+
+var (
+	envAssignment  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	shapeTokenSafe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+)
+
+// ExtractBashCommandFamily reports the shape of a Bash tool's command: the
+// binary followed by the subcommand path the subcommands allowlist admits for
+// it, stopping early at the first token that is not a plain word. Leading
+// KEY=value assignments are skipped and never reported — an assignment's value
+// can be a secret. No operand, flag, flag value, path, URL or free text is ever
+// emitted. Input may be a string ("git status") or a map with a "command" field.
 func ExtractBashCommandFamily(v any) string {
 	var cmd string
 	switch val := v.(type) {
@@ -912,20 +1033,37 @@ func ExtractBashCommandFamily(v any) string {
 	default:
 		return ""
 	}
-	if cmd == "" {
+
+	tokens := strings.Fields(cmd)
+	for len(tokens) > 0 && envAssignment.MatchString(tokens[0]) {
+		tokens = tokens[1:]
+	}
+	if len(tokens) == 0 {
 		return ""
 	}
-	for _, token := range strings.Fields(cmd) {
-		if strings.Contains(token, "=") && !strings.HasPrefix(token, "-") {
-			continue
-		}
-		binary := filepath.Base(token)
-		if binary == "." || binary == "/" {
-			return ""
-		}
+
+	binary := filepath.Base(tokens[0])
+	if !shapeTokenSafe.MatchString(binary) {
+		return ""
+	}
+
+	vocabulary, known := subcommands[binary]
+	if !known || len(tokens) < 2 || !shapeTokenSafe.MatchString(tokens[1]) {
 		return binary
 	}
-	return ""
+	depth, admitted := vocabulary[tokens[1]]
+	if !admitted {
+		return binary
+	}
+
+	shape := []string{binary, tokens[1]}
+	for _, token := range tokens[2:min(2+depth, len(tokens))] {
+		if !shapeTokenSafe.MatchString(token) {
+			break
+		}
+		shape = append(shape, token)
+	}
+	return strings.Join(shape, " ")
 }
 
 // ExtractSkillName parses the skill name from a Skill tool's input.

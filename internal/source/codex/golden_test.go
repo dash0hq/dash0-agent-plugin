@@ -52,6 +52,8 @@ func TestGoldenSpanTree(t *testing.T) {
 		Provider:     "openai",
 		OmitUserInfo: true,
 		OmitIO:       false,
+		Prompts:      otlp.LevelFull,
+		Tools:        otlp.LevelFull,
 	}
 	require.True(t, cfg.ValidateURL())
 

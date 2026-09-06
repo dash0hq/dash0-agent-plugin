@@ -149,9 +149,29 @@ Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/se
 Identity, VCS, and team attributes go on **every** span, the rest depend on the span type.
 Values are strings unless noted as integers.
 
-> The four content attributes `gen_ai.input.messages`, `gen_ai.output.messages`,
-> `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` are replaced with `<REDACTED>`
-> when `omit_io` is on (the default) and truncated to  16 KB otherwise.
+> Content attributes are gated per **privacy dimension**, one of `disabled`,
+> `limited` or `full`. `prompts` gates `gen_ai.input.messages`,
+> `gen_ai.output.messages` and `gen_ai.conversation.name`; `tools` gates
+> `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` and a failed call's
+> `exception.message`; on OpenCode `skills` gates those same three for a `Skill`
+> call, in place of `tools`; `agents` gates the sub-agent's own message content and the
+> `invoke_agent` span. At `limited` the content is replaced with `<REDACTED>`, at
+> `full` it is truncated to 16 KB, and at `disabled` the attribute — or the whole
+> span, for `tools`, `skills` and `agents` — is not exported.
+>
+> **Only OpenCode exposes the dimensions as configuration** ([its
+> README](./opencode/README.md#telemetry-privacy)). On Claude Code, Cursor, Codex
+> and Copilot CLI `omit_io` alone resolves them, exactly as before: on (the
+> default) ⇒ `prompts` and `tools` at `limited`, off ⇒ both `full`. The columns
+> below therefore read the same as they always did on those four.
+>
+> What follows is gated on OpenCode alone, because it would otherwise move a span
+> the other four already export: at `limited`, tool arguments and results, a
+> sub-agent's content and a failed tool call's message are **omitted** rather than
+> placeheld — the semconv makes them Opt-In — the two `withheld_characters`
+> attributes are emitted, and a `Skill` call is routed to `skills` instead of
+> staying on `tools`. A prompt keeps its envelope everywhere, so its roles stay
+> readable.
 
 > The three user-identity attributes behave according to `omit_user_info` (off by default):
 > `user.name` becomes a 16-hex-char SHA-256 hash, `user.email` is
@@ -210,7 +230,7 @@ omitted when its value is empty.
 |---|---|--------------------------------|
 | `gen_ai.operation.name` | `chat` or `invoke_agent`                                             |                                |
 | `gen_ai.request.model` | `claude-…`, `gpt-…`, `cursor-auto`, …                                |                                |
-| `gen_ai.conversation.name` | Session title                                                        | Claude only (from transcript). Content-gated by `omit_io`: the title is derived from the first prompt. |
+| `gen_ai.conversation.name` | Session title                                                        | Claude only (from transcript). Gated by `prompts`: the title is derived from the first prompt, so it is content, not turn metadata. |
 | `gen_ai.usage.input_tokens` | integer                                                              |                                |
 | `gen_ai.usage.output_tokens` | integer                                                              |                                |
 | `gen_ai.usage.cache_read.input_tokens` | integer                                                              |                                |
@@ -221,8 +241,10 @@ omitted when its value is empty.
 | `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh`                                     | Claude only, from the payload's `effort` field. The request-side counterpart to `reasoning.output_tokens`: the setting that produced the thinking those tokens paid for. The attribute is a free-form string — the convention asks for "the exact string value sent to the provider" and gives `low`/`medium`/`high` only as examples — so Claude Code's `xhigh` is reported as-is. |
 | `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude and Codex, on the chat span of a turn that a person's slash command or `$mention` started, and for Codex on any turn that loaded a skill at all. See below. |
 | `dash0.gen_ai.tool.skill.source` | `command`, `model`                                                   | Same rows as above. `model` reaches a chat span only on Codex, where the model's own choice also loads without a tool call. |
-| `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
-| `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
+| `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Gated by `prompts`, or by `agents` on a sub-agent's own messages. |
+| `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Gated by `prompts`, or by `agents` on a sub-agent's own messages. |
+| `dash0.gen_ai.input.messages.withheld_characters` | integer | OpenCode only. At `prompts: limited`, the rune count of the content that was withheld, so prompt-size distribution stays aggregatable without the text. |
+| `dash0.gen_ai.output.messages.withheld_characters` | integer | OpenCode only. Same, for the response. |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On `invoke_agent` spans. Per invocation, not per kind: on Copilot it is the `call_…` id of the `task` tool that spawned the sub-agent, which is also the session id Copilot gives that sub-agent's own hooks under `copilot -p` (interactively that session id is a plain UUID instead, so the join holds in prompt mode only). If the spawning tool's span flushed into a later turn than the agent's, no `invoke_agent` span is emitted for that sub-agent at all — see `copilot/README.md`. |
 | `exception.message` | Error text                                                           | On `StopFailure`.              |
 | `dash0.gen_ai.billing_mode` | `subscription` \| `api` \| `metered_external` \| `unknown`             | Claude Code + Codex. Set whenever token usage is (Codex: always). Codex only ever says `subscription`/`unknown` — see below. |
@@ -438,15 +460,15 @@ Codex-scoped as a reader diagnostic.
 | `gen_ai.tool.type` | `function` | Constant. |
 | `gen_ai.tool.name` | `Bash`, `Read`, … | MCP tool names are stripped of their `mcp__<server>__` prefix; the server goes to `dash0.gen_ai.tool.mcp_server`. |
 | `gen_ai.tool.call.id` | Tool-use ID | |
-| `gen_ai.tool.call.arguments` | Tool input (JSON / string) | Content-gated, ≤16 KB. |
-| `gen_ai.tool.call.result` | Tool output | Content-gated, ≤16 KB. |
+| `gen_ai.tool.call.arguments` | Tool input (JSON / string) | Gated by `tools`, or by `skills` on a `Skill` call. ≤16 KB at `full`; `<REDACTED>` at `limited`, omitted there on OpenCode. |
+| `gen_ai.tool.call.result` | Tool output | Gated by `tools`, or by `skills` on a `Skill` call. ≤16 KB at `full`; `<REDACTED>` at `limited`, omitted there on OpenCode. |
 | `dash0.gen_ai.tool.mcp_server` | MCP server name (placeholder `cursor` on Cursor) | MCP tools only. |
-| `dash0.gen_ai.tool.bash.command_family` | Binary name, e.g. `git`, `npm` | Bash tool. |
+| `dash0.gen_ai.tool.bash.command_family` | Command shape — binary plus its subcommand path, e.g. `git status`, `gh repo clone` | Bash tool. Never an operand, flag or flag value; subcommand words allowlisted per binary in `subcommands`. |
 | `dash0.gen_ai.tool.skill.name` | Skill name | Skill tool. |
 | `dash0.gen_ai.tool.skill.source` | `model` | Skill tool. Constant here — the tool call *is* the model choosing. |
 | `dash0.gen_ai.code.lines_added` | integer | Claude Code only — from the Edit/Write/MultiEdit `structuredPatch`. |
 | `dash0.gen_ai.code.lines_removed` | integer | Claude Code only — from the Edit/Write/MultiEdit `structuredPatch`. |
-| `dash0.gen_ai.vcs.pull_request.url` | PR / MR URL | Survives `omit_io`. |
-| `dash0.gen_ai.vcs.issue.url` | Issue URL | Survives `omit_io`. |
-| `dash0.gen_ai.vcs.commit.sha` | Commit SHA | Survives `omit_io`. |
-| `exception.message` | Error text | On `PostToolUseFailure`. |
+| `dash0.gen_ai.vcs.pull_request.url` | PR / MR URL | Derived, so it survives `tools: limited`. |
+| `dash0.gen_ai.vcs.issue.url` | Issue URL | Derived, so it survives `tools: limited`. |
+| `dash0.gen_ai.vcs.commit.sha` | Commit SHA | Derived, so it survives `tools: limited`. |
+| `exception.message` | Error text | On `PostToolUseFailure`. Gated by `tools`, or by `skills` on a `Skill` call: withheld below `full` on OpenCode, since a failure message can quote the arguments. The `Error` status stays. |

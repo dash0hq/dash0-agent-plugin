@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/identity"
 	"github.com/dash0hq/dash0-agent-plugin/internal/vcs"
@@ -106,7 +107,7 @@ type Config struct {
 	TeamName     string // when set, tag all spans with the dash0.team.name attribute
 	Provider     string // fallback gen_ai.provider.name for events whose model can't be inferred (e.g. SessionStart, PreToolUse). Set by the entrypoint based on host runtime; Cursor leaves it empty since each call's provider is derived from event["model"].
 	OmitUserInfo bool   // when true, hash user.name and omit user.email (both span attributes)
-	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
+	OmitIO       bool   // legacy switch, resolved into Prompts and Tools by harness.Config; redaction reads the levels, not this field
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to
 
@@ -114,6 +115,27 @@ type Config struct {
 	// OS-derived user.name is dropped instead of reported. For orgs that would
 	// rather have no attribution than an approximate one.
 	OmitIdentityFallback bool
+
+	// The four privacy dimensions. Each governs one class of content
+	// independently; harness.Config resolves them, falling back to OmitIO for
+	// Prompts and Tools. Their zero value is LevelLimited.
+	Prompts Level
+	Tools   Level
+	Skills  Level
+	Agents  Level
+
+	// Dimensions reports that this runtime exposes the four dimensions as
+	// configuration, which turns on the parts of their semantics that would
+	// otherwise move a span another runtime already exports: the
+	// dash0.gen_ai.*.withheld_characters attributes at Prompts: LevelLimited,
+	// omitting rather than redacting the execute_tool Opt-In content attributes
+	// at Tools: LevelLimited, withholding a failed tool call's message there,
+	// and letting Skills govern a skill invocation in place of Tools.
+	//
+	// Only the OpenCode entrypoint sets it: every other runtime's spans have to
+	// stay byte-identical to what they exported before the privacy dimensions
+	// existed, and omit_io's default puts them all at LevelLimited.
+	Dimensions bool
 }
 
 // ValidateURL reports whether OTLPUrl is usable, and clears it when it is not.
@@ -398,13 +420,147 @@ const MaxContentBytes = 16 * 1024
 
 const redactedValue = "<REDACTED>"
 
-// contentKeys lists event fields that contain input/output content.
-// These are redacted when Config.OmitIO is true, or truncated when included.
-var contentKeys = map[string]bool{
-	"tool_input":             true,
-	"tool_response":          true,
-	"last_assistant_message": true,
+// dimension names the privacy dimension that governs one content field.
+type dimension int
+
+const (
+	// dimUnset is the zero value on purpose: a contentKeys entry whose dimension
+	// is omitted, or a dimension added without a levelFor case, then resolves to
+	// LevelDisabled instead of silently inheriting whatever c.Prompts is set to.
+	dimUnset dimension = iota
+	dimPrompts
+	dimTools
+	dimSkills
+	dimAgents
+)
+
+// levelFor returns the level configured for the dimension governing a content
+// field. An unknown dimension fails closed at LevelDisabled.
+func (c Config) levelFor(d dimension) Level {
+	switch d {
+	case dimPrompts:
+		return c.Prompts
+	case dimTools:
+		return c.Tools
+	case dimSkills:
+		return c.Skills
+	case dimAgents:
+		return c.Agents
+	default:
+		return LevelDisabled
+	}
+}
+
+// governingDimension resolves which dimension actually governs one content
+// field of one event. A skill invocation reaches the pipeline as a tool call,
+// and a sub-agent's prompt and response are the delegation's content rather
+// than the user's own turn — so Skills and Agents stand in for the dimension
+// the field is listed under, and the four stay independently useful.
+func (c Config) governingDimension(key string, d dimension, event map[string]any) dimension {
+	if !c.Dimensions {
+		return d
+	}
+	switch {
+	case d == dimTools && IsSkillEvent(event):
+		return dimSkills
+	case d == dimPrompts && subAgentContentKeys[key] && isSubAgentEvent(event):
+		return dimAgents
+	}
+	return d
+}
+
+// subAgentContentKeys names the prompt-dimension fields whose value is the
+// sub-agent's own message content, so Agents stands in for Prompts on them.
+// gen_ai.conversation.name is deliberately absent: the session title is derived
+// from the user's own first prompt even on a sub-agent event, so Prompts keeps
+// governing it there.
+var subAgentContentKeys = map[string]bool{
 	"prompt":                 true,
+	"last_assistant_message": true,
+}
+
+// levelForEvent resolves the level governing one content field of one event.
+func (c Config) levelForEvent(key string, d dimension, event map[string]any) Level {
+	return c.levelFor(c.governingDimension(key, d, event))
+}
+
+// omitsAtLimited reports whether a dimension drops its content attributes at
+// LevelLimited instead of exporting the redaction placeholder. The execute_tool
+// convention makes gen_ai.tool.call.arguments and gen_ai.tool.call.result
+// Opt-In, so limited omits them outright, and a sub-agent's invoke_agent span
+// carries its name alone; a prompt keeps its envelope, because a consumer can
+// still read the roles off it.
+func (c Config) omitsAtLimited(d dimension) bool {
+	return c.Dimensions && (d == dimTools || d == dimSkills || d == dimAgents)
+}
+
+// IsSkillEvent reports whether a tool event is a skill invocation. tool_name is
+// the pipeline's canonical name, spelled per runtime, hence the fold; skill_name
+// covers Copilot, which ships no arguments for the skill tool and names the
+// skill in a vendor attribute its source reads before enrichment.
+func IsSkillEvent(event map[string]any) bool {
+	if name, _ := event["tool_name"].(string); strings.EqualFold(name, "Skill") {
+		return true
+	}
+	name, _ := event["skill_name"].(string)
+	return name != ""
+}
+
+// isSubAgentEvent reports whether an event belongs to a delegated sub-agent
+// rather than to the user's own turn. A top-level Agent tool call names the
+// agent it launched too, but its content is tool content — only the chat-span
+// fields consult this.
+func isSubAgentEvent(event map[string]any) bool {
+	id, _ := event["agent_id"].(string)
+	return id != ""
+}
+
+// AgentSpanSuppressed reports whether a sub-agent's invoke_agent span is
+// dropped, so the pipeline can return before building it.
+func (c Config) AgentSpanSuppressed() bool {
+	return c.Dimensions && c.Agents == LevelDisabled
+}
+
+// ToolSpanSuppressed reports whether the level governing a tool call drops its
+// execute_tool span entirely, so the pipeline can return before resolving a
+// parent and a model it will not use.
+func (c Config) ToolSpanSuppressed(event map[string]any) bool {
+	return c.Dimensions && c.levelForEvent("", dimTools, event) == LevelDisabled
+}
+
+// AgentToolSpanSuppressed reports whether the Agent tool call's own
+// execute_tool span is dropped. A sub-agent's spans derive their parent id from
+// the agent id, which is that span's id, so when it is gone they have to parent
+// to the delegating turn's chat span instead: no exported span may reference a
+// span id that was never exported. The Agent tool is never a skill invocation,
+// so Tools governs it outright.
+func (c Config) AgentToolSpanSuppressed() bool {
+	return c.Dimensions && c.Tools == LevelDisabled
+}
+
+// toolFailureWithheld reports whether a failed tool call's message stays out of
+// the span: the message routinely quotes the arguments, so it cannot outlive
+// them. Only a tool event has one — a chat span's error is the harness's own
+// text rather than the tool's.
+func (c Config) toolFailureWithheld(event map[string]any) bool {
+	if !c.Dimensions {
+		return false
+	}
+	if _, isTool := event["tool_name"]; !isTool {
+		return false
+	}
+	return c.levelForEvent("", dimTools, event) != LevelFull
+}
+
+// contentKeys maps every event field that carries input/output content to the
+// privacy dimension governing it. A field listed here is omitted, redacted or
+// truncated according to that dimension's level; a field absent from it is
+// exported verbatim.
+var contentKeys = map[string]dimension{
+	"tool_input":             dimTools,
+	"tool_response":          dimTools,
+	"last_assistant_message": dimPrompts,
+	"prompt":                 dimPrompts,
 
 	// Not a hook payload field. pipeline.go sets it from the transcript, already
 	// namespaced, so it arrives here under its final name rather than a raw one.
@@ -412,7 +568,17 @@ var contentKeys = map[string]bool{
 	// prompt, so it is user content and omit_io has to cover it. Listing it here
 	// is the whole fix: eventAttributes keys redaction off the event key, and
 	// this key needs no attrKeyMap entry because it is already correct.
-	"gen_ai.conversation.name": true,
+	"gen_ai.conversation.name": dimPrompts,
+}
+
+// withheldCountKeys names, per content field, the attribute reporting how many
+// characters of content were withheld at LevelLimited — so prompt-size
+// distribution stays visible when the text itself does not. No semantic
+// convention covers this, hence the dash0. prefix. Config.Dimensions gates
+// them, because they are new attributes only OpenCode may export.
+var withheldCountKeys = map[string]string{
+	"prompt":                 "dash0.gen_ai.input.messages.withheld_characters",
+	"last_assistant_message": "dash0.gen_ai.output.messages.withheld_characters",
 }
 
 // userInfoKeys lists event fields that contain user-identifying information.
@@ -526,6 +692,9 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 		if attrSkipKeys[k] {
 			continue
 		}
+		if k == "error" && cfg.toolFailureWithheld(event) {
+			continue
+		}
 		if cfg.OmitUserInfo && userInfoKeys[k] {
 			key := k
 			if mapped, ok := attrKeyMap[k]; ok {
@@ -536,7 +705,11 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			}
 			continue
 		}
-		if cfg.OmitIO && contentKeys[k] {
+		if dim, isContent := contentKeys[k]; isContent && cfg.levelForEvent(k, dim, event) != LevelFull {
+			governing := cfg.governingDimension(k, dim, event)
+			if cfg.levelFor(governing) == LevelDisabled || cfg.omitsAtLimited(governing) {
+				continue
+			}
 			key := k
 			if mapped, ok := attrKeyMap[k]; ok {
 				key = mapped
@@ -551,6 +724,10 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			} else {
 				attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactedValue)})
 			}
+			if countKey, ok := withheldCountKeys[k]; ok && cfg.Dimensions {
+				withheld := int64(utf8.RuneCountInString(stringifyValue(v)))
+				attrs = append(attrs, Attribute{Key: countKey, Value: IntVal(withheld)})
+			}
 			continue
 		}
 		if t, ok := attrTransformMap[k]; ok {
@@ -559,7 +736,7 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 				s = transformMessage(inputMessageRole(event), v)
 			}
 			if s != "" {
-				if contentKeys[k] {
+				if _, isContent := contentKeys[k]; isContent {
 					s = truncateContent(s)
 				}
 				attrs = append(attrs, Attribute{Key: t.key, Value: StringVal(s)})
@@ -571,7 +748,7 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			key = mapped
 		}
 		av := toAttrValue(v)
-		if av.StringValue != nil && contentKeys[k] {
+		if _, isContent := contentKeys[k]; av.StringValue != nil && isContent {
 			truncated := truncateContent(*av.StringValue)
 			av = StringVal(truncated)
 		}

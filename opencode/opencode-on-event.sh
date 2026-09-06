@@ -60,6 +60,14 @@ load_settings() {
   [[ -n "$val" ]] && export DASH0_TEAM_NAME="$val"
   val=$(echo "$frontmatter" | grep '^omit_io:' | sed 's/omit_io: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_OMIT_IO="$val"
+  val=$(echo "$frontmatter" | grep '^prompts:' | sed 's/prompts: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_PROMPTS="$val"
+  val=$(echo "$frontmatter" | grep '^tools:' | sed 's/tools: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_TOOLS="$val"
+  val=$(echo "$frontmatter" | grep '^skills:' | sed 's/skills: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_SKILLS="$val"
+  val=$(echo "$frontmatter" | grep '^agents:' | sed 's/agents: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  [[ -n "$val" ]] && export DASH0_AGENTS="$val"
   val=$(echo "$frontmatter" | grep '^omit_user_info:' | sed 's/omit_user_info: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   [[ -n "$val" ]] && export DASH0_OMIT_USER_INFO="$val"
   val=$(echo "$frontmatter" | grep '^omit_identity_fallback:' | sed 's/omit_identity_fallback: *//' | sed 's/^"\(.*\)"$/\1/' || true)
@@ -177,6 +185,8 @@ if [ ! -x "$BINARY" ]; then
   chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
 fi
 
-# Forward stdin to the binary. The binary itself exits 0 on telemetry errors
-# (see cmd/opencode-on-event/main.go) so we don't need to wrap this in a trap.
-exec "$BINARY"
+# Forward stdin and any arguments to the binary. The plugin passes none; the
+# /open-session command passes `session-url`. The binary itself exits 0 on
+# telemetry errors (see cmd/opencode-on-event/main.go) so we don't need to wrap
+# this in a trap.
+exec "$BINARY" "$@"

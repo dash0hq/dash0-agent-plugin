@@ -48,6 +48,8 @@ func TestSendLog(t *testing.T) {
 		OTLPUrl:   srv.URL,
 		AuthToken: "test-token",
 		Dataset:   "test-dataset",
+		Prompts:   LevelFull,
+		Tools:     LevelFull,
 	}
 
 	require.NoError(t, SendLog(event, cfg))
@@ -473,7 +475,7 @@ func TestSendLogDropsPromptBookkeeping(t *testing.T) {
 		"attachments":     []any{map[string]any{"type": "file", "path": "/Users/someone/notes.md"}},
 		"chat_span_id":    "9b6e3c1f0a24d158",
 	}
-	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL}))
+	require.NoError(t, SendLog(event, Config{OTLPUrl: srv.URL, Prompts: LevelFull}))
 
 	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
 	assertAttr(t, lr.Attributes, "gen_ai.conversation.id", "aed69ea7-1f2c-4b60-9d8e-3a7c05b41e92")
@@ -526,7 +528,7 @@ func TestToolIOTruncatedInSpan(t *testing.T) {
 		"tool_response":   largeOutput,
 	}
 
-	cfg := Config{OmitIO: false}
+	cfg := Config{Tools: LevelFull}
 	span := NewToolSpan("aabbccdd"+"eeff0011"+"22334455"+"66778899", "span1234span1234", "parentidparentid",
 		time.Now().Add(-100*time.Millisecond), time.Now(), event, false, cfg)
 

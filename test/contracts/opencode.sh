@@ -208,6 +208,17 @@ else shasum -a 256 "$BINARY" | cut -d' ' -f1 > "$BINARY.sha256"; fi
 echo "PASS: an unrunnable cached binary is reported and the wrapper exits 0"
 rm -f "$BINARY" "$BINARY.sha256"
 
+echo "== an operating system without a build is reported, not attempted =="
+UNSUPPORTED_BIN=$(mktemp -d)
+printf '#!/bin/sh\necho MINGW64_NT-10.0\n' > "$UNSUPPORTED_BIN/uname"
+chmod +x "$UNSUPPORTED_BIN/uname"
+unsupported_out=$( cd "$(mktemp -d)" && session_start contract-o8 \
+  | PATH="$UNSUPPORTED_BIN:$PATH" DASH0_PLUGIN_DATA="$(mktemp -d)" bash "$WRAPPER" 2>&1 ) && rc=0 || rc=$?
+[ "$rc" -eq 0 ] || { echo "ERROR: the wrapper exited $rc on an unsupported OS"; exit 1; }
+case "$unsupported_out" in *"unsupported OS"*) ;; *) echo "ERROR: no unsupported-OS message (got: $unsupported_out)"; exit 1 ;; esac
+rm -rf "$UNSUPPORTED_BIN"
+echo "PASS: an unsupported OS is reported and the wrapper exits 0"
+
 echo "== a download that cannot be verified is never executed =="
 export HOME=/tmp/opencode-home-nohash; rm -rf "$HOME"; mkdir -p "$HOME/.config/opencode"
 NOHASH_BIN=$(mktemp -d); NOHASH_DATA=$(mktemp -d)
@@ -290,6 +301,29 @@ theme=$(jq -r '.theme // ""' "$HOME/.config/opencode/opencode.json")
   || { echo "ERROR: installer clobbered the user's opencode.json (theme: $theme)"; fail=1; }
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: installer produced the plugin file, wrapper and config with the user's own config preserved"
+
+echo "== a reinstall without credentials keeps the stored ones =="
+printf 'prompts: full\n' >> "$HOME/.config/opencode/dash0-agent-plugin.local.md"
+DASH0_VERSION="$DASH0_VERSION" bash "$REPO/install-opencode.sh" </dev/null >/dev/null 2>&1
+fail=0
+grep -q '^auth_token: "e2e-token"$' "$HOME/.config/opencode/dash0-agent-plugin.local.md" \
+  || { echo "ERROR: a credential-less reinstall blanked the stored token"; fail=1; }
+grep -q '^prompts: full$' "$HOME/.config/opencode/dash0-agent-plugin.local.md" \
+  || { echo "ERROR: a credential-less reinstall dropped the user's own keys"; fail=1; }
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: reinstalling without credentials leaves the config file untouched"
+
+echo "== a reinstall that passes one credential changes only that key =="
+DASH0_VERSION="$DASH0_VERSION" DASH0_AUTH_TOKEN=e2e-token-2 bash "$REPO/install-opencode.sh" </dev/null >/dev/null 2>&1
+fail=0
+grep -q '^auth_token: "e2e-token-2"$' "$HOME/.config/opencode/dash0-agent-plugin.local.md" \
+  || { echo "ERROR: the passed token was not written"; fail=1; }
+grep -q '^otlp_url: "http://localhost:4319"$' "$HOME/.config/opencode/dash0-agent-plugin.local.md" \
+  || { echo "ERROR: passing only a token blanked the stored endpoint"; fail=1; }
+grep -q '^prompts: full$' "$HOME/.config/opencode/dash0-agent-plugin.local.md" \
+  || { echo "ERROR: passing only a token dropped the user's own keys"; fail=1; }
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: a partial reinstall updates the passed keys and keeps the rest"
 
 echo "== uninstall-opencode.sh strips the plugin and leaves the user config in place =="
 # The wrapper caches downloaded binaries under the data dir on first run, which

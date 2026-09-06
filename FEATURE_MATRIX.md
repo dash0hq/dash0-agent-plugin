@@ -44,7 +44,8 @@ variable instead.
 | `dataset` | Yes | Yes | Yes | Yes | `Dash0-Dataset` header. |
 | `agent_name` | Yes | Yes | Yes | Yes | → `service.name` / `gen_ai.agent.name`. |
 | `team_name` | Yes | Yes | Yes | Yes | → `dash0.team.name`. |
-| `omit_io` | Yes | Yes | Yes | Yes | Binary default `true` (redact prompts + tool I/O).¹ |
+| `omit_io` | Yes | Yes | Yes | Yes | Binary default `true` (redact prompts + tool I/O).¹ Still the only content switch on these four runtimes. |
+| `prompts` / `tools` / `skills` / `agents` | No | No | No | No | OpenCode only.² Four independent privacy dimensions, each `disabled` \| `limited` \| `full`. |
 | `omit_user_info` | Yes | Yes | Yes | Yes | Default `false`. |
 | `omit_identity_fallback` | Yes | Yes | Yes | Yes | Default `false`. When `true`, only a real `git config user.name` is reported; the OS-account fallback is dropped. |
 | `enabled` | Yes | Yes | Yes | Yes | `false` ⇒ wrapper exits, plugin off for that scope. |
@@ -55,6 +56,15 @@ variable instead.
 ¹ The Cursor and Codex README example configs show `omit_io: false`, but the installers
 don't write the key. With no explicit setting the binary default (`true`) applies on all
 four runtimes.
+
+² The four dimensions live in the shared pipeline but only the OpenCode entrypoint
+exposes them as configuration, so the spans these four runtimes export are unchanged
+by them — `omit_io` alone resolves their posture, exactly as before. On OpenCode the
+dimensions layer over `omit_io` rather than replacing it: an explicitly set dimension
+wins, else `omit_io` speaks for `prompts` and `tools` (`true` ⇒ both `limited`,
+`false` ⇒ both `full`), and `skills` and `agents` default to `limited` since `omit_io`
+never spoke for them. See [opencode/README.md](./opencode/README.md#telemetry-privacy);
+OpenCode has no column here while its plugin is under construction.
 
 ## Configuration sources & precedence
 

@@ -100,11 +100,11 @@
 
 ## 8. Documentation
 
-- [ ] 8.1 Document the four dimensions, their levels, the precedence rules and
+- [x] 8.1 Document the four dimensions, their levels, the precedence rules and
   the depth table in `opencode/README.md`, and verify the config example there
   parses under the reader implemented in 6.1
-- [ ] 8.2 Update `FEATURE_MATRIX.md` to show the four dimensions as OpenCode-only
+- [x] 8.2 Update `FEATURE_MATRIX.md` to show the four dimensions as OpenCode-only
   and `omit_io` as still supported everywhere, and verify the table's claims match
   the tests in sections 2 through 5
-- [ ] 8.3 Update `DEVELOPMENT.md`'s telemetry-attributes table to state which
+- [x] 8.3 Update `DEVELOPMENT.md`'s telemetry-attributes table to state which
   dimension gates each content attribute, replacing the `omit_io` references

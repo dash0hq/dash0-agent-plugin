@@ -430,6 +430,8 @@ const (
 	dimUnset dimension = iota
 	dimPrompts
 	dimTools
+	dimSkills
+	dimAgents
 )
 
 // levelFor returns the level configured for the dimension governing a content
@@ -440,28 +442,81 @@ func (c Config) levelFor(d dimension) Level {
 		return c.Prompts
 	case dimTools:
 		return c.Tools
+	case dimSkills:
+		return c.Skills
+	case dimAgents:
+		return c.Agents
 	default:
 		return LevelDisabled
 	}
 }
 
-// levelForEvent resolves the level governing one content field of one event. A
-// skill invocation reaches the pipeline as a tool call, and Skills governs it in
-// place of Tools so the two dimensions are independently useful.
-func (c Config) levelForEvent(d dimension, event map[string]any) Level {
-	if d == dimTools && c.Dimensions && IsSkillEvent(event) {
-		return c.Skills
+// governingDimension resolves which dimension actually governs one content
+// field of one event. A skill invocation reaches the pipeline as a tool call,
+// and a sub-agent's prompt and response are the delegation's content rather
+// than the user's own turn — so Skills and Agents stand in for the dimension
+// the field is listed under, and the four stay independently useful. The Agent
+// tool call carries the same content as arguments and result, so Agents also
+// caps it, but only downward: a looser Agents level never widens Tools.
+func (c Config) governingDimension(key string, d dimension, event map[string]any) dimension {
+	if !c.Dimensions {
+		return d
 	}
-	return c.levelFor(d)
+	switch {
+	case d == dimTools && IsSkillEvent(event):
+		return dimSkills
+	case d == dimTools && isAgentToolEvent(event) && levelRank(c.Agents) < levelRank(c.Tools):
+		return dimAgents
+	case d == dimPrompts && subAgentContentKeys[key] && isSubAgentEvent(event):
+		return dimAgents
+	}
+	return d
+}
+
+// levelRank orders the levels by how much they export, which their numeric
+// values do not.
+func levelRank(l Level) int {
+	switch l {
+	case LevelDisabled:
+		return 0
+	case LevelLimited:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// isAgentToolEvent reports whether a tool event is the delegation call itself.
+// Its arguments are the sub-agent's prompt and its result the sub-agent's
+// answer, so the call may never export more of them than Agents allows.
+func isAgentToolEvent(event map[string]any) bool {
+	name, _ := event["tool_name"].(string)
+	return strings.EqualFold(name, "Agent")
+}
+
+// subAgentContentKeys names the prompt-dimension fields whose value is the
+// sub-agent's own message content, so Agents stands in for Prompts on them.
+// gen_ai.conversation.name is deliberately absent: the session title is derived
+// from the user's own first prompt even on a sub-agent event, so Prompts keeps
+// governing it there.
+var subAgentContentKeys = map[string]bool{
+	"prompt":                 true,
+	"last_assistant_message": true,
+}
+
+// levelForEvent resolves the level governing one content field of one event.
+func (c Config) levelForEvent(key string, d dimension, event map[string]any) Level {
+	return c.levelFor(c.governingDimension(key, d, event))
 }
 
 // omitsAtLimited reports whether a dimension drops its content attributes at
 // LevelLimited instead of exporting the redaction placeholder. The execute_tool
 // convention makes gen_ai.tool.call.arguments and gen_ai.tool.call.result
-// Opt-In, so limited omits them outright; a prompt keeps its envelope, because
-// a consumer can still read the roles off it.
+// Opt-In, so limited omits them outright, and a sub-agent's invoke_agent span
+// carries its name alone; a prompt keeps its envelope, because a consumer can
+// still read the roles off it.
 func (c Config) omitsAtLimited(d dimension) bool {
-	return c.Dimensions && d == dimTools
+	return c.Dimensions && (d == dimTools || d == dimSkills || d == dimAgents)
 }
 
 // IsSkillEvent reports whether a tool event is a skill invocation. tool_name is
@@ -476,11 +531,29 @@ func IsSkillEvent(event map[string]any) bool {
 	return name != ""
 }
 
+// isSubAgentEvent reports whether an event belongs to a delegated sub-agent
+// rather than to the user's own turn. A top-level Agent tool call names the
+// agent it launched too, but it is a tool call — only the chat-span fields
+// consult this.
+func isSubAgentEvent(event map[string]any) bool {
+	id, _ := event["agent_id"].(string)
+	return id != ""
+}
+
+// AgentSpanSuppressed reports whether a sub-agent's invoke_agent span is
+// dropped, so the pipeline can return before building it.
+func (c Config) AgentSpanSuppressed() bool {
+	return c.Dimensions && c.Agents == LevelDisabled
+}
+
 // ToolSpanSuppressed reports whether the level governing a tool call drops its
 // execute_tool span entirely, so the pipeline can return before resolving a
 // parent and a model it will not use.
 func (c Config) ToolSpanSuppressed(event map[string]any) bool {
-	return c.Dimensions && c.levelForEvent(dimTools, event) == LevelDisabled
+	if isAgentToolEvent(event) {
+		return c.AgentToolSpanSuppressed()
+	}
+	return c.Dimensions && c.levelForEvent("", dimTools, event) == LevelDisabled
 }
 
 // AgentToolSpanSuppressed reports whether the Agent tool call's own
@@ -488,7 +561,7 @@ func (c Config) ToolSpanSuppressed(event map[string]any) bool {
 // the agent id, which is that span's id, so when it is gone they have to parent
 // to the delegating turn's chat span instead: no exported span may reference a
 // span id that was never exported. The Agent tool is never a skill invocation,
-// so Tools governs it outright.
+// so Tools alone decides whether its span exists; Agents only caps its content.
 func (c Config) AgentToolSpanSuppressed() bool {
 	return c.Dimensions && c.Tools == LevelDisabled
 }
@@ -504,7 +577,7 @@ func (c Config) toolFailureWithheld(event map[string]any) bool {
 	if _, isTool := event["tool_name"]; !isTool {
 		return false
 	}
-	return c.levelForEvent(dimTools, event) != LevelFull
+	return c.levelForEvent("", dimTools, event) != LevelFull
 }
 
 // contentKeys maps every event field that carries input/output content to the
@@ -671,8 +744,9 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			}
 			continue
 		}
-		if dim, isContent := contentKeys[k]; isContent && cfg.levelForEvent(dim, event) != LevelFull {
-			if cfg.levelForEvent(dim, event) == LevelDisabled || cfg.omitsAtLimited(dim) {
+		if dim, isContent := contentKeys[k]; isContent && cfg.levelForEvent(k, dim, event) != LevelFull {
+			governing := cfg.governingDimension(k, dim, event)
+			if cfg.levelFor(governing) == LevelDisabled || cfg.omitsAtLimited(governing) {
 				continue
 			}
 			key := k

@@ -65,14 +65,14 @@
 
 ## 5. Sub-agent level
 
-- [ ] 5.1 Suppress the `invoke_agent` span at `agents: disabled` and write the
+- [x] 5.1 Suppress the `invoke_agent` span at `agents: disabled` and write the
   delegating turn's span id into the per-agent trace-context snapshot in place of
   the suppressed span's, and verify a test asserts a child tool span parents to
   the chat span
-- [ ] 5.2 Verify a test replays a full delegated session at `agents: disabled`
+- [x] 5.2 Verify a test replays a full delegated session at `agents: disabled`
   and asserts no exported span references a parent span id that was never
   exported
-- [ ] 5.3 Gate the sub-agent's prompt and response content on the `agents` level
+- [x] 5.3 Gate the sub-agent's prompt and response content on the `agents` level
   and verify a test asserts `limited` carries the agent name with no content
 
 ## 6. Configuration surface

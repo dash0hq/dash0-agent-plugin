@@ -256,8 +256,14 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 				markedConsumed = true
 			}
 		}
-		if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
-			fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
+		// At agents: disabled the delegation reports nothing of its own. The
+		// snapshot below still carries the delegating turn's span id, which is
+		// what sendToolTrace parents the sub-agent's tool calls onto, so
+		// suppressing the span here drops no work beneath it.
+		if agentID == "" || !cfg.AgentSpanSuppressed() {
+			if err := sendLLMTrace(event, cfg, now, sessionDir, false); err != nil {
+				fmt.Fprintf(os.Stderr, "on-event: trace export (subagent): %v\n", err)
+			}
 		}
 		if markedConsumed {
 			otlp.ClearAgentTraceContext(sessionDir, agentID)
@@ -402,9 +408,11 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	// and is read above. So agent_id here always names the caller, never the
 	// callee, and nesting survives instead of being flattened onto the turn.
 	//
-	// Unless that caller's own Agent tool span was suppressed, in which case
-	// ctx.SpanID — the delegating turn's chat span — stands in for it.
-	if agentID != "" && !cfg.AgentToolSpanSuppressed() {
+	// Unless the delegation reports no span of its own — either its Agent tool
+	// span was suppressed by tools: disabled, or agents: disabled suppressed the
+	// invoke_agent span — in which case ctx.SpanID, the delegating turn's chat
+	// span carried in the per-agent snapshot, stands in for it.
+	if agentID != "" && !cfg.AgentToolSpanSuppressed() && !cfg.AgentSpanSuppressed() {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
 	}
 

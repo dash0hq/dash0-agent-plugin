@@ -109,7 +109,7 @@ fi
 BASE="${OPENCODE_PLUGIN_DATA:-${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/opencode}}"
 BIN_DIR="$BASE/bin"
 REPO="dash0hq/dash0-agent-plugin"
-VERSION="0.1.24"
+VERSION="0.1.28"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)

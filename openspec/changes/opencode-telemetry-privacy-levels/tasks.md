@@ -89,11 +89,11 @@
 
 ## 7. Leak guards
 
-- [ ] 7.1 Add a test asserting every key in `contentKeys` maps to a dimension, so
+- [x] 7.1 Add a test asserting every key in `contentKeys` maps to a dimension, so
   a future content key cannot be added ungoverned
-- [ ] 7.2 Add a test asserting debug output at `prompts: disabled, tools: limited`
+- [x] 7.2 Add a test asserting debug output at `prompts: disabled, tools: limited`
   contains no prompt text, response text, tool arguments or tool results
-- [ ] 7.3 Add an end-to-end leak test that replays a session whose prompts, tool
+- [x] 7.3 Add an end-to-end leak test that replays a session whose prompts, tool
   arguments and tool results all contain a unique sentinel string, at each
   restrictive level, and asserts the sentinel appears nowhere in the captured
   OTLP payloads or debug output

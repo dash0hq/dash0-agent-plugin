@@ -40,6 +40,10 @@ func main() {
 		AuthToken: *token,
 		Dataset:   *dataset,
 		Debug:     *debug,
+		// The demo exists to produce showcase content, so it opts out of the
+		// LevelLimited zero value both dimensions would otherwise take.
+		Prompts: otlp.LevelFull,
+		Tools:   otlp.LevelFull,
 	}
 
 	// Running inside AWS Lambda's custom runtime: serve the Runtime API loop

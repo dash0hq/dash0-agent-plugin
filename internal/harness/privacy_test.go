@@ -77,6 +77,17 @@ func TestPrivacyLevelResolution(t *testing.T) {
 		assert.Equal(t, otlp.LevelFull, cfg.Agents)
 	})
 
+	// Every harness defaults to prompts: limited, so an ungated withheld-character
+	// count would widen the spans the other four runtimes already export.
+	t.Run("only opencode reports the withheld-character counts", func(t *testing.T) {
+		clearPrivacyEnv(t)
+
+		assert.True(t, OpenCode.Config().WithheldCounts)
+		for _, h := range []Harness{Claude, Cursor, Codex, Copilot} {
+			assert.False(t, h.Config().WithheldCounts, h.Name)
+		}
+	})
+
 	t.Run("a typo falls back to limited rather than to omit_io: false", func(t *testing.T) {
 		clearPrivacyEnv(t)
 		t.Setenv("DASH0_OMIT_IO", "false")

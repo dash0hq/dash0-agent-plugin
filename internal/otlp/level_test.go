@@ -47,6 +47,18 @@ func TestLevelZeroValueIsLimited(t *testing.T) {
 	assert.Equal(t, LevelLimited, cfg.Agents)
 }
 
+// A dimension levelFor does not know about — one added to contentKeys before it
+// is wired here — must export nothing rather than inherit another dimension's
+// level.
+func TestLevelForUnknownDimensionFailsClosed(t *testing.T) {
+	cfg := Config{Prompts: LevelFull, Tools: LevelFull}
+	assert.Equal(t, LevelDisabled, cfg.levelFor(dimUnset))
+
+	for key, dim := range contentKeys {
+		assert.NotEqual(t, dimUnset, dim, "content key %q is governed by no dimension", key)
+	}
+}
+
 func TestLevelString(t *testing.T) {
 	assert.Equal(t, "disabled", LevelDisabled.String())
 	assert.Equal(t, "limited", LevelLimited.String())

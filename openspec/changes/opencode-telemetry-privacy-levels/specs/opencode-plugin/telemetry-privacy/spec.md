@@ -163,9 +163,14 @@ The `prompts` dimension SHALL govern the chat span's `gen_ai.input.messages` and
   additionally report the character count of the content that was withheld.
 - `full` — the content is exported, truncated at the shared 16 KB cap.
 
-The chat span's model, provider, token counts, conversation id, conversation
-name, duration and status SHALL be identical at all three levels. The `prompts`
-dimension governs content only.
+The chat span's model, provider, token counts, conversation id, duration and
+status SHALL be identical at all three levels. The `prompts` dimension governs
+content only.
+
+`gen_ai.conversation.name` is prompt content, not turn metadata: the title is
+derived from the user's first prompt. It SHALL therefore follow the `prompts`
+dimension — omitted at `disabled`, the redaction placeholder at `limited`, the
+title itself at `full`.
 
 #### Scenario: Limited preserves structure and reports size
 
@@ -182,6 +187,13 @@ dimension governs content only.
 - **THEN** neither `gen_ai.input.messages` nor `gen_ai.output.messages` is
   present on the chat span
 - **AND** no redaction placeholder and no character count are exported in their place
+
+#### Scenario: The conversation name follows the prompts dimension
+
+- **WHEN** the same turn is exported at `disabled`, `limited` and `full`
+- **THEN** `gen_ai.conversation.name` is absent at `disabled`
+- **AND** it is the redaction placeholder at `limited`
+- **AND** it is the title itself at `full`
 
 #### Scenario: Token usage survives every level
 

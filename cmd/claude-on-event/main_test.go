@@ -654,6 +654,11 @@ func TestOmitIOOmitsContentAttributes(t *testing.T) {
 	assertAttrContains(t, chatSpan.Attributes, "gen_ai.input.messages", `REDACTED`)
 	assertAttrContains(t, chatSpan.Attributes, "gen_ai.output.messages", `"role":"assistant"`)
 	assertAttrContains(t, chatSpan.Attributes, "gen_ai.output.messages", `REDACTED`)
+
+	// The withheld-character counts are OpenCode's; Claude's redacted chat span
+	// carries exactly the attributes it carried before the privacy dimensions.
+	assertAttrAbsent(t, chatSpan.Attributes, "dash0.gen_ai.input.messages.withheld_characters")
+	assertAttrAbsent(t, chatSpan.Attributes, "dash0.gen_ai.output.messages.withheld_characters")
 }
 
 func TestTeamNameOnAllSpans(t *testing.T) {

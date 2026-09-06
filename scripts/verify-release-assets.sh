@@ -36,7 +36,8 @@ BASE="https://github.com/${GITHUB_REPOSITORY:-dash0hq/dash0-agent-plugin}/releas
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64
            windows-amd64 windows-arm64)
 BOOTSTRAPS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
-            codex/codex-on-event.sh copilot/copilot-on-event.sh)
+            codex/codex-on-event.sh copilot/copilot-on-event.sh
+            opencode/opencode-on-event.sh)
 # The Windows bootstraps ask for windows assets only, and always with .exe.
 PS_BOOTSTRAPS=(cursor/cursor-on-event.ps1 codex/codex-on-event.ps1
                copilot/copilot-on-event.ps1)
@@ -175,6 +176,9 @@ for script in "${BOOTSTRAPS[@]}"; do
   esac
   for platform in "${PLATFORMS[@]}"; do
     [ "$WINDOWS" -eq 1 ] || [ "${platform#windows-}" = "$platform" ] || continue
+    # OpenCode publishes no Windows binary — .goreleaser.yaml builds it for
+    # darwin and linux only — so probing one would fail on every release.
+    case "$script:$platform" in */opencode-on-event.sh:windows-*) continue ;; esac
     # shellcheck disable=SC2086  # one candidate per word, deliberately split
     probe "$script" "$platform" $candidates
   done
@@ -193,4 +197,4 @@ done
 [ "$fail" -eq 0 ] || exit 1
 N=${#PLATFORMS[@]}
 [ "$WINDOWS" -eq 1 ] || N=$((N - 2))
-echo "PASS: every bootstrap resolves a binary for all $N platforms in v${VERSION}"
+echo "PASS: every bootstrap resolves a binary for each of the $N platforms it builds for in v${VERSION}"

@@ -25,15 +25,59 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/dotenv"
 	"github.com/dash0hq/dash0-agent-plugin/internal/harness"
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
+	"github.com/dash0hq/dash0-agent-plugin/internal/sessionurl"
 	"github.com/dash0hq/dash0-agent-plugin/internal/source/opencode"
 )
 
 var hn = harness.OpenCode
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "session-url" {
+		printSessionURL()
+		return
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "opencode-on-event: %v\n", err)
 	}
+}
+
+// printSessionURL backs the `session-url` subcommand, which the /open-session
+// command invokes. It exits non-zero on failure, unlike every other path here:
+// this one is a user asking a direct question, not telemetry running behind a
+// session it must never break.
+func printSessionURL() {
+	link, err := sessionURL()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "opencode-on-event session-url: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(link)
+}
+
+// sessionURL derives the Dash0 session link from the session_id on stdin and
+// the configured OTLP URL. It returns an error when telemetry is not configured,
+// the payload carries no session_id, or the OTLP host is not a recognized Dash0
+// host (see sessionurl.SessionURL).
+func sessionURL() (string, error) {
+	event, err := pipeline.ReadEvent(os.Stdin)
+	if err != nil {
+		return "", err
+	}
+	dotenv.Load(".env")
+	otlpURL := hn.PluginOption("OTLP_URL")
+	if otlpURL == "" {
+		return "", fmt.Errorf("OTLP_URL is not configured")
+	}
+	sessionID, _ := event["session_id"].(string)
+	if sessionID == "" {
+		return "", fmt.Errorf("session_id not provided")
+	}
+	link := sessionurl.SessionURL(otlpURL, sessionID, hn.PluginOption("DATASET"))
+	if link == "" {
+		return "", fmt.Errorf("cannot derive app URL from OTLP_URL %q", otlpURL)
+	}
+	return link, nil
 }
 
 func run() error {

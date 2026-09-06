@@ -159,6 +159,28 @@ jobs:
       - name: Bootstrap download contracts
         run: ./test/contracts/bootstrap.sh
 
+  # The only job that runs a real agent CLI end to end. Every other layer feeds
+  # the pipeline events we recorded earlier, so none of them notices the plugin
+  # failing to load or an OpenCode upgrade renaming a bus field. Cheap enough to
+  # gate on because the model is scripted: no credentials, no network, no budget.
+  live-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install OpenCode
+        run: npm install -g opencode-ai
+
+      - name: OpenCode live-session tests
+        run: make test-live
+
   # Runs on Windows as well as Linux. build-test already covers windows-latest,
   # but only with `go test ./...` — no -tags=e2e — so nothing in test/e2e was
   # ever compiled, let alone run, on Windows. That is where the whole class of
@@ -473,7 +495,7 @@ jobs:
     # always(), or a failed dependency skips this and the ruleset sees a missing
     # context rather than a failure.
     if: always()
-    needs: [checks, build-test, marketplace-install, install-config-contract, e2e, consistency-checks]
+    needs: [checks, build-test, marketplace-install, install-config-contract, live-session, e2e, consistency-checks]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -60,6 +60,12 @@ test-opencode-plugin: ## Run the unit tests for the OpenCode TypeScript plugin.
 test-e2e: ## Run the build-tagged end-to-end tests.
 	go test -tags=e2e -v -timeout=300s ./test/e2e/
 
+# Drives the real opencode CLI against a scripted model. Skips when the CLI is
+# absent locally and fails in CI, per test/contracts/lib.sh's skip_or_fail.
+.PHONY: test-live
+test-live: ## Run the live-session tests (needs the opencode CLI).
+	./test/live/opencode/run.sh
+
 .PHONY: go-mod-tidy
 go-mod-tidy: ## Run go mod tidy and fail if go.mod/go.sum change.
 	go mod tidy

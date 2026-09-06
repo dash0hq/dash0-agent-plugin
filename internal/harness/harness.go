@@ -72,6 +72,12 @@ type Harness struct {
 // Config validates the endpoint before it returns, so a malformed URL is logged
 // to stderr and cleared here, so export is disabled.
 func (h Harness) Config() otlp.Config {
+	omitIO := h.PluginOptionBoolDefault("OMIT_IO", true)
+	ioLevel := otlp.LevelFull
+	if omitIO {
+		ioLevel = otlp.LevelLimited
+	}
+
 	cfg := otlp.Config{
 		OTLPUrl:              h.PluginOption("OTLP_URL"),
 		AuthToken:            h.authToken(),
@@ -82,12 +88,37 @@ func (h Harness) Config() otlp.Config {
 		TeamName:             h.PluginOption("TEAM_NAME"),
 		OmitUserInfo:         h.PluginOptionBoolDefault("OMIT_USER_INFO", false),
 		OmitIdentityFallback: h.PluginOptionBoolDefault("OMIT_IDENTITY_FALLBACK", false),
-		OmitIO:               h.PluginOptionBoolDefault("OMIT_IO", true),
+		OmitIO:               omitIO,
 		Debug:                h.PluginOptionBool("DEBUG"),
 		DebugFile:            h.PluginOption("DEBUG_FILE"),
+		Prompts:              h.privacyLevel("PROMPTS", ioLevel),
+		Tools:                h.privacyLevel("TOOLS", ioLevel),
+		Skills:               h.privacyLevel("SKILLS", otlp.LevelLimited),
+		Agents:               h.privacyLevel("AGENTS", otlp.LevelLimited),
 	}
 	cfg.ValidateURL()
 	return cfg
+}
+
+// privacyLevel resolves one privacy dimension. Precedence, highest first: the
+// explicitly configured level, then fallback — which the caller derives from
+// omit_io for the two dimensions omit_io ever spoke for — then, for an
+// unrecognized value, otlp.LevelLimited.
+//
+// An unrecognized value is reported on stderr rather than accepted silently,
+// because the difference between the level the operator meant and the level they
+// get is the difference between exporting content and not.
+func (h Harness) privacyLevel(key string, fallback otlp.Level) otlp.Level {
+	raw := strings.TrimSpace(h.PluginOption(key))
+	if raw == "" {
+		return fallback
+	}
+	level, ok := otlp.ParseLevel(raw)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "on-event: %q is not a valid privacy level for %s: using %s\n",
+			raw, strings.ToLower(key), level)
+	}
+	return level
 }
 
 // DataDir returns the root for this agent's per-session scratch state.

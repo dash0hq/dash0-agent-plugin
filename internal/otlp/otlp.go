@@ -114,6 +114,14 @@ type Config struct {
 	// OS-derived user.name is dropped instead of reported. For orgs that would
 	// rather have no attribution than an approximate one.
 	OmitIdentityFallback bool
+
+	// The four privacy dimensions. Each governs one class of content
+	// independently; harness.Config resolves them, falling back to OmitIO for
+	// Prompts and Tools. Their zero value is LevelLimited.
+	Prompts Level
+	Tools   Level
+	Skills  Level
+	Agents  Level
 }
 
 // ValidateURL reports whether OTLPUrl is usable, and clears it when it is not.

@@ -1,15 +1,15 @@
 ## 1. The level type and its resolution
 
-- [ ] 1.1 Add `otlp.Level` (`LevelDisabled`, `LevelLimited`, `LevelFull`) with a
+- [x] 1.1 Add `otlp.Level` (`LevelDisabled`, `LevelLimited`, `LevelFull`) with a
   parser whose zero value and unparseable input both yield `LevelLimited`, and
   verify a table test covers each valid spelling, the empty string, and a typo
-- [ ] 1.2 Add `Prompts`, `Tools`, `Skills`, `Agents` to `otlp.Config` and verify
+- [x] 1.2 Add `Prompts`, `Tools`, `Skills`, `Agents` to `otlp.Config` and verify
   `go build ./...` passes with every entrypoint still compiling
-- [ ] 1.3 Implement the resolution helper in `internal/harness` encoding the full
+- [x] 1.3 Implement the resolution helper in `internal/harness` encoding the full
   precedence chain (explicit dimension → `omit_io` mapping → default), and verify
   a test covers all three `omit_io` scenarios from the spec: untouched config,
   explicit dimension overriding `omit_io`, and `omit_io: false` with no dimension
-- [ ] 1.4 Wire the helper into `harness.Config()` and verify the existing
+- [x] 1.4 Wire the helper into `harness.Config()` and verify the existing
   `internal/harness` suite still passes unchanged
 
 ## 2. Prompt levels

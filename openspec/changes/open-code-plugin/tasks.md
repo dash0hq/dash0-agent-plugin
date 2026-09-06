@@ -98,6 +98,6 @@ proves Dash0 actually received what we think it did.
 
 ## 11. Final verification
 
-- [ ] 11.1 Run `make ci` and confirm lint and the full test suite pass
-- [ ] 11.2 Run `make test-e2e`, `make test-live`, and `./test/contracts/run.sh` and confirm all pass
-- [ ] 11.3 Run one real interactive `opencode` session against Dash0 with a real model and confirm the trace looks correct in the UI — the one check the scripted harness cannot make, since it never exercises a real model's tool-calling behavior
+- [x] 11.1 Run `make ci` and confirm lint and the full test suite pass
+- [x] 11.2 Run `make test-e2e`, `make test-live`, and `./test/contracts/run.sh` and confirm all pass — test-live and every contract pass; in test-e2e all three OpenCode tests pass and the five failures are the pre-existing live canaries for other runtimes, which need the Codex CLI, `COPILOT_GITHUB_TOKEN` and Claude auth
+- [x] 11.3 Run one real `opencode` session against Dash0 with a real model (local LM Studio, prism-ml/bonsai-27b) and confirm the trace looks correct — session ses_f891961fcffeor07KZP3bdsPK4, trace eb050111241cd7d93cd027979fd4d2f0, dataset default, 2026-09-06T13:26Z. Headless `opencode run` rather than the TUI; what matters is that a real model drove the tool calls, and `git status --porcelain` reported as `git status` — the one check the scripted harness cannot make, since it never exercises a real model's tool-calling behavior

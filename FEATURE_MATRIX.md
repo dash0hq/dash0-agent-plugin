@@ -120,7 +120,7 @@ demo generator uses them).
 
 | | Claude Code | Cursor | Codex | Copilot CLI | OpenCode |
 |---|---|---|---|---|---|
-| Marketplace | `/plugin install dash0@…` | No (local-plugin dir scan) | `codex plugin add dash0-agent-plugin@dash0` | `copilot plugin install dash0-agent-plugin@dash0` (after `marketplace add`) | No — npm instead: `@dash0/opencode-plugin` in `opencode.json`'s `plugin` array |
+| Marketplace | `/plugin install dash0@…` | No (local-plugin dir scan) | `codex plugin add dash0-agent-plugin@dash0` | `copilot plugin install dash0-agent-plugin@dash0` (after `marketplace add`) | No — npm instead: `opencode plugin @dash0/opencode-plugin --global` |
 | `curl \| bash` installer | No | `install-cursor.sh`, `install-cursor.ps1` on Windows | `install-codex.sh`, `install-codex.ps1` on Windows | No (marketplace only) | `install-opencode.sh` (no Windows script) |
 | Uninstaller | via `/plugin` | `uninstall-cursor.sh`, `uninstall-cursor.ps1` on Windows | `uninstall-codex.sh`, `uninstall-codex.ps1` on Windows | via `copilot plugin` | `uninstall-opencode.sh` |
 | Local dev | `claude --plugin-dir …` ([guide](claude/README.md)) | symlink into `~/.cursor/plugins/local/` ([guide](cursor/README.md)) | `emit-codex-hooks` ([guide](codex/README.md#build--run-locally)) | `copilot-local-dev` skill ([guide](copilot/README.md#build--run-locally)) | copy the built bundle into `~/.config/opencode/plugin/` ([guide](opencode/README.md#build--run-locally)) |

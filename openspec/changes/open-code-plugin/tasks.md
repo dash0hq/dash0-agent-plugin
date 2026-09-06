@@ -84,9 +84,9 @@ proves Dash0 actually received what we think it did.
 
 ## 9. Commands and skill
 
-- [ ] 9.1 Port `dash0-configure` to the OpenCode command format confirmed in 1.6, writing `otlp_url` and `auth_token` into the correct-scope `.local.md`; verify by running it in a scratch project and confirming a subsequent session exports
-- [ ] 9.2 Port `open-session` to open the Dash0 session page for the current OpenCode session; verify the URL it produces matches the one in the startup toast and resolves to the trace found in 8.3
-- [ ] 9.3 Rewrite `audit-usage` against OpenCode's message storage as confirmed in 1.6; verify its token totals for a recorded session match the totals on that session's chat spans in Dash0
+- [x] 9.1 Port `dash0-configure` to `opencode/skills/dash0-configure/SKILL.md` (format confirmed with `opencode debug skill`, which discovers it), writing `otlp_url` and `auth_token` into the correct-scope `.local.md`; verify by running it in a scratch project and confirming a subsequent session exports
+- [x] 9.2 Port `open-session` to open the Dash0 session page for the current OpenCode session; verify the URL it produces matches the one in the startup toast and resolves to the trace found in 8.3
+- [x] 9.3 Rewrite `audit-usage` against `opencode db` and `opencode export` rather than a bespoke reader of the SQLite file; verify its token totals for a recorded session match the totals on that session's chat spans in Dash0
 
 ## 10. Documentation
 

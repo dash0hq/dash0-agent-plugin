@@ -185,6 +185,8 @@ if [ ! -x "$BINARY" ]; then
   chmod +x "$BINARY" || fail_open "could not mark $BINARY executable"
 fi
 
-# Forward stdin to the binary. The binary itself exits 0 on telemetry errors
-# (see cmd/opencode-on-event/main.go) so we don't need to wrap this in a trap.
-exec "$BINARY"
+# Forward stdin and any arguments to the binary. The plugin passes none; the
+# /open-session command passes `session-url`. The binary itself exits 0 on
+# telemetry errors (see cmd/opencode-on-event/main.go) so we don't need to wrap
+# this in a trap.
+exec "$BINARY" "$@"

@@ -106,6 +106,10 @@ jobs:
       - name: The build is complete
         run: |
           set -euo pipefail
+          # checksums.txt lists the OpenCode bundle by basename, but GoReleaser
+          # checksums it where the before hook wrote it and never copies it into
+          # dist. Without this the verification below cannot find it.
+          cp opencode/dist/dash0-opencode-plugin.js dist/
           ( cd dist && sha256sum -c checksums.txt )
           ./scripts/expected-artifacts.sh | sort >expected.txt
           find dist -maxdepth 1 -type f -name '*-on-event-*' -exec basename {} \; \
@@ -232,6 +236,7 @@ jobs:
           # Still a draft, so nothing here can reach an install. Running the
           # binary catches an artifact that is complete and correctly checksummed
           # but not actually executable on its platform.
+          cp opencode/dist/dash0-opencode-plugin.js dist/
           ( cd dist && sha256sum -c checksums.txt )
           ./scripts/expected-artifacts.sh | sort >expected.txt
           find dist -maxdepth 1 -type f -name '*-on-event-*' -exec basename {} \; \
@@ -444,3 +449,51 @@ jobs:
             || { echo "::error::expected at least 3 requests, got $COUNT"; exit 1; }
           AUTH=$(echo "$RESULT" | jq '[.requests[] | select(.auth == "Bearer e2e-release-test-token")] | length')
           [ "$AUTH" -ge 1 ] || { echo "::error::no request carried the auth header"; exit 1; }
+
+  npm:
+    name: Publish @dash0/opencode-plugin
+    runs-on: ubuntu-latest
+    # The npm package ships the wrapper, which asks GitHub Releases for a binary
+    # of the same version. Publishing only after the release job succeeded keeps
+    # npm from ever pointing at a release that does not exist.
+    needs: [plan, release]
+    permissions:
+      contents: read
+      # Required for npm provenance: the publish is signed with a Sigstore
+      # certificate minted from this job's OIDC identity.
+      id-token: write
+    defaults:
+      run:
+        working-directory: opencode
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: '${{ needs.plan.outputs.tag }}' }
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the package version matches the release
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "package.json: $PKG_VERSION ; release: $VERSION"
+          if [ "$PKG_VERSION" != "$VERSION" ]; then
+            echo "::error::@dash0/opencode-plugin version ($PKG_VERSION) does not match the release version ($VERSION) — the bump must pin opencode/package.json too"
+            exit 1
+          fi
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the bundle
+        run: ./build.sh
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

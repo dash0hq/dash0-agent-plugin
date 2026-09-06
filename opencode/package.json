@@ -1,6 +1,6 @@
 {
   "name": "@dash0/opencode-plugin",
-  "version": "0.1.24",
+  "version": "0.1.28",
   "description": "Sends OpenTelemetry traces for OpenCode sessions to Dash0.",
   "license": "Apache-2.0",
   "type": "module",

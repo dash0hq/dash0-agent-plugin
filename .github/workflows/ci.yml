@@ -181,6 +181,50 @@ jobs:
       - name: OpenCode live-session tests
         run: make test-live
 
+  # Packaging the npm plugin is only exercised at release time, where a failure
+  # lands after the tag is already public and the GitHub release already exists.
+  # The dry run reproduces everything the release job does except the upload.
+  npm-package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: opencode
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the bundle
+        run: ./build.sh
+
+      # --provenance is omitted: it is rejected without the id-token permission
+      # the release job grants, and signing is not what this job is guarding.
+      - name: Publish (dry run)
+        run: npm publish --access public --dry-run
+
+      - name: Package contains the bundle and the wrapper
+        run: |
+          # The plugin resolves the wrapper relative to its own file, so a
+          # package missing either half installs cleanly and then does nothing.
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e "
+            const files = require('/tmp/pack.json')[0].files.map(f => f.path)
+            console.log(files.join('\n'))
+            const missing = ['dist/dash0-opencode-plugin.js', 'opencode-on-event.sh'].filter(f => !files.includes(f))
+            if (missing.length) {
+              console.log('::error::@dash0/opencode-plugin would ship without ' + missing.join(', '))
+              process.exit(1)
+            }
+          "
+
   # Runs on Windows as well as Linux. build-test already covers windows-latest,
   # but only with `go test ./...` — no -tags=e2e — so nothing in test/e2e was
   # ever compiled, let alone run, on Windows. That is where the whole class of
@@ -279,6 +323,23 @@ jobs:
         # release workflow cannot be dispatched from a PR, so these contracts are
         # the only pre-merge coverage its branching gets.
         run: ./test/contracts/release.sh
+
+      - name: Version consistency (OpenCode package.json == opencode-on-event.sh)
+        run: |
+          # OpenCode has no plugin.json; the npm package version is what a user
+          # pins, and it ships the wrapper, so the two must agree or an
+          # @dash0/opencode-plugin@X install asks for a binary from some other
+          # release.
+          PKG_VERSION=$(jq -r '.version' opencode/package.json)
+          LOCK_VERSION=$(jq -r '.version' opencode/package-lock.json)
+          SCRIPT_VERSION=$(grep '^VERSION=' opencode/opencode-on-event.sh | sed 's/VERSION="//' | sed 's/"//')
+          echo "opencode/package.json: $PKG_VERSION"
+          echo "opencode/package-lock.json: $LOCK_VERSION"
+          echo "opencode/opencode-on-event.sh: $SCRIPT_VERSION"
+          if [ "$PKG_VERSION" != "$SCRIPT_VERSION" ] || [ "$LOCK_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Version mismatch: package.json=$PKG_VERSION, package-lock.json=$LOCK_VERSION, opencode-on-event.sh=$SCRIPT_VERSION"
+            exit 1
+          fi
 
       - name: Codex marketplace consistency (marketplace.json ↔ plugin manifest)
         run: |
@@ -495,7 +556,7 @@ jobs:
     # always(), or a failed dependency skips this and the ruleset sees a missing
     # context rather than a failure.
     if: always()
-    needs: [checks, build-test, marketplace-install, install-config-contract, live-session, e2e, consistency-checks]
+    needs: [checks, build-test, marketplace-install, install-config-contract, live-session, npm-package, e2e, consistency-checks]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

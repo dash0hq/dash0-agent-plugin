@@ -41,6 +41,15 @@ BOOTSTRAPS=(
   cursor/cursor-on-event.sh
   codex/codex-on-event.sh
   copilot/copilot-on-event.sh
+  opencode/opencode-on-event.sh
+)
+# OpenCode ships as an npm package rather than through a marketplace manifest,
+# and the package carries the wrapper — so a user on @dash0/opencode-plugin@X
+# gets the wrapper that asks GitHub Releases for binary X. The lock file repeats
+# the version in its header, hence two pins for one package.
+NPM_MANIFESTS=(
+  opencode/package.json
+  opencode/package-lock.json
 )
 # The Windows bootstraps, which pin the same version in PowerShell syntax. There
 # is no Claude one: its hook runs the POSIX script.
@@ -76,6 +85,9 @@ pins() {
   done
   for f in "${PS_BOOTSTRAPS[@]}"; do
     printf '%s\t%s\n' "$f" "$(sed -n "s/^\$Version = '\(.*\)'/\1/p" "$f")"
+  done
+  for f in "${NPM_MANIFESTS[@]}"; do
+    printf '%s\t%s\n' "$f" "$(jq -r '.version' "$f")"
   done
 }
 
@@ -127,6 +139,13 @@ set_version() {
     sed -i.bak "s/^\$Version = '[^']*'/\$Version = '${version}'/" "$f"
     rm -f "$f.bak"
   done
+  # The lock file names every dependency's version too, so unlike the plugin
+  # manifests this cannot be a blanket rewrite: only the package's own two
+  # entries, which npm writes in the first lines of the file.
+  sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${version}\"/" opencode/package.json
+  rm -f opencode/package.json.bak
+  sed -i.bak "1,10s/\"version\": \"[^\"]*\"/\"version\": \"${version}\"/" opencode/package-lock.json
+  rm -f opencode/package-lock.json.bak
   check
   # check only proves the pins AGREE. This proves they agree on what was asked
   # for, so a sed that stops matching fails here rather than shipping.

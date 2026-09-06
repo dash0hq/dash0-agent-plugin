@@ -35,7 +35,7 @@ func promptTurnSpan(level Level) Span {
 	end := time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC)
 	return NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid",
 		start, end, promptTurnEvent(), false,
-		Config{Prompts: level, Provider: "anthropic", WithheldCounts: true})
+		Config{Prompts: level, Provider: "anthropic", Dimensions: true})
 }
 
 // TestPromptsDisabledOmitsMessageAttributes covers the spec scenario "Disabled
@@ -85,7 +85,7 @@ func TestWithheldCharacterCountIsRunesNotBytes(t *testing.T) {
 	event["prompt"] = "grüße 世界"
 
 	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "",
-		time.Now(), time.Now(), event, false, Config{Prompts: LevelLimited, WithheldCounts: true})
+		time.Now(), time.Now(), event, false, Config{Prompts: LevelLimited, Dimensions: true})
 
 	assertIntAttr(t, span.Attributes, "dash0.gen_ai.input.messages.withheld_characters", 8)
 }

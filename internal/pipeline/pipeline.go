@@ -214,6 +214,13 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 
 	switch hookEvent {
 	case "PostToolUse", "PostToolUseFailure":
+		// The level that governs this call — Skills for a skill invocation,
+		// Tools otherwise — can drop the span outright. Deciding it here rather
+		// than in the exporter skips resolving a parent and waiting on the
+		// transcript for a model no span will carry.
+		if cfg.ToolSpanSuppressed(event) {
+			break
+		}
 		if err := sendToolTrace(event, cfg, now, sessionDir, hookEvent == "PostToolUseFailure"); err != nil {
 			fmt.Fprintf(os.Stderr, "on-event: trace export: %v\n", err)
 		}
@@ -394,7 +401,10 @@ func sendToolTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir 
 	// agent_id at all: the id of the agent it launches arrives in the response,
 	// and is read above. So agent_id here always names the caller, never the
 	// callee, and nesting survives instead of being flattened onto the turn.
-	if agentID != "" {
+	//
+	// Unless that caller's own Agent tool span was suppressed, in which case
+	// ctx.SpanID — the delegating turn's chat span — stands in for it.
+	if agentID != "" && !cfg.AgentToolSpanSuppressed() {
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
 	}
 
@@ -569,7 +579,13 @@ func sendLLMTrace(event map[string]any, cfg otlp.Config, ts time.Time, dataDir s
 
 	parentSpanID := ""
 	if agentID != "" {
+		// The Agent tool call's span is this span's parent; when Tools: disabled
+		// dropped it, the delegating turn's chat span takes its place so the
+		// invoke_agent span names a parent that was actually exported.
 		parentSpanID = otlp.SpanIDFromAgentID(agentID)
+		if cfg.AgentToolSpanSuppressed() {
+			parentSpanID = ctx.SpanID
+		}
 		newSpanID, err := otlp.GenerateSpanID()
 		if err != nil {
 			return fmt.Errorf("generating sub-agent span ID: %w", err)

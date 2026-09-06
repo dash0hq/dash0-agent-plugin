@@ -198,7 +198,13 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
 	if failed {
 		errMsg, _ := event["error"].(string)
+		if cfg.toolFailureWithheld(event) {
+			errMsg = ""
+		}
 		status = SpanStatus{Code: StatusCodeError, Message: errMsg}
+		if cfg.Dimensions {
+			attrs = append(attrs, Attribute{Key: "error.type", Value: StringVal(errorType(event))})
+		}
 	}
 
 	return Span{
@@ -216,6 +222,17 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 		TraceState:        "",
 		Status:            status,
 	}
+}
+
+// errorType reports a failed tool call's error.type. No source names a type
+// today, so the attribute carries the convention's fallback for a failure whose
+// class is not known — which is still what the convention asks for on a span
+// that ended in error, and is low-cardinality by construction.
+func errorType(event map[string]any) string {
+	if t, _ := event["error_type"].(string); t != "" {
+		return t
+	}
+	return "_OTHER"
 }
 
 // NewLLMSpan creates a child span for an LLM invocation, spanning from

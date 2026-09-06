@@ -82,9 +82,9 @@ func TestPrivacyLevelResolution(t *testing.T) {
 	t.Run("only opencode reports the withheld-character counts", func(t *testing.T) {
 		clearPrivacyEnv(t)
 
-		assert.True(t, OpenCode.Config().WithheldCounts)
+		assert.True(t, OpenCode.Config().Dimensions)
 		for _, h := range []Harness{Claude, Cursor, Codex, Copilot} {
-			assert.False(t, h.Config().WithheldCounts, h.Name)
+			assert.False(t, h.Config().Dimensions, h.Name)
 		}
 	})
 

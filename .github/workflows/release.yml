@@ -106,6 +106,10 @@ jobs:
       - name: The build is complete
         run: |
           set -euo pipefail
+          # checksums.txt lists the OpenCode bundle by basename, but GoReleaser
+          # checksums it where the before hook wrote it and never copies it into
+          # dist. Without this the verification below cannot find it.
+          cp opencode/dist/dash0-opencode-plugin.js dist/
           ( cd dist && sha256sum -c checksums.txt )
           ./scripts/expected-artifacts.sh | sort >expected.txt
           find dist -maxdepth 1 -type f -name '*-on-event-*' -exec basename {} \; \
@@ -232,6 +236,7 @@ jobs:
           # Still a draft, so nothing here can reach an install. Running the
           # binary catches an artifact that is complete and correctly checksummed
           # but not actually executable on its platform.
+          cp opencode/dist/dash0-opencode-plugin.js dist/
           ( cd dist && sha256sum -c checksums.txt )
           ./scripts/expected-artifacts.sh | sort >expected.txt
           find dist -maxdepth 1 -type f -name '*-on-event-*' -exec basename {} \; \

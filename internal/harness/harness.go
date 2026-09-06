@@ -78,6 +78,8 @@ func (h Harness) Config() otlp.Config {
 		ioLevel = otlp.LevelLimited
 	}
 
+	dimensions := h.Name == OpenCode.Name
+
 	cfg := otlp.Config{
 		OTLPUrl:              h.PluginOption("OTLP_URL"),
 		AuthToken:            h.authToken(),
@@ -91,11 +93,11 @@ func (h Harness) Config() otlp.Config {
 		OmitIO:               omitIO,
 		Debug:                h.PluginOptionBool("DEBUG"),
 		DebugFile:            h.PluginOption("DEBUG_FILE"),
-		Prompts:              h.privacyLevel("PROMPTS", ioLevel),
-		Tools:                h.privacyLevel("TOOLS", ioLevel),
-		Skills:               h.privacyLevel("SKILLS", otlp.LevelLimited),
-		Agents:               h.privacyLevel("AGENTS", otlp.LevelLimited),
-		Dimensions:           h.Name == OpenCode.Name,
+		Prompts:              h.privacyLevel(dimensions, "PROMPTS", ioLevel),
+		Tools:                h.privacyLevel(dimensions, "TOOLS", ioLevel),
+		Skills:               h.privacyLevel(dimensions, "SKILLS", otlp.LevelLimited),
+		Agents:               h.privacyLevel(dimensions, "AGENTS", otlp.LevelLimited),
+		Dimensions:           dimensions,
 	}
 	cfg.ValidateURL()
 	return cfg
@@ -106,10 +108,18 @@ func (h Harness) Config() otlp.Config {
 // omit_io for the two dimensions omit_io ever spoke for — then, for an
 // unrecognized value, otlp.LevelLimited.
 //
+// A runtime that does not expose the dimensions never reads the key at all. The
+// lookup reaches DASH0_TOOLS and friends, which are shared across every runtime
+// in one shell, so a value set for OpenCode would otherwise widen what Claude,
+// Cursor, Codex and Copilot export from the same environment.
+//
 // An unrecognized value is reported on stderr rather than accepted silently,
 // because the difference between the level the operator meant and the level they
 // get is the difference between exporting content and not.
-func (h Harness) privacyLevel(key string, fallback otlp.Level) otlp.Level {
+func (h Harness) privacyLevel(exposed bool, key string, fallback otlp.Level) otlp.Level {
+	if !exposed {
+		return fallback
+	}
 	raw := strings.TrimSpace(h.PluginOption(key))
 	if raw == "" {
 		return fallback

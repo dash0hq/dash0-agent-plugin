@@ -243,13 +243,22 @@ binary cannot read — the four dimensions live only in config and in memory.
 
 ## Open Questions
 
-- Whether the four keys are read by `opencode-on-event.sh` (four more
-  `grep | sed` pairs, consistent with the other keys there) or by
-  `internal/config` through `OpenCode.ConfigDir` (which main introduced after
-  this branch was cut). Both satisfy the spec; the Go path is less duplication
-  and is the direction the other runtimes are moving. Deferrable because it
-  changes neither the resolved levels nor any exported span — settle it when
-  writing the config task.
+*(Settled)* The four keys are read by `opencode-on-event.sh`, as four more
+`grep | sed` pairs alongside the keys already there, exporting `DASH0_PROMPTS`,
+`DASH0_TOOLS`, `DASH0_SKILLS` and `DASH0_AGENTS`. The Go path was the leaning
+above, but it cannot see OpenCode's user-scoped file: `Harness.configFile` looks
+in `$HOME/<ConfigDir>`, which for OpenCode is `~/.opencode`, while OpenCode's own
+config directory — and the one `install-opencode.sh` writes the file into — is
+`~/.config/opencode`. Reading the dimensions in Go alone would therefore ignore
+them in exactly the file the installer produces. Realigning that home path is a
+change to where `auth_token` and `dataset` resolve from for every OpenCode
+install, which is a migration rather than a config task.
+
+`internal/config` still reads the same four keys for a *project*-scoped
+`.opencode/dash0-agent-plugin.local.md`, because `PluginOption` consults the
+configuration file for every key and needs no per-key wiring. Both paths resolve
+the same value from the same file, so the two never disagree; the wrapper is what
+extends the reach to the user-scoped location.
 *(Settled)* The withheld-content character count at `prompts: limited` is
 reported as two span attributes,
 `dash0.gen_ai.input.messages.withheld_characters` and

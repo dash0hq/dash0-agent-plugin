@@ -254,3 +254,61 @@ holds `POST /v1/chat/completions` and nothing else.
 
 This unblocks the live-test layer; the fallback in the change's design Risks
 section is not needed.
+
+## Verifying against a live Dash0
+
+Golden and consistency tests compare our output against our own expectations, so
+they cannot catch a mapping that is wrong in both places. This is the step that
+proves Dash0 received what we think we sent.
+
+```sh
+make test-live                            # against a mock collector, no credentials
+test/live/opencode/dash0-session.sh       # the same session, to a real ingress
+test/live/opencode/dash0-session.sh "$(printf 'omit_io: false\nomit_user_info: true')"
+```
+
+`dash0-session.sh` reads `otlp_url`, `auth_token` and `dataset` from your own
+`~/.config/opencode/dash0-agent-plugin.local.md` (override with
+`DASH0_LIVE_{OTLP_URL,AUTH_TOKEN,DATASET}`) and prints the session id, trace id
+and time range to query back. It writes the payloads locally as well as sending
+them, so what the plugin produced stays checkable independently of what the
+backend stored.
+
+Then, in the same dataset:
+
+| Step | Query |
+|---|---|
+| Every span arrived | `getSpans` with `gen_ai.harness.name is opencode` and `gen_ai.conversation.id is <session id>` |
+| The hierarchy is right | `getTraceDetails` on the trace id — `chat` at the root with 5 direct children and 6 descendants, one of them ERROR; `execute_tool Agent` holding the only child, `invoke_agent` |
+| Usage and enrichment | `SELECT name, span_attributes['gen_ai.usage.reasoning.output_tokens'], span_attributes['dash0.gen_ai.tool.bash.command_family'], span_attributes['dash0.gen_ai.vcs.repository.name'] FROM spans WHERE span_attributes['gen_ai.conversation.id'] = '<session id>'` |
+| Identity under `omit_user_info` | the same query for `user.name` (16 hex chars) and `user.email` (absent) |
+
+The scripted turn makes exactly six model calls and the sub-agent one, and the
+mock reports a flat 5 reasoning and 7 cached tokens per call — so the parent
+`chat` span must read 30 and 42, and `invoke_agent` 5 and 7. Those numbers are
+the cheapest way to tell a dropped step from a slow one.
+
+### What a Claude Code session reports that this one does not
+
+Taken from `getAttributeKeys` scoped to spans, for both harnesses in one
+dataset. Nothing here is unaccounted for:
+
+| Absent on OpenCode | Why |
+|---|---|
+| `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, `exception.message` | By design. The `execute_tool` convention makes them Opt-In, so `tools: limited` omits them rather than placeholding — see [Telemetry privacy](#telemetry-privacy). They return at `tools: full`. |
+| `dash0.gen_ai.code.lines_added` / `lines_removed` | Claude Code only — derived from the `structuredPatch` its hooks carry. |
+| `dash0.gen_ai.usage.cost`, `billing_mode`, `plan_type`, `cache_creation.ephemeral_{5m,1h}` | Anthropic-specific billing and cache telemetry with no OpenCode equivalent. |
+| `gen_ai.request.reasoning.level`, `dash0.gen_ai.request.model.original` | Claude Code puts an effort level and a pre-alias model on every payload; OpenCode reports neither. |
+| `dash0.gen_ai.tool.skill.name` / `.source` | OpenCode ships skill plugins, but the scripted turn never invokes one. The `skills` dimension routes `IsSkillEvent` calls and is covered by unit tests and the contract replay — **not** yet by a real OpenCode skill call. |
+| `gen_ai.provider.name` | `ProviderForModel` maps vendor model prefixes (`claude-`, `gpt-`, …). OpenCode is bring-your-own-key and its model ids are `<providerId>/<modelId>`, so a local or self-hosted model resolves to nothing. The provider id is right there in the string and could be read from it; today it is not. |
+
+### One thing the backend does, not the plugin
+
+At `omit_io: false` the plugin exports the real prompt, response and tool
+arguments — the locally written payload shows them in full. They still read
+`<REDACTED>` in Dash0: the ingest redacts `gen_ai.input.messages`,
+`gen_ai.output.messages` and `gen_ai.tool.call.arguments`, and in the dev org no
+span from any harness carries unredacted content. `gen_ai.conversation.name`
+comes through verbatim, so the rule is per-key rather than blanket. Check this
+before concluding a privacy level is not being honoured — read the payload file
+`dash0-session.sh` writes, which is what the plugin actually sent.

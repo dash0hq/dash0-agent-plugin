@@ -19,26 +19,20 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../contracts" && pwd)/lib.sh"
 # developer's cache avoids a models.dev fetch per session, which makes
 # OpenCode's first start hang well past any sane timeout on a cold cache.
 CACHE_DIR="${OPENCODE_LIVE_CACHE:-$HOME/.cache}"
-# The scripted model and MCP servers live with the capture harness that first
-# needed them. One scripted turn, one place to change it: a second copy here
-# would drift from the fixture the golden tests replay.
 CAPTURE="$REPO/test/capture/opencode"
 LLM_PORT="${MOCK_LLM_PORT:-8817}"
 OTLP="http://localhost:4319"
+
+# shellcheck source=test/live/opencode/session.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session.sh"
 
 command -v opencode >/dev/null 2>&1 || skip_or_fail "the opencode CLI is not installed"
 for t in node jq curl; do
   command -v "$t" >/dev/null 2>&1 || skip_or_fail "$t is not installed"
 done
 
-WRAPPER="$REPO/opencode/opencode-on-event.sh"
-BUNDLE="$REPO/opencode/dist/dash0-opencode-plugin.js"
-VERSION=$(grep '^VERSION=' "$WRAPPER" | sed 's/VERSION="//;s/"//')
-
 echo "== building the binary and the plugin bundle =="
-BIN_SRC="$(mktemp -d)/opencode-on-event"
-make -C "$REPO" build-binary PKG=./cmd/opencode-on-event OUT="$BIN_SRC" >/dev/null
-( cd "$REPO/opencode" && ./build.sh >/dev/null )
+build_session_inputs
 
 start_mock_otlp
 
@@ -67,71 +61,8 @@ echo "$scripted" | jq -e '.usage.prompt_tokens_details.cached_tokens == 7' >/dev
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: the scripted model server answers deterministically"
 
-# session TOKEN [CONFIG_LINES] — one full `opencode run` in a sandbox of its own,
-# with the plugin installed from this checkout and the given extra config keys.
-# Echoes the sandbox directory; the caller reads opencode.log from it.
-#
-# Sets SESSION_EXIT to opencode's exit status rather than failing, because the
-# fail-open contracts below assert on it.
-SESSION_EXIT=0
-session() {
-  local token="$1" extra="${2:-}" sandbox home project
-  sandbox="$(mktemp -d)"; home="$sandbox/home"; project="$sandbox/project"
-  mkdir -p "$home/.config/opencode/plugin" "$home/.local/share" "$project"
-  printf 'live fixture project\n' > "$project/README.md"
-
-  cp "$BUNDLE" "$home/.config/opencode/plugin/dash0-opencode-plugin.js"
-  cp "$WRAPPER" "$home/.config/opencode/plugin/opencode-on-event.sh"
-  chmod +x "$home/.config/opencode/plugin/opencode-on-event.sh"
-
-  {
-    echo "---"
-    echo "otlp_url: \"$OTLP\""
-    echo "auth_token: \"$token\""
-    echo "dataset: \"opencode-live\""
-    [ -n "$extra" ] && printf '%s\n' "$extra"
-    echo "---"
-  } > "$home/.config/opencode/dash0-agent-plugin.local.md"
-
-  jq --arg base "http://127.0.0.1:$LLM_PORT/v1" \
-     --arg mcp "$CAPTURE/mock-mcp.mjs" \
-     --arg plugin "$home/.config/opencode/plugin/dash0-opencode-plugin.js" \
-     '.provider.mock.options.baseURL = $base
-      | .mcp.capture.command = ["node", $mcp]
-      | .plugin = [$plugin]' \
-     "$CAPTURE/opencode.json" > "$home/.config/opencode/opencode.json"
-
-  # The wrapper resolves its binary by version and would otherwise download it
-  # from a published release. Seeding the local build keeps the run offline and
-  # tests the code in this checkout rather than the last one that shipped.
-  local bindir="$sandbox/state/dash0-agent-plugin/opencode/bin"
-  mkdir -p "$bindir"
-  cp "$BIN_SRC" "$bindir/opencode-on-event-${VERSION}-$(os_arch)"
-
-  SESSION_EXIT=0
-  (
-    cd "$project"
-    HOME="$home" \
-    XDG_CONFIG_HOME="$home/.config" \
-    XDG_DATA_HOME="$home/.local/share" \
-    XDG_STATE_HOME="$sandbox/state" \
-    XDG_CACHE_HOME="$CACHE_DIR" \
-      opencode run --print-logs --model mock/mock-model \
-        "Read the readme, then read a missing file, then call the capture echo tool, then delegate a sub-task." \
-        < /dev/null > "$sandbox/opencode.log" 2>&1
-  ) || SESSION_EXIT=$?
-
-  printf '%s\n' "$sandbox"
-}
-
-MOCK_LLM_PORT="$LLM_PORT" node "$CAPTURE/mock-llm.mjs" & _bg_pids+=("$!")
-for _ in $(seq 1 40); do
-  curl -sf -m 1 "http://127.0.0.1:$LLM_PORT/v1/models?probe=1" >/dev/null 2>&1 && break
-  sleep 0.25
-done
-
 echo "== a real opencode session exports its spans =="
-SANDBOX=$(session live-main)
+SANDBOX=$(session live-main "$OTLP" opencode-live)
 [ "$SESSION_EXIT" -eq 0 ] || { echo "ERROR: opencode run exited $SESSION_EXIT"; tail -40 "$SANDBOX/opencode.log"; exit 1; }
 sleep 2
 
@@ -196,13 +127,30 @@ MISPARENTED=$(echo "$SPANS" | jq -r --arg chat "$CHAT_ID" --arg agent "$AGENT_TO
 echo "-- the scripted tools all produced a span"
 # The MCP call goes out as capture_echo and must arrive split: OpenCode's flat
 # <serverKey>_<tool> name resolved back into the tool and its server.
-for want in read echo Agent; do
+for want in read echo Agent bash; do
   [ "$(echo "$SPANS" | jq --arg t "$want" '[.[] | .attributes[] | select(.key == "gen_ai.tool.name") | select(.value.stringValue == $t)] | length')" -ge 1 ] \
     || { echo "ERROR: no tool span for the scripted '$want' call"; fail=1; }
 done
 MCP_SERVER=$(echo "$SPANS" | jq -r 'first(.[] | .attributes[] | select(.key == "dash0.gen_ai.tool.mcp_server") | .value.stringValue) // ""')
 [ "$MCP_SERVER" = "capture" ] \
   || { echo "ERROR: the MCP call reported server '$MCP_SERVER', expected 'capture'"; fail=1; }
+
+echo "-- the shell call reports its command shape, not its command"
+# The scripted call is `git status --porcelain`. git has depth 1, so the shape
+# is the binary and one subcommand; the flag must not survive. This is the one
+# attribute derived from a tool's arguments that outlives tools: limited, so it
+# is the one that has to be safe by construction.
+FAMILY=$(echo "$SPANS" | jq -r 'first(.[] | .attributes[] | select(.key == "dash0.gen_ai.tool.bash.command_family") | .value.stringValue) // ""')
+[ "$FAMILY" = "git status" ] \
+  || { echo "ERROR: bash command family is '$FAMILY', expected 'git status'"; fail=1; }
+
+echo "-- VCS and identity enrichment survives tools: limited"
+for k in dash0.gen_ai.vcs.repository.name dash0.gen_ai.vcs.ref.head.name dash0.gen_ai.vcs.provider.name; do
+  [ -n "$(echo "$SPANS" | jq -r --arg k "$k" 'first(.[] | .attributes[] | select(.key == $k) | .value.stringValue) // ""')" ] \
+    || { echo "ERROR: $k is absent; the sandbox is a git repo, so it should resolve"; fail=1; }
+done
+[ "$(echo "$SPANS" | jq -r 'first(.[] | .attributes[] | select(.key == "user.email") | .value.stringValue) // ""')" = "live-fixture@dash0.com" ] \
+  || { echo "ERROR: user.email did not come from the sandbox git identity"; fail=1; }
 # The second scripted read targets a file that does not exist, so exactly one
 # tool span must carry an error status. A green run here means the plugin
 # stopped reporting failures.
@@ -252,21 +200,25 @@ case "$BODIES" in
   *"live fixture project"*) echo "ERROR: the readme's contents were exported under the default omit_io"; fail=1 ;;
 esac
 
-echo "-- the scripted usage reaches the chat span"
-# The scripted server reports reasoning and cached-prompt tokens on every
-# response. cache_creation is mapped but always 0: the OpenAI wire format the
-# mock speaks has no cache-write field to carry one.
-for k in gen_ai.usage.cache_read.input_tokens gen_ai.usage.reasoning.output_tokens; do
-  v=$(echo "$CHAT" | jq -r --arg k "$k" 'first(.attributes[] | select(.key == $k) | .value.intValue) // "0"')
-  [ "$v" -gt 0 ] 2>/dev/null \
-    || { echo "ERROR: $k is $v; the scripted usage reports one on every call"; fail=1; }
-done
+echo "-- the scripted usage reaches the chat span exactly"
+# The scripted server reports a flat 5 reasoning and 7 cached-prompt tokens on
+# every response, so these two attributes count model calls rather than
+# approximate them. The parent turn makes six — one per scripted step — and the
+# sub-agent exactly one. Change a step and these fail, which is the point.
+usage() { echo "$1" | jq -r --arg k "gen_ai.usage.$2" 'first(.attributes[] | select(.key == $k) | .value.intValue) // "0"'; }
+[ "$(usage "$CHAT" reasoning.output_tokens)" = "30" ] \
+  || { echo "ERROR: chat reasoning tokens are $(usage "$CHAT" reasoning.output_tokens), expected 30 (6 scripted calls x 5)"; fail=1; }
+[ "$(usage "$CHAT" cache_read.input_tokens)" = "42" ] \
+  || { echo "ERROR: chat cached tokens are $(usage "$CHAT" cache_read.input_tokens), expected 42 (6 scripted calls x 7)"; fail=1; }
+# Mapped but always 0: the OpenAI wire format the mock speaks has no cache-write
+# field to carry one. Asserting it present still catches the mapping going away.
 echo "$CHAT" | jq -e 'any(.attributes[]; .key == "gen_ai.usage.cache_creation.input_tokens")' >/dev/null \
   || { echo "ERROR: gen_ai.usage.cache_creation.input_tokens is not mapped at all"; fail=1; }
-# The sub-agent's usage is its own, not a copy of the parent's.
-INVOKE_IN=$(echo "$INVOKE" | jq -r 'first(.attributes[] | select(.key == "gen_ai.usage.input_tokens") | .value.intValue) // "0"')
-[ "$INVOKE_IN" -gt 0 ] 2>/dev/null \
-  || { echo "ERROR: the invoke_agent span reports no usage of its own"; fail=1; }
+# The sub-agent's usage is its own, not a share of the parent's.
+[ "$(usage "$INVOKE" reasoning.output_tokens)" = "5" ] && [ "$(usage "$INVOKE" cache_read.input_tokens)" = "7" ] \
+  || { echo "ERROR: the sub-agent's usage is not exactly one scripted call's worth"; fail=1; }
+[ "$(usage "$INVOKE" input_tokens)" -gt 0 ] 2>/dev/null \
+  || { echo "ERROR: the invoke_agent span reports no input tokens of its own"; fail=1; }
 
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: a real opencode session produces the documented span tree"
@@ -276,7 +228,7 @@ echo "== the assertions discriminate =="
 # withheld exactly as configured, so a probe that quietly stopped matching would
 # still read green. Running the inverse configuration makes the same probes come
 # back the other way round; if they do not, they were not testing anything.
-S=$(session live-inverse "$(printf 'prompts: full\ntools: disabled')")
+S=$(session live-inverse "$OTLP" opencode-live "$(printf 'prompts: full\ntools: disabled')")
 [ "$SESSION_EXIT" -eq 0 ] || { echo "ERROR: the inverse session exited $SESSION_EXIT"; exit 1; }
 sleep 2
 INV=$(spans live-inverse)
@@ -326,14 +278,15 @@ check_fail_open() {
 }
 
 fail=0
-S=$(session live-unreachable 'otlp_url: "http://127.0.0.1:1/v1/traces"')
+S=$(session live-unreachable "http://127.0.0.1:1" opencode-live)
 check_fail_open "an unreachable collector" "$S" || fail=1
 
-S=$(session live-rejected 'otlp_url: "http://localhost:4319/reject"')
+S=$(session live-rejected "$OTLP/reject" opencode-live)
 check_fail_open "a rejected endpoint" "$S" || fail=1
 
-# A config file with no closing delimiter and a key the reader has no case for.
-S=$(session live-malformed '
+# A key the reader has no case for, whose value would parse as neither a string
+# nor a scalar if anything downstream tried.
+S=$(session live-malformed "$OTLP" opencode-live '
 not: [valid
   yaml at all')
 check_fail_open "a malformed config file" "$S" || fail=1
@@ -343,7 +296,7 @@ CORRUPT="$(mktemp -d)"; mkdir -p "$CORRUPT/state/dash0-agent-plugin/opencode/bin
 CORRUPT_BIN="$CORRUPT/state/dash0-agent-plugin/opencode/bin/opencode-on-event-${VERSION}-$(os_arch)"
 printf 'not a binary\n' > "$CORRUPT_BIN"; chmod +x "$CORRUPT_BIN"
 printf 'deadbeef\n' > "$CORRUPT_BIN.sha256"
-S=$(DASH0_PLUGIN_DATA="$CORRUPT/state/dash0-agent-plugin/opencode" session live-corrupt)
+S=$(DASH0_PLUGIN_DATA="$CORRUPT/state/dash0-agent-plugin/opencode" session live-corrupt "$OTLP" opencode-live)
 check_fail_open "a corrupted cached binary" "$S" || fail=1
 
 [ "$fail" -eq 0 ] || exit 1

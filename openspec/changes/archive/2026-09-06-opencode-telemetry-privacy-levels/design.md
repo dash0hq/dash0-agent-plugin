@@ -272,5 +272,8 @@ count.
 The two attributes are new, and every runtime's default resolves `prompts` to
 `limited`, so emitting them from the shared redaction path would widen the spans
 Claude, Cursor, Codex and Copilot already export — which the spec forbids. They
-are therefore gated on `otlp.Config.WithheldCounts`, which `harness.Config` sets
-only for OpenCode.
+are therefore gated on `otlp.Config.Dimensions`, which `harness.Config` sets only
+for OpenCode. That one flag gates every behaviour in this design the other four
+runtimes must not see: the withheld counts, the omit-at-`limited` rule for tool
+and sub-agent content, the span suppressions, and routing a `Skill` call to
+`skills` instead of `tools`.

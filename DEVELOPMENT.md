@@ -153,8 +153,8 @@ Values are strings unless noted as integers.
 > `limited` or `full`. `prompts` gates `gen_ai.input.messages`,
 > `gen_ai.output.messages` and `gen_ai.conversation.name`; `tools` gates
 > `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` and a failed call's
-> `exception.message`; `skills` gates those same three for a `Skill` call, in place
-> of `tools`; `agents` gates the sub-agent's own message content and the
+> `exception.message`; on OpenCode `skills` gates those same three for a `Skill`
+> call, in place of `tools`; `agents` gates the sub-agent's own message content and the
 > `invoke_agent` span. At `limited` the content is replaced with `<REDACTED>`, at
 > `full` it is truncated to 16 KB, and at `disabled` the attribute — or the whole
 > span, for `tools`, `skills` and `agents` — is not exported.
@@ -165,12 +165,13 @@ Values are strings unless noted as integers.
 > default) ⇒ `prompts` and `tools` at `limited`, off ⇒ both `full`. The columns
 > below therefore read the same as they always did on those four.
 >
-> Three things below are gated on OpenCode alone, because they would otherwise
-> move a span the other four already export: at `limited`, tool arguments and
-> results, a sub-agent's content and a failed tool call's message are **omitted**
-> rather than placeheld — the semconv makes them Opt-In — and the two
-> `withheld_characters` attributes are emitted. A prompt keeps its envelope
-> everywhere, so its roles stay readable.
+> What follows is gated on OpenCode alone, because it would otherwise move a span
+> the other four already export: at `limited`, tool arguments and results, a
+> sub-agent's content and a failed tool call's message are **omitted** rather than
+> placeheld — the semconv makes them Opt-In — the two `withheld_characters`
+> attributes are emitted, and a `Skill` call is routed to `skills` instead of
+> staying on `tools`. A prompt keeps its envelope everywhere, so its roles stay
+> readable.
 
 > The three user-identity attributes behave according to `omit_user_info` (off by default):
 > `user.name` becomes a 16-hex-char SHA-256 hash, `user.email` is
@@ -470,4 +471,4 @@ Codex-scoped as a reader diagnostic.
 | `dash0.gen_ai.vcs.pull_request.url` | PR / MR URL | Derived, so it survives `tools: limited`. |
 | `dash0.gen_ai.vcs.issue.url` | Issue URL | Derived, so it survives `tools: limited`. |
 | `dash0.gen_ai.vcs.commit.sha` | Commit SHA | Derived, so it survives `tools: limited`. |
-| `exception.message` | Error text | On `PostToolUseFailure`. Gated by `tools` on OpenCode: withheld below `full`, since a failure message can quote the arguments. The `Error` status stays. |
+| `exception.message` | Error text | On `PostToolUseFailure`. Gated by `tools`, or by `skills` on a `Skill` call: withheld below `full` on OpenCode, since a failure message can quote the arguments. The `Error` status stays. |

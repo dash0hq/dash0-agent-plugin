@@ -91,7 +91,7 @@ agents: limited
 
 | Dimension | What it governs | `disabled` | `limited` | `full` |
 |---|---|---|---|---|
-| `prompts` | `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.conversation.name` on chat spans | attributes omitted | message JSON with each content `<REDACTED>`, plus `dash0.gen_ai.{input,output}.messages.withheld_characters` | the text, capped at 16 KB |
+| `prompts` | `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.conversation.name` on chat spans | attributes omitted | message JSON with each content `<REDACTED>`, plus `dash0.gen_ai.{input,output}.messages.withheld_characters`; `gen_ai.conversation.name` is the bare placeholder, with no envelope and no count | the text, capped at 16 KB |
 | `tools` | `execute_tool` spans | no span at all | the `execute_tool` span's Required, Conditionally Required and Recommended attributes plus the derived Dash0 ones; the Opt-In `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` omitted, and a failed call's message withheld | the arguments and result too |
 | `skills` | `Skill` tool calls, which `tools` would otherwise govern | no span for a skill invocation | a span naming the skill, no arguments or result | arguments and result too |
 | `agents` | `invoke_agent` spans and the sub-agent's own message content | no `invoke_agent` span; the sub-agent's tool spans reparent to the delegating turn's chat span | the span with `gen_ai.agent.name`, no sub-agent content | the sub-agent's prompt and response too |

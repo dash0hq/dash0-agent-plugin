@@ -88,13 +88,20 @@ At `tools: limited`, a bash tool call SHALL report the *shape* of its command �
 the binary and its subcommand path — and SHALL NOT report any operand, flag
 value, path, URL, or free-text argument.
 
-The shape SHALL be derived by taking the binary followed by at most N further
-tokens, where N is that binary's configured subcommand depth, stopping early at
-the first token that begins with `-` or that is a shell metacharacter. Both
-bounds SHALL apply; neither alone is sufficient.
+The shape SHALL be derived by taking the binary, then extending it only with
+tokens drawn from that binary's own configured subcommand vocabulary, stopping
+early at the first token that begins with `-`, that is a shell metacharacter, or
+that the vocabulary does not admit. All three bounds SHALL apply; none alone is
+sufficient.
 
-A binary absent from the depth table SHALL have depth 0 and SHALL report its
-name alone. The table SHALL be an allowlist: an unrecognized binary fails
+A token SHALL be admitted only where the binary's grammar guarantees the
+position holds a word from a fixed vocabulary. A position that may hold a path,
+URL, pattern, package, script name or other free text SHALL end the shape, even
+where that position nominally holds a subcommand.
+
+A binary absent from the table, or a subcommand absent from a listed binary's
+vocabulary, SHALL report the binary name alone. The table SHALL be an
+allowlist: an unrecognized binary and an unrecognized subcommand both fail
 closed. The table SHALL cover at minimum the CLIs available in the
 `agents-worker` sandbox image — `curl`, `git`, `gh`, `glab`, `jq`, `rg`, `yq`,
 `python3`, `pip`, `bun`, `pnpm`, `npm`, `node`, `less`, `lsof`, `ps`, `tree`,
@@ -128,16 +135,30 @@ secret.
 #### Scenario: A positional operand with no preceding flag is still redacted
 
 - **WHEN** the command is `cat /home/alice/.env`
-- **AND** `cat` has subcommand depth 0
+- **AND** `cat` is absent from the subcommand table
 - **THEN** the reported command shape is `cat`
 - **AND** the path does not appear in any exported attribute
 
 #### Scenario: An unknown binary fails closed
 
 - **WHEN** the command is `some-internal-tool deploy --target prod`
-- **AND** `some-internal-tool` is absent from the depth table
+- **AND** `some-internal-tool` is absent from the subcommand table
 - **THEN** the reported command shape is `some-internal-tool`
 - **AND** neither `deploy` nor `prod` appears in any exported attribute
+
+#### Scenario: A token that is not a subcommand fails closed
+
+- **WHEN** the command is `pnpm deploy-customer-4711`
+- **AND** `deploy-customer-4711` is not in `pnpm`'s subcommand vocabulary
+- **THEN** the reported command shape is `pnpm`
+- **AND** `deploy-customer-4711` does not appear in any exported attribute
+
+#### Scenario: A free-text position ends the shape
+
+- **WHEN** the command is `bun scripts/seed-customer-4711.ts`
+- **AND** the token after `bun` may be a script file rather than a subcommand
+- **THEN** the reported command shape is `bun`
+- **AND** the script path does not appear in any exported attribute
 
 #### Scenario: A leading environment assignment is skipped and not reported
 

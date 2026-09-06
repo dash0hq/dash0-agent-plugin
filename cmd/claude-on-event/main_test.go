@@ -960,7 +960,7 @@ func TestBashCommandFamilySurvivesOmitIO(t *testing.T) {
 	require.NotNil(t, toolSpan)
 
 	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.call.arguments", "<REDACTED>")
-	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.bash.command_family", "git")
+	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.bash.command_family", "git status")
 }
 
 func TestSkillNameSurvivesOmitIO(t *testing.T) {

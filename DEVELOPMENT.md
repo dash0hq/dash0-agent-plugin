@@ -441,7 +441,7 @@ Codex-scoped as a reader diagnostic.
 | `gen_ai.tool.call.arguments` | Tool input (JSON / string) | Content-gated, ≤16 KB. |
 | `gen_ai.tool.call.result` | Tool output | Content-gated, ≤16 KB. |
 | `dash0.gen_ai.tool.mcp_server` | MCP server name (placeholder `cursor` on Cursor) | MCP tools only. |
-| `dash0.gen_ai.tool.bash.command_family` | Binary name, e.g. `git`, `npm` | Bash tool. |
+| `dash0.gen_ai.tool.bash.command_family` | Command shape — binary plus its subcommand path, e.g. `git status`, `gh repo clone` | Bash tool. Never an operand, flag or flag value; subcommand words allowlisted per binary in `subcommands`. |
 | `dash0.gen_ai.tool.skill.name` | Skill name | Skill tool. |
 | `dash0.gen_ai.tool.skill.source` | `model` | Skill tool. Constant here — the tool call *is* the model choosing. |
 | `dash0.gen_ai.code.lines_added` | integer | Claude Code only — from the Edit/Write/MultiEdit `structuredPatch`. |

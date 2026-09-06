@@ -90,11 +90,11 @@ proves Dash0 actually received what we think it did.
 
 ## 10. Documentation
 
-- [ ] 10.1 Add a fifth column to `FEATURE_MATRIX.md` covering runtimes, config options, config sources, transferred span properties, installation, debugging, error handling, and user notifications; verify every row has an OpenCode entry
-- [ ] 10.2 Write `opencode/README.md` with local-dev instructions following `cursor/README.md`, plus the 1.3–1.6 findings and the 8.7 verification recipe; verify by following it from a clean checkout
-- [ ] 10.3 Link the OpenCode guide from `DEVELOPMENT.md#per-runtime-developer-guides` and add both install paths to `README.md`; verify no other runtime's docs changed
-- [ ] 10.4 Record the resolved minimum supported OpenCode version in `opencode/README.md` and the package's `peerDependencies` range; verify it matches the oldest release whose plugin types carry every field the mapping reads
-- [ ] 10.5 Open a follow-up issue for the wrapper centralization described in design.md Decision 6, naming both candidate shapes and the Codex single-file delivery constraint; verify the issue links back to this change
+- [x] 10.1 Add a fifth column to `FEATURE_MATRIX.md` covering runtimes, config options, config sources, transferred span properties, installation, debugging, error handling, and user notifications; verify every row has an OpenCode entry — 66 rows across 8 tables, checked mechanically for a filled OpenCode cell. The user-notifications table is one row per agent, so OpenCode is a row there rather than a column
+- [x] 10.2 Write `opencode/README.md` with local-dev instructions following `cursor/README.md`, plus the 1.3–1.6 findings and the 8.7 verification recipe; verify by following it from a clean checkout
+- [x] 10.3 Link the OpenCode guide from `DEVELOPMENT.md#per-runtime-developer-guides` and add both install paths to `README.md`; verify no other runtime's docs changed
+- [x] 10.4 Record the resolved minimum supported OpenCode version in `opencode/README.md` and the package's `peerDependencies` range; verify it matches the oldest release whose plugin types carry every field the mapping reads — 1.18.0, unchanged, but resolved on behaviour rather than types. `tsc --noEmit` passes against `@opencode-ai/plugin` as far back as 1.0.0, because the translator reads bus payloads as `Record<string, unknown>`, so the types establish no floor at all. The floor that holds is the version every finding in "Observed OpenCode behavior" was recorded against. 1.18.28, the newest release, also typechecks
+- [x] 10.5 Open a follow-up issue for the wrapper centralization described in design.md Decision 6, naming both candidate shapes and the Codex single-file delivery constraint; verify the issue links back to this change — [#244](https://github.com/dash0hq/dash0-agent-plugin/issues/244)
 
 ## 11. Final verification
 

@@ -141,6 +141,7 @@ Building, sideloading, and running local changes is documented per runtime:
 - **Claude Code** — [claude/README.md](./claude/README.md)
 - **Cursor** — [cursor/README.md](./cursor/README.md)
 - **OpenAI Codex** — [codex/README.md](./codex/README.md)
+- **OpenCode** — [opencode/README.md](./opencode/README.md)
 
 ## Telemetry attributes
 

@@ -29,19 +29,19 @@
 
 ## 3. The CLI subcommand depth table
 
-- [ ] 3.1 Add the depth table as a checked-in map covering every CLI the spec
+- [x] 3.1 Add the depth table as a checked-in map covering every CLI the spec
   names (the `agents-worker` image set plus `tools`), and verify a test asserts
   each listed binary is present with a documented depth
-- [ ] 3.2 Rewrite `ExtractBashCommandFamily` to emit the command shape — skip
+- [x] 3.2 Rewrite `ExtractBashCommandFamily` to emit the command shape — skip
   leading `KEY=value` assignments, take the binary, then up to `depth` further
   tokens, stopping at the first flag or shell metacharacter — and verify a table
   test covers every scenario in the spec's bash requirement
-- [ ] 3.3 Verify a test asserts the unknown-binary path reports the binary alone
+- [x] 3.3 Verify a test asserts the unknown-binary path reports the binary alone
   and that neither a subcommand nor an operand of an unlisted CLI is ever emitted
-- [ ] 3.4 Verify a test asserts the shape never contains a token beginning with
+- [x] 3.4 Verify a test asserts the shape never contains a token beginning with
   `-`, a shell metacharacter, a `/`, or a `=`, for every command in a fixture
   list of realistic sensitive invocations
-- [ ] 3.5 Update the callers and golden expectations of `bash_command_family`
+- [x] 3.5 Update the callers and golden expectations of `bash_command_family`
   across the runtimes for the widened value, and verify every runtime's golden
   span suite passes
 

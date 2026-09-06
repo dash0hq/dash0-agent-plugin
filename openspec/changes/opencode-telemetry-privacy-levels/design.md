@@ -137,18 +137,25 @@ are derived from tool *results* — they are already documented as surviving
 `omit_io`, so `limited` keeps that behaviour unchanged rather than quietly
 tightening it.
 
-### The depth table is an allowlist map, checked in as data
+### The subcommand table is an allowlist map, checked in as data
 
 ```
-var subcommandDepth = map[string]int{
-  "gh": 2, "glab": 2, "git": 1, "tools": 2, "npm": 1, "pnpm": 1, ...
+var subcommands = map[string]map[string]int{
+  "gh":    {"repo": 1, "pr": 1, "api": 0, "browse": 0, ...},
+  "git":   {"status": 0, "commit": 0, "push": 0, ...},
+  "tools": {"invoke": 1, "list": 0},
+  "curl":  {},
 }
 ```
 
+The outer key is a binary; its value maps each subcommand word that binary may
+report to the number of further tokens that word admits.
+
 Shape extraction: skip leading `KEY=value` assignments, take the binary, then
-take up to `depth` further tokens, stopping at the first token that begins with
-`-` or is a shell metacharacter (`&&`, `||`, `|`, `;`, `>`, `<`, `$(`, backtick,
-newline). Absent binary → depth 0.
+take the next token only if that binary's vocabulary admits it, then up to that
+word's own depth of further tokens — stopping at the first token that begins
+with `-`, is a shell metacharacter (`&&`, `||`, `|`, `;`, `>`, `<`, `$(`,
+backtick, newline), or is not admitted. Absent binary → name alone.
 
 *Why an allowlist over "stop at the first dash":* stop-at-dash is correct only
 when the operand follows a flag. `gh repo clone <url>`, `cat <path>` and
@@ -156,16 +163,25 @@ when the operand follows a flag. `gh repo clone <url>`, `cat <path>` and
 path and the search term verbatim — the precise leak this change exists to
 prevent. Both bounds together are what make the rule safe.
 
-*Why depth rather than a full command grammar:* a grammar of every subcommand
-and flag for twenty CLIs is a maintenance burden that rots, and being wrong
-about it leaks. A depth is one integer per binary, and being wrong about it in
-the unsafe direction requires setting the depth *too high* — which review
-catches, and which the unknown-binary default of 0 never does silently.
+*Why a vocabulary rather than a plain per-binary depth:* a plain integer assumes
+every token up to the depth is a command word, and for several of the named CLIs
+that is false at the very first position. `bun index.ts` runs a file, `pnpm
+deploy-customer-4711` runs a package script, `gh api <endpoint>` and `gh browse
+<path>` take an operand where a group name would sit. Any depth high enough to
+reach `gh repo clone` — an explicit spec scenario — is also high enough to emit
+those operands verbatim. Naming the accepted words is what separates the two.
 
-*Why `tools` is depth 2:* `tools invoke dash0.getLogRecords` — the third token
-is the observability tool being invoked, which is the whole diagnostic value,
-while `--args` carries the PromQL and log filters. Depth 2 draws the line
-exactly between them.
+*Why a word list is not the "full command grammar" this rejects:* only the words
+are enumerated, never flags, and a missing word is a shape that stops one token
+early rather than a leak. The table rots in the safe direction, and the
+unknown-word default matches the unknown-binary default.
+
+*Why `tools invoke` admits a further token:* `tools invoke
+dash0.getLogRecords` — the third token is the observability tool being invoked,
+which is the whole diagnostic value, while `--args` carries the PromQL and log
+filters. `invoke: 1` draws the line exactly between them. The same reasoning
+gives `gh repo: 1` — a `gh` group is always followed by a verb, never an
+operand — while `gh api: 0` stops before an endpoint path.
 
 ### `omit_io` is mapped, not deprecated
 
@@ -186,11 +202,12 @@ code path logs the raw event map before `eventAttributes` runs.
 
 ## Risks / Trade-offs
 
-**A depth set too high leaks an operand as if it were a subcommand.** → The
-table is small enough to review line by line, and each entry gets a test case
-using a realistic command for that binary with a sensitive operand in the first
-redacted position. The unknown-binary default is 0, so the failure requires an
-explicit wrong entry rather than an omission.
+**A word admitted at a position that can hold free text leaks an operand as if
+it were a subcommand.** → The table is small enough to review line by line, and
+each entry gets a test case using a realistic command for that binary with a
+sensitive operand in the first redacted position. Both defaults — unknown binary
+and unknown word — report the binary alone, so the failure requires an explicit
+wrong entry rather than an omission.
 
 **A future content attribute is added and governed by no dimension.** → A test
 asserts that every key in `contentKeys` maps to a dimension, and that the set of

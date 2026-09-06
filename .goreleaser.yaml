@@ -3,6 +3,15 @@ project_name: dash0-agent-plugin
 
 version: 2
 
+# OpenCode is loaded from a single bundled JavaScript file rather than a binary,
+# so the release has to carry one artifact that no Go build produces. Bundling
+# here (rather than committing dist/) keeps the published file derived from the
+# tagged source. Runs on `goreleaser build` too, so a snapshot build reproduces
+# the full release artifact set.
+before:
+  hooks:
+    - ./opencode/build.sh
+
 builds:
   # Releases from here on publish claude-on-event-<os>-<arch>, so all four
   # runtimes use the <runtime>-on-event-<os>-<arch> form. Releases up to and
@@ -86,6 +95,21 @@ builds:
     main: ./cmd/copilot-on-event
     binary: "copilot-on-event-{{ .Os }}-{{ .Arch }}"
     no_unique_dist_dir: true
+  - id: opencode-on-event
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/dash0hq/dash0-agent-plugin/internal/version.Version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    dir: ./
+    main: ./cmd/opencode-on-event
+    binary: "opencode-on-event-{{ .Os }}-{{ .Arch }}"
+    no_unique_dist_dir: true
 
 archives:
   - formats: ["binary"]
@@ -93,6 +117,10 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  # The bundle is listed alongside the binaries so install-opencode.sh can verify
+  # what it downloads through the same file it already fetches for the binary.
+  extra_files:
+    - glob: ./opencode/dist/dash0-opencode-plugin.js
 
 release:
   # Upload into a draft; .github/workflows/release.yml publishes it once every
@@ -104,6 +132,8 @@ release:
   draft: true
   prerelease: auto
   mode: replace
+  extra_files:
+    - glob: ./opencode/dist/dash0-opencode-plugin.js
 
 changelog:
   disable: false

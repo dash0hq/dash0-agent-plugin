@@ -158,23 +158,26 @@ echo "== What a release must contain =="
 # which had already gone stale once: Windows took the build from 16 artifacts to
 # 24 and "expected 16" was not updated with it.
 art=$("$REPO/scripts/expected-artifacts.sh")
-if [ "$(printf '%s\n' "$art" | wc -l | tr -d ' ')" = "24" ]; then
-  echo "  ok   24 binaries: four agents, three platforms, two architectures"
+if [ "$(printf '%s\n' "$art" | wc -l | tr -d ' ')" = "28" ]; then
+  echo "  ok   28 binaries: four agents on three platforms and OpenCode on two, two architectures each"
 else
-  echo "  FAIL expected 24 artifact names, got $(printf '%s\n' "$art" | wc -l | tr -d ' ')"; fail=1
+  echo "  FAIL expected 28 artifact names, got $(printf '%s\n' "$art" | wc -l | tr -d ' ')"; fail=1
 fi
 # Named, not counted — the point of the list. .exe only on Windows, because that
 # is what GoReleaser appends and what every bootstrap asks for.
 for want in claude-on-event-linux-amd64 cursor-on-event-darwin-arm64 \
-            codex-on-event-windows-amd64.exe copilot-on-event-windows-arm64.exe; do
+            codex-on-event-windows-amd64.exe copilot-on-event-windows-arm64.exe \
+            opencode-on-event-linux-arm64; do
   printf '%s\n' "$art" | grep -qx "$want" \
     || { echo "  FAIL $want is not in the expected list"; fail=1; }
 done
 printf '%s\n' "$art" | grep -q 'linux.*\.exe' \
   && { echo "  FAIL a non-Windows name carries .exe"; fail=1; }
+printf '%s\n' "$art" | grep -q 'opencode.*windows' \
+  && { echo "  FAIL OpenCode has no Windows build"; fail=1; }
 
 # Derived, not transcribed: dropping a platform from .goreleaser.yaml must drop
-# its four binaries. A transcribed list would keep reporting all 24 and the
+# its binaries. A transcribed list would keep reporting all 28 and the
 # workflow would then diff dist/ against binaries nobody asked it to build.
 # One trap for the whole script. `trap … EXIT` is not additive: a second one
 # silently replaces this, and this one already replaces lib.sh's _cleanup, which
@@ -187,10 +190,10 @@ mkdir -p "$gr/scripts"
 cp "$REPO/scripts/expected-artifacts.sh" "$gr/scripts/"
 grep -v '^      - darwin$' "$REPO/.goreleaser.yaml" >"$gr/.goreleaser.yaml"
 n=$("$gr/scripts/expected-artifacts.sh" | wc -l | tr -d ' ')
-if [ "$n" = "16" ]; then
+if [ "$n" = "18" ]; then
   echo "  ok   the list follows .goreleaser.yaml"
 else
-  echo "  FAIL dropping darwin left $n names, expected 16"; fail=1
+  echo "  FAIL dropping darwin left $n names, expected 18"; fail=1
 fi
 
 echo "== What a bump actually writes =="
@@ -209,18 +212,20 @@ echo "== What a bump actually writes =="
     claude/claude-on-event.sh cursor/cursor-on-event.sh \
     codex/codex-on-event.sh copilot/copilot-on-event.sh \
     cursor/cursor-on-event.ps1 codex/codex-on-event.ps1 \
-    copilot/copilot-on-event.ps1 ) | tar xf - -C "$sandbox"
+    copilot/copilot-on-event.ps1 \
+    opencode/opencode-on-event.sh opencode/package.json opencode/package-lock.json ) | tar xf - -C "$sandbox"
 
 if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
   case "$out" in
-    *"all 13 pins agree on 9.9.9"*) echo "  ok   a bump rewrites every pin" ;;
+    *"all 16 pins agree on 9.9.9"*) echo "  ok   a bump rewrites every pin" ;;
     *) echo "  FAIL a bump rewrites every pin"; printf '    %s\n' "$out"; fail=1 ;;
   esac
   # Named individually, because `check` compares the pins to each other: were a
   # bootstrap's VERSION= line to stop matching, all thirteen would still agree — on
   # the old version — and check would pass.
   for f in claude/claude-on-event.sh cursor/cursor-on-event.sh \
-           codex/codex-on-event.sh copilot/copilot-on-event.sh; do
+           codex/codex-on-event.sh copilot/copilot-on-event.sh \
+           opencode/opencode-on-event.sh; do
     grep -q '^VERSION="9.9.9"$' "$sandbox/$f" \
       || { echo "  FAIL $f still pins $(grep -m1 '^VERSION=' "$sandbox/$f")"; fail=1; }
   done
@@ -232,6 +237,8 @@ if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
   done
   [ "$(jq -r '.metadata.version' "$sandbox/.github/plugin/marketplace.json")" = "9.9.9" ] \
     || { echo "  FAIL marketplace.json metadata.version was not rewritten"; fail=1; }
+  [ "$(jq -r '.version' "$sandbox/opencode/package.json")" = "9.9.9" ] \
+    || { echo "  FAIL opencode/package.json version was not rewritten"; fail=1; }
   # The refusal, now that every pin in the sandbox reads 9.9.9.
   refuse "a bump to the version already pinned" "nothing to prepare" -- \
     "$sandbox/scripts/version.sh" set 9.9.9

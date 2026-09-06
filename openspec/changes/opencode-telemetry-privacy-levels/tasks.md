@@ -47,19 +47,19 @@
 
 ## 4. Tool and skill levels
 
-- [ ] 4.1 Gate `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` on the
+- [x] 4.1 Gate `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` on the
   `tools` level so `limited` omits both, and verify a test asserts the span still
   carries name, type, call id, start time, end time and status
-- [ ] 4.2 Suppress the `execute_tool` span entirely at `tools: disabled` by
+- [x] 4.2 Suppress the `execute_tool` span entirely at `tools: disabled` by
   returning early in `pipeline.Process` before `sendToolTrace`, and verify a test
   asserts no tool span is exported while the turn's chat span still is
-- [ ] 4.3 Confirm `EnrichToolEvent` runs on the full `tool_input` before any
+- [x] 4.3 Confirm `EnrichToolEvent` runs on the full `tool_input` before any
   level gating, and verify a test asserts `bash_command_family`, `skill_name` and
   `mcp_server` are present at `limited`
-- [ ] 4.4 Suppress the failure message at `tools: limited` while keeping the
+- [x] 4.4 Suppress the failure message at `tools: limited` while keeping the
   `Error` status and error type, and verify a test asserts the message text is
   absent from every attribute
-- [ ] 4.5 Route `Skill` tool calls through the `skills` dimension so it overrides
+- [x] 4.5 Route `Skill` tool calls through the `skills` dimension so it overrides
   `tools` for them, and verify tests cover both spec scenarios — skills visible
   with `tools: disabled`, and skills suppressed with `tools: full`
 

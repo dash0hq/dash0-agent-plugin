@@ -124,12 +124,18 @@ type Config struct {
 	Skills  Level
 	Agents  Level
 
-	// WithheldCounts enables the dash0.gen_ai.*.withheld_characters attributes at
-	// Prompts: LevelLimited. Only the OpenCode entrypoint sets it: every other
-	// runtime's spans have to stay byte-identical to what they exported before the
-	// privacy dimensions existed, and omit_io's default puts them all at
-	// LevelLimited.
-	WithheldCounts bool
+	// Dimensions reports that this runtime exposes the four dimensions as
+	// configuration, which turns on the parts of their semantics that would
+	// otherwise move a span another runtime already exports: the
+	// dash0.gen_ai.*.withheld_characters attributes at Prompts: LevelLimited,
+	// omitting rather than redacting the execute_tool Opt-In content attributes
+	// at Tools: LevelLimited, withholding a failed tool call's message there,
+	// and letting Skills govern a skill invocation in place of Tools.
+	//
+	// Only the OpenCode entrypoint sets it: every other runtime's spans have to
+	// stay byte-identical to what they exported before the privacy dimensions
+	// existed, and omit_io's default puts them all at LevelLimited.
+	Dimensions bool
 }
 
 // ValidateURL reports whether OTLPUrl is usable, and clears it when it is not.
@@ -439,6 +445,68 @@ func (c Config) levelFor(d dimension) Level {
 	}
 }
 
+// levelForEvent resolves the level governing one content field of one event. A
+// skill invocation reaches the pipeline as a tool call, and Skills governs it in
+// place of Tools so the two dimensions are independently useful.
+func (c Config) levelForEvent(d dimension, event map[string]any) Level {
+	if d == dimTools && c.Dimensions && IsSkillEvent(event) {
+		return c.Skills
+	}
+	return c.levelFor(d)
+}
+
+// omitsAtLimited reports whether a dimension drops its content attributes at
+// LevelLimited instead of exporting the redaction placeholder. The execute_tool
+// convention makes gen_ai.tool.call.arguments and gen_ai.tool.call.result
+// Opt-In, so limited omits them outright; a prompt keeps its envelope, because
+// a consumer can still read the roles off it.
+func (c Config) omitsAtLimited(d dimension) bool {
+	return c.Dimensions && d == dimTools
+}
+
+// IsSkillEvent reports whether a tool event is a skill invocation. tool_name is
+// the pipeline's canonical name, spelled per runtime, hence the fold; skill_name
+// covers Copilot, which ships no arguments for the skill tool and names the
+// skill in a vendor attribute its source reads before enrichment.
+func IsSkillEvent(event map[string]any) bool {
+	if name, _ := event["tool_name"].(string); strings.EqualFold(name, "Skill") {
+		return true
+	}
+	name, _ := event["skill_name"].(string)
+	return name != ""
+}
+
+// ToolSpanSuppressed reports whether the level governing a tool call drops its
+// execute_tool span entirely, so the pipeline can return before resolving a
+// parent and a model it will not use.
+func (c Config) ToolSpanSuppressed(event map[string]any) bool {
+	return c.Dimensions && c.levelForEvent(dimTools, event) == LevelDisabled
+}
+
+// AgentToolSpanSuppressed reports whether the Agent tool call's own
+// execute_tool span is dropped. A sub-agent's spans derive their parent id from
+// the agent id, which is that span's id, so when it is gone they have to parent
+// to the delegating turn's chat span instead: no exported span may reference a
+// span id that was never exported. The Agent tool is never a skill invocation,
+// so Tools governs it outright.
+func (c Config) AgentToolSpanSuppressed() bool {
+	return c.Dimensions && c.Tools == LevelDisabled
+}
+
+// toolFailureWithheld reports whether a failed tool call's message stays out of
+// the span: the message routinely quotes the arguments, so it cannot outlive
+// them. Only a tool event has one — a chat span's error is the harness's own
+// text rather than the tool's.
+func (c Config) toolFailureWithheld(event map[string]any) bool {
+	if !c.Dimensions {
+		return false
+	}
+	if _, isTool := event["tool_name"]; !isTool {
+		return false
+	}
+	return c.levelForEvent(dimTools, event) != LevelFull
+}
+
 // contentKeys maps every event field that carries input/output content to the
 // privacy dimension governing it. A field listed here is omitted, redacted or
 // truncated according to that dimension's level; a field absent from it is
@@ -461,7 +529,7 @@ var contentKeys = map[string]dimension{
 // withheldCountKeys names, per content field, the attribute reporting how many
 // characters of content were withheld at LevelLimited — so prompt-size
 // distribution stays visible when the text itself does not. No semantic
-// convention covers this, hence the dash0. prefix. Config.WithheldCounts gates
+// convention covers this, hence the dash0. prefix. Config.Dimensions gates
 // them, because they are new attributes only OpenCode may export.
 var withheldCountKeys = map[string]string{
 	"prompt":                 "dash0.gen_ai.input.messages.withheld_characters",
@@ -579,6 +647,9 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 		if attrSkipKeys[k] {
 			continue
 		}
+		if k == "error" && cfg.toolFailureWithheld(event) {
+			continue
+		}
 		if cfg.OmitUserInfo && userInfoKeys[k] {
 			key := k
 			if mapped, ok := attrKeyMap[k]; ok {
@@ -589,8 +660,8 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			}
 			continue
 		}
-		if dim, isContent := contentKeys[k]; isContent && cfg.levelFor(dim) != LevelFull {
-			if cfg.levelFor(dim) == LevelDisabled {
+		if dim, isContent := contentKeys[k]; isContent && cfg.levelForEvent(dim, event) != LevelFull {
+			if cfg.levelForEvent(dim, event) == LevelDisabled || cfg.omitsAtLimited(dim) {
 				continue
 			}
 			key := k
@@ -607,7 +678,7 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			} else {
 				attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactedValue)})
 			}
-			if countKey, ok := withheldCountKeys[k]; ok && cfg.WithheldCounts {
+			if countKey, ok := withheldCountKeys[k]; ok && cfg.Dimensions {
 				withheld := int64(utf8.RuneCountInString(stringifyValue(v)))
 				attrs = append(attrs, Attribute{Key: countKey, Value: IntVal(withheld)})
 			}

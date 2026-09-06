@@ -95,7 +95,7 @@ func (h Harness) Config() otlp.Config {
 		Tools:                h.privacyLevel("TOOLS", ioLevel),
 		Skills:               h.privacyLevel("SKILLS", otlp.LevelLimited),
 		Agents:               h.privacyLevel("AGENTS", otlp.LevelLimited),
-		WithheldCounts:       h.Name == OpenCode.Name,
+		Dimensions:           h.Name == OpenCode.Name,
 	}
 	cfg.ValidateURL()
 	return cfg

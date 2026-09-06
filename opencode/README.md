@@ -107,9 +107,23 @@ because that is the first place the plugin looks for it. The empty
 `opencode.json` exists only so a first-time user has a file to edit; an existing
 one is never touched, since the plugin needs no entry in it.
 
-The npm path is the other way in: `npm i @dash0/opencode-plugin` and name it in
-`opencode.json`'s `plugin` array. Same two files, resolved out of
-`node_modules` instead.
+OpenCode's docs name the global plugin directory `plugins/`, plural. Both
+spellings are scanned: a marker plugin dropped in `plugin/` and one in
+`plugins/` both loaded on 1.18.20. The installer writes the singular one, which
+is also where the plugin looks for its wrapper.
+
+The npm path is the other way in:
+
+```bash
+opencode plugin @dash0/opencode-plugin --global
+```
+
+That resolves the package, adds it to `opencode.json`'s `plugin` array and
+caches it under `~/.cache/opencode/node_modules/`. Same two files, out of the
+package instead of the plugin directory. The entry it writes carries no version,
+so OpenCode resolves the newest on every start; the release workflow refuses to
+publish a package whose version does not match the release, so the wrapper in it
+always asks for a binary that exists. Pin a different one with `DASH0_VERSION`.
 
 `DASH0_VERSION` pins a release. The installer reads it when resolving what to
 download, and `opencode-on-event.sh` reads it at runtime to override the version
@@ -136,6 +150,15 @@ go build -o "$BIN_DIR/opencode-on-event-${VERSION}-${OS}-${ARCH}" ../cmd/opencod
 The wrapper re-verifies a cached binary's checksum on every run, but only
 against a digest file it wrote itself at download time. A hand-built binary has
 none, so the check is skipped rather than failed.
+
+`build.sh` bundles with `bun` when it is installed and `npx esbuild` otherwise,
+and the two write different bytes for the same source. Bun also stamps each
+module's path relative to the working directory, so building from the repo root
+(which is what the release does, through the goreleaser `before` hook) and
+building from `opencode/` differ too. Each is reproducible on its own terms and
+the release checksums whatever it built, so nothing breaks. It does mean a local
+bundle will not match a release digest unless you match the bundler and the
+directory.
 
 **2. Copy both files into the plugin directory:**
 

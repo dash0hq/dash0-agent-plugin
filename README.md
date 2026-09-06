@@ -16,7 +16,11 @@ Trace through a session, see what each turn cost, find where the agent got stuck
   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-opencode.sh | bash
   ```
 
-  or add `@dash0/opencode-plugin` to the `plugin` array in your `opencode.json`.
+  or, if you would rather have it as an npm package:
+
+  ```bash
+  opencode plugin @dash0/opencode-plugin --global
+  ```
 
 The first four run on macOS, Linux, and Windows, on `amd64` or `arm64`. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where Cursor, Codex, and Copilot CLI use a PowerShell bootstrap. OpenCode is macOS and Linux only.
 

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/identity"
 	"github.com/dash0hq/dash0-agent-plugin/internal/vcs"
@@ -106,7 +107,7 @@ type Config struct {
 	TeamName     string // when set, tag all spans with the dash0.team.name attribute
 	Provider     string // fallback gen_ai.provider.name for events whose model can't be inferred (e.g. SessionStart, PreToolUse). Set by the entrypoint based on host runtime; Cursor leaves it empty since each call's provider is derived from event["model"].
 	OmitUserInfo bool   // when true, hash user.name and omit user.email (both span attributes)
-	OmitIO       bool   // when true (default), omit tool inputs/outputs and prompt/response content
+	OmitIO       bool   // legacy switch, resolved into Prompts and Tools by harness.Config; redaction reads the levels, not this field
 	Debug        bool   // when true, print OTel payloads to stderr (and DebugFile if set)
 	DebugFile    string // optional file path to append debug output to
 
@@ -122,6 +123,13 @@ type Config struct {
 	Tools   Level
 	Skills  Level
 	Agents  Level
+
+	// WithheldCounts enables the dash0.gen_ai.*.withheld_characters attributes at
+	// Prompts: LevelLimited. Only the OpenCode entrypoint sets it: every other
+	// runtime's spans have to stay byte-identical to what they exported before the
+	// privacy dimensions existed, and omit_io's default puts them all at
+	// LevelLimited.
+	WithheldCounts bool
 }
 
 // ValidateURL reports whether OTLPUrl is usable, and clears it when it is not.
@@ -406,13 +414,40 @@ const MaxContentBytes = 16 * 1024
 
 const redactedValue = "<REDACTED>"
 
-// contentKeys lists event fields that contain input/output content.
-// These are redacted when Config.OmitIO is true, or truncated when included.
-var contentKeys = map[string]bool{
-	"tool_input":             true,
-	"tool_response":          true,
-	"last_assistant_message": true,
-	"prompt":                 true,
+// dimension names the privacy dimension that governs one content field.
+type dimension int
+
+const (
+	// dimUnset is the zero value on purpose: a contentKeys entry whose dimension
+	// is omitted, or a dimension added without a levelFor case, then resolves to
+	// LevelDisabled instead of silently inheriting whatever c.Prompts is set to.
+	dimUnset dimension = iota
+	dimPrompts
+	dimTools
+)
+
+// levelFor returns the level configured for the dimension governing a content
+// field. An unknown dimension fails closed at LevelDisabled.
+func (c Config) levelFor(d dimension) Level {
+	switch d {
+	case dimPrompts:
+		return c.Prompts
+	case dimTools:
+		return c.Tools
+	default:
+		return LevelDisabled
+	}
+}
+
+// contentKeys maps every event field that carries input/output content to the
+// privacy dimension governing it. A field listed here is omitted, redacted or
+// truncated according to that dimension's level; a field absent from it is
+// exported verbatim.
+var contentKeys = map[string]dimension{
+	"tool_input":             dimTools,
+	"tool_response":          dimTools,
+	"last_assistant_message": dimPrompts,
+	"prompt":                 dimPrompts,
 
 	// Not a hook payload field. pipeline.go sets it from the transcript, already
 	// namespaced, so it arrives here under its final name rather than a raw one.
@@ -420,7 +455,17 @@ var contentKeys = map[string]bool{
 	// prompt, so it is user content and omit_io has to cover it. Listing it here
 	// is the whole fix: eventAttributes keys redaction off the event key, and
 	// this key needs no attrKeyMap entry because it is already correct.
-	"gen_ai.conversation.name": true,
+	"gen_ai.conversation.name": dimPrompts,
+}
+
+// withheldCountKeys names, per content field, the attribute reporting how many
+// characters of content were withheld at LevelLimited — so prompt-size
+// distribution stays visible when the text itself does not. No semantic
+// convention covers this, hence the dash0. prefix. Config.WithheldCounts gates
+// them, because they are new attributes only OpenCode may export.
+var withheldCountKeys = map[string]string{
+	"prompt":                 "dash0.gen_ai.input.messages.withheld_characters",
+	"last_assistant_message": "dash0.gen_ai.output.messages.withheld_characters",
 }
 
 // userInfoKeys lists event fields that contain user-identifying information.
@@ -544,7 +589,10 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			}
 			continue
 		}
-		if cfg.OmitIO && contentKeys[k] {
+		if dim, isContent := contentKeys[k]; isContent && cfg.levelFor(dim) != LevelFull {
+			if cfg.levelFor(dim) == LevelDisabled {
+				continue
+			}
 			key := k
 			if mapped, ok := attrKeyMap[k]; ok {
 				key = mapped
@@ -559,6 +607,10 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			} else {
 				attrs = append(attrs, Attribute{Key: key, Value: StringVal(redactedValue)})
 			}
+			if countKey, ok := withheldCountKeys[k]; ok && cfg.WithheldCounts {
+				withheld := int64(utf8.RuneCountInString(stringifyValue(v)))
+				attrs = append(attrs, Attribute{Key: countKey, Value: IntVal(withheld)})
+			}
 			continue
 		}
 		if t, ok := attrTransformMap[k]; ok {
@@ -567,7 +619,7 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 				s = transformMessage(inputMessageRole(event), v)
 			}
 			if s != "" {
-				if contentKeys[k] {
+				if _, isContent := contentKeys[k]; isContent {
 					s = truncateContent(s)
 				}
 				attrs = append(attrs, Attribute{Key: t.key, Value: StringVal(s)})
@@ -579,7 +631,7 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 			key = mapped
 		}
 		av := toAttrValue(v)
-		if av.StringValue != nil && contentKeys[k] {
+		if _, isContent := contentKeys[k]; av.StringValue != nil && isContent {
 			truncated := truncateContent(*av.StringValue)
 			av = StringVal(truncated)
 		}

@@ -233,6 +233,18 @@ binary cannot read — the four dimensions live only in config and in memory.
   and is the direction the other runtimes are moving. Deferrable because it
   changes neither the resolved levels nor any exported span — settle it when
   writing the config task.
-- The exact attribute key for the withheld-content character count at
-  `prompts: limited`. There is no semconv attribute for it, so it needs a
-  `dash0.` prefix; naming it does not change the approach.
+*(Settled)* The withheld-content character count at `prompts: limited` is
+reported as two span attributes,
+`dash0.gen_ai.input.messages.withheld_characters` and
+`dash0.gen_ai.output.messages.withheld_characters` — integers counting runes,
+not bytes. Span attributes rather than a field inside the message JSON, because
+the point of the count is that prompt-size distribution stays aggregatable when
+the text does not; a number buried in a JSON string is not. The envelope carries
+exactly one message per attribute, so per-attribute and per-message are the same
+count.
+
+The two attributes are new, and every runtime's default resolves `prompts` to
+`limited`, so emitting them from the shared redaction path would widen the spans
+Claude, Cursor, Codex and Copilot already export — which the spec forbids. They
+are therefore gated on `otlp.Config.WithheldCounts`, which `harness.Config` sets
+only for OpenCode.

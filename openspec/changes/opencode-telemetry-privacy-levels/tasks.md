@@ -14,16 +14,16 @@
 
 ## 2. Prompt levels
 
-- [ ] 2.1 Convert `contentKeys` from `map[string]bool` to a key → dimension map
+- [x] 2.1 Convert `contentKeys` from `map[string]bool` to a key → dimension map
   and switch `eventAttributes` on the governing dimension's level, and verify the
   existing `internal/otlp` redaction tests pass with no assertion edits
-- [ ] 2.2 Implement `disabled` for prompts — attribute omitted rather than
+- [x] 2.2 Implement `disabled` for prompts — attribute omitted rather than
   placeholder — and verify a test asserts neither `gen_ai.input.messages` nor
   `gen_ai.output.messages` is present
-- [ ] 2.3 Add the withheld-content character count at `limited`, settling the
+- [x] 2.3 Add the withheld-content character count at `limited`, settling the
   `dash0.`-prefixed attribute name from design.md's Open Questions, and verify a
   test asserts the count matches the original content length
-- [ ] 2.4 Verify a test replays one turn at all three prompt levels and asserts
+- [x] 2.4 Verify a test replays one turn at all three prompt levels and asserts
   the model, provider, token count, conversation id, duration and status
   attributes are identical across the three chat spans
 

@@ -112,7 +112,7 @@ func TestNewToolSpan(t *testing.T) {
 		"tool_input":      "ls -la",
 	}
 
-	span := NewToolSpan("aabb"+"ccdd"+"eeff"+"0011"+"2233"+"4455"+"6677"+"8899", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{})
+	span := NewToolSpan("aabb"+"ccdd"+"eeff"+"0011"+"2233"+"4455"+"6677"+"8899", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{Tools: LevelFull})
 
 	assert.Equal(t, "parentidparentid", span.ParentSpanID)
 	assert.Equal(t, "execute_tool Bash", span.Name)
@@ -303,7 +303,7 @@ func TestNewToolSpanOmitIO(t *testing.T) {
 		"tool_response":   "file1.go",
 	}
 
-	span := NewToolSpan("aabb"+"ccdd"+"eeff"+"0011"+"2233"+"4455"+"6677"+"8899", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{OmitIO: true})
+	span := NewToolSpan("aabb"+"ccdd"+"eeff"+"0011"+"2233"+"4455"+"6677"+"8899", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{Tools: LevelLimited})
 
 	// Tool name is still present.
 	assertAttr(t, span.Attributes, "gen_ai.tool.name", "Bash")
@@ -323,7 +323,7 @@ func TestNewLLMSpanOmitIO(t *testing.T) {
 		"last_assistant_message": "hi there",
 	}
 
-	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{OmitIO: true})
+	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{Prompts: LevelLimited})
 
 	// Model is still present.
 	assertAttr(t, span.Attributes, "gen_ai.request.model", "claude-sonnet-4-20250514")
@@ -348,7 +348,7 @@ func TestNewLLMSpanPromptRole(t *testing.T) {
 		"prompt":          `<system_notification> agent finished`,
 		"prompt_role":     "assistant",
 	}
-	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "", start, end, event, false, Config{})
+	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "", start, end, event, false, Config{Prompts: LevelFull})
 	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", `"role":"assistant"`)
 	assertAttrContains(t, span.Attributes, "gen_ai.input.messages", "agent finished")
 	for _, a := range span.Attributes {
@@ -360,7 +360,7 @@ func TestNewLLMSpanPromptRole(t *testing.T) {
 		"session_id":  "sess-1",
 		"prompt":      `<system_notification> secret`,
 		"prompt_role": "assistant",
-	}, false, Config{OmitIO: true})
+	}, false, Config{Prompts: LevelLimited})
 	assertAttrContains(t, redacted.Attributes, "gen_ai.input.messages", `"role":"assistant"`)
 	assertAttrContains(t, redacted.Attributes, "gen_ai.input.messages", "REDACTED")
 
@@ -368,7 +368,7 @@ func TestNewLLMSpanPromptRole(t *testing.T) {
 	plain := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "", start, end, map[string]any{
 		"session_id": "sess-1",
 		"prompt":     "hello",
-	}, false, Config{})
+	}, false, Config{Prompts: LevelFull})
 	assertAttrContains(t, plain.Attributes, "gen_ai.input.messages", `"role":"user"`)
 }
 
@@ -527,12 +527,12 @@ func TestChatSpanRedactsConversationName(t *testing.T) {
 	}
 
 	kept := NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "",
-		ts, ts, event, false, Config{})
+		ts, ts, event, false, Config{Prompts: LevelFull})
 	assertAttr(t, kept.Attributes, "gen_ai.conversation.name",
 		"Fix the OTLP exporter's cost rounding")
 
 	omitted := NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "",
-		ts, ts, event, false, Config{OmitIO: true})
+		ts, ts, event, false, Config{Prompts: LevelLimited})
 	assertAttr(t, omitted.Attributes, "gen_ai.conversation.name", "<REDACTED>")
 }
 

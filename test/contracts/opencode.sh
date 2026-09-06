@@ -91,6 +91,97 @@ fail=0
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: config-file and env-var credentials flow through opencode-on-event.sh to real OTLP requests"
 
+echo "== the four privacy dimensions in a config file reach the exported spans =="
+# The wrapper is the only reader that finds the user-scoped config file, so this
+# is what proves the four keys are wired end to end. The fixture is the same
+# recorded OpenCode session the Go golden test replays.
+ENVELOPES="$REPO/internal/source/opencode/testdata/forwarded_envelopes.jsonl"
+PROMPT_TEXT="Read the readme, then read a missing file"
+TOOL_ARGUMENT="hello from mcp"
+
+# replay TOKEN DIMENSIONS — drive the recorded session through the wrapper with a
+# config file carrying those dimensions, under a data dir of its own so the
+# fixture's fixed session ids cannot carry state between scenarios.
+replay() {
+  local token="$1" dimensions="$2"
+  export HOME="/tmp/opencode-home-$token"; rm -rf "$HOME"; mkdir -p "$HOME/.config/opencode"
+  {
+    echo "---"
+    echo 'otlp_url: "http://localhost:4319"'
+    echo "auth_token: \"$token\""
+    printf '%s\n' "$dimensions"
+    echo "---"
+  } > "$HOME/.config/opencode/dash0-agent-plugin.local.md"
+
+  export DASH0_PLUGIN_DATA="/tmp/opencode-pdata-$token"
+  rm -rf "$DASH0_PLUGIN_DATA"; mkdir -p "$DASH0_PLUGIN_DATA/bin"
+  cp "/tmp/opencode-pdata/bin/opencode-on-event-${VERSION}-$(os_arch)" \
+     "$DASH0_PLUGIN_DATA/bin/opencode-on-event-${VERSION}-$(os_arch)"
+
+  ( cd "$(mktemp -d)" && while IFS= read -r envelope; do
+      printf '%s\n' "$envelope" | bash "$WRAPPER"
+    done < "$ENVELOPES" )
+}
+
+# bodies TOKEN — every OTLP payload that carried that token, concatenated.
+bodies() {
+  curl -s http://localhost:4319/requests \
+    | jq -r --arg auth "Bearer $1" '[.requests[]|select(.auth==$auth)|.body]|join("\n")'
+}
+
+replay opencode-dims-a "$(printf 'prompts: disabled\ntools: full')"
+replay opencode-dims-b "$(printf 'prompts: full\ntools: disabled')"
+replay opencode-dims-c "$(printf 'prompts: disabled\ntools: full\nskills: disabled\nagents: disabled')"
+
+sleep 2
+fail=0
+A=$(bodies opencode-dims-a)
+[ -n "$A" ] || { echo "ERROR: prompts: disabled / tools: full exported nothing at all"; fail=1; }
+case "$A" in
+  *"$PROMPT_TEXT"*) echo "ERROR: prompt text was exported at prompts: disabled"; fail=1 ;;
+esac
+case "$A" in
+  *"$TOOL_ARGUMENT"*) ;;
+  *) echo "ERROR: tool arguments were withheld at tools: full"; fail=1 ;;
+esac
+
+B=$(bodies opencode-dims-b)
+[ -n "$B" ] || { echo "ERROR: prompts: full / tools: disabled exported nothing at all"; fail=1; }
+case "$B" in
+  *"$PROMPT_TEXT"*) ;;
+  *) echo "ERROR: prompt text was withheld at prompts: full"; fail=1 ;;
+esac
+case "$B" in
+  *"$TOOL_ARGUMENT"*) echo "ERROR: tool arguments were exported at tools: disabled"; fail=1 ;;
+esac
+case "$B" in
+  *execute_tool*) echo "ERROR: an execute_tool span survived tools: disabled"; fail=1 ;;
+esac
+# agents was left unset here, so it sits at the default: the recorded session's
+# delegation still gets its invoke_agent span. This is the contrast that gives
+# the assertion below its teeth.
+case "$B" in
+  *invoke_agent*) ;;
+  *) echo "ERROR: no invoke_agent span at the default agents level"; fail=1 ;;
+esac
+
+C=$(bodies opencode-dims-c)
+[ -n "$C" ] || { echo "ERROR: the four-dimension config exported nothing at all"; fail=1; }
+case "$C" in
+  *invoke_agent*) echo "ERROR: an invoke_agent span survived agents: disabled"; fail=1 ;;
+esac
+case "$C" in
+  *"$PROMPT_TEXT"*) echo "ERROR: prompt text was exported at prompts: disabled"; fail=1 ;;
+esac
+case "$C" in
+  *"$TOOL_ARGUMENT"*) ;;
+  *) echo "ERROR: tool arguments were withheld at tools: full"; fail=1 ;;
+esac
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: the four dimensions configured in a config file govern the exported spans"
+
+export DASH0_PLUGIN_DATA=/tmp/opencode-pdata
+
 echo "== a cached binary that fails checksum verification is discarded, not run =="
 export HOME=/tmp/opencode-home-checksum; rm -rf "$HOME"; mkdir -p "$HOME/.config/opencode"
 BINARY="$DASH0_PLUGIN_DATA/bin/opencode-on-event-${VERSION}-$(os_arch)"

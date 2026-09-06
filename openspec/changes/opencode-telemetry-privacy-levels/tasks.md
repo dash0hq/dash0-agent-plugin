@@ -77,13 +77,13 @@
 
 ## 6. Configuration surface
 
-- [ ] 6.1 Settle design.md's Open Question on where the four keys are read —
+- [x] 6.1 Settle design.md's Open Question on where the four keys are read —
   `opencode-on-event.sh` or `internal/config` via `OpenCode.ConfigDir` — then
   implement it and verify a config file setting all four dimensions produces the
   expected resolved levels
-- [ ] 6.2 Verify `test/contracts/opencode.sh` covers a config file setting the
+- [x] 6.2 Verify `test/contracts/opencode.sh` covers a config file setting the
   four dimensions and asserts the resulting spans against the mock OTLP server
-- [ ] 6.3 Verify a test asserts that setting the four dimensions changes no
+- [x] 6.3 Verify a test asserts that setting the four dimensions changes no
   attribute on any span exported by the Claude, Cursor, Codex or Copilot
   entrypoints
 

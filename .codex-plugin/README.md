@@ -10,8 +10,7 @@ Emit OpenAI Codex agent activity as OpenTelemetry spans to your Dash0 endpoint â
 - **Shell tooling:**
   - macOS and Linux: `bash`, `curl` or `wget`, and `sha256sum` or `shasum` â€” the
     bootstrap downloads and checksum-verifies the hook binary on first run.
-  - Windows: nothing extra. The plugin runs a PowerShell bootstrap, and both
-    `curl.exe` and `Get-FileHash` ship with Windows.
+  - Windows: nothing extra
 
 ## Installation
 

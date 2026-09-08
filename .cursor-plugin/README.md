@@ -12,9 +12,7 @@ Cursor plugin that emits agent activity as OpenTelemetry spans to your Dash0 end
     (`brew install jq` on macOS; your distro's package manager on Linux) — the
     installer needs `jq` to merge safely into your `~/.cursor/hooks.json`, and the
     bootstrap downloads and checksum-verifies the hook binary on first run.
-  - Windows: nothing extra. The PowerShell installer reads and writes JSON
-    itself, so it needs no `jq`, and both `curl.exe` and `Get-FileHash` ship with
-    Windows.
+  - Windows: nothing extra
 
 ## Installation
 

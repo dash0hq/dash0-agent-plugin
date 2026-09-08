@@ -1,0 +1,39 @@
+{
+  "name": "@dash0/opencode-plugin",
+  "version": "0.1.24",
+  "description": "Sends OpenTelemetry traces for OpenCode sessions to Dash0.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/dash0-opencode-plugin.js",
+  "exports": {
+    ".": "./dist/dash0-opencode-plugin.js"
+  },
+  "files": [
+    "dist/dash0-opencode-plugin.js",
+    "opencode-on-event.sh",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dash0hq/dash0-agent-plugin.git",
+    "directory": "opencode"
+  },
+  "scripts": {
+    "build": "./build.sh",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/*.test.ts'"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18.0 <2"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.0",
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  }
+}

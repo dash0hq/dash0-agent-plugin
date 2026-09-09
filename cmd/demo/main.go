@@ -32,6 +32,7 @@ func main() {
 	token := flag.String("token", os.Getenv("DASH0_AUTH_TOKEN"), "Dash0 auth token (or DASH0_AUTH_TOKEN)")
 	dataset := flag.String("dataset", os.Getenv("DASH0_DATASET"), "Dash0 dataset (or DASH0_DATASET)")
 	n := flag.Int("n", envInt("DEMO_TURNS", 1), "number of turns to generate and send (or DEMO_TURNS)")
+	canary := flag.Bool("canary", envBool("DEMO_CANARY"), "also emit deterministic cost-validation canary turns (or DEMO_CANARY)")
 	debug := flag.Bool("debug", false, "print OTLP payloads to stderr")
 	flag.Parse()
 
@@ -45,7 +46,7 @@ func main() {
 	// Running inside AWS Lambda's custom runtime: serve the Runtime API loop
 	// instead of the one-shot CLI path.
 	if os.Getenv("AWS_LAMBDA_RUNTIME_API") != "" {
-		serveLambda(cfg, *n)
+		serveLambda(cfg, *n, *canary)
 		return
 	}
 
@@ -56,12 +57,12 @@ func main() {
 
 	ctx := context.Background()
 	for i := 0; i < *n; i++ {
-		if err := demo.Handle(ctx, cfg); err != nil {
+		if err := demo.Handle(ctx, cfg, *canary); err != nil {
 			fmt.Fprintf(os.Stderr, "demo: turn %d: %v\n", i+1, err)
 			os.Exit(1)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "demo: sent %d turn(s)\n", *n)
+	fmt.Fprintf(os.Stderr, "demo: sent %d turn(s)%s\n", *n, canarySuffix(*canary))
 }
 
 // envInt returns the integer value of the env var, or fallback if unset/invalid.
@@ -70,4 +71,18 @@ func envInt(key string, fallback int) int {
 		return v
 	}
 	return fallback
+}
+
+// envBool reports whether the env var is set to a truthy value (1, true, yes…).
+func envBool(key string) bool {
+	v, _ := strconv.ParseBool(os.Getenv(key))
+	return v
+}
+
+// canarySuffix annotates the send summary when canary turns were also emitted.
+func canarySuffix(canary bool) string {
+	if canary {
+		return " + canary turns"
+	}
+	return ""
 }

@@ -22,7 +22,7 @@ import (
 // works both as a local CLI and as the Lambda `bootstrap` — no SDK required.
 //
 // API reference: https://docs.aws.amazon.com/lambda/latest/dg/runtimes-api.html
-func serveLambda(cfg otlp.Config, turns int) {
+func serveLambda(cfg otlp.Config, turns int, canary bool) {
 	base := "http://" + os.Getenv("AWS_LAMBDA_RUNTIME_API") + "/2018-06-01/runtime"
 	// No client timeout: the /invocation/next poll blocks until work arrives.
 	client := &http.Client{}
@@ -41,7 +41,7 @@ func serveLambda(cfg otlp.Config, turns int) {
 			continue
 		}
 
-		if err := runTurns(cfg, turns); err != nil {
+		if err := runTurns(cfg, turns, canary); err != nil {
 			postString(client, base+"/invocation/"+reqID+"/error",
 				fmt.Sprintf(`{"errorMessage":%q,"errorType":"HandlerError"}`, err.Error()))
 			continue
@@ -67,10 +67,10 @@ func nextInvocation(client *http.Client, base string) (string, error) {
 	return reqID, nil
 }
 
-func runTurns(cfg otlp.Config, turns int) error {
+func runTurns(cfg otlp.Config, turns int, canary bool) error {
 	ctx := context.Background()
 	for i := 0; i < turns; i++ {
-		if err := demo.Handle(ctx, cfg); err != nil {
+		if err := demo.Handle(ctx, cfg, canary); err != nil {
 			return fmt.Errorf("turn %d/%d: %w", i+1, turns, err)
 		}
 	}

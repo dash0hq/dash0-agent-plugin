@@ -37,6 +37,18 @@ type turn struct {
 	branch   string
 	revision string
 	session  string
+	usage    usage
+}
+
+// usage holds the token counts reported on a turn's chat span. These are the
+// only inputs to the cost Dash0 enriches, so newTurn randomizes them for
+// realistic traffic while the deterministic canary pins them to a known vector
+// (see canary.go) — giving the cost aggregations hand-computable expected values.
+type usage struct {
+	inputTokens         int64
+	outputTokens        int64
+	cacheCreationTokens int64
+	cacheReadTokens     int64
 }
 
 const newcomerProbability = 0.15
@@ -54,6 +66,12 @@ func newTurn(now time.Time) turn {
 		// A fresh session per turn, used as the conversation identifier.
 		revision: randomHex(40),
 		session:  randomUUID(),
+		usage: usage{
+			inputTokens:         int64(rand.IntN(40000) + 2000),
+			outputTokens:        int64(rand.IntN(60000) + 500),
+			cacheCreationTokens: int64(rand.IntN(400000)),
+			cacheReadTokens:     int64(rand.IntN(9000000)),
+		},
 	}
 }
 
@@ -140,10 +158,10 @@ func (t turn) traces(now time.Time) (otlp.ExportTracesRequest, error) {
 		{Key: "gen_ai.conversation.id", Value: otlp.StringVal(sessionID)},
 		{Key: "gen_ai.input.messages", Value: otlp.StringVal(messageJSON("user", msg.Input))},
 		{Key: "gen_ai.output.messages", Value: otlp.StringVal(messageJSON("assistant", msg.Output))},
-		{Key: "gen_ai.usage.input_tokens", Value: otlp.IntVal(int64(rand.IntN(40000) + 2000))},
-		{Key: "gen_ai.usage.output_tokens", Value: otlp.IntVal(int64(rand.IntN(60000) + 500))},
-		{Key: "gen_ai.usage.cache_creation.input_tokens", Value: otlp.IntVal(int64(rand.IntN(400000)))},
-		{Key: "gen_ai.usage.cache_read.input_tokens", Value: otlp.IntVal(int64(rand.IntN(9000000)))},
+		{Key: "gen_ai.usage.input_tokens", Value: otlp.IntVal(t.usage.inputTokens)},
+		{Key: "gen_ai.usage.output_tokens", Value: otlp.IntVal(t.usage.outputTokens)},
+		{Key: "gen_ai.usage.cache_creation.input_tokens", Value: otlp.IntVal(t.usage.cacheCreationTokens)},
+		{Key: "gen_ai.usage.cache_read.input_tokens", Value: otlp.IntVal(t.usage.cacheReadTokens)},
 		{Key: "effort", Value: effortVal},
 	}
 	chatAttrs = append(chatAttrs, sharedAttrs...)

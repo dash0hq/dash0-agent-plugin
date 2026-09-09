@@ -34,6 +34,40 @@ randomized values. They carry the **same repository and branch** as the turn's
 spans, so the metrics join with the spans on the VCS dimensions. See
 [`vcs_metrics.go`](./vcs_metrics.go).
 
+## Cost-validation canary
+
+The random turns above make each turn's cost unknowable up front, which is fine
+for the demo but useless for checking whether cost enrichment and the cost
+aggregations (per user / repo / team, built on the `coding_agent_spans`
+projection) are correct. The **canary** (`-canary` / `DEMO_CANARY=true`) adds a
+small deterministic subset _alongside_ the random traffic: on every invocation
+it also emits three turns with a **fixed** token vector, one per model tier, each
+attributed to a reserved user, repository, and team (all disjoint from
+[`data.go`](./data.go), so they filter cleanly out of the random data). See
+[`canary.go`](./canary.go).
+
+Because the token usage is pinned (`100k` input / `100k` output / `100k` cache
+write / `1M` cache read) and identical across the three, each turn's enriched
+cost is a known constant and the per-tier costs land in an exact **5:3:1** ratio:
+
+| Reserved user / repo  | Model             | Expected cost per turn |
+| --------------------- | ----------------- | ---------------------- |
+| `cost-canary-opus`    | `claude-opus-4-8` | **$4.125**             |
+| `cost-canary-sonnet`  | `claude-sonnet-4-6` | **$2.475**           |
+| `cost-canary-haiku`   | `claude-haiku-4-5` | **$0.825**            |
+| team `Cost Validation` | (roll-up)        | **$7.425**             |
+
+Filter a Dash0 cost view to `user.name = "cost-canary-opus"` (or the repo, or the
+`Cost Validation` team) and the cost per turn must equal these constants;
+grouping by team must roll up to the sum; the tier ratio must stay 5:3:1. Any
+deviation points straight at the rate table or the projection. (Costs assume the
+5-minute cache-write multiplier of 1.25× — an isolated cache-write canary would
+disambiguate 5-minute vs 1-hour, if needed.)
+
+Only trace/span/session IDs stay unique, so the canary turns still render as
+distinct sessions. Emission is **gated** so the canary lands only in the
+cost-validation dataset — never enable it on the customer-facing demo datasets.
+
 ## Running locally
 
 ```sh
@@ -43,6 +77,9 @@ go run ./cmd/demo -url https://ingress.<region>.aws.dash0.com -token <auth> -dat
 # Or configure via env, and send a batch of 25 turns
 DASH0_OTLP_URL=... DASH0_AUTH_TOKEN=... DASH0_DATASET=demo go run ./cmd/demo -n 25
 
+# Add the deterministic cost-validation canary turns
+DASH0_OTLP_URL=... DASH0_AUTH_TOKEN=... DASH0_DATASET=cost-validation go run ./cmd/demo -canary
+
 # Print payloads without sending anything
 go run ./cmd/demo -debug
 ```
@@ -51,6 +88,7 @@ go run ./cmd/demo -debug
 
 - [`data.go`](./data.go) — the closed lists of mock data.
 - [`generator.go`](./generator.go) — `GenerateTurn` builds the OTLP request for one turn.
+- [`canary.go`](./canary.go) — the deterministic cost-validation canary turns.
 - [`handler.go`](./handler.go) — `Handle` generates one turn and exports it; the
   transport-agnostic entry point shared by the local driver and (later) a Lambda wrapper.
 - [`../../cmd/demo`](../../cmd/demo) — the binary: a local CLI that also serves

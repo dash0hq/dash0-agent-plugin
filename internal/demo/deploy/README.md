@@ -86,6 +86,7 @@ DASH0_OTLP_URL=https://ingress.us-west-2.aws.dash0.com \
 | `DASH0_AUTH_TOKEN` | yes      | —                    | Dash0 auth token (stored as env var) |
 | `DASH0_DATASET`    | no       | derived from token   | Target dataset; unset = no `Dash0-Dataset` header, ingest uses the token's dataset |
 | `DEMO_TURNS`       | no       | `1`                  | Turns sent per invocation            |
+| `DEMO_CANARY`      | no       | unset                | Set to `true` to also emit the deterministic cost-validation canary turns (see the generator README). Enable only on the cost-validation deployment. |
 | `AWS_REGION`       | no       | `eu-west-1`          | Target region                        |
 | `FUNCTION_NAME`    | no       | `dash0-demo-telemetry` | Lambda + base for role/rule names  |
 | `SCHEDULE`         | no       | `rate(20 minutes)`   | EventBridge schedule expression      |

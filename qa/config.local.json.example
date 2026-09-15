@@ -4,5 +4,6 @@
   "ingestUrl": "https://ingress.eu-west-1.aws.dash0-dev.com",
   "authToken": "auth_REPLACE_ME",
   "dataset": "default",
+  "ampDataset": "your-qa-dataset",
   "org": "your-org-slug"
 }

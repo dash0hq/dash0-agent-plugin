@@ -17,3 +17,4 @@ amp/node_modules/
 amp/amp-on-event
 amp/amp-on-event.exe
 .amp/*.local.md
+.amp/plugins/

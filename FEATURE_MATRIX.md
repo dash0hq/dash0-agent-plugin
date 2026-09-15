@@ -157,3 +157,26 @@ Code alone.
 For the three non-Claude agents, injecting the session link as model context is
 the only portable fallback — it lets the agent surface the link if asked, but
 does not display it directly.
+
+## Amp CLI and Orbs
+
+Amp uses a native TypeScript plugin and the shared Go OTLP builders instead of
+shell hooks and the on-disk pipeline lifecycle. See [installation and research](amp/README.md).
+
+| Capability | Amp |
+| --- | --- |
+| Local CLI / Orb executor | Same native plugin, installed on each executor |
+| Identity/config | `harness.Amp`, `AMP_PLUGIN_OPTION_*`, `.amp/dash0-agent-plugin.local.md` |
+| Session / turn | Thread ID / typed initiating message ID; completed-turn batches |
+| Root operation | `chat`; the answering exported message names it and supplies its usage, both absent when usage is off |
+| Tools | Paired `tool.call`/`tool.result`; observed timing and status. **Client-side tools only** — server-executed built-ins fire no plugin event and get no span |
+| Per-model tokens | Opt-in exact assistant-ID lookup in unstable `threads export` JSON, polled up to 20s because the export materializes seconds after the turn ends |
+| Mixed models in a turn | Separate usage-bearing `chat` children; no root duplication |
+| Missing usage | Omitted, never estimated or filled with zero |
+| Content | Prompt, response, and tool arguments/output under the shared `omit_io` rule; thinking and image blocks dropped in the bridge |
+| Subagent usage / tree | Only selected exported messages; hidden usage and ancestry not inferred |
+| Reload/pause recovery | No guarantee; unmatched/in-flight turns may be lost. The helper is detached and outlives the CLI, so a turn's spans can arrive after it exits |
+| Usage-child timing | Zero-duration observation; not automatically excluded from request-latency metrics |
+| Operation-based metrics | Root counts as one turn like Claude/Codex; each earlier model call adds one zero-latency `chat` prompt; no full metric parity |
+| Failures | Bounded helper; static diagnostics; tool calls always allowed |
+| Installation | Source build and directory copy; helper included in future release assets |

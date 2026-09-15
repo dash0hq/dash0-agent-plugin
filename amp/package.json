@@ -1,0 +1,16 @@
+{
+  "name": "dash0-amp-plugin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "prettier --check ."
+  },
+  "devDependencies": {
+    "@ampcode/plugin": "0.0.0-20260908001747-gc3e098d",
+    "@types/bun": "1.3.10",
+    "typescript": "5.9.3",
+    "prettier": "3.6.2"
+  }
+}

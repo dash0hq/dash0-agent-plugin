@@ -114,6 +114,25 @@ type Config struct {
 	// OS-derived user.name is dropped instead of reported. For orgs that would
 	// rather have no attribution than an approximate one.
 	OmitIdentityFallback bool
+
+	// Set only on a batch-local copy by WithSpanContext. nil retains the
+	// existing per-event resolution behavior for other integrations.
+	spanContext *[]Attribute
+}
+
+// WithSpanContext resolves workspace and identity attributes once for a batch.
+// Call after configuring privacy and selecting the workspace, not globally.
+func (c Config) WithSpanContext() Config {
+	attrs := append(vcsSpanAttributes(c), identitySpanAttributes(c)...)
+	c.spanContext = &attrs
+	return c
+}
+
+func contextSpanAttributes(c Config) []Attribute {
+	if c.spanContext != nil {
+		return *c.spanContext
+	}
+	return append(vcsSpanAttributes(c), identitySpanAttributes(c)...)
 }
 
 // ValidateURL reports whether OTLPUrl is usable, and clears it when it is not.
@@ -259,7 +278,18 @@ func sendOTLP(cfg Config, path string, payload []byte) error {
 			httpReq.Header.Set("Dash0-Dataset", cfg.Dataset)
 		}
 
+		started := time.Now()
+		if cfg.Debug {
+			debugLog(cfg, "otlp", fmt.Appendf(nil, `{"attempt":%d,"phase":"start"}`, attempt))
+		}
 		resp, err := http.DefaultClient.Do(httpReq)
+		if cfg.Debug {
+			status := 0
+			if resp != nil {
+				status = resp.StatusCode
+			}
+			debugLog(cfg, "otlp", fmt.Appendf(nil, `{"attempt":%d,"phase":"finish","status":%d,"elapsed_ms":%d}`, attempt, status, time.Since(started).Milliseconds()))
+		}
 		if err != nil {
 			cancel()
 			lastErr = fmt.Errorf("sending OTLP request: %w", err)
@@ -768,11 +798,12 @@ func redactHomeDir(path string) string {
 	}
 	home = filepath.Clean(home)
 	path = filepath.Clean(path)
-	if path == home {
+	relative, err := filepath.Rel(home, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return path
+	}
+	if relative == "." {
 		return "~"
 	}
-	if strings.HasPrefix(path, home+string(filepath.Separator)) {
-		return "~" + path[len(home):]
-	}
-	return path
+	return filepath.Join("~", relative)
 }

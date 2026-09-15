@@ -15,3 +15,7 @@ qa/config.local.json
 .amp/portals/*
 opencode-v2/node_modules/
 .opencode-v2/*.local.md
+amp/node_modules/
+amp/amp-on-event
+amp/amp-on-event.exe
+.amp/*.local.md

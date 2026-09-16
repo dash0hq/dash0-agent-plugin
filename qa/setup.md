@@ -5,7 +5,14 @@ config_file: qa/config.local.json
 # The last day every check of every runtime ran. 2026-09-01 added and ran the
 # cursor arm and the shared checks, but did not re-run the claude-only, codex-only
 # or copilot-only ones, so it is not a full pass. 2026-08-28 did the same for the
-# copilot arm.
+# copilot arm. 2026-09-15 added the amp arm, ran all fourteen of its checks
+# against real sessions, fixed the two product defects they found, and re-ran
+# them: thirteen green, and one still failing (server-side tool visibility),
+# which is a documented Amp limitation rather than a bug to fix. The claude,
+# codex, copilot and cursor arms were not re-run that day, and this machine's
+# QA token is scoped to the amp dataset so they cannot run here, so it is not
+# a full pass. That matters more than usual now: the skill fix touched shared
+# internal/pipeline code.
 last_full_pass: 2026-08-25
 ---
 
@@ -39,16 +46,92 @@ topic area spanning all four would need four drivers mid-run. A spec written for
 one runtime says nothing about the others. They share the Go pipeline and
 therefore share most invariants, but they differ in what a run can prove:
 
-| | claude | codex | copilot | cursor |
-| --- | --- | --- | --- | --- |
-| Driver | `qa/tools/qa-session.sh` | `qa/tools/qa-session-codex.sh` | `qa/tools/qa-session-copilot.sh` | `qa/tools/qa-session-cursor.sh`, through a pty |
-| What is under test | the plugin **as this machine has it installed** | the shipped install path, **provisioned into a throwaway home** | the shipped marketplace install, **provisioned into a throwaway home** | the machine's own registration, which must be the **shipped wrapper** |
-| Who configures it | the managed install; QA cannot | QA, from `qa/config.local.json` | QA, from `qa/config.local.json` | QA, from `qa/config.local.json`, through `CURSOR_PLUGIN_OPTION_*` |
-| Second channel | the transcript, via `claude-code-usage-audit.py` | the rollout, via `qa/tools/qa-rollout.py` (usage only) | the native-OTel file, via `qa/tools/qa-otel.py` (usage **and** tool spans) | the transcript, via `qa/tools/qa-transcript-cursor.py` (turns only; **no usage**) |
-| Harness's own figures | `claude -p --output-format json`, including cost | `codex exec --json`; Codex reports no cost | `copilot --output-format json`; output tokens and AI credits, no input tokens | none. The TUI has no machine-readable output |
-| Sees what was sent | no | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log |
-| Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording |
-| Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run |
+| | claude | codex | copilot | cursor | amp |
+| --- | --- | --- | --- | --- | --- |
+| Driver | `qa/tools/qa-session.sh` | `qa/tools/qa-session-codex.sh` | `qa/tools/qa-session-copilot.sh` | `qa/tools/qa-session-cursor.sh`, through a pty | `qa/tools/qa-session-amp.sh` |
+| What is under test | the plugin **as this machine has it installed** | the shipped install path, **provisioned into a throwaway home** | the shipped marketplace install, **provisioned into a throwaway home** | the machine's own registration, which must be the **shipped wrapper** | the plugin **as this machine has it installed**, built from source; there is no shipped install path yet |
+| Who configures it | the managed install; QA cannot | QA, from `qa/config.local.json` | QA, from `qa/config.local.json` | QA, from `qa/config.local.json`, through `CURSOR_PLUGIN_OPTION_*` | the machine's `~/.amp/dash0-agent-plugin.local.md`, **except the dataset**, which QA redirects with `AMP_PLUGIN_OPTION_DATASET` |
+| Second channel | the transcript, via `claude-code-usage-audit.py` | the rollout, via `qa/tools/qa-rollout.py` (usage only) | the native-OTel file, via `qa/tools/qa-otel.py` (usage **and** tool spans) | the transcript, via `qa/tools/qa-transcript-cursor.py` (turns only; **no usage**) | `--stream-json` stdout. **Not** `amp threads export`: the plugin reads that itself |
+| Harness's own figures | `claude -p --output-format json`, including cost | `codex exec --json`; Codex reports no cost | `copilot --output-format json`; output tokens and AI credits, no input tokens | none. The TUI has no machine-readable output | `--stream-json` events, and `amp threads usage <id>` |
+| Sees what was sent | no | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log |
+| Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording | the thread id, discovered from the run; amp has no `--session-id` |
+| Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run | no, on the local arm. The orb arm installs into the orb |
+
+The `amp` arm is **runnable** for the local executor: driver, recorder,
+comparison tool, fourteen checks and seven specs, all exercised against real
+sessions on 2026-09-15, including a five-turn conversation, MCP with two
+servers, and a skill. Coverage now matches the other four runtimes except for
+subagents, which Amp has no tool for — see
+[specs/amp/subagents](specs/amp/subagents/README.md).
+
+The arm found three defects. Two are **fixed and verified**; the third is a
+limitation of Amp's plugin API rather than a bug:
+
+- [amp-answering-model-call-is-never-attributed](findings/amp-answering-model-call-is-never-attributed.md)
+  — **fixed.** `threads export` returns the thread empty for seconds after a
+  turn and then materializes it whole, so the old single 1.5 s re-read always
+  missed. The helper now polls, and the bridge hands off so the poll is never
+  latency. Five turns of five now match, with tokens reconciling exactly.
+- [amp-skill-invocation-is-not-attributed](findings/amp-skill-invocation-is-not-attributed.md)
+  — **fixed.** Amp's skill tool names its argument `name`; `ExtractSkillName`
+  read only `skill`. It now falls back. **Shared code — see the caveat under
+  `amp-skill-invocation-is-named`.**
+- [amp-server-side-tools-produce-no-span](findings/amp-server-side-tools-produce-no-span.md)
+  — **open, and staying open.** Server-executed tools fire no plugin events, so
+  they reach no span. Nothing to fix in the bridge; it is documented in
+  `amp/README.md` and `FEATURE_MATRIX.md` and pinned by a failing check.
+
+One gap remains: the orb executor has no install path, so
+`amp-orb-install-path-exists` is an unverified placeholder.
+
+**The fix changed when spans arrive.** The helper is detached and polls for up
+to twenty seconds, so a turn's spans can land after `amp` itself has exited.
+Every amp check and spec settles for 30 s, not 10 s, whenever usage export is
+on. A read taken too early reports `partial`, or no spans at all, for a
+perfectly healthy run.
+
+### Amp writes to its own dataset, not `default`
+
+Every other runtime's arm reads `dataset`, which is `default`, because that is
+where those installs write. The `amp` arm reads **`ampDataset`**, which is a
+dataset of your own choosing, so QA sessions do not land in the shared
+`default` dataset alongside real work. Every `<ampDataset>` below means that
+value from `qa/config.local.json`.
+
+That is possible without provisioning anything, because the harness prefix
+outranks the config file. Measured 2026-09-15 against a local listener capturing
+the `Dash0-Dataset` header, with the machine's own file saying `default`:
+
+| Environment | `Dash0-Dataset` sent |
+| --- | --- |
+| nothing set | `default` |
+| `AMP_PLUGIN_OPTION_DATASET=qa-probe-dataset` | `qa-probe-dataset` |
+| `DASH0_DATASET=qa-probe-dataset` | `default` — the file still wins |
+
+So the driver exports `AMP_PLUGIN_OPTION_DATASET` from `ampDataset` and reads
+back with the same value. The machine's `~/.amp/dash0-agent-plugin.local.md` is
+never edited, and a normal Amp session outside QA keeps going to `default`.
+`DASH0_DATASET` is not a substitute and must not be used here: the third row is
+why, and it fails as a healthy run with zero spans found.
+
+The other four arms were deliberately **not** moved. `claude` structurally
+cannot: its dataset comes from a managed `remote-settings.json` that QA cannot
+change, which is the whole reason
+`qa-reads-the-environment-the-plugin-writes-to` exists. Moving `codex`,
+`copilot` and `cursor` is possible, since QA provisions those, but it is a
+separate change with its own re-verification and is not done here.
+
+Amp takes the machine's install for the same reason `claude` does, but not for
+the same cause: the personal plugin directory *does* follow `XDG_CONFIG_HOME`
+(measured 2026-09-15 — `XDG_CONFIG_HOME=/tmp/… amp plugins list` drops `dash0`
+and keeps the workspace plugins), so a throwaway home is available and was
+deliberately not taken. Testing the real install is the point here, since the
+install is a hand-built directory copy rather than a marketplace artifact.
+
+The orb arm is a second driver, not a flag on the first. A local install is not
+copied to an orb, so the orb needs its own build and copy; `amp/README.md` says
+so and this repository has no `.amp/` setup script to do it. See
+`amp-orb-install-path-exists` below for what that check will have to prove.
 
 The asymmetry is not a preference, it is what each host allows. Claude Code's
 options arrive from a managed `remote-settings.json` that beats every override,
@@ -137,8 +220,17 @@ chmod 600 qa/config.local.json
 | `appUrl` | UI base for a session link | Only used to build a human link. `internal/sessionurl/sessionurl.go` derives the same value from the ingress host, so a mismatch here means a report links somewhere the spans are not. |
 | `ingestUrl` | Where the plugin is expected to write | For `claude`, nothing is sent here: it exists so a check can prove QA reads the environment the plugin writes to. For `codex`, `copilot` and `cursor`, this is where the install actually exports. |
 | `authToken` | Reads spans back, and for `codex`, `copilot` and `cursor` also ingests them | A live token, and it must do **both**. The `claude` runtime only reads, so a read-scoped token is enough there. The other two provision the install and hand this same token to the plugin, and a token that cannot ingest 401s on every export — a run that looks perfectly healthy and reports zero spans. `ingest-token-reaches-the-ingress` proves it before a session is paid for. The two permissions really are separate, so reading is no guarantee of ingesting: measured 2026-08-26, an ingest-scoped token answers a query with `403 ... *:read permission is required`, and measured 2026-08-28, an access token copied out of the `dash0` CLI's own profile gets `401` from the ingress. Ask the team for the QA token rather than improvising one from a CLI profile. |
-| `dataset` | The dataset to read, and for `codex`, `copilot` and `cursor` to write | Must be the installed plugin's `DATASET`, which is `default`, not `qa`. Reading a *different readable* dataset returns an empty result that looks exactly like the plugin having sent nothing. |
+| `dataset` | The dataset to read, and for `codex`, `copilot` and `cursor` to write. **Not used by the `amp` arm** | Must be the installed plugin's `DATASET`, which is `default`, not `qa`. Reading a *different readable* dataset returns an empty result that looks exactly like the plugin having sent nothing. |
+| `ampDataset` | The dataset the `amp` arm writes to and reads back, via `AMP_PLUGIN_OPTION_DATASET` | A dataset of your own, deliberately not `default`, so QA sessions stay out of the shared dataset. The override only works through the harness prefix; `DASH0_DATASET` loses to the machine's config file and silently leaves spans in `default`. |
 | `org` | Organization slug | Informational. |
+
+> [!IMPORTANT]
+> **This machine's QA token is scoped to the amp dataset only.** That is what
+> the `amp` arm needs and all it needs. The consequence is that the `claude`,
+> `codex`, `copilot` and `cursor` arms cannot run here: they read and write
+> `default`, and `token-reads-the-dataset` fails for them with a 403. Getting a
+> `default`-capable token back is what unblocks them; nothing about their checks
+> changed.
 
 The `dash0` CLI's own active profile is deliberately not used. It carries its own
 dataset, which on this machine resolves to one the token cannot read, and every
@@ -931,13 +1023,18 @@ check would have caught. The harness ones are fixed: the transcript reader count
 as a reused run id. The product gap is open —
 [findings/cursor-subagent-work-produces-no-span.md](findings/cursor-subagent-work-produces-no-span.md).
 
-Checks with no prefix apply to every runtime. A `codex-`, `copilot-` or `cursor-`
-prefix means the check belongs to that runtime alone; skip it when a run targets
-another one, and skip the `claude`-only ones the same way. The runtime-specific
-blocking checks are `probe-session-agrees-with-what-it-was-fed` for `claude`,
-`codex-probe-session-agrees-with-what-it-was-fed` for `codex`,
+Checks with no prefix apply to every runtime. A `codex-`, `copilot-`, `cursor-`
+or `amp-` prefix means the check belongs to that runtime alone; skip it when a
+run targets another one, and skip the `claude`-only ones the same way. The
+runtime-specific blocking checks are `probe-session-agrees-with-what-it-was-fed`
+for `claude`, `codex-probe-session-agrees-with-what-it-was-fed` for `codex`,
 `copilot-probe-session-agrees-with-what-it-was-fed` for `copilot`, and
-`cursor-probe-session-agrees-with-what-it-was-fed` for `cursor`.
+`cursor-probe-session-agrees-with-what-it-was-fed` for `cursor`. `amp` has no
+equivalent yet; see the `amp-` checks at the end.
+
+One shared check does not transfer to `amp` as written. `toolchain-present`
+names `claude`, which an `amp` run does not need, so the `amp` arm carries its
+own `amp-toolchain-present` and skips that one.
 
 ### toolchain-present
 
@@ -982,7 +1079,9 @@ for p in qa/tools/qa-session.sh qa/tools/qa-compare.py qa/tools/qa-attrs.py \
          qa/tools/qa-codex-hooks/main.go \
          qa/tools/qa-session-copilot.sh qa/tools/qa-otel.py \
          qa/tools/qa-session-cursor.sh qa/tools/qa-cursor-drive.py \
-         qa/tools/qa-transcript-cursor.py; do
+         qa/tools/qa-transcript-cursor.py qa/tools/qa-amp-dataset-header.py \\
+         qa/tools/qa-session-amp.sh qa/tools/qa-amp-compare.py \\
+         qa/recorder/amp/index.ts; do
   git check-ignore -q "$p" && echo "IGNORED: $p" || echo "tracked: $p"
 done
 ```
@@ -1010,7 +1109,7 @@ except FileNotFoundError:
     sys.exit('qa/config.local.json does not exist')
 except json.JSONDecodeError as e:
     sys.exit(f'qa/config.local.json is not valid JSON: {e}')
-missing = [k for k in ('apiUrl','appUrl','ingestUrl','authToken','dataset') if not c.get(k)]
+missing = [k for k in ('apiUrl','appUrl','ingestUrl','authToken','dataset','ampDataset') if not c.get(k)]
 if missing: sys.exit('missing: ' + ', '.join(missing))
 if any('REPLACE_ME' in str(v) for v in c.values()): sys.exit('placeholder left in the config')
 print('config ok')
@@ -2001,4 +2100,473 @@ QA_CURSOR_RESUME='Now run the shell command: echo qa-second. Then reply with exa
 sleep 25
 qa/tools/qa-compare.py qa/runs/setup-probe-cursor-turns
 qa/tools/qa-transcript-cursor.py qa/runs/setup-probe-cursor-turns
+```
+
+### amp-toolchain-present
+
+- **proves.** An `amp` run needs `go`, `python3`, `dash0`, `uuidgen`, `amp` and
+  `bun`, and a missing one surfaces halfway through a paid session rather than
+  before it. `bun` is here and not in the shared check because Amp runs the
+  bridge with it, and because `make test-amp` cannot run without it either.
+  `claude` is deliberately absent: an `amp` run never invokes it.
+- **after.** none
+- **blocking.** true
+- **pass.** No output.
+- **fail.** `MISSING: <tool>`. `amp` comes from
+  https://ampcode.com/docs/install, `bun` from `brew install oven-sh/bun/bun`,
+  `dash0` from `brew install dash0`.
+- **verified.** 2026-09-15, signals: pass+fail. The fail half was provoked by
+  adding a name that cannot exist to the loop.
+
+```sh
+for t in go python3 dash0 uuidgen amp bun; do command -v "$t" >/dev/null || echo "MISSING: $t"; done
+```
+
+### amp-plugin-is-loaded
+
+- **proves.** Amp has actually loaded the dash0 plugin and bound all four of its
+  lifecycle events. A plugin directory that exists but did not load produces a
+  session that runs perfectly and exports nothing, which reads as total telemetry
+  loss rather than as an install problem.
+- **after.** none
+- **blocking.** true
+- **pass.** A line containing `plugins/dash0/index.ts active`, and a following
+  line naming `agent.start`, `tool.call`, `tool.result` and `agent.end`.
+- **fail.** No `dash0` line at all means the plugin is not installed for this
+  user, or `XDG_CONFIG_HOME` points somewhere without it. Reinstall with the
+  build-and-copy steps in `amp/README.md`. A `dash0` line with fewer than four
+  events means `index.ts` loaded but did not register; check it against the tree
+  with `amp-installed-plugin-matches-the-tree`.
+- **verified.** 2026-09-15, signals: pass+fail. The fail half was provoked with
+  `XDG_CONFIG_HOME=/tmp/…`, which drops `dash0` from the list and leaves the
+  workspace plugins in place. That provocation mutates nothing, which is why it
+  is the one used here rather than moving the install aside.
+
+```sh
+amp plugins list 2>&1 | grep -A1 'plugins/dash0/index.ts active' \
+  || echo "NOT LOADED: dash0 plugin absent from amp plugins list"
+```
+
+### amp-installed-plugin-matches-the-tree
+
+- **proves.** The plugin this machine will run is the one in this working tree.
+  Amp loads `index.ts` from `~/.config/amp/plugins/dash0/`, and the helper next to
+  it is a compiled copy, so neither follows a `git checkout`. A run against a
+  stale copy reports defects that were already fixed, or misses ones that were
+  just introduced, and nothing in the run output says which build it used.
+- **after.** amp-plugin-is-loaded
+- **blocking.** true
+- **pass.** `index.ts current` and `helper current`.
+- **fail.** `index.ts STALE` or `helper STALE`. Reinstall before running
+  anything, with **`-buildvcs=false`**, which is what makes this check work at
+  all (see below):
+
+  ```sh
+  go build -buildvcs=false -o ~/.config/amp/plugins/dash0/amp-on-event ./cmd/amp-on-event
+  cp amp/index.ts ~/.config/amp/plugins/dash0/index.ts
+  ```
+
+  Then restart Amp. A running session keeps the `index.ts` it loaded, so copying
+  the file is not enough on its own.
+
+  A helper installed by the plain `amp/README.md` command reports `STALE` here
+  the first time even when its source is identical. Reinstall once with the
+  command above and it stays quiet after that.
+- **verified.** 2026-09-15, signals: pass+fail. The `index.ts` half had both
+  halves observed that day: the installed copy was genuinely stale before a
+  reinstall and the check said so. The helper half was first written as a plain
+  `cmp` against a fresh build and **that version was wrong** — it reported
+  `STALE` against a byte-identical source, because Go stamps `vcs.revision` and
+  `vcs.time` into the binary, so the same source built at two different commits
+  differs. Measured: the installed helper carried
+  `vcs.revision=72a8417…` and a fresh build `vcs.revision=a1cc0ed…` from
+  unchanged source. `-buildvcs=false` on both sides was then measured
+  reproducible across two consecutive builds. An mtime comparison was tried
+  first and rejected for the same class of reason: `git reset` and `git stash
+  apply` rewrite working-tree mtimes, so every Go file looks newer than the
+  binary after any history operation.
+
+```sh
+D="$HOME/.config/amp/plugins/dash0"
+diff -q "$D/index.ts" amp/index.ts >/dev/null && echo "index.ts current" || echo "index.ts STALE"
+# -buildvcs=false on both sides. Without it Go stamps the commit into the
+# binary and a byte comparison reports STALE on identical source.
+go build -buildvcs=false -o /tmp/amp-on-event.qa ./cmd/amp-on-event \
+  && { cmp -s /tmp/amp-on-event.qa "$D/amp-on-event" && echo "helper current" || echo "helper STALE"; }
+```
+
+### amp-no-project-config-overrides-the-install
+
+- **proves.** No config file in the session's reach can hand the installed plugin
+  a different endpoint, dataset or token than the one QA is reading from. This is
+  the same failure `no-project-config-overrides-the-install` guards for `claude`,
+  and it is worth its own check because Amp resolves a *workspace* file —
+  `.amp/dash0-agent-plugin.local.md` — that outranks `DASH0_*` and is easy to
+  leave behind after manual testing.
+- **after.** none
+- **blocking.** true
+- **pass.** `clean`.
+- **fail.** A path means this repository has a workspace-level config and a
+  session run from here would use it instead of `~/.amp/`. Move it to `~/.amp/`.
+  Note `.gitignore` already carries `.amp/*.local.md`, so such a file is
+  untracked and invisible to a `git status` skim.
+- **verified.** 2026-09-15, signals: pass+fail. The fail half was provoked in a
+  temporary directory rather than by writing into the repository.
+
+```sh
+ls .amp/dash0-agent-plugin.local.md 2>/dev/null || echo clean
+```
+
+### amp-dataset-override-reaches-the-header
+
+- **proves.** The one mechanism the whole `amp` arm rests on: that
+  `AMP_PLUGIN_OPTION_DATASET` actually changes the `Dash0-Dataset` header the
+  helper sends, so QA spans land in `ampDataset` and not in the shared
+  `default` dataset. If this silently stopped working, a run would export into
+  `default` and then read `ampDataset`, which returns nothing and looks exactly
+  like the plugin having sent nothing at all.
+- **after.** amp-installed-plugin-matches-the-tree
+- **blocking.** true
+- **pass.** `default`, then the probe's dataset, then `default`.
+- **fail.** A second value of `default` means the harness prefix stopped
+  outranking the config file, and the arm cannot isolate its dataset any more;
+  stop and fix that before running a session. A third value of the probe's
+  dataset means `DASH0_DATASET` started winning over the file, which would make the
+  override order in `internal/harness` different from what this arm assumes.
+- **verified.** 2026-09-15, signals: pass+fail. All three rows were observed.
+  The second row is the pass the arm depends on; the first and third are the
+  failures it must not have, and both were produced by the same run rather than
+  by breaking anything. No Dash0 credential is used — the listener is local and
+  the token is a fixed dummy string.
+
+```sh
+python3 qa/tools/qa-amp-dataset-header.py
+```
+
+### amp-probe-session-agrees-with-what-it-was-fed
+
+- **proves.** The whole method on a session small enough to reason about: the
+  recorder saw every plugin event, the installed bridge exported, Dash0 stored
+  it in the amp dataset, and the span count and tool names agree with Amp's own
+  `--stream-json`, which the plugin never sees. This is the `amp` equivalent of
+  the same check on the other four runtimes, and it is the blocking one.
+- **after.** config-is-complete, amp-installed-plugin-matches-the-tree,
+  amp-dataset-override-reaches-the-header
+- **blocking.** true
+- **pass.** `qa-amp-compare.py` exits `0` and prints `AGREEMENT`: one `chat`
+  span for one `amp -x`, one `execute_tool` span, matching tool names.
+- **fail.** `no spans for T-… in <ampDataset>` means the export never happened
+  or went elsewhere; the most likely cause is `--plugin-ready-timeout` having been
+  dropped from the driver, which lets Amp start the turn before the bridge has
+  loaded and skip `agent.start`/`agent.end` entirely. A tool-count mismatch is
+  a real defect. A turn where the model declined to call the tool is a failed
+  run rather than a failing check; re-run it.
+- **verified.** 2026-09-15, signals: pass-only. Measured on
+  `qa/runs/setup-probe-amp`: 1 chat span, 1 `execute_tool shell_command`, both
+  channels agreeing, `AGREEMENT`, exit `0`. Provoking the failure would mean
+  breaking the export on purpose, which this check exists to notice.
+
+```sh
+qa/tools/qa-session-amp.sh \
+  'Run the shell command: echo qa-amp-first. Then reply with exactly the word done.' \
+  setup-probe-amp
+sleep 10
+qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp
+```
+
+### amp-resumed-turn-is-scoped-to-itself
+
+- **proves.** A second turn on the same thread produces its own root and its own
+  tool span, rather than re-reporting the first turn's. This defect class was
+  real on both `copilot` and `cursor`, so it is the highest-value second probe
+  rather than a speculative one.
+- **after.** amp-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false. Without it an `amp` run says nothing about per-turn
+  scoping, and a spec that needs it ships single-channel.
+- **pass.** Exit `0`, 2 `chat` spans and 2 `execute_tool` spans for two turns.
+- **fail.** 1 chat span for 2 turns means the resumed turn was not recorded. 3
+  `execute_tool` spans for 2 tool calls is the double-reporting the other
+  runtimes had.
+- **verified.** 2026-09-15, signals: pass-only. Measured on
+  `qa/runs/setup-probe-amp-turns`: 2 turns, 2 chat spans, 2 tool spans,
+  `AGREEMENT`. Scoping is correct on `amp`. Note that run also had usage
+  enabled and both turns returned `status=partial` — see the finding named in
+  `amp-usage-attributes-the-answering-call` below. That is a different defect
+  and does not affect this check.
+
+```sh
+QA_AMP_RESUME='Now run the shell command: echo qa-amp-second. Then reply with exactly the word done.' \
+  qa/tools/qa-session-amp.sh \
+  'Run the shell command: echo qa-amp-first. Then reply with exactly the word done.' \
+  setup-probe-amp-turns
+sleep 12
+qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-turns
+```
+
+### amp-usage-attributes-the-answering-call
+
+- **proves.** That opting into usage export actually attributes the model call
+  which answered the turn. It is a check rather than only a spec because a run
+  that silently attributes nothing looks identical to one where the model used
+  no tokens.
+- **after.** amp-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false.
+- **pass.** `usage status: matched`, `gen_ai.request.model` present on the turn
+  root, and `output tokens stream=N dash0=N` agreeing. That last line is the
+  strong one: `qa-amp-compare.py` asserts the identity only when every turn
+  matched, and it holds the exporter's per-call attribution against Amp's own
+  stream, which the plugin never reads.
+- **fail.** `usage status: partial` with no model on the root. Before assuming a
+  regression, check the *settle time*: the helper now polls the export for up
+  to twenty seconds after the turn ends and the bridge hands off after two, so
+  a read at 10 s can report `partial`, or no spans at all, for a perfectly
+  healthy run. If 30 s still gives `partial`, it is a real regression of
+  [findings/amp-answering-model-call-is-never-attributed.md](findings/amp-answering-model-call-is-never-attributed.md).
+- **verified.** 2026-09-15, signals: **both**, which is new. This check was
+  written `fail-only` against an open defect and has since been used as that
+  defect's acceptance test.
+
+  *Failing half*, before the fix, on `qa/runs/setup-probe-amp-ids` and
+  `qa/runs/conv-amp-5turn-b`: `partial`, the root named by the tool-calling
+  round rather than the answering one, and only one turn in five ever matching.
+
+  *Passing half*, after it, on `qa/runs/fix-conv-5turn`: five turns of five
+  `matched`, five roots of five carrying a model, and output tokens reconciling
+  exactly — 222 against 222.
+
+  The cause was not the duration of the old 1.5 s re-read but its shape.
+  `amp threads export` returns the thread with *no messages at all* for the
+  first seconds after a turn and then materializes it whole, so a single
+  re-read landed in the empty window every time.
+
+```sh
+QA_AMP_USAGE=1 qa/tools/qa-session-amp.sh \
+  'Run the shell command: echo qa-amp-usage. Then reply with exactly the word done.' \
+  setup-probe-amp-usage
+# 30s, not 10s: with usage export on the helper is detached and polls
+# `amp threads export` for up to twenty seconds, so spans land after `amp` exits.
+sleep 30
+qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-usage
+```
+
+### amp-orb-install-path-exists
+
+- **proves.** An orb has a way to get the plugin before the orb arm is worth
+  running. A local install is not copied to an orb, so an `-ox` run against an
+  orb with no install produces a healthy session and zero spans — the same
+  symptom as a broken plugin.
+- **after.** none
+- **blocking.** true for the orb arm only. Skip it for a local `amp` run.
+- **pass.** not yet observed.
+- **fail.** not yet observed.
+- **verified.** **never. This check is a placeholder and must not be trusted.**
+  As of 2026-09-15 this repository has no `.amp/` setup script, so there is no
+  install path for an orb to follow, and `amp projects status` maps the
+  directory to `dash0/dash0-agent-plugin`. Writing the check means first
+  deciding how an orb gets the plugin — a project setup script that builds it
+  from a pinned checkout, per `amp/README.md`, or a first thread turn that
+  installs it before the probe turn. The second is untested and may not work at
+  all, because `--plugin-ready-timeout` waits for plugins at turn start and it
+  is unknown whether Amp rescans mid-thread.
+
+  Resolve that before running an orb session. Do not guess: an orb turn costs
+  credits and a wrong guess here is indistinguishable from a plugin defect.
+
+### amp-conversation-keeps-one-thread-across-turns
+
+- **proves.** That a real conversation — five turns, tool calls, and a fact
+  carried from turn one to turn five — produces five scoped roots on one
+  thread. `amp-resumed-turn-is-scoped-to-itself` proves two turns do not
+  collide; this proves the bridge survives a session long enough for its
+  per-turn state map, its turn ids and its `usage:<turn>:<n>` span ids to be
+  wrong, and that the turns really are one conversation rather than five
+  threads that happen to share an id in the manifest.
+- **after.** amp-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false. Without it, nothing here speaks for a session longer
+  than two turns.
+- **pass.** `AGREEMENT`; five `chat` roots, four `execute_tool` spans, five
+  distinct `dash0.amp.turn.id` values, and the model answers turn five with the
+  codeword given only in turn one.
+- **fail.** A repeated `dash0.amp.turn.id` is the state-map-keyed-by-thread
+  bug. A tool span carrying the previous turn's id is the span-id collision
+  one. The model not recalling the codeword means `amp threads continue`
+  started fresh threads, and every span assertion above would still pass — so
+  check the codeword first.
+- **verified.** 2026-09-15, signals: pass-only. Measured on
+  `qa/runs/conv-amp-5turn-b`: 5 turns, 10 spans, `AGREEMENT`, and turn five
+  answered `ZEPHYR-41`. One turn of five reached `usage status: matched`; the
+  other four were `partial`, which is the known usage defect and not this
+  check's concern.
+
+  The first attempt at this check failed with an empty `stream.jsonl` and
+  `Error: Timeout while reading from stdin`. `amp -x [message]` falls back to
+  reading the prompt from stdin, so an inherited stdin that never closes hangs
+  it. The driver now pins `< /dev/null` on both `amp` invocations. If this
+  check ever reports "could not find a thread id", check that first.
+
+```sh
+cat > /tmp/qa-amp-turns.txt << 'EOF'
+Run the shell command: echo qa-turn-two. Then reply with exactly the word done.
+Run the shell command: qa-this-command-does-not-exist. Do not try an alternative and do not fix it. Then reply with exactly the word done.
+Run the shell command: echo qa-turn-four. Then reply with exactly the word done.
+Without running any command, reply with exactly the codeword I gave you in my first message, and nothing else.
+EOF
+
+QA_AMP_USAGE=1 QA_AMP_TURNS=/tmp/qa-amp-turns.txt qa/tools/qa-session-amp.sh \
+  'Remember the codeword: ZEPHYR-41. Run the shell command: echo qa-turn-one. Then reply with exactly the word done.' \
+  setup-probe-amp-conversation
+# 30s, not 10s: with usage export on the helper is detached and polls
+# `amp threads export` for up to twenty seconds, so spans land after `amp` exits.
+sleep 30
+qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-conversation
+```
+
+### amp-mcp-call-is-named-and-a-failure-is-reported
+
+- **proves.** MCP works end to end on `amp`: the `mcp__<server>__` prefix is
+  stripped, each call is tagged with the server that served it, the two servers
+  are not conflated, and a failing MCP call sets the span status to `ERROR`.
+  That last one is why this check is worth its own run — an MCP tool is the
+  **only** thing on `amp` that is both client-side and able to fail on demand,
+  so this is the one check that exercises the `tool.Status != "done"` branch in
+  `internal/source/amp/amp.go` against a real session.
+- **after.** amp-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false.
+- **pass.** `AGREEMENT`, span names `execute_tool echo_text` and
+  `execute_tool always_fails`, `dash0.gen_ai.tool.mcp_server` of
+  `qa_fixture_alpha` and `qa_fixture_beta` respectively, and status `ERROR` on
+  the second only.
+- **fail.** `mcp__` surviving in a span name is a prefix-stripping regression.
+  One server value on both spans means the two were conflated. Status `UNSET`
+  on `always_fails` means the bridge stopped copying Amp's own classification.
+- **verified.** 2026-09-15, signals: **both**. Measured on
+  `qa/runs/amp-mcp-b`, all four assertions holding. The failure signal is
+  genuinely exercised by `always_fails` rather than provoked artificially.
+
+  Two shape traps cost a run each, both now handled by the driver: Amp's
+  `--mcp-config` takes the server map **flat** — not Claude Code's
+  `{"mcpServers": {...}}` and not Amp's own `"amp.mcpServers"` settings key,
+  both of which are rejected with `Invalid MCP server configuration` — and Amp
+  has no `--strict-mcp-config`, so `--mcp-config` merges into the settings file
+  and isolation comes from `--settings-file` with an empty `amp.mcpServers`
+  instead. Without that, a QA prompt can reach the developer's real connectors.
+
+```sh
+QA_AMP_MCP=1 QA_AMP_USAGE=1 qa/tools/qa-session-amp.sh \
+  'Call the tool mcp__qa_fixture_alpha__echo_text once with the text QA-MCP-ALPHA. Then call the tool mcp__qa_fixture_beta__always_fails once; it will fail, which is expected, so do not retry it and do not try an alternative. Then reply with exactly the word done.' \
+  setup-probe-amp-mcp
+# 30s, not 10s: with usage export on the helper is detached and polls
+# `amp threads export` for up to twenty seconds, so spans land after `amp` exits.
+sleep 30
+qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-mcp
+```
+
+### amp-skill-invocation-is-named
+
+- **proves.** That a skill the model loads is named on its tool span, the way
+  it is on the other four runtimes.
+- **after.** amp-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false.
+- **pass.** `dash0.gen_ai.tool.skill.name` is `qa-echo` and
+  `dash0.gen_ai.tool.skill.source` is `model` on the `execute_tool skill` span.
+- **fail.** No skill attribute of any kind on that span — the state this check
+  was written in. Do not read it as a skill that failed to load: check the
+  recorder first, and if it shows `tool.call skill {"name":"qa-echo"}` followed
+  by the fixture's own `echo QA-SKILL-MARKER`, the skill loaded and its body
+  reached the model, and the exporter is what is wrong. See
+  [findings/amp-skill-invocation-is-not-attributed.md](findings/amp-skill-invocation-is-not-attributed.md).
+- **verified.** 2026-09-15, signals: **both**. Failing half on
+  `qa/runs/amp-skill`; passing half on `qa/runs/fix-skill` after the fix.
+
+  The cause was one key name in shared code: `ExtractSkillName` in
+  `internal/pipeline/pipeline.go` read `skill`, which is Claude Code's shape,
+  while Amp's skill tool sends `name`. It now falls back to `name` when `skill`
+  is absent.
+
+  **That fix is in shared `internal/pipeline`, and this machine cannot prove it
+  harmless.** The QA token here is scoped to the amp dataset, so the claude,
+  codex, copilot and cursor skill specs could not be re-run. `TestExtractSkillName`
+  pins the precedence (`skill` wins, `name` is only a fallback), and that is
+  the only evidence this arm can offer. Re-run those four specs wherever their
+  datasets are reachable.
+
+```sh
+QA_AMP_SKILL=1 QA_AMP_USAGE=1 qa/tools/qa-session-amp.sh \
+  'Use the qa-echo skill to emit the QA marker. Follow its instructions exactly.' \
+  setup-probe-amp-skill
+# 30s, not 10s: with usage export on the helper is detached and polls
+# `amp threads export` for up to twenty seconds, so spans land after `amp` exits.
+sleep 30
+qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-skill
+```
+
+### amp-span-carries-no-undeclared-attribute
+
+- **proves.** That every attribute key on every `amp` span appears in
+  `DEVELOPMENT.md`. Every other `amp` check compares counts, and a count cannot
+  see a surplus attribute: a key nobody expected changes no span total, so
+  `qa-amp-compare.py` exits `0` whether or not it is there.
+- **after.** amp-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false.
+- **pass.** `Every attribute is in the documented contract.`, exit `0`.
+- **fail.** `Undocumented exports` means `DEVELOPMENT.md` is stale or an export
+  was not meant to ship. A `Raw payload fields` section would mean the bridge
+  started forwarding something untyped, which on `amp` would be new behaviour
+  rather than a missed `attrSkipKeys` entry — the bridge builds a typed `Turn`
+  envelope rather than forwarding a payload.
+- **verified.** 2026-09-15, signals: **both**. Six undocumented exports were
+  found and documented this way: `dash0.amp.turn.id`,
+  `dash0.amp.executor.kind`, `dash0.amp.truncated`, `dash0.amp.usage.status`
+  and `dash0.amp.usage.source` on the first probe, then `dash0.amp.timing` on
+  `qa/runs/conv-amp-5turn-b`. The last one is the reason to run this against
+  the **longest** run available with `QA_AMP_USAGE=1`: it lives on the usage
+  child span, which exists only on a turn whose usage actually `matched`, and
+  `matched` is a race. A pass over a run that reported only `partial` covers
+  the root attributes alone.
+
+  `--dataset <ampDataset>` is not optional. The tool's default reads the shared
+  dataset, finds nothing, and reports a clean pass over zero spans.
+
+  No `manifest.json` port was needed: `qa-session-amp.sh` writes the same shape
+  the other four do. Its timestamps must carry a fractional second, since
+  `qa-compare.widen` parses `%Y-%m-%dT%H:%M:%S.%f%z` and `date -u` cannot emit
+  one portably on macOS — that is what the driver's `stamp()` helper is for.
+
+```sh
+qa/tools/qa-attrs.py qa/runs/conv-amp-5turn-b --dataset <ampDataset>
+```
+
+### amp-server-side-tools-are-still-invisible
+
+- **proves.** That the known gap has not silently changed shape. Amp runs some
+  built-in tools server-side, and those fire no plugin events at all, so they
+  reach neither the bridge nor a span. This check is here so that an Amp
+  release which closes the gap is noticed rather than assumed, and so that a
+  missing tool span is not mistaken for a bridge defect.
+- **after.** amp-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false. It fails today by design.
+- **pass.** Two `tool_use` blocks in the stream, two `execute_tool` spans,
+  `AGREEMENT`.
+- **fail.** `stream={'shell_command': 1, 'web_search': 1}` against
+  `dash0={'shell_command': 1}`. **This is the current, expected result** —
+  [findings/amp-server-side-tools-produce-no-span.md](findings/amp-server-side-tools-produce-no-span.md).
+  There is nothing to fix in `amp/index.ts`; the decision is what to document.
+  Confirm it with the recorder rather than guessing: a server-side tool leaves
+  no `tool.call` in `record.jsonl` at all.
+- **verified.** 2026-09-15, signals: **fail-only**. Measured on
+  `qa/runs/amp-mixed-tools`, one turn using both kinds so the comparison cannot
+  be blamed on run-to-run variation, and on `qa/runs/amp-toolerror-b`, whose
+  only tool was `read_web_page` and whose recorder captured exactly two events,
+  `agent.start` and `agent.end`. Confirmed client-side: `shell_command`.
+  Confirmed server-side: `read_web_page`, `web_search`. The other 12 tools in
+  `amp tools list` are unprobed and the split is Amp's to move.
+
+```sh
+QA_AMP_USAGE=1 qa/tools/qa-session-amp.sh \
+  'Do exactly two things and nothing else. First, run the shell command: echo qa-mixed. Second, use web_search to search for: OpenTelemetry semantic conventions gen_ai. Then reply with exactly the word done.' \
+  setup-probe-amp-server-tools
+# 30s, not 10s: with usage export on the helper is detached and polls
+# `amp threads export` for up to twenty seconds, so spans land after `amp` exits.
+sleep 30
+qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-server-tools
 ```

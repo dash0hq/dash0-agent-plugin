@@ -10,15 +10,26 @@ Trace through a session, see what each turn cost, find where the agent got stuck
 - **Cursor** — installation, configuration, and usage in [`.cursor-plugin/README.md`](./.cursor-plugin/README.md).
 - **OpenAI Codex** — installation, configuration, and usage in [`.codex-plugin/README.md`](./.codex-plugin/README.md).
 - **GitHub Copilot CLI** — installation, configuration, and usage in [`.github/plugin/README.md`](./.github/plugin/README.md).
+- **Amp / ampcode CLI and Orbs** — native plugin, scripted installation (`install-amp.sh`, `install-amp.ps1`), and per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is on by default, is partial, and uses an unstable Amp export schema.
 
-All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other three use a PowerShell bootstrap.
+Release builds cover macOS, Linux, and Windows on `amd64` and `arm64`. The four
+shell-hook integrations use bootstrap scripts; Amp instead loads `amp/index.ts`
+as a native plugin and invokes its helper directly. On Windows, Claude Code also
+needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through
+Git Bash, while Cursor, Codex, and Copilot use PowerShell. See each runtime guide
+for tested host behavior; release coverage does not imply every host and OS
+combination has been exercised live.
 
 ## Repository layout
 
-This repo ships one shared Go pipeline (`cmd/`, `internal/`) and runtime-specific plugin surfaces. The rule: **`<runtime>/` holds everything shipped to that runtime**, including its `<runtime>-on-event.sh` bootstrap wrapper.
+This repo ships one shared Go pipeline (`cmd/`, `internal/`) and runtime-specific
+plugin surfaces. Each `<runtime>/` holds everything shipped to that runtime. The
+four hook integrations include a `<runtime>-on-event.sh` bootstrap wrapper; Amp
+contains its native TypeScript plugin and built helper instead.
 
 | Path | Runtime | Purpose |
 |---|---|---|
+| `amp/` (`index.ts`, built `amp-on-event` helper), `install-amp.sh` | Amp CLI and Orbs | Native plugin events, bounded completed-turn batches, optional exact-message per-model export usage, installer |
 | `claude/` (`claude-on-event.sh`, `hooks.json`, `commands/`, `skills/`, `tools/`), `.claude-plugin/` | Claude Code | Bootstrap wrapper, hook registration, slash commands, configure skill, diagnostic scripts, manifest |
 | `cursor/` (`cursor-on-event.sh`, `hooks.json`, `skills/`), `.cursor-plugin/`, `install-cursor.sh` | Cursor | Bootstrap wrapper, hook registration, configure skill, manifest, installer |
 | `codex/` (`codex-on-event.sh`, `hooks.json`), `.codex-plugin/`, `.agents/plugins/marketplace.json`, `install-codex.sh` | OpenAI Codex | Bootstrap wrapper, hook registration, manifest, self-hosted Codex marketplace, installer. Installed via marketplace (`codex plugin add`) or the installer (hooks written to `~/.codex/config.toml`). `.agents/plugins/` is Codex-only — Claude reads `.claude-plugin/`, Cursor its own dir |

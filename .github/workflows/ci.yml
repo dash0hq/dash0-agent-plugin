@@ -29,6 +29,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Amp bridge tests, types, and formatting
+        run: |
+          npm install -g bun@1.3.10
+          make test-amp
+
       - name: Shellcheck
         run: make shellcheck-lint
 
@@ -152,6 +157,9 @@ jobs:
 
       - name: Codex install/config contracts
         run: ./test/contracts/codex.sh
+
+      - name: Amp install/uninstall contracts
+        run: ./test/contracts/amp.sh
 
       - name: Bootstrap download contracts
         run: ./test/contracts/bootstrap.sh

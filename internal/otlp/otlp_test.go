@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -694,6 +695,23 @@ func TestRedactHomeDir(t *testing.T) {
 	})
 }
 
+func TestRedactHomeDirUsesPlatformCaseRules(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "Alice")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	differentCase := strings.ToUpper(home)
+	for _, suffix := range []string{"", "workspace"} {
+		path := filepath.Join(differentCase, suffix)
+		want := path
+		if runtime.GOOS == "windows" {
+			want = filepath.Join("~", suffix)
+		}
+		require.Equal(t, want, redactHomeDir(path))
+	}
+	sibling := filepath.Join(differentCase+"-other", "workspace")
+	require.Equal(t, sibling, redactHomeDir(sibling))
+}
+
 func TestHashIdentity(t *testing.T) {
 	t.Run("produces stable 16-char hex output", func(t *testing.T) {
 		result := hashIdentity("Guy Moses")
@@ -754,4 +772,21 @@ func TestConfigValidateURLClearingStopsExport(t *testing.T) {
 	require.False(t, bad.ValidateURL())
 	require.NoError(t, SendLog(map[string]any{"hook_event_name": "SessionStart"}, bad))
 	assert.Equal(t, 1, got, "a cleared URL must send nothing")
+}
+
+func TestOTLPDebugReportsHTTPOutcomeWithoutCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("PRIVATE response"))
+	}))
+	defer srv.Close()
+	file := filepath.Join(t.TempDir(), "debug.log")
+	cfg := Config{OTLPUrl: srv.URL, AuthToken: "PRIVATE token", Debug: true, DebugFile: file}
+	require.Error(t, sendOTLP(cfg, "/v1/traces", []byte("PRIVATE payload")))
+	data, err := os.ReadFile(file)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"phase":"start"`)
+	require.Contains(t, string(data), `"phase":"finish","status":401`)
+	require.Contains(t, string(data), `"elapsed_ms":`)
+	require.NotContains(t, string(data), "PRIVATE")
 }

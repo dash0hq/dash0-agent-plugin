@@ -44,7 +44,7 @@ way:
 | `dash0.amp.turn.id` | first probe | on both `chat` and `execute_tool` |
 | `dash0.amp.executor.kind` | first probe | on both |
 | `dash0.amp.truncated` | first probe | root only, and only when content was shed |
-| `dash0.amp.usage.status` | first probe | root only, usage opt-in |
+| `dash0.amp.usage.status` | first probe | root only |
 | `dash0.amp.usage.source` | first probe | root only, and only when usage **matched** |
 | `dash0.amp.timing` | the 5-turn conversation | on the usage **child** span, which exists only on a `matched` turn |
 

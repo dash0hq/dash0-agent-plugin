@@ -216,14 +216,48 @@ func TestUsageFailureDoesNotSuppressLifecycle(t *testing.T) {
 	}
 }
 
-func TestUsageDisabledByDefault(t *testing.T) {
+// Nothing configured at all still accounts for the turn. This is the case an
+// ordinary install lands in, and the one a regression would silently break:
+// every other usage test here sets the option explicitly, so none of them would
+// notice the default flipping back.
+func TestUsageOnByDefault(t *testing.T) {
 	got := setup(t)
 	t.Setenv("AMP_PLUGIN_OPTION_EXPORT_USAGE", "")
-	t.Setenv("DASH0_EXPORT_USAGE", "true")
-	require.NoError(t, os.Mkdir(".amp", 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(".amp", config.Name), []byte("---\nexport_usage: true\n---\n"), 0600))
-	require.NoError(t, run(strings.NewReader(envelope), func(string) ([]byte, error) { t.Fatal("must not export thread"); return nil, nil }))
-	require.Contains(t, string(<-got), "disabled")
+	require.NoError(t, run(strings.NewReader(envelope), func(string) ([]byte, error) {
+		return []byte(exportFixture), nil
+	}))
+	data := <-got
+	require.Contains(t, string(data), `"matched"`)
+	require.Contains(t, string(data), "chat claude-sonnet-4-6")
+}
+
+// Turning it off is a plain option, readable from either configuration file or
+// the environment: unlike enabling it, opting out grants no capability, so
+// there is no reason to restrict where the "no" may come from.
+func TestUsageCanBeDisabled(t *testing.T) {
+	for _, tc := range []struct{ name, where string }{
+		{"project file", filepath.Join(".amp", config.Name)},
+		{"environment", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := setup(t)
+			if tc.where == "" {
+				t.Setenv("AMP_PLUGIN_OPTION_EXPORT_USAGE", "false")
+			} else {
+				t.Setenv("AMP_PLUGIN_OPTION_EXPORT_USAGE", "")
+				require.NoError(t, os.Mkdir(filepath.Dir(tc.where), 0700))
+				require.NoError(t, os.WriteFile(tc.where, []byte("---\nexport_usage: false\n---\n"), 0600))
+				harness.ResetConfig()
+			}
+			require.NoError(t, run(strings.NewReader(envelope), func(string) ([]byte, error) {
+				t.Fatal("must not export thread")
+				return nil, nil
+			}))
+			data := <-got
+			require.Contains(t, string(data), "disabled")
+			require.NotContains(t, string(data), "gen_ai.usage.")
+		})
+	}
 }
 
 func TestDisabledConfigurationDoesNotReadInput(t *testing.T) {

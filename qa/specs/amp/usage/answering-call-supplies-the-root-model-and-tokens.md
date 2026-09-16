@@ -19,10 +19,10 @@ The same install and configuration as
 [../session/turn-produces-one-chat-root-and-one-span-per-tool.md](../session/turn-produces-one-chat-root-and-one-span-per-tool.md),
 plus `QA_AMP_USAGE=1`, which sets `AMP_PLUGIN_OPTION_EXPORT_USAGE=true`.
 
-That variable is the only way to enable usage export. It is read through
-`PluginOptionSecure`, so neither the config file nor `DASH0_EXPORT_USAGE` can
-turn it on, and a run that sets the wrong one gets `status=disabled` and no
-tokens while looking otherwise healthy.
+Usage export is on by default, so that variable only matters here as an
+explicit record of what the run exercised. `export_usage: false` in either
+configuration file, or the variable set to `false`, turns it off and yields
+`status=disabled` with no tokens on a run that otherwise looks healthy.
 
 ## When
 

@@ -158,6 +158,9 @@ jobs:
       - name: Codex install/config contracts
         run: ./test/contracts/codex.sh
 
+      - name: Amp install/uninstall contracts
+        run: ./test/contracts/amp.sh
+
       - name: Bootstrap download contracts
         run: ./test/contracts/bootstrap.sh
 

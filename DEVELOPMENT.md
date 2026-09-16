@@ -90,10 +90,11 @@ Two gaps, neither closed here:
   `install-cursor.ps1` and `install-codex.ps1` *do* read it, so on Windows the
   variable is honoured at install time and ignored at event time.
 - **The installers do not validate it.** `install-cursor.sh`,
-  `install-codex.sh` and both `.ps1` installers read `DASH0_VERSION` into the
-  same download URL and filesystem path with no check. The bootstrap guard is
-  the second line of defence; by the time a hook runs, the installer has already
-  written the binary.
+  `install-codex.sh`, `install-amp.sh` and all three `.ps1` installers read
+  `DASH0_VERSION` into the same download URL and filesystem path with no check.
+  The bootstrap guard is the second line of defence; by the time a hook runs,
+  the installer has already written the binary. Amp has no bootstrap and so no
+  second line at all: `install-amp.sh` is the only place its version is read.
 
 > **No dev channel yet.** Cutting a prerelease from a feature branch and gating
 > the App credential by branch are mutually exclusive without splitting the job

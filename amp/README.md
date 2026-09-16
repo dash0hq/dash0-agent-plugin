@@ -4,36 +4,71 @@ This native [Amp plugin](https://ampcode.com/docs/plugin-api) sends completed
 turns and paired tool calls to Dash0. It works on the executor running Amp,
 whether that is a local CLI or an Orb. It does not wrap the `amp` command.
 
-## Install from source
+## Install
 
-Install Go 1.25+ and Amp. From this repository, build the helper and copy the
-directory plugin. No JavaScript dependencies are needed at runtime; Amp runs it
-with Bun and erases the type-only import.
+```sh
+curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-amp.sh | bash
+```
+
+On Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-amp.ps1 | iex
+```
+
+The installer downloads the helper for this platform, verifies it against the
+release checksums, and installs it as `amp-on-event` (`amp-on-event.exe` on
+Windows) next to `index.ts` in `~/.config/amp/plugins/dash0/`. The bridge spawns
+the helper by that exact name, so the release asset
+`amp-on-event-<os>-<arch>` must be renamed on the way in — which is what the
+installer is for. It then prompts for the OTLP endpoint, token, dataset, and
+team, and writes them to `~/.amp/dash0-agent-plugin.local.md` (mode 600). Pass
+`--endpoint`, `--token`, `--dataset`, and `--team` to skip the prompts, or set
+`DASH0_OTLP_URL` / `DASH0_AUTH_TOKEN` / `DASH0_DATASET` / `DASH0_TEAM_NAME`.
+Run `install-amp.sh --help` for the full list. No JavaScript dependencies are
+needed at runtime; Amp runs `index.ts` with Bun and erases the type-only import.
+
+Reload plugins from Amp's command palette. Install just this plugin once per
+executor. To restrict installation to one workspace, run the installer with
+`--project` (`-Project` on Windows), which uses `.amp/plugins/dash0/` in the
+current directory. The credential file stays user-level either way; a workspace
+`.amp/dash0-agent-plugin.local.md` outranks it if you add one, and must be kept
+out of Git.
+
+The installer asks the latest release for the helper, or the release pinned by
+`DASH0_VERSION`. The helper is included in release builds from the release that
+carries this integration onwards; it does not assume an already published
+release contains it, and an older pin fails rather than installing something
+that cannot run. Until then, use the from-source path below.
+
+For an Orb, run the same Linux installation in the Orb, or add the installer to
+the project's setup script. A local installation is not copied to an Orb.
+User-local installations inside an Orb last only as long as that Orb. For new
+Orbs, automate installation in project setup.
+
+To uninstall, run `uninstall-amp.sh` (`uninstall-amp.ps1` on Windows), which
+removes only the `dash0` plugin directory and the credential file. Reload
+plugins afterwards.
+
+### Install from source
+
+For developing this plugin, or on a host with no network, build the helper and
+point the installer at the working tree instead of a release:
 
 ```sh
 go build -o amp/amp-on-event ./cmd/amp-on-event
-mkdir -p ~/.config/amp/plugins/dash0
-cp amp/index.ts amp/amp-on-event ~/.config/amp/plugins/dash0/
+DASH0_SOURCE_DIR=amp ./install-amp.sh
 ```
 
 On Windows, use PowerShell:
 
 ```powershell
 go build -o amp/amp-on-event.exe ./cmd/amp-on-event
-New-Item -ItemType Directory -Force "$HOME/.config/amp/plugins/dash0"
-Copy-Item amp/index.ts,amp/amp-on-event.exe "$HOME/.config/amp/plugins/dash0/"
+$env:DASH0_SOURCE_DIR = 'amp'; .\install-amp.ps1
 ```
 
-Reload plugins from Amp's command palette. Install just this plugin once per
-executor. To restrict installation to one project, use
-`.amp/plugins/dash0/` in that workspace instead of the user directory.
-
-For an Orb, run the same Linux installation in the Orb, or add those build/copy
-steps to the project's setup script using a pinned checkout of this repository.
-A local installation is not copied to an Orb. User-local installations inside
-an Orb last only as long as that Orb. For new Orbs, automate installation in
-project setup. This change includes the helper in future release builds; it
-does not assume an already published release contains it.
+That copies `index.ts` and the helper you just built into the same plugin
+directory, under the same names, and requires Go 1.25+.
 
 Execute mode must wait for plugins to load:
 

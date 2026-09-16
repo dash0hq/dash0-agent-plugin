@@ -170,7 +170,7 @@ shell hooks and the on-disk pipeline lifecycle. See [installation and research](
 | Session / turn | Thread ID / typed initiating message ID; completed-turn batches |
 | Root operation | `chat`; the answering exported message names it and supplies its usage, both absent when usage is off |
 | Tools | Paired `tool.call`/`tool.result`; observed timing and status. **Client-side tools only** — server-executed built-ins fire no plugin event and get no span |
-| Per-model tokens | Opt-in exact assistant-ID lookup in unstable `threads export` JSON, polled up to 20s because the export materializes seconds after the turn ends |
+| Per-model tokens | On by default (`export_usage: false` opts out). Exact assistant-ID lookup in unstable `threads export` JSON, polled up to 20s because the export materializes seconds after the turn ends |
 | Mixed models in a turn | Separate usage-bearing `chat` children; no root duplication |
 | Missing usage | Omitted, never estimated or filled with zero |
 | Content | Prompt, response, and tool arguments/output under the shared `omit_io` rule; thinking and image blocks dropped in the bridge |

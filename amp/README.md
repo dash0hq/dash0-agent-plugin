@@ -124,17 +124,37 @@ the token must permit span ingestion into the configured dataset. Verify a
 turn with a read-capable token before relying on it.
 To uninstall, remove only the `dash0` plugin directory and reload plugins.
 
-## Token accounting is opt-in and incomplete
+## Token accounting is on by default, and incomplete
 
-Set this in the environment of the Amp executor before it starts:
+Models and token counts are the point of the integration, so the helper reads
+them unless you say otherwise. Nothing to configure: a fresh install accounts
+for every turn.
 
-```sh
-export AMP_PLUGIN_OPTION_EXPORT_USAGE=true
+To turn it off, set `export_usage: false` in either
+`~/.amp/dash0-agent-plugin.local.md` or a workspace
+`.amp/dash0-agent-plugin.local.md`:
+
+```yaml
+export_usage: false
 ```
 
-On PowerShell: `$env:AMP_PLUGIN_OPTION_EXPORT_USAGE = 'true'`.
-Only this Amp-specific environment variable enables usage. Neither a repository
-file nor `DASH0_EXPORT_USAGE` can enable whole-thread reads.
+Or in the environment of the Amp executor before it starts, which switches it
+off for one session rather than permanently:
+
+```sh
+export AMP_PLUGIN_OPTION_EXPORT_USAGE=false
+```
+
+On PowerShell: `$env:AMP_PLUGIN_OPTION_EXPORT_USAGE = 'false'`.
+`DASH0_EXPORT_USAGE=false` works too.
+
+What this costs when left on: one `amp threads export` subprocess per turn,
+polled for up to twenty seconds. It never becomes latency the user feels — the
+helper is detached, see below — but it does require working Amp authentication
+on the executor. Without it the read fails and the turn reports
+`dash0.amp.usage.status=unavailable` instead of carrying tokens; the poll gives
+up after two consecutive command failures rather than spending the whole window
+on an executor that is logged out.
 
 At `agent.end`, the helper runs the public read-only command
 `amp threads export <thread-id>`. This requires working Amp authentication on

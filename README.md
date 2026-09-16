@@ -10,7 +10,7 @@ Trace through a session, see what each turn cost, find where the agent got stuck
 - **Cursor** — installation, configuration, and usage in [`.cursor-plugin/README.md`](./.cursor-plugin/README.md).
 - **OpenAI Codex** — installation, configuration, and usage in [`.codex-plugin/README.md`](./.codex-plugin/README.md).
 - **GitHub Copilot CLI** — installation, configuration, and usage in [`.github/plugin/README.md`](./.github/plugin/README.md).
-- **Amp / ampcode CLI and Orbs** — native plugin, scripted installation (`install-amp.sh`, `install-amp.ps1`), and opt-in per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is partial and uses an unstable Amp export schema.
+- **Amp / ampcode CLI and Orbs** — native plugin, scripted installation (`install-amp.sh`, `install-amp.ps1`), and per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is on by default, is partial, and uses an unstable Amp export schema.
 
 Release builds cover macOS, Linux, and Windows on `amd64` and `arm64`. The four
 shell-hook integrations use bootstrap scripts; Amp instead loads `amp/index.ts`

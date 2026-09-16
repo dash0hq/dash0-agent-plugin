@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/harness"
@@ -84,10 +83,11 @@ func run(input io.Reader, export func(string) ([]byte, error)) error {
 	}
 	var usage []amp.Usage
 	status := "disabled"
-	// Export reads the whole thread. Require explicit Amp-specific environment
-	// consent, rather than allowing a repository file or generic DASH0 fallback.
-	optIn := strings.ToLower(strings.TrimSpace(hn.PluginOptionSecure("EXPORT_USAGE")))
-	if optIn == "true" || optIn == "1" {
+	// On by default: models and token counts are the point of the integration,
+	// and an install that silently accounts for nothing is the worse failure.
+	// `export_usage: false` in either configuration file, or the environment
+	// variable, turns the whole-thread read off for anyone who does not want it.
+	if hn.PluginOptionBoolDefault("EXPORT_USAGE", true) {
 		status = "unavailable"
 		failures := 0
 		deadline := time.Now().Add(usagePollWindow)

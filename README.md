@@ -16,7 +16,7 @@ Check out our documentation for setting up and configuring the Dash0 Agent Plugi
 - **GitHub Copilot CLI** — installation, configuration, and usage in [`.github/plugin/README.md`](./.github/plugin/README.md).
 - **OpenCode V2** — installation, configuration, and usage in [`opencode-v2/README.md`](./opencode-v2/README.md).
 - **GitHub Copilot app** — installation, configuration, and usage in [`copilot-app/README.md`](./copilot-app/README.md).
-- **Amp / ampcode CLI and Orbs** — native plugin, source installation, and per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is partial and uses an unstable Amp export schema.
+- **Amp / ampcode CLI and Orbs** — native plugin, scripted installation (`install-amp.sh`, `install-amp.ps1`), and per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is partial and uses an unstable Amp export schema.
 
 All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. The shell-hook integrations use bootstrap scripts; Amp instead loads `amp/index.ts` as a native plugin and invokes its helper directly. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other runtimes use a PowerShell bootstrap.
 
@@ -29,7 +29,7 @@ contains its native TypeScript plugin and built helper instead.
 
 | Path | Runtime | Purpose |
 |---|---|---|
-| `amp/` (`index.ts`, built `amp-on-event` helper) | Amp CLI and Orbs | Native plugin events, bounded completed-turn batches, optional exact-message per-model export usage |
+| `amp/` (`index.ts`, built `amp-on-event` helper), `install-amp.sh` | Amp CLI and Orbs | Native plugin events, bounded completed-turn batches, optional exact-message per-model export usage, installer |
 | `claude/` (`claude-on-event.sh`, `hooks.json`, `commands/`, `skills/`, `tools/`), `.claude-plugin/` | Claude Code | Bootstrap wrapper, hook registration, slash commands, configure skill, diagnostic scripts, manifest |
 | `cursor/` (`cursor-on-event.sh`, `hooks.json`, `skills/`), `.cursor-plugin/`, `install-cursor.sh` | Cursor | Bootstrap wrapper, hook registration, configure skill, manifest, installer |
 | `codex/` (`codex-on-event.sh`, `hooks.json`), `.codex-plugin/`, `.agents/plugins/marketplace.json`, `install-codex.sh` | OpenAI Codex | Bootstrap wrapper, hook registration, manifest, self-hosted Codex marketplace, installer. Installed via marketplace (`codex plugin add`) or the installer (hooks written to `~/.codex/config.toml`). `.agents/plugins/` is Codex-only — Claude reads `.claude-plugin/`, Cursor its own dir |

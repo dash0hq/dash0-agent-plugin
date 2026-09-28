@@ -244,7 +244,9 @@ json.dump({
         "name": "dash0-agent-plugin",
         "marketplace": marketplace,
         "version": version,
-        "installed_at": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
+        # timezone.utc rather than datetime.UTC: the latter is 3.11+, and nothing else
+        # in qa/ needs a Python that new.
+        "installed_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
         "cache_path": plugin_root,
         "enabled": True,
     }],

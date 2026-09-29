@@ -4,6 +4,10 @@ Connect your coding agent to [Dash0](https://dash0.com) for deep insight into ho
 
 Trace through a session, see what each turn cost, find where the agent got stuck, and join agent activity with the systems it touches.
 
+## Setup
+
+Check out our documentation for setting up and configuring the Dash0 Agent Plugin: [Set Up AI SDLC Insights](https://www.dash0.com/docs/dash0/darkplane/insights/setup)
+
 ## Supported runtimes
 
 - **Claude Code** — installation, configuration, and usage in [`.claude-plugin/README.md`](./.claude-plugin/README.md).

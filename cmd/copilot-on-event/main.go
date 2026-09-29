@@ -234,9 +234,7 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 			event["model"] = u.Model
 		}
 	}
-	// Both models go out, because only the responding one can be priced: Copilot
-	// reports "auto" as the requested model whenever none is pinned, and that
-	// matches no row in the collector's pricing table (SIG-528).
+	// Both go out: only the responding model is priceable when none was pinned.
 	if u.ResponseModel != "" {
 		if _, has := event["response_model"]; !has {
 			event["response_model"] = u.ResponseModel

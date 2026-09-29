@@ -169,11 +169,8 @@ func TestNewLLMSpan(t *testing.T) {
 	assertAttr(t, span.Attributes, "gen_ai.operation.name", "chat")
 }
 
-// Both model keys reach the span, under their own semconv names. The responding
-// model is the only one the collector can price, because Copilot reports "auto"
-// as the requested model whenever none is pinned and no pricing row matches it
-// (SIG-528). The span name still follows the requested model, which is what the
-// harness itself calls the turn.
+// The span name still follows the requested model, which is what the harness
+// itself calls the turn.
 func TestNewLLMSpanCarriesBothModels(t *testing.T) {
 	startTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	endTime := time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC)

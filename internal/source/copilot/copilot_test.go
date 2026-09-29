@@ -402,14 +402,7 @@ func TestReadTurn_responseText(t *testing.T) {
 	assert.Equal(t, "All done.", turn.Usage.ResponseText)
 }
 
-// Copilot reports "auto" as the requested model whenever the user has not pinned
-// one, and names the model that actually answered in a second key on the same
-// span. Only the second can be priced -- "auto" matches no row in the collector's
-// pricing table, so a turn reported under it reaches ClickHouse with real token
-// counts and no cost at all (SIG-528). The two are therefore recovered into
-// separate fields; collapsing them would lose the fact that nothing was pinned.
-//
-// The attribute values here are the ones a real two-turn Copilot session wrote,
+// The attribute values are the ones a real two-turn Copilot session wrote,
 // captured in qa/runs/copilot-twoturns1/otel.jsonl.
 func TestReadTurn_bothModelsWhenNonePinned(t *testing.T) {
 	otelDir := t.TempDir()
@@ -431,10 +424,8 @@ func TestReadTurn_bothModelsWhenNonePinned(t *testing.T) {
 	assert.Equal(t, "gpt-5.6-luna", turn.Usage.ResponseModel, "what answered is the only priceable one")
 }
 
-// A harness that names no responding model must leave the field empty rather than
-// falling back to the requested one. The fallback belongs downstream, where both
-// keys are visible; doing it here would make an absent response.model
-// indistinguishable from one that echoed the request.
+// The fallback belongs downstream, where both keys are visible: echoing the
+// request model here would hide that none was reported.
 func TestReadTurn_responseModelAbsent(t *testing.T) {
 	otelDir := t.TempDir()
 	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)

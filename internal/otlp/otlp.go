@@ -421,6 +421,13 @@ var userInfoKeys = map[string]bool{
 	"cwd": true,
 }
 
+// userIdentityKeys lists event fields that identify the user outright, so
+// Config.OmitUserInfo drops them instead of redacting them. user_email is
+// Cursor's signed-in account.
+var userIdentityKeys = map[string]bool{
+	"user_email": true,
+}
+
 // attrKeyMap maps event field names to OTLP semantic convention attribute keys.
 var attrKeyMap = map[string]string{
 	"session_id":          "gen_ai.conversation.id",
@@ -524,6 +531,9 @@ func eventAttributes(event map[string]any, cfg Config) []Attribute {
 	var attrs []Attribute
 	for k, v := range event {
 		if attrSkipKeys[k] {
+			continue
+		}
+		if cfg.OmitUserInfo && userIdentityKeys[k] {
 			continue
 		}
 		if cfg.OmitUserInfo && userInfoKeys[k] {

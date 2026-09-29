@@ -196,7 +196,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 | `dash0.gen_ai.vcs.ref.head.revision` | commit SHA                                                                     | |
 | `dash0.gen_ai.vcs.ref.head.type` | `branch` or `tag`                                                              | |
 | `user.name` | Real name, or a 16-hex-char SHA-256 hash when `omit_user_info`                 | From `git config user.name`, else the OS account. |
-| `user.email` | git email                                                                      | git-only, never inferred. Omitted when `omit_user_info`. |
+| `user.email` | git email                                                                      | From git, never inferred; Cursor also sends its signed-in account email. Omitted when `omit_user_info`. |
 | `dash0.gen_ai.user.identity.source` | `git` or `os`                                                                  | Which source `user.name` came from. Emitted whenever a name is. |
 
 The `dash0.gen_ai.vcs.*` keys are only present inside a git repository. The identity keys

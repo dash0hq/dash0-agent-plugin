@@ -17,6 +17,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/identity"
 )
 
 func TestSendLog(t *testing.T) {
@@ -662,6 +664,45 @@ func TestSendLogMapsUserEmailAttribute(t *testing.T) {
 	for _, a := range lr.Attributes {
 		assert.NotEqual(t, "user_email", a.Key, "raw user_email key should not appear")
 	}
+}
+
+func TestSendLogOmitUserInfoDropsUserEmail(t *testing.T) {
+	var received ExportLogsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := map[string]any{
+		"hook_event_name": "SessionStart",
+		"session_id":      "sess-456",
+		"user_email":      "alice@example.com",
+	}
+	cfg := Config{OTLPUrl: srv.URL, OmitUserInfo: true}
+
+	require.NoError(t, SendLog(event, cfg))
+
+	lr := received.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	for _, a := range lr.Attributes {
+		assert.NotEqual(t, "user.email", a.Key)
+		assert.NotEqual(t, "user_email", a.Key)
+	}
+}
+
+func TestSessionSpanOmitUserInfoDropsCursorUserEmail(t *testing.T) {
+	pinIdentity(t, identity.Info{})
+	event := map[string]any{
+		"hook_event_name": "SessionStart",
+		"session_id":      "sess-456",
+		"user_email":      "alice@example.com",
+	}
+
+	span := NewSessionSpan("trace", "span", time.Now(), event, Config{OmitUserInfo: true})
+
+	assert.NotContains(t, attrMap(span.Attributes), "user.email")
 }
 
 // redactHomeDir runs filepath.Clean, so its output uses the platform separator.

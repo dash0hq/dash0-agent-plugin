@@ -402,6 +402,58 @@ func TestReadTurn_responseText(t *testing.T) {
 	assert.Equal(t, "All done.", turn.Usage.ResponseText)
 }
 
+// Copilot reports "auto" as the requested model whenever the user has not pinned
+// one, and names the model that actually answered in a second key on the same
+// span. Only the second can be priced -- "auto" matches no row in the collector's
+// pricing table, so a turn reported under it reaches ClickHouse with real token
+// counts and no cost at all (SIG-528). The two are therefore recovered into
+// separate fields; collapsing them would lose the fact that nothing was pinned.
+//
+// The attribute values here are the ones a real two-turn Copilot session wrote,
+// captured in qa/runs/copilot-twoturns1/otel.jsonl.
+func TestReadTurn_bothModelsWhenNonePinned(t *testing.T) {
+	otelDir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
+
+	writeLines(t, filepath.Join(otelDir, "otel.jsonl"),
+		nativeSpanLine(t, "t1", "ch1", "", "chat auto", 100, 101, 0, map[string]any{
+			"gen_ai.conversation.id":    "conv-1",
+			"gen_ai.request.model":      "auto",
+			"gen_ai.response.model":     "gpt-5.6-luna",
+			"gen_ai.usage.input_tokens": 24085, "gen_ai.usage.output_tokens": 47,
+		}),
+	)
+
+	turn, _ := ReadTurn("conv-1")
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, "auto", turn.Usage.Model, "what was asked for must survive")
+	assert.Equal(t, "gpt-5.6-luna", turn.Usage.ResponseModel, "what answered is the only priceable one")
+}
+
+// A harness that names no responding model must leave the field empty rather than
+// falling back to the requested one. The fallback belongs downstream, where both
+// keys are visible; doing it here would make an absent response.model
+// indistinguishable from one that echoed the request.
+func TestReadTurn_responseModelAbsent(t *testing.T) {
+	otelDir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
+
+	writeLines(t, filepath.Join(otelDir, "otel.jsonl"),
+		nativeSpanLine(t, "t1", "ch1", "", "chat gpt", 100, 101, 0, map[string]any{
+			"gen_ai.conversation.id":    "conv-1",
+			"gen_ai.request.model":      "gpt",
+			"gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 2,
+		}),
+	)
+
+	turn, _ := ReadTurn("conv-1")
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, "gpt", turn.Usage.Model)
+	assert.Empty(t, turn.Usage.ResponseModel)
+}
+
 func TestAssistantTextFromOutput(t *testing.T) {
 	// Multiple text parts of one message join with newlines; the LAST assistant
 	// message wins; non-assistant roles and non-text parts are ignored.

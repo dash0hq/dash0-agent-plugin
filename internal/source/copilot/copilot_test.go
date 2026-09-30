@@ -402,6 +402,49 @@ func TestReadTurn_responseText(t *testing.T) {
 	assert.Equal(t, "All done.", turn.Usage.ResponseText)
 }
 
+// The attribute values are the ones a real two-turn Copilot session wrote,
+// captured in qa/runs/copilot-twoturns1/otel.jsonl.
+func TestReadTurn_bothModelsWhenNonePinned(t *testing.T) {
+	otelDir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
+
+	writeLines(t, filepath.Join(otelDir, "otel.jsonl"),
+		nativeSpanLine(t, "t1", "ch1", "", "chat auto", 100, 101, 0, map[string]any{
+			"gen_ai.conversation.id":    "conv-1",
+			"gen_ai.request.model":      "auto",
+			"gen_ai.response.model":     "gpt-5.6-luna",
+			"gen_ai.usage.input_tokens": 24085, "gen_ai.usage.output_tokens": 47,
+		}),
+	)
+
+	turn, _ := ReadTurn("conv-1")
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, "auto", turn.Usage.Model, "what was asked for must survive")
+	assert.Equal(t, "gpt-5.6-luna", turn.Usage.ResponseModel, "what answered is the only priceable one")
+}
+
+// The fallback belongs downstream, where both keys are visible: echoing the
+// request model here would hide that none was reported.
+func TestReadTurn_responseModelAbsent(t *testing.T) {
+	otelDir := t.TempDir()
+	t.Setenv("DASH0_COPILOT_OTEL_DIR", otelDir)
+
+	writeLines(t, filepath.Join(otelDir, "otel.jsonl"),
+		nativeSpanLine(t, "t1", "ch1", "", "chat gpt", 100, 101, 0, map[string]any{
+			"gen_ai.conversation.id":    "conv-1",
+			"gen_ai.request.model":      "gpt",
+			"gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 2,
+		}),
+	)
+
+	turn, _ := ReadTurn("conv-1")
+	require.NotNil(t, turn)
+	require.NotNil(t, turn.Usage)
+	assert.Equal(t, "gpt", turn.Usage.Model)
+	assert.Empty(t, turn.Usage.ResponseModel)
+}
+
 func TestAssistantTextFromOutput(t *testing.T) {
 	// Multiple text parts of one message join with newlines; the LAST assistant
 	// message wins; non-assistant roles and non-text parts are ignored.

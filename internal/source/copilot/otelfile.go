@@ -21,7 +21,8 @@ type Usage struct {
 	OutputTokens          int64
 	CacheReadInputTokens  int64
 	ReasoningOutputTokens int64
-	Model                 string
+	Model                 string // gen_ai.request.model; the literal "auto" when nothing was pinned
+	ResponseModel         string // gen_ai.response.model; the only priceable one when Model is "auto" (SIG-528)
 	ResponseText          string // final assistant text of the turn (from gen_ai.output.messages)
 }
 
@@ -206,6 +207,9 @@ func ReadTurn(sessionID string) (*Turn, string) {
 			u.ReasoningOutputTokens += attrInt(a, "gen_ai.usage.reasoning.output_tokens")
 			if m := attrString(a, "gen_ai.request.model"); m != "" {
 				u.Model = m // last non-empty model in the turn
+			}
+			if m := attrString(a, "gen_ai.response.model"); m != "" {
+				u.ResponseModel = m // last non-empty responding model in the turn
 			}
 			if txt := assistantTextFromOutput(attrString(a, "gen_ai.output.messages")); txt != "" {
 				u.ResponseText = txt // last non-empty assistant text in the turn = the final response

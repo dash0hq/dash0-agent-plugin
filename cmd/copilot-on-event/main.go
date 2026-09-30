@@ -234,6 +234,12 @@ func attachUsage(event map[string]any, u *copilot.Usage) {
 			event["model"] = u.Model
 		}
 	}
+	// Both go out: only the responding model is priceable when none was pinned.
+	if u.ResponseModel != "" {
+		if _, has := event["response_model"]; !has {
+			event["response_model"] = u.ResponseModel
+		}
+	}
 	// The agentStop payload carries no response text (only stopReason), so the
 	// turn's final assistant message comes from the native-OTel chat span. The
 	// pipeline renders last_assistant_message as gen_ai.output.messages.
@@ -275,6 +281,9 @@ func emitToolSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config) 
 		}
 		if turn.Usage != nil && turn.Usage.Model != "" {
 			event["model"] = turn.Usage.Model
+		}
+		if turn.Usage != nil && turn.Usage.ResponseModel != "" {
+			event["response_model"] = turn.Usage.ResponseModel
 		}
 		if tc.SkillName != "" {
 			event["skill_name"] = tc.SkillName
@@ -327,6 +336,9 @@ func emitAgentSpans(turn *copilot.Turn, ctx *otlp.TraceContext, cfg otlp.Config)
 		}
 		if turn.Usage != nil && turn.Usage.Model != "" {
 			event["model"] = turn.Usage.Model
+		}
+		if turn.Usage != nil && turn.Usage.ResponseModel != "" {
+			event["response_model"] = turn.Usage.ResponseModel
 		}
 
 		parent := sa.ParentSpanID

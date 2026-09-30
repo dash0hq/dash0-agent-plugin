@@ -169,6 +169,24 @@ func TestNewLLMSpan(t *testing.T) {
 	assertAttr(t, span.Attributes, "gen_ai.operation.name", "chat")
 }
 
+// The span name still follows the requested model, which is what the harness
+// itself calls the turn.
+func TestNewLLMSpanCarriesBothModels(t *testing.T) {
+	startTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	endTime := time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC)
+	event := map[string]any{
+		"hook_event_name": "Stop",
+		"session_id":      "sess-123",
+		"model":           "auto",
+		"response_model":  "gpt-5.6-luna",
+	}
+
+	span := NewLLMSpan("abc123traceabc123traceabc123tr", "span1234span1234", "parentidparentid", startTime, endTime, event, false, Config{})
+
+	assertAttr(t, span.Attributes, "gen_ai.request.model", "auto")
+	assertAttr(t, span.Attributes, "gen_ai.response.model", "gpt-5.6-luna")
+}
+
 func TestNewLLMSpanFailure(t *testing.T) {
 	startTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	endTime := time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC)

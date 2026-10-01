@@ -6,6 +6,7 @@ package harness
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,6 +38,52 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(home)
 	os.Exit(code)
+}
+
+// The five shipped values must stay distinct and complete. This is the test that a
+// typo in one of them now fails: previously each entrypoint declared its own copy,
+// so no Go test saw the real strings.
+func TestShippedAgents(t *testing.T) {
+	all := map[string]Harness{
+		"Claude": Claude, "Cursor": Cursor, "Codex": Codex, "Copilot": Copilot, "OpenCode": OpenCode,
+	}
+	seenPrefix := map[string]string{}
+	seenSubdir := map[string]string{}
+	for label, h := range all {
+		assert.NotEmpty(t, h.Name, "%s.Name", label)
+		assert.NotEmpty(t, h.EnvPrefix, "%s.EnvPrefix", label)
+		assert.NotEmpty(t, h.DataSubdir, "%s.DataSubdir", label)
+		assert.Equal(t, strings.ToUpper(h.EnvPrefix), h.EnvPrefix, "%s.EnvPrefix must be upper case", label)
+
+		// A shared prefix would let one agent read another's token; a shared
+		// subdirectory would let two agents collide in the state root.
+		if other, dup := seenPrefix[h.EnvPrefix]; dup {
+			t.Errorf("%s and %s share EnvPrefix %q", label, other, h.EnvPrefix)
+		}
+		seenPrefix[h.EnvPrefix] = label
+		if other, dup := seenSubdir[h.DataSubdir]; dup {
+			t.Errorf("%s and %s share DataSubdir %q", label, other, h.DataSubdir)
+		}
+		seenSubdir[h.DataSubdir] = label
+	}
+
+	// The exact strings the installers, bootstraps and docs are written against.
+	assert.Equal(t, "CLAUDE", Claude.EnvPrefix)
+	assert.Equal(t, "CURSOR", Cursor.EnvPrefix)
+	assert.Equal(t, "CODEX", Codex.EnvPrefix)
+	assert.Equal(t, "COPILOT", Copilot.EnvPrefix)
+	assert.Equal(t, "github-copilot-cli", Copilot.Name)
+	assert.Equal(t, "copilot", Copilot.DataSubdir)
+	assert.Equal(t, "OPENCODE", OpenCode.EnvPrefix)
+	assert.Equal(t, "opencode", OpenCode.Name)
+	assert.Equal(t, "opencode", OpenCode.DataSubdir)
+
+	// Only the single-vendor agents pin a provider.
+	assert.Equal(t, "anthropic", Claude.Provider)
+	assert.Equal(t, "openai", Codex.Provider)
+	assert.Empty(t, Cursor.Provider)
+	assert.Empty(t, Copilot.Provider)
+	assert.Empty(t, OpenCode.Provider)
 }
 
 func TestDataDirPrecedence(t *testing.T) {
@@ -90,6 +137,32 @@ func TestDataDirPrecedence(t *testing.T) {
 		got, err := Codex.DataDir()
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join("/home/somebody", ".local", "state", "dash0-agent-plugin", "codex"), got)
+	})
+
+	t.Run("OpenCode walks the whole chain", func(t *testing.T) {
+		t.Setenv("DASH0_PLUGIN_DATA", "/from/dash0")
+		t.Setenv("XDG_STATE_HOME", "/from/xdg")
+
+		t.Setenv("OPENCODE_PLUGIN_DATA", "/from/opencode")
+		got, err := OpenCode.DataDir()
+		require.NoError(t, err)
+		assert.Equal(t, "/from/opencode", got)
+
+		t.Setenv("OPENCODE_PLUGIN_DATA", "")
+		got, err = OpenCode.DataDir()
+		require.NoError(t, err)
+		assert.Equal(t, "/from/dash0", got)
+
+		t.Setenv("DASH0_PLUGIN_DATA", "")
+		got, err = OpenCode.DataDir()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join("/from/xdg", "dash0-agent-plugin", "opencode"), got)
+
+		t.Setenv("XDG_STATE_HOME", "")
+		t.Setenv("HOME", "/home/somebody")
+		got, err = OpenCode.DataDir()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join("/home/somebody", ".local", "state", "dash0-agent-plugin", "opencode"), got)
 	})
 
 	t.Run("agents keep separate subdirectories", func(t *testing.T) {
@@ -252,6 +325,7 @@ func TestProvider(t *testing.T) {
 	assert.Equal(t, "anthropic", Claude.Provider)
 	assert.Equal(t, "openai", Codex.Provider)
 	assert.Empty(t, Copilot.Provider)
+	assert.Empty(t, OpenCode.Provider)
 }
 
 func TestPluginOption(t *testing.T) {

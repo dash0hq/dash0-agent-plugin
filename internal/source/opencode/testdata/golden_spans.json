@@ -1,0 +1,131 @@
+[
+  {
+    "name": "execute_tool read",
+    "kind": 1,
+    "trace": "trace-1",
+    "span": "span-1",
+    "parent": "span-6",
+    "durationMs": 12,
+    "attributes": {
+      "gen_ai.agent.name": "opencode",
+      "gen_ai.conversation.id": "ses_fd56324abffeYUUI5c6tAmJq8L",
+      "gen_ai.harness.name": "opencode",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.request.model": "mock-model",
+      "gen_ai.tool.call.arguments": "{\"filePath\":\"/var/folders/n5/0mkkbtqs36s2f_4s45lmdxgr0000gn/T/tmp.JBE6GOxB6e/project/README.md\"}",
+      "gen_ai.tool.call.id": "call_0_1787421318796",
+      "gen_ai.tool.call.result": "\u003cpath\u003e/var/folders/n5/0mkkbtqs36s2f_4s45lmdxgr0000gn/T/tmp.JBE6GOxB6e/project/README.md\u003c/path\u003e\n\u003ctype\u003efile\u003c/type\u003e\n\u003ccontent\u003e\n1: capture fixture project\n\n(End of file - total 1 lines)\n\u003c/content\u003e",
+      "gen_ai.tool.name": "read",
+      "gen_ai.tool.type": "function"
+    }
+  },
+  {
+    "name": "execute_tool read",
+    "kind": 1,
+    "trace": "trace-1",
+    "span": "span-2",
+    "parent": "span-6",
+    "durationMs": 3,
+    "status": "2:File not found: /var/folders/n5/0mkkbtqs36s2f_4s45lmdxgr0000gn/T/tmp.JBE6GOxB6e/project/no-such-file.txt",
+    "attributes": {
+      "exception.message": "File not found: /var/folders/n5/0mkkbtqs36s2f_4s45lmdxgr0000gn/T/tmp.JBE6GOxB6e/project/no-such-file.txt",
+      "gen_ai.agent.name": "opencode",
+      "gen_ai.conversation.id": "ses_fd56324abffeYUUI5c6tAmJq8L",
+      "gen_ai.harness.name": "opencode",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.request.model": "mock-model",
+      "gen_ai.tool.call.arguments": "{\"filePath\":\"/var/folders/n5/0mkkbtqs36s2f_4s45lmdxgr0000gn/T/tmp.JBE6GOxB6e/project/no-such-file.txt\"}",
+      "gen_ai.tool.call.id": "call_1_1787421318845",
+      "gen_ai.tool.name": "read",
+      "gen_ai.tool.type": "function"
+    }
+  },
+  {
+    "name": "execute_tool echo",
+    "kind": 1,
+    "trace": "trace-1",
+    "span": "span-3",
+    "parent": "span-6",
+    "durationMs": 3,
+    "attributes": {
+      "dash0.gen_ai.tool.mcp_server": "capture",
+      "gen_ai.agent.name": "opencode",
+      "gen_ai.conversation.id": "ses_fd56324abffeYUUI5c6tAmJq8L",
+      "gen_ai.harness.name": "opencode",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.request.model": "mock-model",
+      "gen_ai.tool.call.arguments": "{\"message\":\"hello from mcp\"}",
+      "gen_ai.tool.call.id": "call_2_1787421318871",
+      "gen_ai.tool.call.result": "echo: hello from mcp",
+      "gen_ai.tool.name": "echo",
+      "gen_ai.tool.type": "function"
+    }
+  },
+  {
+    "name": "invoke_agent general",
+    "kind": 1,
+    "trace": "trace-1",
+    "span": "span-4",
+    "parent": "span-5",
+    "durationMs": 1000,
+    "attributes": {
+      "gen_ai.agent.id": "ses_fd5632109ffeIJoNI5KhyWKCl2",
+      "gen_ai.agent.name": "general",
+      "gen_ai.conversation.id": "ses_fd56324abffeYUUI5c6tAmJq8L",
+      "gen_ai.conversation.name": "done",
+      "gen_ai.harness.name": "opencode",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"done\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
+      "gen_ai.request.model": "mock-model",
+      "gen_ai.usage.cache_creation.input_tokens": "int:0",
+      "gen_ai.usage.cache_read.input_tokens": "int:7",
+      "gen_ai.usage.input_tokens": "int:98",
+      "gen_ai.usage.output_tokens": "int:10",
+      "gen_ai.usage.reasoning.output_tokens": "int:5"
+    }
+  },
+  {
+    "name": "execute_tool Agent",
+    "kind": 1,
+    "trace": "trace-1",
+    "span": "span-5",
+    "parent": "span-6",
+    "durationMs": 30,
+    "attributes": {
+      "gen_ai.agent.id": "ses_fd5632109ffeIJoNI5KhyWKCl2",
+      "gen_ai.agent.name": "opencode",
+      "gen_ai.conversation.id": "ses_fd56324abffeYUUI5c6tAmJq8L",
+      "gen_ai.harness.name": "opencode",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.request.model": "mock-model",
+      "gen_ai.tool.call.arguments": "{\"description\":\"Sub-agent step\",\"prompt\":\"Reply with the word done.\",\"subagent_type\":\"general\"}",
+      "gen_ai.tool.call.id": "call_3_1787421318897",
+      "gen_ai.tool.call.result": "{\"agentId\":\"ses_fd5632109ffeIJoNI5KhyWKCl2\",\"output\":\"\\u003ctask id=\\\"ses_fd5632109ffeIJoNI5KhyWKCl2\\\" state=\\\"completed\\\"\\u003e\\n\\u003ctask_result\\u003e\\ndone\\n\\u003c/task_result\\u003e\\n\\u003c/task\\u003e\"}",
+      "gen_ai.tool.name": "Agent",
+      "gen_ai.tool.type": "function"
+    }
+  },
+  {
+    "name": "chat mock-model",
+    "kind": 1,
+    "trace": "trace-1",
+    "span": "span-6",
+    "parent": "",
+    "durationMs": 7000,
+    "attributes": {
+      "gen_ai.agent.name": "opencode",
+      "gen_ai.conversation.id": "ses_fd56324abffeYUUI5c6tAmJq8L",
+      "gen_ai.conversation.name": "done",
+      "gen_ai.harness.name": "opencode",
+      "gen_ai.input.messages": "[{\"parts\":[{\"content\":\"\\\"Read the readme, then read a missing file, then call the capture echo tool, then delegate a sub-task.\\\"\",\"type\":\"text\"}],\"role\":\"user\"}]",
+      "gen_ai.operation.name": "chat",
+      "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"All done.\",\"type\":\"text\"}],\"role\":\"assistant\"}]",
+      "gen_ai.request.model": "mock-model",
+      "gen_ai.usage.cache_creation.input_tokens": "int:0",
+      "gen_ai.usage.cache_read.input_tokens": "int:35",
+      "gen_ai.usage.input_tokens": "int:481",
+      "gen_ai.usage.output_tokens": "int:41",
+      "gen_ai.usage.reasoning.output_tokens": "int:25"
+    }
+  }
+]

@@ -86,6 +86,22 @@ builds:
     main: ./cmd/copilot-on-event
     binary: "copilot-on-event-{{ .Os }}-{{ .Arch }}"
     no_unique_dist_dir: true
+  - id: amp-on-event
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/dash0hq/dash0-agent-plugin/internal/version.Version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    dir: ./
+    main: ./cmd/amp-on-event
+    binary: "amp-on-event-{{ .Os }}-{{ .Arch }}"
+    no_unique_dist_dir: true
 
 archives:
   - formats: ["binary"]

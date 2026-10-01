@@ -244,8 +244,7 @@ json.dump({
         "name": "dash0-agent-plugin",
         "marketplace": marketplace,
         "version": version,
-        # timezone.utc rather than datetime.UTC: the latter is 3.11+, and nothing else
-        # in qa/ needs a Python that new.
+        # Not datetime.UTC (3.11+): stock macOS python3 is 3.9.
         "installed_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
         "cache_path": plugin_root,
         "enabled": True,

@@ -44,3 +44,15 @@ func TestAttachUsage_omitsAnAbsentResponseModel(t *testing.T) {
 	_, present := event["response_model"]
 	assert.False(t, present, "an absent responding model must add no key")
 }
+
+// Cache writes are reported by the desktop app only, so a zero means "not
+// reported" and must not be sent as a measured zero.
+func TestAttachUsage_cacheCreationOnlyWhenReported(t *testing.T) {
+	event := map[string]any{}
+	AttachUsage(event, &Usage{InputTokens: 10})
+	_, present := event["gen_ai.usage.cache_creation.input_tokens"]
+	assert.False(t, present)
+
+	AttachUsage(event, &Usage{InputTokens: 10, CacheCreationInputTokens: 7})
+	assert.Equal(t, int64(7), event["gen_ai.usage.cache_creation.input_tokens"])
+}

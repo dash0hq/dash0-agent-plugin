@@ -103,6 +103,9 @@ func TestDataDirPrecedence(t *testing.T) {
 		copilotDir, err := Copilot.DataDir()
 		require.NoError(t, err)
 		assert.NotEqual(t, codexDir, copilotDir)
+		appDir, err := CopilotApp.DataDir()
+		require.NoError(t, err)
+		assert.NotEqual(t, copilotDir, appDir, "the app and the CLI must not share session state")
 	})
 }
 
@@ -112,6 +115,7 @@ func TestAgentName(t *testing.T) {
 		assert.Equal(t, "codex", Codex.AgentName())
 		// Copilot's reported name is not its data subdirectory.
 		assert.Equal(t, "github-copilot-cli", Copilot.AgentName())
+		assert.Equal(t, "github-copilot-app", CopilotApp.AgentName())
 	})
 
 	t.Run("DASH0_AGENT_NAME overrides", func(t *testing.T) {
@@ -240,6 +244,7 @@ func TestHarnessNameIsNotConfigurable(t *testing.T) {
 
 	assert.Equal(t, "claude-code", Claude.HarnessName())
 	assert.Equal(t, "github-copilot-cli", Copilot.HarnessName())
+	assert.Equal(t, "github-copilot-app", CopilotApp.HarnessName())
 
 	// The two coincide only by default; an override separates them.
 	assert.Equal(t, "from-plugin-ui", Claude.AgentName())

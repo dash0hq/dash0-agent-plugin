@@ -12,9 +12,9 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
 )
 
-// The emitters below turn a recovered Turn into spans. They live beside the Turn
-// model rather than in the CLI entrypoint so that any source able to build a
-// Turn emits the same spans.
+// The emitters below are shared by both Copilot entrypoints: the CLI recovers a
+// Turn from the native-OTel file, the desktop app (internal/source/copilotapp)
+// builds one from session events. Either way the same spans go out.
 
 // AttachUsage sets the per-turn token, model and response attributes on the Stop
 // event.
@@ -22,6 +22,9 @@ func AttachUsage(event map[string]any, u *Usage) {
 	event["gen_ai.usage.input_tokens"] = u.InputTokens
 	event["gen_ai.usage.output_tokens"] = u.OutputTokens
 	event["gen_ai.usage.cache_read.input_tokens"] = u.CacheReadInputTokens
+	if u.CacheCreationInputTokens > 0 {
+		event["gen_ai.usage.cache_creation.input_tokens"] = u.CacheCreationInputTokens
+	}
 	if u.ReasoningOutputTokens > 0 {
 		event["gen_ai.usage.reasoning.output_tokens"] = u.ReasoningOutputTokens
 	}
@@ -130,11 +133,16 @@ func EmitAgentSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPref
 		if sa.CallID != "" {
 			event["agent_id"] = sa.CallID
 		}
-		if turn.Usage != nil && turn.Usage.Model != "" {
-			event["model"] = turn.Usage.Model
-		}
-		if turn.Usage != nil && turn.Usage.ResponseModel != "" {
-			event["response_model"] = turn.Usage.ResponseModel
+		if sa.Model != "" {
+			event["model"] = sa.Model
+			event["response_model"] = sa.Model
+		} else {
+			if turn.Usage != nil && turn.Usage.Model != "" {
+				event["model"] = turn.Usage.Model
+			}
+			if turn.Usage != nil && turn.Usage.ResponseModel != "" {
+				event["response_model"] = turn.Usage.ResponseModel
+			}
 		}
 
 		parent := sa.ParentSpanID

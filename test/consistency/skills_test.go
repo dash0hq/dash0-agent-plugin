@@ -20,7 +20,9 @@ var frontmatter = regexp.MustCompile(`(?s)\A---\n(.*?)\n---\n`)
 
 // skillManifests lists every plugin manifest that declares a skills directory.
 // A manifest's "skills" value resolves against base, which is the repository
-// root for Claude and Cursor and the package directory for Copilot.
+// root for Claude and Cursor and the package directory for Copilot. The Copilot
+// app extension has no manifest — extension.mjs hands its skills directory to
+// joinSession — so its entry leaves manifest empty and base is that directory.
 var skillManifests = []struct {
 	label    string
 	manifest string
@@ -29,6 +31,7 @@ var skillManifests = []struct {
 	{"claude", ".claude-plugin/plugin.json", "."},
 	{"cursor", ".cursor-plugin/plugin.json", "."},
 	{"copilot", "copilot/plugin.json", "copilot"},
+	{"copilot-app", "", "copilot-app/skills"},
 }
 
 // TestSkillFrontmatterParses parses the frontmatter of every shipped skill with
@@ -49,14 +52,17 @@ func TestSkillFrontmatterParses(t *testing.T) {
 
 	for _, m := range skillManifests {
 		t.Run(m.label, func(t *testing.T) {
-			declared, ok := readJSON(t, filepath.Join(root, m.manifest))["skills"].(string)
-			require.True(t, ok, "%s declares no skills directory", m.manifest)
-
-			dir := filepath.Join(root, m.base, filepath.Clean(strings.TrimPrefix(declared, "./")))
+			declared, dir := m.base, filepath.Join(root, m.base)
+			if m.manifest != "" {
+				var ok bool
+				declared, ok = readJSON(t, filepath.Join(root, m.manifest))["skills"].(string)
+				require.True(t, ok, "%s declares no skills directory", m.manifest)
+				dir = filepath.Join(root, m.base, filepath.Clean(strings.TrimPrefix(declared, "./")))
+			}
 			files, err := filepath.Glob(filepath.Join(dir, "*", "SKILL.md"))
 			require.NoError(t, err)
 			require.NotEmpty(t, files,
-				"%s declares skills at %s but ships no SKILL.md there", m.manifest, declared)
+				"%s declares skills at %s but ships no SKILL.md there", m.label, declared)
 
 			for _, file := range files {
 				name := filepath.Base(filepath.Dir(file))

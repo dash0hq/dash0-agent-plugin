@@ -218,7 +218,8 @@ attacker's own manifest.
 Two gaps, neither closed here:
 
 - **The Windows hooks ignore it.** `cursor-on-event.ps1`, `codex-on-event.ps1`,
-  `copilot-on-event.ps1`, and `opencode-v2-on-event.ps1` always use their pinned `$Version`. Confusingly,
+  `copilot-on-event.ps1`, `opencode-v2-on-event.ps1`, and `copilot-app-on-event.ps1` always use
+  their pinned `$Version`. Confusingly,
   `install-cursor.ps1` and `install-codex.ps1` *do* read it, so on Windows the
   variable is honoured at install time and ignored at event time.
 - **The installers do not validate it.** `install-cursor.sh`,
@@ -236,7 +237,7 @@ Two gaps, neither closed here:
 ### How it is wired
 
 - **`scripts/version.sh`** — `check`, `set`, `latest`, `next`. The only list of
-  the eighteen version pins, so the bump and the check cannot disagree
+  the twenty version pins, so the bump and the check cannot disagree
   about what needs bumping. `next` counts from the newest **published release**,
   not from tags or the manifests, both of which can name a version that was never
   released.

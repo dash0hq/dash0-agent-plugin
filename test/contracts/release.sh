@@ -201,7 +201,7 @@ echo "== What a bump actually writes =="
 # proves it refuses things. This proves it succeeds: the release job runs it on
 # main and commits whatever it produced, so a sed that quietly stops matching
 # would ship a release whose bootstraps ask for a version that was never tagged.
-# Thirteen pins across two syntaxes, and the PowerShell ones arrived after this
+# Fifteen pins across two syntaxes, and the PowerShell ones arrived after this
 # script did — exactly the drift this catches.
 # It runs against a copy — the script cds to its own parent, so the copy is the
 # only way to exercise the real writes without dirtying the working tree.
@@ -211,26 +211,29 @@ echo "== What a bump actually writes =="
     opencode-v2/package.json opencode-v2/package-lock.json \
     claude/claude-on-event.sh cursor/cursor-on-event.sh \
     codex/codex-on-event.sh copilot/copilot-on-event.sh \
+    copilot-app/copilot-app-on-event.sh \
     cursor/cursor-on-event.ps1 codex/codex-on-event.ps1 \
     copilot/copilot-on-event.ps1 opencode-v2/opencode-v2-on-event.sh \
-    opencode-v2/opencode-v2-on-event.ps1 ) | tar xf - -C "$sandbox"
+    opencode-v2/opencode-v2-on-event.ps1 copilot-app/copilot-app-on-event.ps1 ) | tar xf - -C "$sandbox"
 
 if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
   case "$out" in
-    *"all 18 pins agree on 9.9.9"*) echo "  ok   a bump rewrites every pin" ;;
+    *"all 20 pins agree on 9.9.9"*) echo "  ok   a bump rewrites every pin" ;;
     *) echo "  FAIL a bump rewrites every pin"; printf '    %s\n' "$out"; fail=1 ;;
   esac
   # Named individually, because `check` compares the pins to each other: were a
   # bootstrap's VERSION= line to stop matching, the remaining pins would still agree — on
   # the old version — and check would pass.
   for f in claude/claude-on-event.sh cursor/cursor-on-event.sh \
-           codex/codex-on-event.sh copilot/copilot-on-event.sh opencode-v2/opencode-v2-on-event.sh; do
+           codex/codex-on-event.sh copilot/copilot-on-event.sh opencode-v2/opencode-v2-on-event.sh \
+           copilot-app/copilot-app-on-event.sh; do
     grep -q '^VERSION="9.9.9"$' "$sandbox/$f" \
       || { echo "  FAIL $f still pins $(grep -m1 '^VERSION=' "$sandbox/$f")"; fail=1; }
   done
   # PowerShell pins the same version in its own syntax, so its rewrite is a
   # separate sed that can drift on its own.
-  for f in cursor/cursor-on-event.ps1 codex/codex-on-event.ps1 copilot/copilot-on-event.ps1 opencode-v2/opencode-v2-on-event.ps1; do
+  for f in cursor/cursor-on-event.ps1 codex/codex-on-event.ps1 copilot/copilot-on-event.ps1 opencode-v2/opencode-v2-on-event.ps1 \
+           copilot-app/copilot-app-on-event.ps1; do
     grep -q "^\$Version = '9.9.9'$" "$sandbox/$f" \
       || { echo "  FAIL $f did not get the new version"; fail=1; }
   done

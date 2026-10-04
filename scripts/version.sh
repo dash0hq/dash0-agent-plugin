@@ -9,7 +9,7 @@
 #   scripts/version.sh latest                 the newest published release
 #   scripts/version.sh next patch|minor|major print what comes after it
 #
-# Sixteen files carry eighteen pins (marketplace.json and package-lock.json have two each). They must agree:
+# Eighteen files carry twenty pins (marketplace.json and package-lock.json have two each). They must agree:
 # a bootstrap left behind asks GitHub for a release that was never tagged, and
 # since the Claude marketplace lists this repo with no ref, that reaches users
 # on their next `plugin install`.
@@ -43,6 +43,7 @@ BOOTSTRAPS=(
   codex/codex-on-event.sh
   copilot/copilot-on-event.sh
   opencode-v2/opencode-v2-on-event.sh
+  copilot-app/copilot-app-on-event.sh
 )
 # The Windows bootstraps, which pin the same version in PowerShell syntax. There
 # is no Claude one: its hook runs the POSIX script.
@@ -51,6 +52,7 @@ PS_BOOTSTRAPS=(
   codex/codex-on-event.ps1
   copilot/copilot-on-event.ps1
   opencode-v2/opencode-v2-on-event.ps1
+  copilot-app/copilot-app-on-event.ps1
 )
 
 # Tag names of published, non-draft, non-prerelease releases.

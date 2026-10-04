@@ -22,7 +22,8 @@ unset DASH0_VERSION
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 SCRIPTS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
-         codex/codex-on-event.sh copilot/copilot-on-event.sh)
+         codex/codex-on-event.sh copilot/copilot-on-event.sh
+         copilot-app/copilot-app-on-event.sh)
 
 echo "== Every bootstrap writes the binary only by rename =="
 # Static, so it holds regardless of whether a race reproduces on this machine or
@@ -116,15 +117,22 @@ pinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/claude/claude-on-event.sh")
 # cache anything" then means "there was nothing to cache", not "the hook stopped".
 CHECKSUMS_URL="https://github.com/dash0hq/dash0-agent-plugin/releases/download/v${pinned}/checksums.txt"
 published=0
-curl -fsSL -o /dev/null "$CHECKSUMS_URL" 2>/dev/null && published=1
+checksums=$(curl -fsSL "$CHECKSUMS_URL" 2>/dev/null) && published=1
 [ "$published" -eq 1 ] \
   || echo "  note: v$pinned is not published — asserting refusal only, not the fallback"
 
-# All four, not just claude. The block is duplicated in each bootstrap, so a
+# All of them, not just claude. The block is duplicated in each bootstrap, so a
 # fix applied to one and missed in another is exactly the drift worth catching —
 # and three of them were carrying this untested.
 for s in "${SCRIPTS[@]}"; do
   spinned=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$REPO/$s")
+  # A runtime added since the pinned release has no asset in it yet, so there
+  # is nothing for the fallback to fetch.
+  sasset=1
+  if [ "$published" -eq 1 ] && ! grep -q "  $(basename "$s" .sh)-" <<<"$checksums"; then
+    sasset=0
+    echo "  note: v$pinned ships no $(basename "$s" .sh) binary — asserting refusal only for $s"
+  fi
   for bad in '../../../../attacker/repo/releases/download/v9' '../../etc' 'v0.1.25' '0.1.25; id'; do
     bdata=$(mktemp -d)
     out=$(cd "$vdata" && HOME="$vdata/home" DASH0_VERSION="$bad" \
@@ -138,7 +146,7 @@ for s in "${SCRIPTS[@]}"; do
     # the pinned version — the message says "ignoring", and for a long time the
     # code exited instead, turning a typo like v0.1.25 into a session with no
     # telemetry at all. Asserting only on the message could not tell them apart.
-    if [ "$published" -eq 1 ]; then
+    if [ "$published" -eq 1 ] && [ "$sasset" -eq 1 ]; then
       cached=$(find "$bdata" -type f -name "*-${spinned}-*" 2>/dev/null | head -1) || true
       [ -n "$cached" ] \
         || { echo "  FAIL $s: '$bad' stopped the hook instead of falling back to $spinned"; fail=1; }

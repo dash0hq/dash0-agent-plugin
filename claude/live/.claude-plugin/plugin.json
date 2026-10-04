@@ -1,0 +1,14 @@
+{
+  "name": "dash0-live",
+  "version": "0.1.0",
+  "author": { "name": "Dash0" },
+  "description": "Dash0 live insights inside Claude Code: a status-line entry, a bar above the prompt and a pane with failing checks and Agent0 threads.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "dataset": { "type": "string", "title": "Dataset", "description": "Dash0 dataset to watch", "default": "default" },
+    "window": { "type": "string", "title": "Time window", "description": "How far back to look, e.g. 30m, 1h, 1d", "default": "1h" },
+    "refreshSeconds": { "type": "number", "title": "Refresh (s)", "description": "Polling interval, 15-3600", "default": 60 },
+    "band": { "type": "string", "title": "Bar above the prompt", "description": "always, only while something is failing, or off", "default": "always", "options": ["always", "failing", "off"] },
+    "mcpServer": { "type": "string", "title": "Dash0 MCP server name", "description": "As /mcp lists it; blank tries Dash0, dash0 and claude.ai Dash0", "default": "" }
+  }
+}

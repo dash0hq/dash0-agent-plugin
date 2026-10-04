@@ -5,7 +5,7 @@
 // pipeline's canonical event vocabulary, and recovers each turn — tokens, model,
 // response, the turn's tool executions and its sub-agents — from Copilot's
 // native-OpenTelemetry file. The file's own cost figure is deliberately left
-// there; see attachUsage in cmd/copilot-on-event.
+// there; see AttachUsage in emit.go.
 //
 // Copilot's per-turn hook (`agentStop`) fires only under camelCase
 // registration, and camelCase payloads carry no `hook_event_name` field — so
@@ -30,7 +30,7 @@ import "strings"
 //     sub-agents. Tool spans come from the native-OTel file's execute_tool
 //     spans instead — real timings, failure status, and sub-agent tool calls
 //     nested under their spawning `task` span (see otelfile.go / the
-//     entrypoint's emitToolSpans).
+//     EmitToolSpans in emit.go).
 //   - preToolUse: Copilot's only fail-closed event; not registering it avoids
 //     the foot-gun of a broken hook blocking the user's tools.
 //   - subagentStart/subagentStop AND every sub-agent lifecycle event: a sub-agent

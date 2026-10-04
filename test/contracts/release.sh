@@ -158,16 +158,17 @@ echo "== What a release must contain =="
 # which had already gone stale once: Windows took the build from 16 artifacts to
 # 24 and "expected 16" was not updated with it.
 art=$("$REPO/scripts/expected-artifacts.sh")
-if [ "$(printf '%s\n' "$art" | wc -l | tr -d ' ')" = "30" ]; then
-  echo "  ok   30 binaries: five agents, three platforms, two architectures"
+if [ "$(printf '%s\n' "$art" | wc -l | tr -d ' ')" = "36" ]; then
+  echo "  ok   36 binaries: six agents, three platforms, two architectures"
 else
-  echo "  FAIL expected 30 artifact names, got $(printf '%s\n' "$art" | wc -l | tr -d ' ')"; fail=1
+  echo "  FAIL expected 36 artifact names, got $(printf '%s\n' "$art" | wc -l | tr -d ' ')"; fail=1
 fi
 # Named, not counted — the point of the list. .exe only on Windows, because that
 # is what GoReleaser appends and what every bootstrap asks for.
 for want in claude-on-event-linux-amd64 cursor-on-event-darwin-arm64 \
             codex-on-event-windows-amd64.exe copilot-on-event-windows-arm64.exe \
-            opencode-v2-on-event-linux-arm64 opencode-v2-on-event-windows-amd64.exe; do
+            opencode-v2-on-event-linux-arm64 opencode-v2-on-event-windows-amd64.exe \
+            copilot-app-on-event-linux-arm64; do
   printf '%s\n' "$art" | grep -qx "$want" \
     || { echo "  FAIL $want is not in the expected list"; fail=1; }
 done
@@ -175,7 +176,7 @@ printf '%s\n' "$art" | grep -q 'linux.*\.exe' \
   && { echo "  FAIL a non-Windows name carries .exe"; fail=1; }
 
 # Derived, not transcribed: dropping a platform from .goreleaser.yaml must drop
-# its four binaries. A transcribed list would keep reporting all 24 and the
+# its twelve binaries. A transcribed list would keep reporting all 36 and the
 # workflow would then diff dist/ against binaries nobody asked it to build.
 # One trap for the whole script. `trap … EXIT` is not additive: a second one
 # silently replaces this, and this one already replaces lib.sh's _cleanup, which
@@ -188,10 +189,10 @@ mkdir -p "$gr/scripts"
 cp "$REPO/scripts/expected-artifacts.sh" "$gr/scripts/"
 grep -v '^      - darwin$' "$REPO/.goreleaser.yaml" >"$gr/.goreleaser.yaml"
 n=$("$gr/scripts/expected-artifacts.sh" | wc -l | tr -d ' ')
-if [ "$n" = "20" ]; then
+if [ "$n" = "24" ]; then
   echo "  ok   the list follows .goreleaser.yaml"
 else
-  echo "  FAIL dropping darwin left $n names, expected 20"; fail=1
+  echo "  FAIL dropping darwin left $n names, expected 24"; fail=1
 fi
 
 echo "== What a bump actually writes =="

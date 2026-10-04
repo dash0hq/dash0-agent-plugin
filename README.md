@@ -15,6 +15,7 @@ Check out our documentation for setting up and configuring the Dash0 Agent Plugi
 - **OpenAI Codex** — installation, configuration, and usage in [`.codex-plugin/README.md`](./.codex-plugin/README.md).
 - **GitHub Copilot CLI** — installation, configuration, and usage in [`.github/plugin/README.md`](./.github/plugin/README.md).
 - **OpenCode V2** — installation, configuration, and usage in [`opencode-v2/README.md`](./opencode-v2/README.md).
+- **GitHub Copilot app** — installation, configuration, and usage in [`copilot-app/README.md`](./copilot-app/README.md).
 
 All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other runtimes use a PowerShell bootstrap.
 
@@ -29,8 +30,9 @@ This repo ships one shared Go pipeline (`cmd/`, `internal/`) and runtime-specifi
 | `codex/` (`codex-on-event.sh`, `hooks.json`), `.codex-plugin/`, `.agents/plugins/marketplace.json`, `install-codex.sh` | OpenAI Codex | Bootstrap wrapper, hook registration, manifest, self-hosted Codex marketplace, installer. Installed via marketplace (`codex plugin add`) or the installer (hooks written to `~/.codex/config.toml`). `.agents/plugins/` is Codex-only — Claude reads `.claude-plugin/`, Cursor its own dir |
 | `copilot/` (`copilot-on-event.sh`, `plugin.json`, `hooks.json`, `skills/`), `.github/plugin/marketplace.json` | GitHub Copilot CLI | Self-contained plugin package (bootstrap wrapper, manifest, camelCase hooks, configure skill) + self-hosted Copilot marketplace listing it. Installed via marketplace (`copilot plugin install dash0-agent-plugin@dash0`) or the `:copilot` subpath. `.github/plugin/` is Copilot-only |
 | `opencode-v2/` (`index.js`, bootstraps, `skills/`, npm metadata) | OpenCode V2 | V2 `Plugin.define` package, configure skill and persistent event-stream consumer. Installed with `opencode plugin add @dash0/agent-plugin-opencode-v2` (npm, published by the release workflow) or from a cloned path |
+| `copilot-app/` (`extension.mjs`, `copilot-app-on-event.sh`, `skills/`) | GitHub Copilot app | Session extension (no manifest) that turns the app's session events into one binary call per turn, plus bootstrap wrapper and configure skill. Installed with `install_extension` pointed at this folder |
 
-The dotted directories are fixed by each agent's plugin discovery and cannot move. Keeping every other runtime asset under `claude/`, `cursor/`, `codex/`, `copilot/`, and `opencode-v2/` stops one marketplace from auto-discovering another runtime's components. `scripts/` is repo tooling only (release, version checks, the Docker test harness) — nothing there is shipped to a user.
+The dotted directories are fixed by each agent's plugin discovery and cannot move. Keeping every other runtime asset under `claude/`, `cursor/`, `codex/`, `copilot/`, `opencode-v2/`, and `copilot-app/` stops one marketplace from auto-discovering another runtime's components. `scripts/` is repo tooling only (release, version checks, the Docker test harness) — nothing there is shipped to a user.
 
 ## Contributing
 

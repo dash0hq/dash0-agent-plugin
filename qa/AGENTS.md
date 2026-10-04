@@ -15,12 +15,16 @@ the project moves.
 
 One writer per directory, so a hand edit in the wrong place gets overwritten or quietly ignored.
 
-## Five runtimes
+## Six runtimes
 
-Specs target Claude Code, Codex, GitHub Copilot CLI, Cursor or OpenCode, and say which in their `runtime:`
-frontmatter. Each has its own driver, its own second channel, and its own limits on what a run can
-prove. `## Runtimes` in [setup.md](setup.md) is the table; read it before running or writing
-anything, and never carry a result from one runtime over to another.
+Specs target Claude Code, Codex, GitHub Copilot CLI, Cursor, OpenCode or the GitHub Copilot app, and
+say which in their `runtime:` frontmatter. Each has its own driver, its own second channel, and its
+own limits on what a run can prove. `## Runtimes` in [setup.md](setup.md) is the table; read it
+before running or writing anything, and never carry a result from one runtime over to another. The
+Copilot app (`runtime: copilot-app`) is driven by a runner, an agent session inside the app that
+creates and prompts target sessions with the app's session tools. Read
+[specs/copilot-app/README.md](specs/copilot-app/README.md) before writing one of its specs: no spec
+there may need a person.
 
 Three of them differ in kind rather than in detail, and each has a page to read before writing or
 judging one of its specs.

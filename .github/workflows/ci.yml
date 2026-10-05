@@ -47,6 +47,11 @@ jobs:
       - name: Diagnostic scripts
         run: make test-scripts
 
+      - name: OpenCode V2 plugin type check
+        run: |
+          npm --prefix opencode-v2 ci --ignore-scripts
+          npm --prefix opencode-v2 run check
+
   build-test:
     needs: checks
     runs-on: ${{ matrix.os }}
@@ -74,6 +79,14 @@ jobs:
 
       - name: Test
         run: go test ${{ matrix.test-flags }} ./...
+
+      # On every OS: the Windows run is the only one that drives index.js through
+      # the real PowerShell bootstrap.
+      - name: OpenCode V2 plugin tests
+        shell: bash
+        run: |
+          npm --prefix opencode-v2 ci --ignore-scripts
+          npm --prefix opencode-v2 test
 
   # Marketplace install paths. Linux-only: they drive the real Claude Code CLI
   # through three install routes, which is a property of the marketplaces and

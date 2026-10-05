@@ -451,3 +451,87 @@ jobs:
             || { echo "::error::expected at least 3 requests, got $COUNT"; exit 1; }
           AUTH=$(echo "$RESULT" | jq '[.requests[] | select(.auth == "Bearer e2e-release-test-token")] | length')
           [ "$AUTH" -ge 1 ] || { echo "::error::no request carried the auth header"; exit 1; }
+
+  # The OpenCode V2 plugin's npm package, so `opencode plugin add
+  # @dash0/agent-plugin-opencode-v2` works. After the release job, because the
+  # package's bootstrap downloads this version's binary from the GitHub release.
+  # npm versions are immutable, so a re-run that finds the version already
+  # published skips instead of failing.
+  #
+  # Published with npm trusted publishing (OIDC), not a token. The package's
+  # trusted publisher on npmjs.com must name repository dash0hq/dash0-agent-plugin,
+  # workflow release.yml and environment release (see DEVELOPMENT.md).
+  npm:
+    name: Publish the OpenCode V2 npm package
+    needs: [plan, release]
+    # Not only on success: the release job's last steps (asset check, moving
+    # main) can fail after the GitHub release is public, and that release
+    # cannot be redone. Whether to publish is decided by the release itself.
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC); provenance comes with it
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: The GitHub release is published
+        id: published
+        run: |
+          set -euo pipefail
+          # A draft or a missing release (404: this endpoint omits drafts) means
+          # the release failed before Publish, and there is nothing for npm to
+          # match. Any other error is not an answer, so the job fails.
+          if draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .draft 2>gh.err); then
+            if [ "$draft" = "false" ]; then
+              echo "yes=true" >>"$GITHUB_OUTPUT"
+            else
+              echo "$TAG is a draft; not publishing to npm"
+            fi
+          elif grep -q 'HTTP 404' gh.err; then
+            echo "$TAG is not a published release; not publishing to npm"
+          else
+            cat gh.err >&2
+            echo "::error::could not tell whether $TAG is published"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.published.outputs.yes == 'true'
+        with: { ref: '${{ needs.plan.outputs.tag }}' }
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.published.outputs.yes == 'true'
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: npm with trusted publishing
+        if: steps.published.outputs.yes == 'true'
+        # Trusted publishing needs npm 11.5.1 or later.
+        run: npm install -g npm@11.21.0
+
+      - name: Publish
+        if: steps.published.outputs.yes == 'true'
+        working-directory: opencode-v2
+        run: |
+          set -euo pipefail
+          [ "$(jq -r .version package.json)" = "$VERSION" ] \
+            || { echo "::error::package.json does not pin $VERSION"; exit 1; }
+          if npm view "@dash0/agent-plugin-opencode-v2@$VERSION" version >/dev/null 2>&1; then
+            echo "@dash0/agent-plugin-opencode-v2@$VERSION is already published"
+            exit 0
+          fi
+          # A failure, so a release without its npm package is not missed. It
+          # cannot block or undo the GitHub release, which is already public:
+          # fix the trusted publisher and re-run this job, which publishes from the tag.
+          if ! npm publish --access public; then
+            msg="@dash0/agent-plugin-opencode-v2@$VERSION was not published, so \`opencode plugin add\` cannot install it. Check the package's trusted publisher on npmjs.com (repository dash0hq/dash0-agent-plugin, workflow release.yml, environment release), then re-run this job."
+            echo "::error::$msg"
+            echo "> [!CAUTION]"$'\n'"> $msg" >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

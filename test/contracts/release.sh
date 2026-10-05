@@ -207,6 +207,7 @@ echo "== What a bump actually writes =="
 ( cd "$REPO" && tar cf - scripts/version.sh \
     .claude-plugin/plugin.json .cursor-plugin/plugin.json .codex-plugin/plugin.json \
     copilot/plugin.json .github/plugin/marketplace.json \
+    opencode-v2/package.json opencode-v2/package-lock.json \
     claude/claude-on-event.sh cursor/cursor-on-event.sh \
     codex/codex-on-event.sh copilot/copilot-on-event.sh \
     cursor/cursor-on-event.ps1 codex/codex-on-event.ps1 \
@@ -215,7 +216,7 @@ echo "== What a bump actually writes =="
 
 if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
   case "$out" in
-    *"all 15 pins agree on 9.9.9"*) echo "  ok   a bump rewrites every pin" ;;
+    *"all 18 pins agree on 9.9.9"*) echo "  ok   a bump rewrites every pin" ;;
     *) echo "  FAIL a bump rewrites every pin"; printf '    %s\n' "$out"; fail=1 ;;
   esac
   # Named individually, because `check` compares the pins to each other: were a
@@ -234,6 +235,8 @@ if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
   done
   [ "$(jq -r '.metadata.version' "$sandbox/.github/plugin/marketplace.json")" = "9.9.9" ] \
     || { echo "  FAIL marketplace.json metadata.version was not rewritten"; fail=1; }
+  [ "$(jq -r '.packages[""].version' "$sandbox/opencode-v2/package-lock.json")" = "9.9.9" ] \
+    || { echo "  FAIL package-lock.json root package version was not rewritten"; fail=1; }
   # The refusal, now that every pin in the sandbox reads 9.9.9.
   refuse "a bump to the version already pinned" "nothing to prepare" -- \
     "$sandbox/scripts/version.sh" set 9.9.9

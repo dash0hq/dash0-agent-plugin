@@ -1,9 +1,10 @@
 # Feature support matrix across coding agents
 
-Four runtimes ship today — **Claude Code**, **Cursor**, **OpenAI Codex**, and
-**GitHub Copilot CLI** — on one shared Go pipeline (`cmd/*/main.go` →
-`internal/pipeline` → `internal/otlp`), with each agent's configuration resolved
-by `internal/harness`. They differ in how they're installed, how config reaches
+Five runtimes are implemented — **Claude Code**, **Cursor**, **OpenAI Codex**,
+**GitHub Copilot CLI**, and **OpenCode V2** — sharing Go configuration and OTLP
+export (`internal/harness`, `internal/otlp`). The hook adapters use
+`internal/pipeline`; OpenCode's stream consumer uses its tool enrichment helpers.
+They differ in how they're installed, how config reaches
 the hook, what the host exposes to a hook, and (consequently) which span
 properties can be populated.
 
@@ -28,6 +29,26 @@ set by an agent today, and Copilot's bootstrap reads the same one, so its binary
 cache and session state share a root. Codex sets bare `PLUGIN_DATA` instead:
 `codex/codex-on-event.sh` caches the binary under it but never exports it, so for a
 marketplace install the cache and the session state sit in different roots.
+
+### OpenCode V2
+
+OpenCode uses a persistent V2-only stream consumer with the shared exporter:
+
+| Capability | OpenCode V2 |
+|---|---|
+| Harness / entrypoint | `opencode-v2` / `cmd/opencode-v2-on-event` |
+| Plugin API | `Plugin.define`, pinned `@opencode/plugin` 2.0.22 |
+| Configuration | `opencode.json` `plugins[].package` + `options`; `.opencode-v2/dash0-agent-plugin.local.md`; `OPENCODE_V2_PLUGIN_OPTION_*`, then non-secret `DASH0_*` fallbacks |
+| State | `$OPENCODE_V2_PLUGIN_DATA` › `$DASH0_PLUGIN_DATA` › `~/.local/state/dash0-agent-plugin/opencode-v2` |
+| Delivery | `opencode plugin add @dash0/agent-plugin-opencode-v2` (npm) or a clone path; shell or PowerShell downloads the checksummed release binary; `executable` selects a local build |
+| Configure | Bundled `dash0-configure` skill, registered by the plugin, writes `.opencode-v2/dash0-agent-plugin.local.md` |
+| Privacy defaults | `omit_io: true`; `omit_user_info: false`; `omit_identity_fallback: false` |
+| Removal | `opencode plugin remove @dash0/agent-plugin-opencode-v2` (or remove the `plugins` entry), then `opencode reload` |
+| Reload limitation | Live stream only; a reload may miss events and plugin context has no reliable replay API |
+| MCP server attribute | No: MCP tools keep the flattened `<server>_<tool>` name; the plugin API cannot tell them from a local tool in the same namespace |
+
+The release workflow publishes the package to npm. See
+[`opencode-v2/README.md`](opencode-v2/README.md) for installation and all options.
 
 ## Configuration options
 
@@ -54,7 +75,7 @@ variable instead.
 
 ¹ The Cursor and Codex README example configs show `omit_io: false`, but the installers
 don't write the key. With no explicit setting the binary default (`true`) applies on all
-four runtimes.
+five runtimes.
 
 ## Configuration sources & precedence
 

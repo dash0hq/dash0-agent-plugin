@@ -36,10 +36,11 @@ BASE="https://github.com/${GITHUB_REPOSITORY:-dash0hq/dash0-agent-plugin}/releas
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64
            windows-amd64 windows-arm64)
 BOOTSTRAPS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
-            codex/codex-on-event.sh copilot/copilot-on-event.sh)
+            codex/codex-on-event.sh copilot/copilot-on-event.sh
+            opencode-v2/opencode-v2-on-event.sh)
 # The Windows bootstraps ask for windows assets only, and always with .exe.
 PS_BOOTSTRAPS=(cursor/cursor-on-event.ps1 codex/codex-on-event.ps1
-               copilot/copilot-on-event.ps1)
+               copilot/copilot-on-event.ps1 opencode-v2/opencode-v2-on-event.ps1)
 
 # 403 is retried alongside 429 and 5xx: it is what github.com answers for
 # anonymous rate limiting, and this script makes about thirty unauthenticated
@@ -132,7 +133,34 @@ if [ "$STRICT" -eq 0 ]; then
   fi
 fi
 
+# An agent added after the pinned release has no binary in it until the next
+# release, so on a PR its probes would fail with nothing to fix. Listed by name
+# rather than inferred from the manifest: inferring would also skip a released
+# agent whose asset name was renamed by mistake, which is what this check is for.
+# Once the pinned release ships a listed agent, its assets are checked like any
+# other's, with a warning to remove the stale entry. Failing instead would turn
+# every PR red between a release and that one-line cleanup. Never skipped under
+# --strict.
+UNRELEASED_AGENTS=(opencode-v2)
 fail=0
+predates() { # <agent> <candidate names…>
+  local agent="$1" name listed
+  shift
+  [ "$STRICT" -eq 0 ] || return 1
+  for listed in "${UNRELEASED_AGENTS[@]}"; do
+    [ "$listed" = "$agent" ] || continue
+    for name in "$@"; do
+      if printf '%s' "$MANIFEST" | grep -q -- " ${name}-"; then
+        echo "::warning::v${VERSION} ships $agent — checking it; remove it from UNRELEASED_AGENTS"
+        return 1
+      fi
+    done
+    echo "::warning::v${VERSION} predates $agent — its assets not checked"
+    return 0
+  done
+  return 1
+}
+
 probe() {
   local script="$1" platform="$2" name asset suffix="" found=""
   shift 2
@@ -173,6 +201,8 @@ for script in "${BOOTSTRAPS[@]}"; do
       echo "::error::could not read the asset names from $script — update this parser" >&2
       fail=1; continue ;;
   esac
+  # shellcheck disable=SC2086  # one candidate per word, deliberately split
+  predates "$agent" $candidates && continue
   for platform in "${PLATFORMS[@]}"; do
     [ "$WINDOWS" -eq 1 ] || [ "${platform#windows-}" = "$platform" ] || continue
     # shellcheck disable=SC2086  # one candidate per word, deliberately split
@@ -186,6 +216,7 @@ for script in "${PS_BOOTSTRAPS[@]}"; do
   [ -n "$agent" ] || { echo "::error::could not read \$Agent from $script" >&2; fail=1; continue; }
   # These name windows explicitly, so only the arch varies. .exe comes from
   # probe, which appends it for every windows platform.
+  predates "$agent" "${agent}-on-event" && continue
   probe "$script" windows-amd64 "${agent}-on-event"
   probe "$script" windows-arm64 "${agent}-on-event"
 done

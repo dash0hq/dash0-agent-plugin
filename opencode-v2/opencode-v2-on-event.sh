@@ -2,23 +2,22 @@
 # SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Bootstrap wrapper for the cursor-on-event binary. Installed at a stable
-# user-owned path by the setup CLI; referenced by absolute path from Cursor's
-# hooks.json so each hook invocation runs:
+# Bootstrap for the persistent OpenCode V2 event consumer. The V2 JavaScript
+# plugin starts it once and streams newline-delimited events on stdin:
 #
-#   stdin (JSON) → cursor-on-event.sh → cursor-on-event binary → OTLP
+#   V2 subscription -> opencode-v2-on-event.sh -> Go consumer -> OTLP
 #
 # Fail-open: any error before exec'ing the binary logs to stderr and exits 0 so
-# a broken installer never breaks the user's Cursor session. `set -e` is
+# a broken installer never breaks the user's OpenCode session. `set -e` is
 # deliberately absent; fail_open does that job.
 set -u
 
-AGENT="cursor"
+AGENT="opencode-v2"
 VERSION="0.1.28"
 
 # Where the downloaded binary lives. Mirrors the per-source scratch root layout
 # from internal/harness so a user can clean up the whole tree at once.
-BASE="${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/cursor}"
+BASE="${OPENCODE_V2_PLUGIN_DATA:-${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/opencode-v2}}"
 
 # >>> shared bootstrap - byte-identical across the fail-open POSIX bootstraps >>>
 # test/consistency asserts these three regions match, so a fix lands in all of

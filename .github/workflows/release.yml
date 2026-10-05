@@ -124,7 +124,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.mode == 'release'
     runs-on: ubuntu-latest
-    # GoReleaser cross-compiles 24 targets and uploads them, which is 6-10min on
+    # GoReleaser cross-compiles 30 targets and uploads them, which is 6-10min on
     # its own, and the strict asset check can spend minutes more on retries. The
     # budget below is sized so the two together cannot reach this.
     timeout-minutes: 30
@@ -241,6 +241,13 @@ jobs:
           DASH0_OTLP_URL=http://127.0.0.1:1 \
             dist/claude-on-event-linux-amd64 \
             <<<'{"hook_event_name":"SessionStart","session_id":"release-verify","model":"opus"}'
+          opencode_data=$(mktemp -d)
+          OPENCODE_V2_PLUGIN_DATA=$opencode_data \
+          DASH0_OTLP_URL=http://127.0.0.1:1 \
+            dist/opencode-v2-on-event-linux-amd64 \
+            <<<'{"type":"session.created","created":1,"data":{"sessionID":"release-verify"}}'
+          # The exporter logs errors and exits 0, so check it handled the event.
+          grep -q release-verify "$opencode_data/opencode-v2.json"
 
       - name: The draft carries exactly what was built
         run: |

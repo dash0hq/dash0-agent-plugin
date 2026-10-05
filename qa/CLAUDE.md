@@ -15,14 +15,14 @@ the project moves.
 
 One writer per directory, so a hand edit in the wrong place gets overwritten or quietly ignored.
 
-## Four runtimes
+## Five runtimes
 
-Specs target Claude Code, Codex, GitHub Copilot CLI or Cursor, and say which in their `runtime:`
+Specs target Claude Code, Codex, GitHub Copilot CLI, Cursor or OpenCode, and say which in their `runtime:`
 frontmatter. Each has its own driver, its own second channel, and its own limits on what a run can
 prove. `## Runtimes` in [setup.md](setup.md) is the table; read it before running or writing
 anything, and never carry a result from one runtime over to another.
 
-Two of them differ in kind rather than in detail, and each has a page to read before writing or
+Three of them differ in kind rather than in detail, and each has a page to read before writing or
 judging one of its specs.
 
 **Copilot.** Its hooks carry no numbers and no tool events the plugin uses, so its second channel —
@@ -36,6 +36,10 @@ transcript, carries no token count at all: usage exists only in the hook payload
 plugin's input. So a cursor run can prove that a token count is *scoped* correctly and never that it
 is correct. Read `## The two things to know before reading any spec here` in
 [specs/cursor](specs/cursor/README.md).
+
+**OpenCode.** It has no hooks, so there is no recorder and no `hooks` column: the plugin reads
+the V2 event stream, and the independent record is `opencode session export`. Read `### OpenCode` under
+`## Configure` in [setup.md](setup.md).
 
 ## Findings
 

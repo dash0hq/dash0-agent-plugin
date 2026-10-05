@@ -106,7 +106,7 @@ function send(eventName, payload, { surface = false } = {}) {
           resolve();
         });
         child.on("close", () => {
-          for (const line of stderr.split("\n")) {
+          for (const line of stderr.split(/\r?\n/)) {
             if (!line.trim()) continue;
             if (surface && line.startsWith("dash0:")) session?.log(line).catch(() => {});
             else warn(line);

@@ -4,12 +4,14 @@
 package consistency
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -61,38 +63,105 @@ for (let i = 0; i < 500; i++) {
 await new Promise((r) => setTimeout(r, 100));
 `
 
+// fakeBinarySrc stands in for copilot-app-on-event: it records its event
+// argument and the payload it read on stdin, one line per call.
+const fakeBinarySrc = `package main
+
+import (
+	"io"
+	"os"
+)
+
+func main() {
+	in, _ := io.ReadAll(os.Stdin)
+	f, err := os.OpenFile(os.Getenv("LOG"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		os.Exit(1)
+	}
+	defer f.Close()
+	f.WriteString(os.Args[1] + " " + string(in) + "\n")
+}
+`
+
+var (
+	fakeBinaryOnce sync.Once
+	fakeBinary     string
+	fakeBinaryErr  error
+)
+
+// buildFakeBinary compiles fakeBinarySrc once per test run.
+func buildFakeBinary(t *testing.T) string {
+	t.Helper()
+	fakeBinaryOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "copilot-app-fake")
+		if err != nil {
+			fakeBinaryErr = err
+			return
+		}
+		src := filepath.Join(dir, "main.go")
+		if fakeBinaryErr = os.WriteFile(src, []byte(fakeBinarySrc), 0o644); fakeBinaryErr != nil {
+			return
+		}
+		fakeBinary = filepath.Join(dir, "fake")
+		if runtime.GOOS == "windows" {
+			fakeBinary += ".exe"
+		}
+		out, err := exec.Command("go", "build", "-o", fakeBinary, src).CombinedOutput()
+		if err != nil {
+			fakeBinaryErr = fmt.Errorf("%w: %s", err, out)
+		}
+	})
+	require.NoError(t, fakeBinaryErr, "building the fake binary")
+	return fakeBinary
+}
+
 // runExtension loads the real extension.mjs against the stub, delivers the
 // given live events while the history read is pending, optionally ends the
 // session through the sessionEnd hook with exitReason, and returns one
-// "<event> <payload>" line per bootstrap call.
+// "<event> <payload>" line per binary call.
+//
+// The sends go through the real bootstrap for this platform: bash and
+// copilot-app-on-event.sh, or powershell.exe and copilot-app-on-event.ps1 on
+// Windows. Its cache is seeded with a fake binary under the pinned name, so
+// nothing is downloaded and the whole spawn and stdin path is exercised.
 func runExtension(t *testing.T, live string, want int, exitReason string) []string {
 	t.Helper()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not installed")
 	}
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake bootstrap is a shell script")
-	}
+	root := repoRoot(t)
 	dir := t.TempDir()
-	src, err := os.ReadFile(filepath.Join(repoRoot(t), "copilot-app", "extension.mjs"))
-	require.NoError(t, err)
 	sdk := filepath.Join(dir, "node_modules", "@github", "copilot-sdk")
 	require.NoError(t, os.MkdirAll(sdk, 0o755))
 	files := map[string]string{
-		"extension.mjs":           string(src),
-		"driver.mjs":              extensionDriver,
-		"copilot-app-on-event.sh": `{ printf '%s ' "$1"; cat; echo; } >> "$LOG"` + "\n",
+		"driver.mjs": extensionDriver,
 		filepath.Join("node_modules", "@github", "copilot-sdk", "package.json"): `{"name":"@github/copilot-sdk","type":"module","exports":{"./extension":"./extension.js"}}`,
 		filepath.Join("node_modules", "@github", "copilot-sdk", "extension.js"): extensionSDKStub,
+	}
+	for _, name := range []string{"extension.mjs", "copilot-app-on-event.sh", "copilot-app-on-event.ps1"} {
+		body, err := os.ReadFile(filepath.Join(root, "copilot-app", name))
+		require.NoError(t, err)
+		files[name] = string(body)
 	}
 	for name, body := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
 	}
 
+	data := filepath.Join(dir, "data")
+	binDir := filepath.Join(data, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	cached := fmt.Sprintf("copilot-app-on-event-%s-%s-%s", bootstrapVersion(t, "copilot-app"), runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		cached += ".exe"
+	}
+	fake, err := os.ReadFile(buildFakeBinary(t))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, cached), fake, 0o755))
+
 	log := filepath.Join(dir, "calls.log")
 	cmd := exec.Command("node", "driver.mjs", live, strconv.Itoa(want), exitReason)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LOG="+log)
+	cmd.Env = append(os.Environ(), "LOG="+log, "COPILOT_APP_PLUGIN_DATA="+data, "DASH0_VERSION=")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "driver: %s", out)
 

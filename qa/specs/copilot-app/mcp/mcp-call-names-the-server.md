@@ -64,4 +64,4 @@ expected `gen_ai.tool.name` is `mcpToolName`, and the expected `dash0.gen_ai.too
 **The tool name belongs to the app.** Assert against the event log, never against
 `get_file_contents` literally.
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

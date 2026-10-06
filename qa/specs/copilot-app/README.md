@@ -31,8 +31,8 @@ Each run follows the same steps. A spec names only what differs.
 2. **Create the target:** `create_session` with `workspace_type: "worktree"` and
    `notify_on_idle: "once"`, then `get_session` for its worktree path and session id. Its worktree
    exists now, before any message.
-3. **Prepare it:** `qa/tools/qa-app-run.py prepare <run-id> <worktree> [--omit-io] [--fake-model]`.
-   This writes the QA config, and with `--fake-model` the model pin, into that worktree.
+3. **Prepare it:** `qa/tools/qa-app-run.py prepare <run-id> <worktree> [--omit-io]`. This writes
+   the QA config into that worktree.
 4. **Prompt it:** `send_session_message` with the spec's text. Use `delivery_mode: "immediate"` to
    steer a busy session and `"enqueue"` to queue behind it. Both were measured on 2026-10-06 to
    arrive as `delivery: "steering"` and `"queued"`.
@@ -41,8 +41,23 @@ Each run follows the same steps. A spec names only what differs.
    `qa/tools/qa-attrs.py qa/runs/<run-id>`.
 
 **A spec that uses the fake model first checks that the target ran on it.** `fake-model.jsonl` must
-hold at least one call made after `prepare`. If it holds none, the pin did not take. That is a setup
-failure, not a spec result: report it and stop.
+hold at least one call made after `swap-in`. If it holds none, the kickoff's model did not take.
+That is a setup failure, not a spec result: report it and stop.
+
+**A fake-model run replaces steps 2 to 4.** A session's model can only be set by a kickoff when it
+is created, and a kickoff sends its prompt at once, before `prepare` can run:
+
+- `qa/tools/qa-app-run.py swap-in <run-id> [--omit-io]` puts the run's config in place of the
+  user's `~/.copilot` one and prints the `<provider-id>/qa-fake` model id;
+- `create_session` with `kickoff: {prompt: <the spec's first prompt>, model: <that id>, mode: "interactive"}`;
+- `get_session`, then `prepare <run-id> <worktree> [--omit-io]`, which also puts the user's config
+  back. Do this straight away: until then every session on the machine reports to the QA target.
+
+If anything fails between `swap-in` and `prepare`, run `qa/tools/qa-app-run.py restore` before
+anything else. Later prompts go through `send_session_message` as usual. After a fake-model run, the app
+offers `qa-fake` to every new session, so run the real-model specs first and the fake-model ones
+last. Then give the picker back: one more `create_session` with a kickoff `Reply with ok.` on the
+runner's own model (from `get_session` on the runner), and `archive_session` it once idle.
 
 The fake model needs a one-time provider in the app's settings. See the fake model under
 `### GitHub Copilot app` in [../../setup.md](../../setup.md).

@@ -60,4 +60,4 @@ the plugin produces them.
 **Keys added at ingest** (`dash0.*` resource and operation keys, `user.id`) are informational, and
 `qa-attrs.py` already sets them apart.
 
-**Ingest lag: 25 seconds** after the newest run.
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

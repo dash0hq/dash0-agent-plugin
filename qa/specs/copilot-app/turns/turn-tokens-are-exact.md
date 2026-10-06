@@ -16,8 +16,8 @@ covers:
 ## Given
 
 The runner procedure in [../README.md](../README.md), with the fake model and `omit_io` off. Start
-the fake model with `--mode ok --prompt-tokens 1000 --completion-tokens 10`. Prepare the target with
-`--fake-model`.
+the fake model with `--mode ok --prompt-tokens 1000 --completion-tokens 10`. Create the target with a kickoff whose
+prompt is `one`, after `swap-in`, as the README's fake-model steps say.
 
 With a real model, no record outside the plugin carries tokens, so
 [later-turns-are-traced-live](later-turns-are-traced-live.md) can only check scoping by a heuristic.
@@ -27,10 +27,10 @@ first, live and live, so both the history path and the live path are covered.
 
 ## When
 
-Send three prompts, each after the previous turn has gone idle:
+Three prompts, each after the previous turn has gone idle. The first is the kickoff's:
 
 ```text
-send_session_message <target>: one
+kickoff: one
 send_session_message <target>: two
 send_session_message <target>: three
 ```
@@ -67,4 +67,4 @@ difference is a finding.
 **The model name may carry the provider prefix** (`<provider-id>/qa-fake`) or not. Assert that it
 ends in `qa-fake`.
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

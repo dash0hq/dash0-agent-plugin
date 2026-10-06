@@ -50,7 +50,7 @@ therefore share most invariants, but they differ in what a run can prove:
 | Second channel | the transcript, via `claude-code-usage-audit.py` | the rollout, via `qa/tools/qa-rollout.py` (usage only) | the native-OTel file, via `qa/tools/qa-otel.py` (usage **and** tool spans) | the transcript, via `qa/tools/qa-transcript-cursor.py` (turns only; **no usage**) | `opencode session export`, via `qa/tools/qa-compare-opencode-v2.py` (turns, tools **and** per-step usage) | `events.jsonl`, the app's own session log (structure only; **no usage**) |
 | Harness's own figures | `claude -p --output-format json`, including cost | `codex exec --json`; Codex reports no cost | `copilot --output-format json`; output tokens and AI credits, no input tokens | none. The TUI has no machine-readable output | `opencode run --format json`, kept but not compared | none |
 | Sees what was sent | no | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log |
-| Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording | discovered from `opencode run --format json` | discovered from the session's working directory |
+| Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording | discovered from `opencode run --format json` | from `get_session`, passed to `collect --session-id` |
 | Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run | only OpenCode's session database: QA sessions show up in `opencode session list` | yes: the binary cache, the extension folder, and the worktree the app created |
 
 The asymmetry is not a preference, it is what each host allows. Claude Code's
@@ -578,7 +578,7 @@ session:
 
 - It fails unless `~/.copilot/extensions/copilot-app` is byte-identical to
   `copilot-app/`. Installing is the person's job, once, and is reversible by
-  moving the folder back. The script never writes into `~/.copilot` itself.
+  moving the folder back. Only `swap-in`, below, writes into `~/.copilot`.
 - It fails if the session's directory also has a `.github/extensions/`. Two
   copies of the extension join one session and every span arrives twice.
 - It builds `cmd/copilot-app-on-event` into the bootstrap's cache with
@@ -619,7 +619,9 @@ right name without checking it, so that binary stays in use until it is deleted;
 the bootstrap then downloads the release, which for the app means 0.1.29 or
 later. Before that release, deleting it leaves the app extension silent. The
 config in the session's worktree, which holds the QA token: delete the worktree
-from the app when the run is collected.
+from the app when the run is collected. The app's model picker: it offers the
+last model a session used to the next one, so after a fake-model run, pick a real
+model again.
 
 **The fake model makes the model a property of the run.** The app accepts a
 custom, OpenAI-compatible model provider, and `qa/tools/qa-fake-model.py` is one,
@@ -631,6 +633,28 @@ OpenAI-compatible provider using chat completions, base URL
 `http://127.0.0.1:8765/v1`, no API key, model `qa-fake`. Measured 2026-10-06: the
 app streams (`stream: true`) and sends its 80 tools on every call, and the
 session's `assistant.message` carries `model: "qa-fake"`.
+
+**A fake-model target gets its model from a `create_session` kickoff, and its
+first turn its config from a swap.** The app keeps each session's model in its
+own database and ignores `.github/copilot/settings.local.json` (measured
+2026-10-06 on `ca-failed-first-r2`: the file was written before the first prompt
+and the session ran on the default model). The model can only be set at creation,
+by `kickoff: {prompt, model, mode: "interactive"}`, and a kickoff sends its prompt
+at once, before `prepare` can write the worktree's config. So the run goes:
+
+1. `qa-app-run.py swap-in <run-id> [--omit-io]` moves the user's
+   `~/.copilot/dash0-agent-plugin.local.md` to `….qa-saved` (or leaves
+   `….qa-none` when there was none), writes the run's config in its place, and
+   prints the `<provider-id>/qa-fake` id read from the app's database. It refuses
+   while an earlier swap is still waiting.
+2. `create_session` with the kickoff on that model.
+3. `prepare <run-id> <worktree>` writes the worktree's own config and puts the
+   user's back.
+
+Between 1 and 3 every session on the machine reports to the QA target. Keep that
+window to the seconds it takes, and run fake-model specs one at a time.
+`qa-app-run.py restore` puts the user's config back by hand, after a run that never
+reached `prepare`; `copilot-app-user-config-is-restored` checks it.
 
 The server's modes give a run what the real model will not do on demand: `error`
 (a chosen status and message every time), `fail-once` (then healthy), `context`
@@ -930,6 +954,9 @@ The runner's procedure is in [specs/copilot-app/README.md](specs/copilot-app/REA
 optionally start the fake model, `create_session` (worktree), `get_session` for
 the worktree, `qa-app-run.py prepare` in it, `send_session_message`, wait for
 idle and settling, then `qa-app-run.py collect --session-id` and `qa-attrs.py`.
+A fake-model run instead starts with `swap-in` and a kickoff, as under
+`### GitHub Copilot app` in Configure. Always pass `--session-id`: targets share
+this repository's git directory, so without it `collect` can pick another one.
 
 `collect` copies the session's `events.jsonl`, writes `manifest.json`, and saves
 Dash0's spans as `dash0-spans.json`. There is no `qa-compare.py` support: the app
@@ -950,12 +977,10 @@ at its first message, and a new worktree holds only committed files, so the
 untracked config never reaches it in time and the session uses the person's own
 configuration. Always let the runner create the target.
 
-**The model of a fake-model run comes from the repository settings.**
-`prepare --fake-model` writes `.github/copilot/settings.local.json` with
-`{"model": "<provider-id>/qa-fake"}` into the target's worktree, reading the
-provider id from the app's database, and without the flag removes that file. A
-spec using it checks `fake-model.jsonl` for a call before asserting anything,
-because a pin that did not take leaves the session on a real model.
+**The model of a fake-model run comes from the kickoff.** See
+`### GitHub Copilot app` under Configure. A spec using it checks
+`fake-model.jsonl` for a call before asserting anything, because a kickoff that
+did not take leaves the session on a real model.
 
 Four artifacts are specific to this runtime:
 
@@ -1161,6 +1186,12 @@ start and 120 seconds after its end, so re-running the comparison is always
 enough — the window is not the problem, the wait is. A comparison that reports
 too few spans immediately after a session should be re-run before it is believed.
 
+**The Copilot app's runs saw far more: up to about five minutes.** Measured
+2026-10-06 on `ca-failed-first-r3`: Dash0 held no span for more than two minutes,
+and the debug log had sent it at once. For a copilot-app run, read the debug log
+first. When Dash0 is short of it, re-query for up to five minutes before calling
+a span missing.
+
 **One thing a Copilot run changes outside its own directory.** On `sessionStart`
 the plugin sweeps two places under its data directory: native-OTel files left by
 unclean exits, and the session directories of runs that were killed — a session
@@ -1218,7 +1249,7 @@ Checks with no prefix apply to every runtime. A `codex-`, `copilot-`, `cursor-` 
 another one, and skip the `claude`-only ones the same way. The runtime-specific
 blocking checks are `probe-session-agrees-with-what-it-was-fed` for `claude`,
 `codex-probe-session-agrees-with-what-it-was-fed` for `codex`,
-`copilot-probe-session-agrees-with-what-it-was-fed` for `copilot`, and
+`copilot-probe-session-agrees-with-what-it-was-fed` for `copilot`,
 `cursor-probe-session-agrees-with-what-it-was-fed` for `cursor`,
 `opencode-probe-session-agrees-with-what-it-was-fed` for `opencode`, and
 `copilot-app-bootstrap-exports-to-the-target` for `copilot-app`.
@@ -2508,4 +2539,24 @@ PY
 ```sh
 qa/tools/qa-fake-model.py self-test
 curl -sf http://127.0.0.1:8765/v1/models || echo "FAILED: curl 000"
+```
+
+### copilot-app-user-config-is-restored
+
+- **proves.** `swap-in` left the machine as it found it. Until `prepare` runs,
+  the user's own `~/.copilot/dash0-agent-plugin.local.md` is the QA config, so
+  every session on the machine reports to the QA target with a debug file in a
+  run directory.
+- **after.** none
+- **blocking.** true
+- **pass.** `RESTORED`.
+- **fail.** `NOT RESTORED` — run `qa/tools/qa-app-run.py restore`, which moves
+  `….qa-saved` back, or removes the run's config when `….qa-none` says there was
+  none.
+- **verified.** 2026-10-06, signals: pass+fail, in a throwaway `HOME`: after
+  `swap-in` this printed `NOT RESTORED`, a second `swap-in` refused, and
+  `restore` brought back the original byte for byte, both with and without one.
+
+```sh
+ls "$HOME"/.copilot/dash0-agent-plugin.local.md.qa-* >/dev/null 2>&1 && echo "NOT RESTORED" || echo RESTORED
 ```

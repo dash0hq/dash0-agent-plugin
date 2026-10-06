@@ -68,4 +68,4 @@ Wait for both runs to finish and the session to go idle, then wait out the settl
 `delivery: "steering"`, that is
 [steering-joins-the-running-turn](steering-joins-the-running-turn.md). Re-run.
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

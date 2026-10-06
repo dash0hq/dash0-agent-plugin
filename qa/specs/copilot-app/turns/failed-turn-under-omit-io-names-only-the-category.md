@@ -15,7 +15,7 @@ covers:
 ## Given
 
 As in [failed-first-turn-is-reported](failed-first-turn-is-reported.md), with a fresh marker *K*,
-but prepare the target with `--fake-model --omit-io`.
+but pass `--omit-io` to both `swap-in` and `prepare`.
 
 An error message can quote the request, so under `omit_io` the span status must carry only the
 error's category. The fake model's message stands in for that quote: *K* is known before the run,
@@ -24,7 +24,7 @@ so its absence can be proved.
 ## When
 
 ```text
-send_session_message <target>: hi
+kickoff: hi
 ```
 
 Wait for the idle notification, then the settling time.
@@ -61,4 +61,4 @@ only if the event log's error has none.
 config with `omit_io` on. Its one `chat` span had status 2, message `query`, and no *K*. That run
 was not prepared by the harness, so it does not count as a pass of this spec.
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

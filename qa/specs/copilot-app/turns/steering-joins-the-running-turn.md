@@ -68,4 +68,4 @@ send the message sooner.
 such as `<copilot_tauri_workspace>…`, in `data.content`. Compare with the event log's content,
 never with the text that was sent.
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

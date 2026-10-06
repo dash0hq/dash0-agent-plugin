@@ -5,7 +5,9 @@ The app has no headless mode, so the session itself is driven by hand, from
 another app session with send_session_message, or through the GUI. This does
 everything around it:
 
-  qa-app-run.py prepare <run-id> <session-cwd> [--omit-io] [--fake-model]
+  qa-app-run.py swap-in <run-id> [--omit-io]
+  qa-app-run.py prepare <run-id> <session-cwd> [--omit-io]
+  qa-app-run.py restore
   qa-app-run.py collect <run-id> [--session-id <id>]
 
 prepare checks that the installed extension is the working tree's, builds the
@@ -15,11 +17,13 @@ worktree after create_session and before send_session_message: the config is
 untracked, so the worktree never has it otherwise, and the session would fall
 back to the user's own ~/.copilot/dash0-agent-plugin.local.md.
 
---fake-model pins the session's model to qa-fake, the provider
-qa-fake-model.py serves, through the repository settings file
-.github/copilot/settings.local.json, which the runtime reads when the session
-starts. Without it, prepare removes that file, so an earlier pin never carries
-into a run meant for a real model.
+A session's model can only be chosen when it is created, by a create_session
+kickoff, and a kickoff sends its prompt at once, before prepare can run. swap-in
+covers that first turn: it moves the user's ~/.copilot config aside and puts the
+run's config there, then prints the qa-fake model id for the kickoff. prepare
+puts the user's config back once the session has its own. restore does the same
+by hand after a run that never reached prepare. swap-in refuses while a moved
+config is still waiting, so the user's own is never overwritten.
 
 collect finds the session (or takes --session-id), copies its events.jsonl,
 writes manifest.json, and saves Dash0's spans for it. qa-attrs.py reads the
@@ -73,21 +77,60 @@ def fake_model_id():
     return f"{row[0]}/qa-fake" if row else None
 
 
-def pin_model(cwd, model):
-    """Write, or with model None remove, the session's repository model setting."""
-    path = os.path.join(cwd, ".github", "copilot", "settings.local.json")
-    if model is None:
-        if os.path.exists(path):
-            os.remove(path)
-        return None
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    ignore = os.path.join(os.path.dirname(path), ".gitignore")
-    if not os.path.exists(ignore):
-        with open(ignore, "w") as handle:
-            handle.write("settings.local.json\n.gitignore\n")
-    with open(path, "w") as handle:
-        json.dump({"model": model}, handle)
-    return path
+USER_CONFIG = os.path.expanduser("~/.copilot/dash0-agent-plugin.local.md")
+# Where swap-in keeps the user's config, and the marker it leaves when there was
+# none. Outside qa/runs, because the user's token must not reach a run directory.
+SAVED = USER_CONFIG + ".qa-saved"
+NONE = USER_CONFIG + ".qa-none"
+
+
+def write_config(path, config, run_dir, omit_io):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write("---\n"
+                     f'otlp_url: "{config["ingestUrl"]}"\n'
+                     f'auth_token: "{config["authToken"]}"\n'
+                     f'dataset: "{config["dataset"]}"\n'
+                     'debug: "true"\n'
+                     f'debug_file: "{os.path.join(run_dir, "plugin-debug.log")}"\n'
+                     f'omit_io: "{"true" if omit_io else "false"}"\n'
+                     "---\n")
+
+
+def restore(_args=None, _config=None):
+    """Put the user's own config back. Exit 0 when nothing was swapped."""
+    if os.path.exists(SAVED):
+        os.replace(SAVED, USER_CONFIG)
+        print(f"restored {USER_CONFIG}")
+    elif os.path.exists(NONE):
+        if os.path.exists(USER_CONFIG):
+            os.remove(USER_CONFIG)
+        os.remove(NONE)
+        print(f"removed the run's {USER_CONFIG}; there was none before")
+    return 0
+
+
+def swap_in(args, config):
+    if os.path.exists(SAVED) or os.path.exists(NONE):
+        print("a swapped-out user config is still waiting. Run `qa-app-run.py restore` first.", file=sys.stderr)
+        return 1
+    model = fake_model_id()
+    if not model:
+        print("the app has no qa-fake model. Add the provider once: see the fake model in setup.md.",
+              file=sys.stderr)
+        return 1
+    run_dir = os.path.join(ROOT, "qa", "runs", args.run_id)
+    os.makedirs(run_dir, exist_ok=True)
+    if os.path.exists(USER_CONFIG):
+        shutil.copy2(USER_CONFIG, SAVED)
+    else:
+        open(NONE, "w").close()
+    write_config(USER_CONFIG, config, run_dir, args.omit_io)
+    with open(os.path.join(run_dir, "started-at"), "w") as handle:
+        handle.write(now())
+    print(f"swapped in the run's config at {USER_CONFIG} (omit_io {'on' if args.omit_io else 'off'})\n"
+          f"  model   {model}\nCreate the target now, with a kickoff on that model, then prepare it.")
+    return 0
 
 
 def prepare(args, config):
@@ -128,32 +171,19 @@ def prepare(args, config):
 
     run_dir = os.path.join(ROOT, "qa", "runs", args.run_id)
     os.makedirs(run_dir, exist_ok=True)
-    os.makedirs(os.path.join(cwd, ".copilot"), exist_ok=True)
     path = os.path.join(cwd, ".copilot", "dash0-agent-plugin.local.md")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        handle.write("---\n"
-                     f'otlp_url: "{config["ingestUrl"]}"\n'
-                     f'auth_token: "{config["authToken"]}"\n'
-                     f'dataset: "{config["dataset"]}"\n'
-                     'debug: "true"\n'
-                     f'debug_file: "{os.path.join(run_dir, "plugin-debug.log")}"\n'
-                     f'omit_io: "{"true" if args.omit_io else "false"}"\n'
-                     "---\n")
-    model = None
-    if args.fake_model:
-        model = fake_model_id()
-        if not model:
-            print("the app has no qa-fake model. Add the provider once: see the fake model in setup.md.",
-                  file=sys.stderr)
-            return 1
-    pin_model(cwd, model)
-    with open(os.path.join(run_dir, "started-at"), "w") as handle:
-        handle.write(now())
+    write_config(path, config, run_dir, args.omit_io)
+    # The session has its own config now, so a swapped-in one goes back. A
+    # kickoff run started before prepare, and swap-in already marked when.
+    swapped = os.path.exists(SAVED) or os.path.exists(NONE)
+    restore()
+    if not swapped:
+        with open(os.path.join(run_dir, "started-at"), "w") as handle:
+            handle.write(now())
     with open(os.path.join(run_dir, "session-cwd"), "w") as handle:
         handle.write(cwd)
     print(f"prepared {run_dir}\n  config  {path} (omit_io {'on' if args.omit_io else 'off'})\n"
-          f"  binary  {binary}\n  model   {model or 'the app default'}\nSend the first prompt now.")
+          f"  binary  {binary}")
     return 0
 
 
@@ -244,7 +274,10 @@ def main():
     p.add_argument("run_id")
     p.add_argument("session_cwd")
     p.add_argument("--omit-io", action="store_true")
-    p.add_argument("--fake-model", action="store_true")
+    w = sub.add_parser("swap-in")
+    w.add_argument("run_id")
+    w.add_argument("--omit-io", action="store_true")
+    sub.add_parser("restore")
     c = sub.add_parser("collect")
     c.add_argument("run_id")
     c.add_argument("--session-id")
@@ -254,10 +287,10 @@ def main():
     if error:
         print(error, file=sys.stderr)
         return 2
-    if args.command == "prepare" and not config.get("ingestUrl"):
+    if args.command in ("prepare", "swap-in") and not config.get("ingestUrl"):
         print("qa/config.local.json has no ingestUrl.", file=sys.stderr)
         return 2
-    return prepare(args, config) if args.command == "prepare" else collect(args, config)
+    return {"prepare": prepare, "swap-in": swap_in, "restore": restore, "collect": collect}[args.command](args, config)
 
 
 if __name__ == "__main__":

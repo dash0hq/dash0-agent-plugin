@@ -70,4 +70,4 @@ so.
 **`process.working_directory` and the VCS keys are not content.** They follow `omit_user_info`, not
 `omit_io`, and are not asserted here.
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

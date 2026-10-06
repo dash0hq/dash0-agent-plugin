@@ -102,4 +102,4 @@ values.
 **Extra tools are the app's.** `rename_branch` is one the app adds to the first turn of a worktree
 session. Assert that every tool in the event log is in Dash0, never a count.
 
-**Ingest lag: 25 seconds.** See `## Settling` in [../../../setup.md](../../../setup.md).
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing. See `## Settling` in [../../../setup.md](../../../setup.md).

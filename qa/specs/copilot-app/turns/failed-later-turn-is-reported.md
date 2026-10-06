@@ -16,7 +16,7 @@ covers:
 ## Given
 
 The runner procedure in [../README.md](../README.md), with the fake model and `omit_io` off. Start
-the fake model in `ok` mode. Prepare the target with `--fake-model`.
+the fake model in `ok` mode, and use the README's fake-model steps.
 
 A later turn's error arrives on the live stream, through a different path from
 [failed-first-turn-is-reported](failed-first-turn-is-reported.md), which is rebuilt from history.
@@ -25,7 +25,7 @@ span.
 
 ## When
 
-1. `send_session_message <target>: hi`, and wait for idle.
+1. The kickoff's prompt is `hi`. Wait for idle.
 2. Stop the fake model and start it again on the same port and log, with a fresh marker *K*:
    `--mode error --status 400 --message "K for the request"`.
 3. `send_session_message <target>: hi again`, and wait for idle. Then wait out the settling time.
@@ -52,4 +52,4 @@ span.
 
 ## Tolerance
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

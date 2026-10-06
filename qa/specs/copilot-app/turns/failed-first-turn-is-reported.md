@@ -23,7 +23,7 @@ qa/tools/qa-fake-model.py serve --port 8765 --log qa/runs/<run-id>/fake-model.js
   --mode error --status 400 --message "K for the request"
 ```
 
-Prepare the target with `--fake-model` and without `--omit-io`.
+Use the README's fake-model steps, without `--omit-io`: the kickoff's prompt is the turn under test.
 
 **This is the regression spec for a fixed defect.** The app starts the extension only after the
 first prompt is sent. A request that fails at once ends the turn in about 30 ms, before the
@@ -34,7 +34,7 @@ even when it has already closed.
 ## When
 
 ```text
-send_session_message <target>: hi
+kickoff: hi
 ```
 
 Wait for the idle notification, then the settling time.
@@ -42,7 +42,7 @@ Wait for the idle notification, then the settling time.
 ## Expectation
 
 **From `fake-model.jsonl`, independently:** exactly one call, answered `400` with *K*. If there is
-no call, the pin did not take. Stop and report a setup failure.
+no call, the kickoff's model did not take. Stop and report a setup failure.
 
 **From `events.jsonl`, independently:**
 - one main-agent `user.message`;
@@ -70,4 +70,4 @@ under `## Observe` in setup.md.
 
 **The prefix belongs to the app.** Compare with *M* from the event log, never with a literal.
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

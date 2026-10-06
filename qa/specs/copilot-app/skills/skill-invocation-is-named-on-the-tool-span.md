@@ -68,4 +68,4 @@ a finding about the app's shape, not as a plugin failure.
 **The qualified name belongs to the app.** If the arguments say `qa-echo` under a prefix, expect
 that exact string.
 
-**Ingest lag: 25 seconds.**
+**Ingest lag: 25 seconds, and up to five minutes in this runtime.** The debug log is complete at once. When Dash0 holds fewer spans than it, re-query for up to five minutes before calling one missing.

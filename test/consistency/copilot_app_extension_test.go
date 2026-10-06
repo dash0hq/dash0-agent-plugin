@@ -292,3 +292,27 @@ func TestCopilotAppExtension_firstTurnRecoversTheUsageItMissed(t *testing.T) {
 	assert.Contains(t, calls[2], `"data":{"model":"m","inputTokens":1000,"outputTokens":10}`)
 	assert.NotContains(t, calls[2], "9999")
 }
+
+// A prompt that arrives live while the history is still being read, after the
+// first turn went idle, starts the second turn only once the first is
+// recovered. Each turn keeps its own events.
+func TestCopilotAppExtension_secondPromptDuringCatchUpKeepsTheFirstTurn(t *testing.T) {
+	live := `[{"type":"session.idle","data":{}},{"type":"user.message","data":{"content":"second"}},` +
+		`{"type":"tool.execution_start","data":{"toolCallId":"t9","toolName":"bash"}},{"type":"session.idle","data":{}}]`
+	calls := runExtension(t, live, 5, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[1], `"prompt":"hi"`)
+	assert.Contains(t, calls[2], `"toolCallId":"t1"`)
+	assert.NotContains(t, calls[2], `"t9"`)
+	assert.Contains(t, calls[3], `"prompt":"second"`)
+	assert.Contains(t, calls[4], `"toolCallId":"t9"`)
+	assert.NotContains(t, calls[4], `"t1"`)
+}
+
+// The sessionEnd hook fires after every run, but the run's error can follow it,
+// so the hook does not end the turn: session.idle does.
+func TestCopilotAppExtension_completedRunHookLeavesTheTurnToIdle(t *testing.T) {
+	calls := runExtension(t, "", 3, "complete")
+	// The hook returns at once, so its mark can land before the sends.
+	assert.ElementsMatch(t, []string{"sessionStart", "userPromptSubmitted", "hookReturned"}, eventNames(calls))
+}

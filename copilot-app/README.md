@@ -62,7 +62,7 @@ stdin, as with every other runtime:
 |---|---|
 | `sessionStart` | when the extension joins (a repeated one does nothing) |
 | `userPromptSubmitted` | when the main agent receives a `user.message` |
-| `turnEnd` | at `session.idle`, or when the `sessionEnd` hook reports a finished run. Carries the turn's buffered events |
+| `turnEnd` | at `session.idle`, or at the next prompt or the session's end if idle never came. Carries the turn's buffered events |
 | `sessionEnd` | at `session.shutdown`, or when the `sessionEnd` hook reports `user_exit` |
 
 Everything quantitative comes from the session events, so unlike the CLI there

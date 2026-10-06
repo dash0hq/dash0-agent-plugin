@@ -158,6 +158,11 @@ let liveIds = new Set();
 let closedDuringCatchUp = null;
 // Ids catchUp took from the history, which the live stream may still deliver.
 let replayed = new Set();
+// A live prompt that arrived while catchUp was reading the history, before it
+// had opened the first turn. Opening it there would end that turn unrecovered,
+// so catchUp opens it once the first turn is done. split is where its events
+// begin in the buffer; closed is the first turn's close, if it came before.
+let held = null;
 
 // Persisted events that only follow a finished main-agent turn. session.idle
 // would be the natural marker, but it is ephemeral and never in the history.
@@ -205,6 +210,7 @@ async function catchUp() {
     if (Date.now() - Date.parse(prompt.timestamp) > CATCH_UP_WINDOW_MS) return;
     const first = history.filter(isPrompt).length === 1 && !history.some((e) => e.type === "session.resume");
     const missed = first ? usageMissed(metrics, prompt.timestamp) : [];
+    if (held) held.tail = buffer.splice(held.split);
     const later = history.slice(start + 1).filter((e) => !liveIds.has(e.id));
     const earlier = later.filter((e) => KEEP[e.type]);
     for (const e of later) if (e.id) replayed.add(e.id);
@@ -219,6 +225,14 @@ async function catchUp() {
     warn(`could not read the session history: ${err?.message ?? err}`);
   } finally {
     liveIds = null;
+    if (held) {
+      const { event, split, tail, closed } = held;
+      held = null;
+      const rest = tail ?? buffer.slice(split);
+      endTurn(closed?.timestamp ?? event.timestamp, closed?.aborted);
+      buffer = rest;
+      openTurn(event);
+    }
     if (closedDuringCatchUp) endTurn(closedDuringCatchUp.timestamp, closedDuringCatchUp.aborted);
     closedDuringCatchUp = null;
   }
@@ -303,12 +317,14 @@ try {
         }
       },
       // The app fires sessionEnd with reason "complete" after every prompt's
-      // run, so only a user exit ends the session; the rest end the turn.
+      // run, so only a user exit ends the session. The turn is left to
+      // session.idle: the run's session.error can arrive after this hook, and
+      // only idle carries the aborted flag.
       onSessionEnd: (input) => {
         try {
           if (!ours(input)) return;
           const timestamp = new Date(input.timestamp ?? Date.now()).toISOString();
-          if (input.reason !== "user_exit") return closeTurn(timestamp);
+          if (input.reason !== "user_exit") return;
           // The app stops the extension once the session ends (SIGTERM, then
           // SIGKILL 5s later). Returning the sends keeps it alive until
           // turnEnd and sessionEnd have run, within that window.
@@ -343,6 +359,11 @@ try {
           if (event.agentId) return;
           if (isSteering(event) && (turnOpen || liveIds)) {
             steered.push(event.data?.content ?? "");
+            return;
+          }
+          if (liveIds && !turnOpen && !held) {
+            held = { event, split: buffer.length, closed: closedDuringCatchUp };
+            closedDuringCatchUp = null;
             return;
           }
           closedDuringCatchUp = null;

@@ -292,6 +292,7 @@ func TestBuildTurn_turnWithoutUsageNamesTheModelAndNoTokens(t *testing.T) {
 	event := map[string]any{}
 	copilot.AttachUsage(event, turn.Usage)
 	assert.Equal(t, "qa-fake", event["model"])
+	assert.Equal(t, "qa-fake", event["response_model"])
 	for k := range event {
 		assert.NotContains(t, k, "token", "no usage was seen, so no count is known")
 	}

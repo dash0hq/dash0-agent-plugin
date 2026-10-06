@@ -1405,7 +1405,6 @@ func TestProcess_PostToolUse_DoesNotWaitWhenTranscriptNamesNoModel(t *testing.T)
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do thing"})
 
-	start := time.Now()
 	s.feed(t, map[string]any{
 		"hook_event_name": "PostToolUse",
 		"session_id":      "sess-1",
@@ -1413,6 +1412,9 @@ func TestProcess_PostToolUse_DoesNotWaitWhenTranscriptNamesNoModel(t *testing.T)
 		"tool_use_id":     "tu1",
 		"transcript_path": transcriptPath,
 	})
+
+	start := time.Now()
+	assert.Empty(t, waitForModel(transcriptPath))
 	assert.Less(t, time.Since(start), modelWaitBudget, "no assistant entry is pending, so there is nothing to wait for")
 
 	mu.Lock()

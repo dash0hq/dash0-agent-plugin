@@ -61,7 +61,9 @@ func Normalize(eventName string, payload map[string]any) map[string]any {
 	if cwd, _ := payload["cwd"].(string); cwd != "" {
 		event["cwd"] = cwd
 	}
-	if canonical == "UserPromptSubmit" {
+	// On Stop a prompt is present only when the user steered the turn: it is the
+	// opening prompt and every steering message, and replaces the stored one.
+	if canonical == "UserPromptSubmit" || canonical == "Stop" {
 		if p, ok := payload["prompt"].(string); ok {
 			event["prompt"] = p
 			// Copilot injects agent-side context (e.g. a background agent
@@ -154,8 +156,9 @@ func AgentSpanID(toolCallID string) string { return otlp.SpanIDFromAgentID("agen
 // BuildTurn assembles the turn the events describe. It returns nil when there
 // is nothing to report, so the caller emits a bare chat span.
 //
-// Usage is summed across the main agent and its sub-agents: attribution stays
-// flat, matching the CLI, so a trace's total is the chat span's. The model and
+// A sub-agent's usage goes on its own invoke_agent span, priced at its own
+// model; the chat span carries the main agent's. Usage whose sub-agent is not
+// in the turn stays on the chat span, so no tokens are lost. The model and
 // response are the main agent's.
 //
 // end closes tool calls and sub-agents that started but never finished (an
@@ -188,18 +191,27 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 
 	var usage copilot.Usage
 	sawUsage := false
+	agentUsage := map[string]*copilot.Usage{}
 	toolIndex := map[string]int{}
 	agentIndex := map[string]int{}
 
 	for _, e := range events {
 		switch e.Type {
 		case "assistant.usage":
-			sawUsage = true
-			usage.InputTokens += e.num("inputTokens")
-			usage.OutputTokens += e.num("outputTokens")
-			usage.CacheReadInputTokens += e.num("cacheReadTokens")
-			usage.CacheCreationInputTokens += e.num("cacheWriteTokens")
-			usage.ReasoningOutputTokens += e.num("reasoningTokens")
+			u := &usage
+			if ptc := e.str("parentToolCallId"); spawned[ptc] {
+				if agentUsage[ptc] == nil {
+					agentUsage[ptc] = &copilot.Usage{}
+				}
+				u = agentUsage[ptc]
+			} else {
+				sawUsage = true
+			}
+			u.InputTokens += e.num("inputTokens")
+			u.OutputTokens += e.num("outputTokens")
+			u.CacheReadInputTokens += e.num("cacheReadTokens")
+			u.CacheCreationInputTokens += e.num("cacheWriteTokens")
+			u.ReasoningOutputTokens += e.num("reasoningTokens")
 			if m := e.str("model"); m != "" && !e.isSubAgent() {
 				// Auto mode resolves per call. What was asked for is "auto",
 				// which is what the CLI reports too; the responding model is the
@@ -288,6 +300,7 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 	for i := range turn.Agents {
 		a := &turn.Agents[i]
 		closeOpen(&a.Start, &a.End, &a.Failed, end)
+		a.Usage = agentUsage[a.CallID]
 	}
 
 	if sawUsage || usage.ResponseText != "" {
@@ -297,6 +310,48 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 		return nil
 	}
 	return turn
+}
+
+// TurnError says why the turn failed, or "" when it did not. A turn failed when
+// it was aborted, or when the main agent's last error came after its last
+// message: an error it recovered from (a rate limit followed by an automatic
+// model switch) is not the turn's outcome.
+//
+// The error message can quote the request, and it becomes the span status,
+// which omit_io does not redact. With omitIO only its category goes out.
+func TurnError(events []Event, payload map[string]any, omitIO bool) string {
+	errType, errMessage, abortReason := "", "", ""
+	for _, e := range events {
+		if e.isSubAgent() {
+			continue
+		}
+		switch e.Type {
+		case "assistant.message":
+			if strings.TrimSpace(e.str("content")) != "" {
+				errType, errMessage = "", ""
+			}
+		case "session.error":
+			errType, errMessage = e.str("errorType"), e.str("message")
+			if errType == "" {
+				errType = "error"
+			}
+		case "abort":
+			abortReason = e.str("reason")
+		}
+	}
+	aborted, _ := payload["aborted"].(bool)
+	switch {
+	case abortReason != "":
+		return "turn aborted: " + abortReason
+	case aborted:
+		return "turn aborted"
+	case errType == "":
+		return ""
+	case omitIO || errMessage == "":
+		return errType
+	default:
+		return errMessage
+	}
 }
 
 // closeOpen ends a span that never saw its completion event at the turn's end,

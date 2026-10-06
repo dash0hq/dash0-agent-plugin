@@ -30,13 +30,21 @@ func TestBuildTurn_fromRecordedEvents(t *testing.T) {
 	turn := BuildTurn(loadFixture(t), end)
 	require.NotNil(t, turn)
 
-	t.Run("usage is summed across the main agent and its sub-agent", func(t *testing.T) {
+	t.Run("each agent's usage is its own", func(t *testing.T) {
 		u := turn.Usage
 		require.NotNil(t, u)
-		assert.Equal(t, int64(124277+7723+7796+124696), u.InputTokens)
-		assert.Equal(t, int64(307+51+27+219), u.OutputTokens)
-		assert.Equal(t, int64(0+0+7720+124275), u.CacheReadInputTokens)
-		assert.Equal(t, int64(124275+7720+73+419), u.CacheCreationInputTokens)
+		assert.Equal(t, int64(124277+124696), u.InputTokens, "the main agent's two rounds only")
+		assert.Equal(t, int64(307+219), u.OutputTokens)
+		assert.Equal(t, int64(0+124275), u.CacheReadInputTokens)
+		assert.Equal(t, int64(124275+419), u.CacheCreationInputTokens)
+
+		require.Len(t, turn.Agents, 1)
+		a := turn.Agents[0].Usage
+		require.NotNil(t, a, "the sub-agent's rounds go on its invoke_agent span")
+		assert.Equal(t, int64(7723+7796), a.InputTokens)
+		assert.Equal(t, int64(51+27), a.OutputTokens)
+		assert.Equal(t, int64(0+7720), a.CacheReadInputTokens)
+		assert.Equal(t, int64(7720+73), a.CacheCreationInputTokens)
 	})
 
 	t.Run("model and response are the main agent's", func(t *testing.T) {
@@ -171,9 +179,14 @@ func TestNormalize(t *testing.T) {
 	t.Run("copies only what the pipeline reads", func(t *testing.T) {
 		got := Normalize("turnEnd", map[string]any{
 			"sessionId": "s1", "cwd": "/repo", "timestamp": "2026-10-02T12:00:00Z",
-			"events": []any{map[string]any{"type": "assistant.usage"}}, "aborted": true, "prompt": "ignored on Stop",
+			"events": []any{map[string]any{"type": "assistant.usage"}}, "aborted": true,
 		})
 		assert.Equal(t, map[string]any{"hook_event_name": "Stop", "session_id": "s1", "cwd": "/repo"}, got)
+	})
+
+	t.Run("a steered turn's prompt is carried on Stop", func(t *testing.T) {
+		got := Normalize("turnEnd", map[string]any{"sessionId": "s1", "prompt": "fix it\nand the tests"})
+		assert.Equal(t, "fix it\nand the tests", got["prompt"])
 	})
 
 	t.Run("a prompt is carried on UserPromptSubmit", func(t *testing.T) {
@@ -194,4 +207,45 @@ func TestTimestamp(t *testing.T) {
 		Timestamp(map[string]any{"timestamp": "2026-10-02T12:54:27.552Z"}, fallback))
 	assert.Equal(t, fallback, Timestamp(map[string]any{}, fallback))
 	assert.Equal(t, fallback, Timestamp(map[string]any{"timestamp": "yesterday"}, fallback))
+}
+
+// Usage from a sub-agent the turn never saw start (the extension joined late)
+// has no invoke_agent span to go on, so the chat span keeps it.
+func TestBuildTurn_unknownSubAgentUsageStaysOnTheChat(t *testing.T) {
+	turn := BuildTurn([]Event{{
+		Type: "assistant.usage", Timestamp: "2026-10-02T12:00:00Z", AgentID: "a1",
+		Data: map[string]any{"model": "gpt-5.6-luna", "inputTokens": 10.0, "parentToolCallId": "gone"},
+	}}, time.Now())
+	require.NotNil(t, turn)
+	assert.Equal(t, int64(10), turn.Usage.InputTokens)
+	assert.Empty(t, turn.Usage.Model, "a sub-agent's model is not the turn's")
+}
+
+func TestTurnError(t *testing.T) {
+	ts := "2026-10-02T12:00:00Z"
+	failure := Event{Type: "session.error", Timestamp: ts,
+		Data: map[string]any{"errorType": "quota", "message": "quota exceeded for request 'secret'"}}
+	reply := Event{Type: "assistant.message", Timestamp: ts, Data: map[string]any{"content": "done"}}
+
+	t.Run("a clean turn has none", func(t *testing.T) {
+		assert.Empty(t, TurnError([]Event{reply}, map[string]any{}, true))
+	})
+	t.Run("an error the turn ended on", func(t *testing.T) {
+		events := []Event{reply, failure}
+		assert.Equal(t, "quota exceeded for request 'secret'", TurnError(events, map[string]any{}, false))
+		assert.Equal(t, "quota", TurnError(events, map[string]any{}, true), "omit_io sends only the category")
+	})
+	t.Run("an error the turn recovered from", func(t *testing.T) {
+		assert.Empty(t, TurnError([]Event{failure, reply}, map[string]any{}, false))
+	})
+	t.Run("a sub-agent's error is not the turn's", func(t *testing.T) {
+		sub := failure
+		sub.AgentID = "a1"
+		assert.Empty(t, TurnError([]Event{sub}, map[string]any{}, false))
+	})
+	t.Run("an aborted turn", func(t *testing.T) {
+		assert.Equal(t, "turn aborted", TurnError([]Event{reply}, map[string]any{"aborted": true}, true))
+		abort := Event{Type: "abort", Timestamp: ts, Data: map[string]any{"reason": "user_initiated"}}
+		assert.Equal(t, "turn aborted: user_initiated", TurnError([]Event{abort}, map[string]any{"aborted": true}, true))
+	})
 }

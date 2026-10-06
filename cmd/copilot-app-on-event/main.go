@@ -17,7 +17,8 @@
 // model and response to the Stop event for pipeline.Process's chat span, then
 // emits one invoke_agent span per sub-agent and one execute_tool span per tool
 // call — the same tree the CLI produces: chat → execute_tool task →
-// invoke_agent → execute_tool view.
+// invoke_agent → execute_tool view. A turn that errored or was aborted ends
+// as StopFailure, so its chat span carries the error.
 //
 // Telemetry failures never break the user's session: errors go to stderr and
 // the process always exits 0.
@@ -105,9 +106,14 @@ func run() error {
 	var turn *copilot.Turn
 	var turnCtx *otlp.TraceContext
 	if hookEvent == "Stop" {
-		turn = copilotapp.BuildTurn(copilotapp.DecodeEvents(payload), now)
+		events := copilotapp.DecodeEvents(payload)
+		turn = copilotapp.BuildTurn(events, now)
 		if turn != nil && turn.Usage != nil {
 			copilot.AttachUsage(event, turn.Usage)
+		}
+		if msg := copilotapp.TurnError(events, payload, cfg.OmitIO); msg != "" {
+			event["hook_event_name"] = "StopFailure"
+			event["error"] = msg
 		}
 		if sessionDir != "" {
 			turnCtx, _ = otlp.LoadTraceContext(sessionDir)

@@ -67,7 +67,11 @@ type SubAgent struct {
 	CallID string
 	// Model is the sub-agent's own model when the source reports one (the
 	// Copilot app's subagent.* events do). Empty falls back to the turn's.
-	Model      string
+	Model string
+	// Usage is the sub-agent's own tokens when the source attributes them (the
+	// app does). Nil leaves them folded into the turn's chat span, as the CLI's
+	// file requires.
+	Usage      *Usage
 	Start, End time.Time
 	Failed     bool
 }

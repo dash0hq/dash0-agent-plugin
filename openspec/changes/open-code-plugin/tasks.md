@@ -21,7 +21,7 @@ than observation. Resolve them before writing anything that depends on them.
 
 ## 3. Shell wrapper
 
-- [x] 3.1 Create `opencode/opencode-on-event.sh` from `claude/claude-on-event.sh`, changing only the config paths (`.opencode/` and `~/.config/opencode/`), the secure var (`OPENCODE_PLUGIN_OPTION_AUTH_TOKEN`), the data-dir chain, and the binary name, and switching the failure mode to fail-open `exit 0`; verify `make shellcheck-lint` passes
+- [x] 3.1 Create `opencode/opencode-on-event.sh` from `claude/claude-on-event.sh`, keeping only the bootstrap half (data-dir chain, download, checksum, fail-open `exit 0`) because the binary reads the configuration file, the keychain and `enabled` itself through `harness.OpenCode`, whose user-scoped file is `~/.config/opencode/`; verify `make shellcheck-lint` passes
 - [x] 3.2 Verify the wrapper's config precedence by hand against the spec's scenarios: project file wins wholesale, `DASH0_*` fills non-secrets, `DASH0_AUTH_TOKEN` is never read, `enabled: false` exits silently
 - [x] 3.3 Verify keychain resolution on macOS with a throwaway `security add-generic-password` item, including that a successful lookup overrides a literal `auth_token` and a failed one falls back to it
 - [x] 3.4 Verify checksum enforcement by corrupting a cached binary and confirming the wrapper deletes it, never executes it, and exits 0

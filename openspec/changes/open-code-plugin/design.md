@@ -183,13 +183,16 @@ The accumulator is in-memory. If OpenCode exits mid-turn the counts are lost and
 no chat span is emitted for that turn — consistent with the fail-open rule, and
 the `SessionEnd` fallback still closes an open trace.
 
-### 6. Config, keychain, and binary bootstrap stay in a shell wrapper
+### 6. Binary bootstrap stays in a shell wrapper; the binary owns configuration
 
-`opencode/opencode-on-event.sh` is a clone of `claude/claude-on-event.sh` — the
-one wrapper that already implements keychain resolution — and owns frontmatter
-parsing, project-over-user precedence, `security find-generic-password` lookup,
-OS/arch detection, release download, checksum verification, and fail-open. The
-plugin writes canonical JSON to its stdin and knows none of this.
+`opencode/opencode-on-event.sh` is a clone of the bootstrap half of
+`claude/claude-on-event.sh`: OS/arch detection, staged release download, checksum
+verification and re-verification, and fail-open. It parses no configuration. The
+binary reads the frontmatter file, applies project-over-user precedence, resolves
+the macOS keychain item and honors `enabled: false` through `harness.OpenCode`,
+exactly as the other runtimes' binaries do. OpenCode's user-scoped file lives at
+`~/.config/opencode/`, which `harness.Harness.UserConfigDir` names. The plugin
+writes canonical JSON to the wrapper's stdin and knows none of this.
 
 This is a fifth near-duplicate of a script that already exists four times
 (`cursor-on-event.sh` and `codex-on-event.sh` differ by 39 diff lines out of

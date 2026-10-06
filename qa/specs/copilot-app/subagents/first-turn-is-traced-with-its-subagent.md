@@ -39,8 +39,9 @@ From another session:
 
 ```text
 send_session_message <session-id>:
-  Run `ls cmd` with the bash tool, and in parallel use an explore sub-agent to report the first
-  line of FEATURE_MATRIX.md. Then reply in one short sentence. Do not edit any files.
+  Run `ls cmd` with the bash tool, and in parallel use an explore sub-agent that opens
+  FEATURE_MATRIX.md with its view tool and reports the file's first line verbatim. Then reply in
+  one short sentence. Do not edit any files.
 ```
 
 Wait for the session to go idle, then wait out the settling time.
@@ -98,6 +99,12 @@ whose `toolCallId` is the `task` call's id and whose `model` names the sub-agent
 
 **The model may not delegate.** Without a `task` call there is no sub-agent, and the run tests
 nothing. Reword the prompt and re-run.
+
+**The sub-agent may answer without a tool.** Measured 2026-10-06: asked only to "report the first
+line", the explore agent guessed `# Feature Matrix` with no tool call, so the nested
+`execute_tool` assertion had nothing to check. That run is inconclusive, not a pass. The prompt
+above names the view tool for that reason. If `events.jsonl` shows no sub-agent tool call, re-run
+in a fresh session.
 
 **The agent kind and the models belong to the app.** Assert that `gen_ai.agent.name` is present,
 and that the `invoke_agent` model equals the one in `subagent.started`. Never assert the literal

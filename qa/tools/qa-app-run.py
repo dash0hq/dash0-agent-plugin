@@ -128,6 +128,7 @@ def swap_in(args, config):
     write_config(USER_CONFIG, config, run_dir, args.omit_io)
     with open(os.path.join(run_dir, "started-at"), "w") as handle:
         handle.write(now())
+    open(os.path.join(run_dir, "swapped-in"), "w").close()
     print(f"swapped in the run's config at {USER_CONFIG} (omit_io {'on' if args.omit_io else 'off'})\n"
           f"  model   {model}\nCreate the target now, with a kickoff on that model, then prepare it.")
     return 0
@@ -175,9 +176,11 @@ def prepare(args, config):
     write_config(path, config, run_dir, args.omit_io)
     # The session has its own config now, so a swapped-in one goes back. A
     # kickoff run started before prepare, and swap-in already marked when.
-    swapped = os.path.exists(SAVED) or os.path.exists(NONE)
     restore()
-    if not swapped:
+    swapped = os.path.join(run_dir, "swapped-in")
+    if os.path.exists(swapped):
+        os.remove(swapped)
+    else:
         with open(os.path.join(run_dir, "started-at"), "w") as handle:
             handle.write(now())
     with open(os.path.join(run_dir, "session-cwd"), "w") as handle:
@@ -282,6 +285,9 @@ def main():
     c.add_argument("run_id")
     c.add_argument("--session-id")
     args = parser.parse_args()
+    # restore needs nothing else: it must work even when the QA config does not.
+    if args.command == "restore":
+        return restore()
 
     config, error = compare().load_config(ROOT)
     if error:

@@ -176,7 +176,9 @@ const CATCH_UP_WINDOW_MS = 60_000;
 // progress from the history rather than lose every session's first turn.
 async function catchUp() {
   try {
-    const history = await session.getEvents();
+    // Both at once: a second wait here would be a window in which the session
+    // can end, or a live prompt open a turn, after the check below.
+    const [history, metrics] = await Promise.all([session.getEvents(), usageMetrics()]);
     // A live prompt opened a turn of its own, or the session is already over.
     if (turnOpen || ended) return;
     let start = -1;
@@ -202,8 +204,7 @@ async function catchUp() {
     const prompt = history[start];
     if (Date.now() - Date.parse(prompt.timestamp) > CATCH_UP_WINDOW_MS) return;
     const first = history.filter(isPrompt).length === 1 && !history.some((e) => e.type === "session.resume");
-    const missed = first ? await usageMissed(prompt.timestamp) : [];
-    if (turnOpen || ended) return;
+    const missed = first ? usageMissed(metrics, prompt.timestamp) : [];
     const later = history.slice(start + 1).filter((e) => !liveIds.has(e.id));
     const earlier = later.filter((e) => KEEP[e.type]);
     for (const e of later) if (e.id) replayed.add(e.id);
@@ -225,32 +226,36 @@ async function catchUp() {
 
 const TOKEN_KEYS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"];
 
+// The session's usage metrics, or null. The SDK marks them experimental.
+async function usageMetrics() {
+  try {
+    return await session.rpc?.usage?.getMetrics?.();
+  } catch (err) {
+    warn(`could not read the session usage: ${err?.message ?? err}`);
+    return null;
+  }
+}
+
 // assistant.usage is ephemeral, so the history has none of the usage spent
 // before the extension listened. The session's metrics have it all: for the
 // session's first turn, they less what arrived live is what was missed. Returns
 // assistant.usage events per model carrying that difference.
-async function usageMissed(timestamp) {
-  try {
-    const metrics = await session.rpc?.usage?.getMetrics?.();
-    const perModel = metrics?.agentMetrics?.main?.modelMetrics;
-    if (!perModel) return [];
-    const out = [];
-    for (const [model, m] of Object.entries(perModel)) {
-      const data = { model };
-      for (const k of TOKEN_KEYS) {
-        let n = Number(m?.usage?.[k]) || 0;
-        for (const e of buffer) {
-          if (e.type === "assistant.usage" && !e.data.parentToolCallId && e.data.model === model) n -= Number(e.data[k]) || 0;
-        }
-        if (n > 0) data[k] = n;
+function usageMissed(metrics, timestamp) {
+  const perModel = metrics?.agentMetrics?.main?.modelMetrics;
+  if (!perModel) return [];
+  const out = [];
+  for (const [model, m] of Object.entries(perModel)) {
+    const data = { model };
+    for (const k of TOKEN_KEYS) {
+      let n = Number(m?.usage?.[k]) || 0;
+      for (const e of buffer) {
+        if (e.type === "assistant.usage" && !e.data.parentToolCallId && e.data.model === model) n -= Number(e.data[k]) || 0;
       }
-      if (Object.keys(data).length > 1) out.push({ type: "assistant.usage", timestamp, data });
+      if (n > 0) data[k] = n;
     }
-    return out;
-  } catch (err) {
-    warn(`could not read the session usage: ${err?.message ?? err}`);
-    return [];
+    if (Object.keys(data).length > 1) out.push({ type: "assistant.usage", timestamp, data });
   }
+  return out;
 }
 
 // A message the user sent into the running turn, rather than one that starts

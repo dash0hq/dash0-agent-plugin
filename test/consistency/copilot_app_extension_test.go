@@ -31,6 +31,7 @@ globalThis.__session = {
   getEvents: () => pending,
   on: (h) => (handler = h),
   log: async () => {},
+  rpc: process.env.METRICS ? { usage: { getMetrics: async () => JSON.parse(process.env.METRICS) } } : undefined,
 };
 const loaded = import("./extension.mjs");
 while (!handler) await new Promise((r) => setTimeout(r, 1));
@@ -141,6 +142,13 @@ func runExtension(t *testing.T, live string, want int, exitReason string) []stri
 // extension reads at startup, as a JSON array of events.
 func runExtensionWithHistory(t *testing.T, history, live string, want int, exitReason string) []string {
 	t.Helper()
+	return runExtensionWithMetrics(t, history, "", live, want, exitReason)
+}
+
+// runExtensionWithMetrics is runExtensionWithHistory with the session's usage
+// metrics, as a JSON object, which the extension reads for its first turn.
+func runExtensionWithMetrics(t *testing.T, history, metrics, live string, want int, exitReason string) []string {
+	t.Helper()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not installed")
 	}
@@ -176,7 +184,7 @@ func runExtensionWithHistory(t *testing.T, history, live string, want int, exitR
 	log := filepath.Join(dir, "calls.log")
 	cmd := exec.Command("node", "driver.mjs", live, strconv.Itoa(want), exitReason)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LOG="+log, "COPILOT_APP_PLUGIN_DATA="+data, "DASH0_VERSION=", "HISTORY="+history)
+	cmd.Env = append(os.Environ(), "LOG="+log, "COPILOT_APP_PLUGIN_DATA="+data, "DASH0_VERSION=", "HISTORY="+history, "METRICS="+metrics)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "driver: %s", out)
 
@@ -270,4 +278,17 @@ func TestCopilotAppExtension_laterFinishedTurnIsNotReplayed(t *testing.T) {
 		`{"type":"user.message","data":{"content":"two"}},{"type":"hook.start","data":{"hookType":"sessionEnd"}}]`
 	calls := runExtensionWithHistory(t, history, "", 1, "")
 	assert.Equal(t, []string{"sessionStart"}, eventNames(calls))
+}
+
+// Usage events are not kept in the history, so the tokens a first turn spent
+// before the extension listened come from the session's metrics, less what
+// arrived live. Sub-agent tokens are left to the sub-agent's own events.
+func TestCopilotAppExtension_firstTurnRecoversTheUsageItMissed(t *testing.T) {
+	metrics := `{"modelMetrics":{"m":{"usage":{"inputTokens":9999}}},"agentMetrics":{"main":{"modelMetrics":{"m":{"usage":{"inputTokens":3000,"outputTokens":30,"cacheReadTokens":0}}}}}}`
+	live := `[{"type":"assistant.usage","data":{"model":"m","inputTokens":1000,"outputTokens":10}},{"type":"session.idle","data":{}}]`
+	calls := runExtensionWithMetrics(t, "", metrics, live, 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[2], `"data":{"model":"m","inputTokens":2000,"outputTokens":20}`)
+	assert.Contains(t, calls[2], `"data":{"model":"m","inputTokens":1000,"outputTokens":10}`)
+	assert.NotContains(t, calls[2], "9999")
 }

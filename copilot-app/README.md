@@ -104,6 +104,10 @@ recorded sessions:
   removes duplicates by event id. A first turn whose request fails at once
   (an unsupported model, a quota) can be over before the extension listens.
   It is still reported, with its error, unless the session was resumed.
+  `assistant.usage` is not kept in the history, so the tokens that first turn
+  spent before the extension listened come from the session's usage metrics
+  (`usage.getMetrics()`), less what arrived live. A turn with no usage at all
+  takes its model from `assistant.message` and carries no token counts.
 - **Sub-agent hooks fire into the parent's extension** under the sub-agent's own
   session id. The extension ignores them. A sub-agent's events carry an
   `agentId`, and the main agent's carry none.

@@ -38,7 +38,7 @@ const EXIT_BUDGET_MS = 4_000;
 // later SDK adds from reaching the binary unannounced.
 const KEEP = {
   "assistant.usage": ["model", "isAuto", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "parentToolCallId"],
-  "assistant.message": ["content", "parentToolCallId"],
+  "assistant.message": ["content", "model", "parentToolCallId"],
   "tool.execution_start": ["toolCallId", "toolName", "arguments", "mcpServerName", "mcpToolName", "parentToolCallId"],
   "tool.execution_complete": ["toolCallId", "success", "result", "error", "parentToolCallId"],
   "subagent.started": ["toolCallId", "agentName", "agentDisplayName", "model"],
@@ -201,10 +201,13 @@ async function catchUp() {
     }
     const prompt = history[start];
     if (Date.now() - Date.parse(prompt.timestamp) > CATCH_UP_WINDOW_MS) return;
+    const first = history.filter(isPrompt).length === 1 && !history.some((e) => e.type === "session.resume");
+    const missed = first ? await usageMissed(prompt.timestamp) : [];
+    if (turnOpen || ended) return;
     const later = history.slice(start + 1).filter((e) => !liveIds.has(e.id));
     const earlier = later.filter((e) => KEEP[e.type]);
     for (const e of later) if (e.id) replayed.add(e.id);
-    buffer = [...earlier.map(slim), ...buffer].slice(0, MAX_EVENTS);
+    buffer = [...missed, ...earlier.map(slim), ...buffer].slice(0, MAX_EVENTS);
     // Steering that arrived live while the history was read follows the
     // history's own.
     const live = steered;
@@ -217,6 +220,36 @@ async function catchUp() {
     liveIds = null;
     if (closedDuringCatchUp) endTurn(closedDuringCatchUp.timestamp, closedDuringCatchUp.aborted);
     closedDuringCatchUp = null;
+  }
+}
+
+const TOKEN_KEYS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"];
+
+// assistant.usage is ephemeral, so the history has none of the usage spent
+// before the extension listened. The session's metrics have it all: for the
+// session's first turn, they less what arrived live is what was missed. Returns
+// assistant.usage events per model carrying that difference.
+async function usageMissed(timestamp) {
+  try {
+    const metrics = await session.rpc?.usage?.getMetrics?.();
+    const perModel = metrics?.agentMetrics?.main?.modelMetrics;
+    if (!perModel) return [];
+    const out = [];
+    for (const [model, m] of Object.entries(perModel)) {
+      const data = { model };
+      for (const k of TOKEN_KEYS) {
+        let n = Number(m?.usage?.[k]) || 0;
+        for (const e of buffer) {
+          if (e.type === "assistant.usage" && !e.data.parentToolCallId && e.data.model === model) n -= Number(e.data[k]) || 0;
+        }
+        if (n > 0) data[k] = n;
+      }
+      if (Object.keys(data).length > 1) out.push({ type: "assistant.usage", timestamp, data });
+    }
+    return out;
+  } catch (err) {
+    warn(`could not read the session usage: ${err?.message ?? err}`);
+    return [];
   }
 }
 

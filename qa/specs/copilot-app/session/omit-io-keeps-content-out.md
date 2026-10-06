@@ -56,7 +56,8 @@ Each of those strings must be absent from everything the plugin sent.
 - None of them occurs anywhere in `dash0-spans.json`.
 - `gen_ai.input.messages` and `gen_ai.output.messages` on the `chat` span, and
   `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` on every `execute_tool` span, are
-  either absent or exactly `<REDACTED>` in the debug log.
+  either absent or redacted in the debug log: exactly `<REDACTED>`, or for the message keys the
+  message structure with every part's `content` exactly `<REDACTED>`.
 - The spans exist: one `chat` span and one `execute_tool bash` span. A run that sent nothing would
   pass every absence check above.
 

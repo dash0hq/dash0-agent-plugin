@@ -929,7 +929,20 @@ func ExtractBashCommandFamily(v any) string {
 }
 
 // ExtractSkillName parses the skill name from a Skill tool's input.
-// Input may be a JSON string or an already-decoded map with a "skill" field.
+// Input may be a JSON string or an already-decoded map.
+//
+// A skill tool's argument is spelled "skill" or "name" depending on the
+// runtime, the same way tool names themselves are spelled differently and are
+// matched case-insensitively above. "skill" wins when both are present, so
+// adding the alternative cannot change an answer that already resolved.
+func skillNameFrom(m map[string]any) string {
+	if name, _ := m["skill"].(string); name != "" {
+		return name
+	}
+	name, _ := m["name"].(string)
+	return name
+}
+
 func ExtractSkillName(v any) string {
 	switch val := v.(type) {
 	case string:
@@ -940,11 +953,9 @@ func ExtractSkillName(v any) string {
 		if err := json.Unmarshal([]byte(val), &m); err != nil {
 			return ""
 		}
-		name, _ := m["skill"].(string)
-		return name
+		return skillNameFrom(m)
 	case map[string]any:
-		name, _ := val["skill"].(string)
-		return name
+		return skillNameFrom(val)
 	default:
 		return ""
 	}

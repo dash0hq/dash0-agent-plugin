@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/version"
@@ -191,8 +192,7 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 
 	attrs = append(attrs, Attribute{Key: "gen_ai.tool.type", Value: StringVal("function")})
 	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
-	attrs = append(attrs, vcsSpanAttributes(cfg)...)
-	attrs = append(attrs, identitySpanAttributes(cfg)...)
+	attrs = append(attrs, contextSpanAttributes(cfg)...)
 	attrs = append(attrs, teamSpanAttributes(cfg)...)
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}
@@ -225,7 +225,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 	attrs := eventAttributes(event, cfg)
 
 	opName := "chat"
-	spanName := "chat " + model
+	spanName := strings.TrimSpace("chat " + model)
 	// gen_ai.agent.name is set from agent_type by eventAttributes (via attrKeyMap);
 	// here we only adjust the operation/span name for sub-agent invocations.
 	agentType, _ := event["agent_type"].(string)
@@ -235,8 +235,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 	}
 	attrs = append(attrs, Attribute{Key: "gen_ai.operation.name", Value: StringVal(opName)})
 	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
-	attrs = append(attrs, vcsSpanAttributes(cfg)...)
-	attrs = append(attrs, identitySpanAttributes(cfg)...)
+	attrs = append(attrs, contextSpanAttributes(cfg)...)
 	attrs = append(attrs, teamSpanAttributes(cfg)...)
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}

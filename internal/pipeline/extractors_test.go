@@ -239,6 +239,15 @@ func TestExtractSkillName(t *testing.T) {
 		{"map with skill field", map[string]any{"skill": "keybindings-help"}, "keybindings-help"},
 		{"map without skill field", map[string]any{"args": "something"}, ""},
 		{"nil input", nil, ""},
+		// Amp's skill tool names the field "name". Measured verbatim off the
+		// wire: {"event":"tool.call","payload":{"tool":"skill",
+		// "input":{"name":"qa-echo"}}}.
+		{"amp name field string", `{"name":"qa-echo"}`, "qa-echo"},
+		{"amp name field map", map[string]any{"name": "qa-echo"}, "qa-echo"},
+		// "skill" wins, so a harness sending both keeps its old answer.
+		{"skill beats name", map[string]any{"skill": "chosen", "name": "ignored"}, "chosen"},
+		{"empty skill falls back to name", map[string]any{"skill": "", "name": "qa-echo"}, "qa-echo"},
+		{"null name string", `{"name":null}`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

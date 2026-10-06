@@ -15,7 +15,7 @@
 # on their next `plugin install`.
 # This is the only list of them, so the bump and the check cannot disagree about
 # what needs bumping. Used by .github/workflows/release.yml, CI's
-# consistency-checks job, and `make version-check`.
+# release-checks job, and `make version-check`.
 #
 # Test hooks, used by test/contracts/release.sh:
 #   EXISTING_RELEASES  a version list, instead of querying GitHub

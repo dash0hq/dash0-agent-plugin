@@ -71,7 +71,7 @@ profile if you added them.)
   it needs the launch-time env, which is exactly what `/dash0-configure`'s launch function provides.
 - setup.sh copies `copilot/` wholesale — the shipped package is clean. The dev-only capture
   harness lives outside it under `test/capture/copilot/`, so it never ships (guarded by
-  `TestCopilotShippedPackageExcludesDevOnlyDirs`).
+  `TestRuntimePackagesShipNoCaptureHarness`).
 - setup.sh reuses the repo's real `.github/plugin/marketplace.json` (only its `name` swapped to
   `dash0-local`), so this exercises the actual marketplace file that ships to users.
 - Hooks come from the manifest, the same as a real install. Verified on macOS

@@ -19,7 +19,13 @@ covers:
 A fresh worktree session in the Copilot app, before its first prompt. Copy `copilot-app/` into the
 worktree as `.github/extensions/dash0-agent-plugin/`. Give the worktree a
 `.copilot/dash0-agent-plugin.local.md` with the target's `otlp_url`, `auth_token`, and `dataset`,
-plus `debug: "true"` and a `debug_file`.
+plus `omit_io: false`, `debug: "true"` and a `debug_file`. The project file replaces the user file
+entirely, so a user-level `omit_io: true` does not leak in.
+
+If the extension is already installed for the user, in `~/.copilot/extensions/`, skip the copy. A
+second copy risks two extensions joining one session and every span arriving twice. Check that the
+installed folder matches `copilot-app/` with `diff -r` instead, and rebuild the binary into the
+bootstrap's cache as `copilot-app/README.md` describes.
 
 The spec has to use **the first turn**, because that turn is the hard one. The app starts the
 extension when the first prompt is sent, not when the session is created. In the reference run the
@@ -61,15 +67,17 @@ whose `toolCallId` is the `task` call's id and whose `model` names the sub-agent
 ## Oracle
 
 - Dash0: `dash0 spans query` filtered to `gen_ai.conversation.id` = the session id. Read each span's
-  `spanId` and `parentSpanId` to rebuild the tree.
+  `spanId` and `parentSpanId` to rebuild the tree. The API returns `gen_ai.input.messages` as
+  `<REDACTED>`, so it proves that the key exists and nothing about its content.
 - The event log: `~/.copilot/session-state/<session-id>/events.jsonl`, for the tool calls, the
   sub-agent and its model.
-- The debug log, for tokens only. It is the plugin's own output, so it shows what was sent, not
-  whether it was right.
+- The debug log, for tokens and for the `chat` span's input. It is the plugin's own output, so it
+  shows what was sent, not whether it was right.
 
 ## Then
 
-- Dash0 holds **exactly one** `chat` span for the session, and its input is the first prompt. Zero
+- Dash0 holds **exactly one** `chat` span for the session, and in the debug log its input is the
+  first prompt. Zero
   means the late join was not recovered. Two means the recovered events were buffered twice.
 - Every tool call in `events.jsonl` appears as an `execute_tool` span, once.
 - `execute_tool task` is parented on the `chat` span.
@@ -79,8 +87,10 @@ whose `toolCallId` is the `task` call's id and whose `model` names the sub-agent
   `task` span's `gen_ai.tool.call.id`.
 - `invoke_agent` carries the model from `subagent.started`, which here differs from the `chat`
   span's model.
-- `invoke_agent` carries **no** `gen_ai.usage.*`. Attribution is flat, so the sub-agent's tokens
-  are already in the `chat` span.
+- `invoke_agent` carries `gen_ai.usage.*`: the sub-agent's own tokens, at its own model. They are
+  not also in the `chat` span, so summing the trace counts each token once. Read the figures from
+  the debug log. No record outside the plugin carries tokens, so this checks where they were put
+  and not whether they are right.
 - **No span** has a `gen_ai.conversation.id` other than the session id. The sub-agent's hooks fire
   into the extension under the sub-agent's own id, and the extension ignores them.
 

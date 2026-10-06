@@ -60,6 +60,8 @@ func TestGoldenSpanTree(t *testing.T) {
 		HarnessName:  "opencode",
 		OmitUserInfo: true,
 		OmitIO:       false,
+		Prompts:      otlp.LevelFull,
+		Tools:        otlp.LevelFull,
 	}
 	require.True(t, cfg.ValidateURL())
 

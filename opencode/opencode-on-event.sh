@@ -133,5 +133,5 @@ fi
 shopt -s execfail
 set +e
 # shellcheck disable=SC2093 # execfail is the point: the next line runs only when exec could not start the binary
-exec "$BINARY"
+exec "$BINARY" "$@"
 fail_open "the cached binary could not be executed — telemetry is off until the next release"

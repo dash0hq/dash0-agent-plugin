@@ -27,6 +27,17 @@ const SCRIPT = [
   { text: "All done." },
 ]
 
+// The live layer needs a shell call, to prove the command shape reaches the
+// span. The capture fixture predates it, so the step is opt-in: enabling it by
+// default would make a re-capture disagree with the recorded events.
+if (process.env.MOCK_LLM_BASH_STEP === "1") {
+  SCRIPT.splice(SCRIPT.length - 1, 0, {
+    text: "Checking the working tree.",
+    tool: ["bash"],
+    args: { command: "git status --porcelain", description: "check the working tree" },
+  })
+}
+
 function resolveTool(candidates, available) {
   for (const c of candidates) {
     if (available.includes(c)) return c

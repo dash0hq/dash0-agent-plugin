@@ -18,6 +18,7 @@ type request struct {
 	Path   string `json:"path"`
 	Auth   string `json:"auth"`
 	Size   int    `json:"bodySize"`
+	Body   string `json:"body"`
 }
 
 type state struct {
@@ -36,6 +37,7 @@ func main() {
 			Path:   r.URL.Path,
 			Auth:   r.Header.Get("Authorization"),
 			Size:   len(body),
+			Body:   string(body),
 		})
 		s.mu.Unlock()
 		w.WriteHeader(http.StatusOK)

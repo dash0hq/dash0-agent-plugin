@@ -183,9 +183,12 @@ async function catchUp() {
   try {
     // Both at once: a second wait here would be a window in which the session
     // can end, or a live prompt open a turn, after the check below.
-    const [history, metrics] = await Promise.all([session.getEvents(), usageMetrics()]);
+    let [history, metrics] = await Promise.all([session.getEvents(), usageMetrics()]);
     // A live prompt opened a turn of its own, or the session is already over.
     if (turnOpen || ended) return;
+    // A held prompt can be in the history too. It is the next turn's, not one
+    // to recover.
+    if (held?.event.id) history = history.filter((e) => e.id !== held.event.id);
     let start = -1;
     let closed = false;
     for (let i = history.length - 1; i >= 0; i--) {
@@ -209,8 +212,9 @@ async function catchUp() {
     const prompt = history[start];
     if (Date.now() - Date.parse(prompt.timestamp) > CATCH_UP_WINDOW_MS) return;
     const first = history.filter(isPrompt).length === 1 && !history.some((e) => e.type === "session.resume");
-    const missed = first ? usageMissed(metrics, prompt.timestamp) : [];
     if (held) held.tail = buffer.splice(held.split);
+    // The metrics also count a held turn's usage, which all arrived live.
+    const missed = first ? usageMissed(metrics, prompt.timestamp, [...buffer, ...(held?.tail ?? [])]) : [];
     const later = history.slice(start + 1).filter((e) => !liveIds.has(e.id));
     const earlier = later.filter((e) => KEEP[e.type]);
     for (const e of later) if (e.id) replayed.add(e.id);
@@ -225,14 +229,17 @@ async function catchUp() {
     warn(`could not read the session history: ${err?.message ?? err}`);
   } finally {
     liveIds = null;
-    if (held) {
+    if (held && !ended) {
       const { event, split, tail, closed } = held;
-      held = null;
       const rest = tail ?? buffer.slice(split);
+      // History events can still arrive live after this; they stay replayed.
+      const seen = replayed;
       endTurn(closed?.timestamp ?? event.timestamp, closed?.aborted);
+      replayed = seen;
       buffer = rest;
       openTurn(event);
     }
+    held = null;
     if (closedDuringCatchUp) endTurn(closedDuringCatchUp.timestamp, closedDuringCatchUp.aborted);
     closedDuringCatchUp = null;
   }
@@ -254,7 +261,7 @@ async function usageMetrics() {
 // before the extension listened. The session's metrics have it all: for the
 // session's first turn, they less what arrived live is what was missed. Returns
 // assistant.usage events per model carrying that difference.
-function usageMissed(metrics, timestamp) {
+function usageMissed(metrics, timestamp, seen) {
   const perModel = metrics?.agentMetrics?.main?.modelMetrics;
   if (!perModel) return [];
   const out = [];
@@ -262,7 +269,7 @@ function usageMissed(metrics, timestamp) {
     const data = { model };
     for (const k of TOKEN_KEYS) {
       let n = Number(m?.usage?.[k]) || 0;
-      for (const e of buffer) {
+      for (const e of seen) {
         if (e.type === "assistant.usage" && !e.data.parentToolCallId && e.data.model === model) n -= Number(e.data[k]) || 0;
       }
       if (n > 0) data[k] = n;

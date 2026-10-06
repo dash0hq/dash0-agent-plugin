@@ -53,6 +53,11 @@ release(process.env.HISTORY
       { id: "h3", type: "tool.execution_complete", timestamp: now, data: { toolCallId: "t1", success: true } },
     ]);
 await loaded;
+// LATE: events the live stream delivers after the history read returned.
+if (process.env.LATE) {
+  await new Promise((r) => setTimeout(r, 50));
+  for (const e of JSON.parse(process.env.LATE)) handler({ timestamp: now, ...e });
+}
 
 // End the session through the hook, as the app does on exit, and mark when the
 // hook's promise settles relative to the sends it should have waited for.
@@ -315,4 +320,43 @@ func TestCopilotAppExtension_completedRunHookLeavesTheTurnToIdle(t *testing.T) {
 	calls := runExtension(t, "", 3, "complete")
 	// The hook returns at once, so its mark can land before the sends.
 	assert.ElementsMatch(t, []string{"sessionStart", "userPromptSubmitted", "hookReturned"}, eventNames(calls))
+}
+
+// With a prompt held during catch-up, the held prompt is not taken from the
+// history as the turn to recover, and the first turn's missed usage is the
+// session's less what arrived live for either turn.
+func TestCopilotAppExtension_heldPromptStaysOutOfTheFirstTurn(t *testing.T) {
+	history := `[{"type":"user.message","data":{"content":"hi"}},{"id":"l2","type":"user.message","data":{"content":"second"}}]`
+	metrics := `{"agentMetrics":{"main":{"modelMetrics":{"m":{"usage":{"inputTokens":3000}}}}}}`
+	live := `[{"type":"assistant.usage","data":{"model":"m","inputTokens":1000}},{"type":"session.idle","data":{}},` +
+		`{"type":"user.message","data":{"content":"second"}},{"type":"assistant.usage","data":{"model":"m","inputTokens":500}},{"type":"session.idle","data":{}}]`
+	calls := runExtensionWithMetrics(t, history, metrics, live, 5, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[1], `"prompt":"hi"`)
+	assert.Contains(t, calls[2], `"inputTokens":1500`)
+	assert.Contains(t, calls[2], `"inputTokens":1000`)
+	assert.NotContains(t, calls[2], `"inputTokens":500}`)
+	assert.Contains(t, calls[3], `"prompt":"second"`)
+	assert.Contains(t, calls[4], `"inputTokens":500`)
+	assert.NotContains(t, calls[4], `"inputTokens":1000`)
+}
+
+// A prompt held during catch-up is dropped when the session shuts down first:
+// nothing goes out after sessionEnd.
+func TestCopilotAppExtension_heldPromptAfterShutdownIsDropped(t *testing.T) {
+	// want 3 waits out the driver's timeout, so a late send would show.
+	calls := runExtension(t, `[{"type":"user.message","data":{"content":"second"}},{"type":"session.shutdown","data":{}}]`, 3, "")
+	assert.Equal(t, []string{"sessionStart", "sessionEnd"}, eventNames(calls))
+}
+
+// History events the live stream delivers after catch-up stay out of the held
+// prompt's turn: they were the first turn's, and went out with it.
+func TestCopilotAppExtension_lateHistoryEventsStayOutOfTheHeldTurn(t *testing.T) {
+	t.Setenv("LATE", `[{"id":"x1","type":"tool.execution_start","data":{"toolCallId":"t1","toolName":"view"}},{"type":"session.idle","data":{}}]`)
+	history := `[{"type":"user.message","data":{"content":"hi"}},{"type":"tool.execution_start","data":{"toolCallId":"t1","toolName":"view"}}]`
+	live := `[{"type":"session.idle","data":{}},{"type":"user.message","data":{"content":"second"}}]`
+	calls := runExtensionWithHistory(t, history, live, 5, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[2], `"toolCallId":"t1"`)
+	assert.NotContains(t, calls[4], `"t1"`)
 }

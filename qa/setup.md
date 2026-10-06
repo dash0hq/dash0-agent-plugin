@@ -7,6 +7,8 @@ config_file: qa/config.local.json
 # or copilot-only ones, so it is not a full pass. 2026-08-28 did the same for the
 # copilot arm. 2026-10-05 added and ran the opencode arm and the shared checks
 # it depends on, and is not a full pass either.
+# 2026-10-06 added and ran the copilot-app arm and the six shared checks it
+# uses, the same way.
 last_full_pass: 2026-08-25
 ---
 
@@ -30,9 +32,9 @@ spec, learning, finding, and report.
 
 ## Runtimes
 
-All five supported agents are covered here, **one spec tree per runtime**:
+All six supported agents are covered here, **one spec tree per runtime**:
 `qa/specs/claude/`, `qa/specs/codex/`, `qa/specs/copilot/`,
-`qa/specs/cursor/` and `qa/specs/opencode-v2/`, each split by topic underneath. Each spec also names its
+`qa/specs/cursor/`, `qa/specs/opencode-v2/` and `qa/specs/copilot-app/`, each split by topic underneath. Each spec also names its
 runtime in frontmatter, so the area and the field cannot drift apart. The split
 is by runtime rather than by topic because a run is one driver, one credential
 and one cost profile — `/qa-run codex` is a coherent thing to execute, while a
@@ -40,16 +42,16 @@ topic area spanning all four would need four drivers mid-run. A spec written for
 one runtime says nothing about the others. They share the Go pipeline and
 therefore share most invariants, but they differ in what a run can prove:
 
-| | claude | codex | copilot | cursor | opencode |
-| --- | --- | --- | --- | --- | --- |
-| Driver | `qa/tools/qa-session.sh` | `qa/tools/qa-session-codex.sh` | `qa/tools/qa-session-copilot.sh` | `qa/tools/qa-session-cursor.sh`, through a pty | `qa/tools/qa-session-opencode-v2.sh`, against a private `opencode serve` |
-| What is under test | the plugin **as this machine has it installed** | the shipped install path, **provisioned into a throwaway home** | the shipped marketplace install, **provisioned into a throwaway home** | the machine's own registration, which must be the **shipped wrapper** | this checkout's `opencode-v2/` package and working-tree exporter, **loaded from a throwaway config** |
-| Who configures it | the managed install; QA cannot | QA, from `qa/config.local.json` | QA, from `qa/config.local.json` | QA, from `qa/config.local.json`, through `CURSOR_PLUGIN_OPTION_*` | QA, from `qa/config.local.json`, as plugin options in a generated `opencode.json` |
-| Second channel | the transcript, via `claude-code-usage-audit.py` | the rollout, via `qa/tools/qa-rollout.py` (usage only) | the native-OTel file, via `qa/tools/qa-otel.py` (usage **and** tool spans) | the transcript, via `qa/tools/qa-transcript-cursor.py` (turns only; **no usage**) | `opencode session export`, via `qa/tools/qa-compare-opencode-v2.py` (turns, tools **and** per-step usage) |
-| Harness's own figures | `claude -p --output-format json`, including cost | `codex exec --json`; Codex reports no cost | `copilot --output-format json`; output tokens and AI credits, no input tokens | none. The TUI has no machine-readable output | `opencode run --format json`, kept but not compared |
-| Sees what was sent | no | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log |
-| Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording | discovered from `opencode run --format json` |
-| Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run | only OpenCode's session database: QA sessions show up in `opencode session list` |
+| | claude | codex | copilot | cursor | opencode | copilot-app |
+| --- | --- | --- | --- | --- | --- | --- |
+| Driver | `qa/tools/qa-session.sh` | `qa/tools/qa-session-codex.sh` | `qa/tools/qa-session-copilot.sh` | `qa/tools/qa-session-cursor.sh`, through a pty | `qa/tools/qa-session-opencode-v2.sh`, against a private `opencode serve` | a runner: an agent session in the app, using `create_session` and `send_session_message`; `qa/tools/qa-app-run.py` prepares and collects |
+| What is under test | the plugin **as this machine has it installed** | the shipped install path, **provisioned into a throwaway home** | the shipped marketplace install, **provisioned into a throwaway home** | the machine's own registration, which must be the **shipped wrapper** | this checkout's `opencode-v2/` package and working-tree exporter, **loaded from a throwaway config** | the **machine's own** user-level extension and the bootstrap's binary cache, both checked to be the working tree's |
+| Who configures it | the managed install; QA cannot | QA, from `qa/config.local.json` | QA, from `qa/config.local.json` | QA, from `qa/config.local.json`, through `CURSOR_PLUGIN_OPTION_*` | QA, from `qa/config.local.json`, as plugin options in a generated `opencode.json` | QA, through a project config `qa-app-run.py` writes into the session's worktree |
+| Second channel | the transcript, via `claude-code-usage-audit.py` | the rollout, via `qa/tools/qa-rollout.py` (usage only) | the native-OTel file, via `qa/tools/qa-otel.py` (usage **and** tool spans) | the transcript, via `qa/tools/qa-transcript-cursor.py` (turns only; **no usage**) | `opencode session export`, via `qa/tools/qa-compare-opencode-v2.py` (turns, tools **and** per-step usage) | `events.jsonl`, the app's own session log (structure only; **no usage**) |
+| Harness's own figures | `claude -p --output-format json`, including cost | `codex exec --json`; Codex reports no cost | `copilot --output-format json`; output tokens and AI credits, no input tokens | none. The TUI has no machine-readable output | `opencode run --format json`, kept but not compared | none |
+| Sees what was sent | no | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log |
+| Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording | discovered from `opencode run --format json` | discovered from the session's working directory |
+| Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run | only OpenCode's session database: QA sessions show up in `opencode session list` | yes: the binary cache, the extension folder, and the worktree the app created |
 
 The asymmetry is not a preference, it is what each host allows. Claude Code's
 options arrive from a managed `remote-settings.json` that beats every override,
@@ -110,6 +112,33 @@ otherwise, and the same for `copilot` and `cursor`.
 `test/contracts/cursor.sh` and `test/e2e/` still own what no session can reach on
 this runtime: the installer's own behaviour, the uninstaller's, and the bytes on
 the wire.
+
+**The Copilot app's driver is an agent inside the app, and that changes what a
+run is.** The app is a desktop GUI with no headless mode, so no script outside it
+can launch a session or send a prompt. A **runner**, an agent session in the app
+executing `/qa-run`, does both with the app's own session tools
+(`create_session`, `send_session_message`), and runs `qa/tools/qa-app-run.py`
+and `qa/tools/qa-fake-model.py` with its shell tool. A person starts the runner
+and nothing else. Three consequences:
+
+- **No spec may need a person.** No tool an agent has can press Stop or quit the
+  app, so a stopped turn and a reopened session are not specs; the extension
+  tests cover them.
+- **The second channel is structure only.** `events.jsonl` is the app's own
+  persisted log and is not the plugin's input — the extension reads the live
+  stream — so tool calls, sub-agents, parents and models are a real cross-check.
+  It carries no `assistant.usage` at all (measured 2026-10-06 on
+  `qa/runs/copilot-app-first-turn-rerun2-20261006`: 63 events, none of them
+  usage), so a token count exists only in the plugin's debug log, which is the
+  plugin's own output. A `copilot-app` run can say where tokens were put and never
+  whether they are right.
+- **What is under test is this machine's install.** The extension the app loads
+  is the user-level `~/.copilot/extensions/copilot-app`, and the binary is the one
+  in the bootstrap's cache. QA checks both against the working tree before every
+  run rather than provisioning a hermetic copy, because the app reads extensions
+  from only those two places. `test/e2e/copilot_app_e2e_test.go` owns what a
+  session cannot reach: the exact bytes, and failure shapes the app will not
+  produce on demand.
 
 ## Layout
 
@@ -537,6 +566,87 @@ exporter and which fields survive, `internal/source/opencodev2/opencodev2.go` fo
 they become spans, `opencode-v2/README.md` for the design, and `DEVELOPMENT.md` for
 the attribute contract.
 
+### GitHub Copilot app
+
+**QA uses this machine's install and points one session at the QA target.** The
+app loads an extension from exactly two places, the user-level
+`~/.copilot/extensions/` and a repository's committed `.github/extensions/`, and
+it starts the extension inside the app's own process tree, so there is no
+throwaway home to provision. Instead `qa/tools/qa-app-run.py prepare` makes the
+machine's install the thing under test and confines the QA configuration to the
+session:
+
+- It fails unless `~/.copilot/extensions/copilot-app` is byte-identical to
+  `copilot-app/`. Installing is the person's job, once, and is reversible by
+  moving the folder back. The script never writes into `~/.copilot` itself.
+- It fails if the session's directory also has a `.github/extensions/`. Two
+  copies of the extension join one session and every span arrives twice.
+- It builds `cmd/copilot-app-on-event` into the bootstrap's cache with
+  `-buildvcs=false`, so the binary is a function of the code alone and
+  `copilot-app-binary-is-the-working-tree` can compare bytes. The bootstrap uses a
+  cached binary instead of downloading, which is also how a run tests code no
+  release has shipped yet.
+- It refuses a directory whose repository does not gitignore
+  `.copilot/dash0-agent-plugin.local.md`, because that file holds the QA token.
+  The QA project's `.gitignore` covers `.copilot/`. This repository's does not, so
+  a session on `dash0-agent-plugin` is never a QA session.
+- It writes `.copilot/dash0-agent-plugin.local.md` **into the session's working
+  directory**, from `qa/config.local.json`, mode `0600`, with `debug_file`
+  pointing into the run directory and `omit_io` from `--omit-io`.
+
+> [!CAUTION]
+> **The app runs every session in a git worktree it creates** — on this machine
+> under `~/Developer/dash0/copilot-worktrees/<repo>/<name>` — so the session's working
+> directory is not the project you opened. An untracked config never reaches that
+> worktree, and the session silently falls back to the user's own
+> `~/.copilot/dash0-agent-plugin.local.md`: their target, their dataset and their
+> `omit_io`. So `prepare` takes the **session's** directory and runs after the app
+> has created it and before the first prompt. The binary reads the config on every
+> call, so nothing earlier is needed. `collect` fails when the run's debug log is
+> empty, which is how a session that read the wrong config shows up.
+
+This is the opposite of the `copilot` CLI's rule, and deliberately: there the
+driver provisions a home and a project config would retarget it, while here the
+project config is the only lever QA has that does not touch the user's own
+configuration.
+
+**Auth.** The app's own GitHub login. Nothing to configure, and nothing QA can
+check before a session.
+
+**What stays on the machine after a run.** The binary in the cache, which the
+user's own sessions then use. The bootstrap runs any executable file of the
+right name without checking it, so that binary stays in use until it is deleted;
+the bootstrap then downloads the release, which for the app means 0.1.29 or
+later. Before that release, deleting it leaves the app extension silent. The
+config in the session's worktree, which holds the QA token: delete the worktree
+from the app when the run is collected.
+
+**The fake model makes the model a property of the run.** The app accepts a
+custom, OpenAI-compatible model provider, and `qa/tools/qa-fake-model.py` is one,
+on `127.0.0.1`. A session that selects its model, `qa-fake`, sends its model calls
+there and nowhere else. The rest of the machine and the network are unaffected,
+which is the point: a failure scenario must never cut the connection the driver
+itself runs on. Set it up once, by hand, in the app's model settings: an
+OpenAI-compatible provider using chat completions, base URL
+`http://127.0.0.1:8765/v1`, no API key, model `qa-fake`. Measured 2026-10-06: the
+app streams (`stream: true`) and sends its 80 tools on every call, and the
+session's `assistant.message` carries `model: "qa-fake"`.
+
+The server's modes give a run what the real model will not do on demand: `error`
+(a chosen status and message every time), `fail-once` (then healthy), `context`
+(a context-length error), `hang` (a stream that never finishes) and `ok` (a fixed
+reply with a fixed `prompt_tokens` and `completion_tokens`). Its log,
+`fake-model.jsonl` in the run directory, has one line per model call with the
+usage it reported. **That log is the one record of tokens outside the plugin**, so
+a spec using `ok` mode can assert a token count exactly: a turn's input tokens are
+the number of its calls times `--prompt-tokens`.
+
+Authoritative shapes: `copilot-app/extension.mjs` for what is forwarded and when,
+`internal/source/copilotapp/copilotapp.go` for how a turn is built,
+`copilot-app/README.md` for the app behaviour that shaped the design, and the
+SDK's own `session-events.d.ts` inside `/Applications/GitHub Copilot.app` for the
+event schema.
+
 ## Stimulate
 
 ### Claude Code
@@ -814,6 +924,57 @@ conversation id, so they come back from the same query.
 A run whose `opencode run` or export failed, or whose export has a different
 number of turns than the driver ran, exits 2: it measured nothing.
 
+### GitHub Copilot app
+
+The runner's procedure is in [specs/copilot-app/README.md](specs/copilot-app/README.md):
+optionally start the fake model, `create_session` (worktree), `get_session` for
+the worktree, `qa-app-run.py prepare` in it, `send_session_message`, wait for
+idle and settling, then `qa-app-run.py collect --session-id` and `qa-attrs.py`.
+
+`collect` copies the session's `events.jsonl`, writes `manifest.json`, and saves
+Dash0's spans as `dash0-spans.json`. There is no `qa-compare.py` support: the app
+has no hook recording to derive an expectation from, so each spec computes its
+expectation from `events.jsonl` and, for a fake-model run, `fake-model.jsonl`.
+
+What each session tool was measured to do, 2026-10-06:
+
+| Tool | Does | Measured |
+| --- | --- | --- |
+| `create_session` with `workspace_type: "worktree"` | creates the target and its worktree at once, before any message | `get_session` returns the worktree path; `prepare` ran in it before the first prompt on every run |
+| `send_session_message`, `delivery_mode: "immediate"` | into a busy session: joins the running turn | arrives as `user.message` with `delivery: "steering"` |
+| `send_session_message`, `delivery_mode: "enqueue"` | into a busy session: waits for its own run | arrives with `delivery: "queued"` |
+| none | stop a turn, quit or restart the app, set a session's model | `set_session_model` exists only as the app's internal UI call |
+
+**A session made by hand cannot be prepared.** The app gives it a worktree only
+at its first message, and a new worktree holds only committed files, so the
+untracked config never reaches it in time and the session uses the person's own
+configuration. Always let the runner create the target.
+
+**The model of a fake-model run comes from the repository settings.**
+`prepare --fake-model` writes `.github/copilot/settings.local.json` with
+`{"model": "<provider-id>/qa-fake"}` into the target's worktree, reading the
+provider id from the app's database, and without the flag removes that file. A
+spec using it checks `fake-model.jsonl` for a call before asserting anything,
+because a pin that did not take leaves the session on a real model.
+
+Four artifacts are specific to this runtime:
+
+| Artifact | Holds | Read it as |
+| --- | --- | --- |
+| `events.jsonl` | the app's persisted session log | the independent record of structure, never of tokens |
+| `plugin-debug.log` | every span the plugin emitted, as it emitted it | the product's output, and the only place a token count or a span's input can be read |
+| `dash0-spans.json` | what Dash0 holds for the session | channel one |
+| `session-cwd` | the worktree `prepare` configured | provenance, and how `collect` finds the session |
+
+`events.jsonl` persists more than the live stream needs and less than it has.
+Measured 2026-10-06: `abort` (with `reason`) and `session.error` (with
+`errorType` and `statusCode`) are written to it, so a failed or stopped turn has
+an independent record. `session.idle` and `assistant.usage` are not, so neither
+the turn boundary the extension uses nor any token count can be read from it.
+`hook.start` and `hook.end` entries are the app logging every hook it runs; the
+extension's own `onSessionEnd` is one of them, and the rest are not the
+plugin's.
+
 ## Observe
 
 1. **Dash0** — `dash0 spans query` with the endpoint, token, and dataset from
@@ -972,6 +1133,23 @@ Known divergences to check before reporting anything:
   that starts a turn — but a spec carried over from either of those runtimes will
   look for it in the wrong place.
 
+- **`copilot-app`: Dash0 returns message content as `<REDACTED>`.** The API
+  keeps the shape of `gen_ai.input.messages` and `gen_ai.output.messages` and
+  replaces every part's `content`, whatever the plugin sent, so a query proves the
+  key and its roles exist and nothing about the text.
+  An `omit_io` spec, or one about a steered turn's input, reads content from
+  `plugin-debug.log` and uses Dash0 only for presence and absence of keys.
+
+- **`copilot-app`: a turn with no model round is named `chat ` with no model.**
+  Measured 2026-10-06 on `qa/runs/setup-probe-copilot-app`: a turn whose events
+  carry no `assistant.usage` produces a span named `chat ` and no
+  `gen_ai.request.model`. A turn stopped or failed before the first model reply
+  looks like this. It is the product's current shape, not a broken query.
+
+- **`copilot-app`: the first turn of a worktree session has an extra tool.** The
+  app adds `rename_branch` on its own. Assert that every tool call in
+  `events.jsonl` is in Dash0, never a tool count.
+
 ## Settling
 
 Ingest lag only. **Allow 25 seconds, not 8.** Measured 2026-08-28 on
@@ -1041,8 +1219,16 @@ another one, and skip the `claude`-only ones the same way. The runtime-specific
 blocking checks are `probe-session-agrees-with-what-it-was-fed` for `claude`,
 `codex-probe-session-agrees-with-what-it-was-fed` for `codex`,
 `copilot-probe-session-agrees-with-what-it-was-fed` for `copilot`, and
-`cursor-probe-session-agrees-with-what-it-was-fed` for `cursor`, and
-`opencode-probe-session-agrees-with-what-it-was-fed` for `opencode`.
+`cursor-probe-session-agrees-with-what-it-was-fed` for `cursor`,
+`opencode-probe-session-agrees-with-what-it-was-fed` for `opencode`, and
+`copilot-app-bootstrap-exports-to-the-target` for `copilot-app`.
+
+A `copilot-app` run needs only six of the shared checks: `qa-runs-is-untracked`,
+`config-is-complete`, `config-is-untracked`, `token-reads-the-dataset`,
+`ingest-token-reaches-the-ingress` and `run-dir-carries-no-real-credential`. The
+rest are about Claude Code's managed install, which the app never reads. Its own
+checks were added and first run 2026-10-06 against the working tree at 0.1.28 and
+the GitHub Copilot app installed that day.
 
 ### toolchain-present
 
@@ -1088,7 +1274,8 @@ for p in qa/tools/qa-session.sh qa/tools/qa-compare.py qa/tools/qa-attrs.py \
          qa/tools/qa-session-copilot.sh qa/tools/qa-otel.py \
          qa/tools/qa-session-cursor.sh qa/tools/qa-cursor-drive.py \
          qa/tools/qa-transcript-cursor.py \
-         qa/tools/qa-session-opencode-v2.sh qa/tools/qa-compare-opencode-v2.py; do
+         qa/tools/qa-session-opencode-v2.sh qa/tools/qa-compare-opencode-v2.py \
+         qa/tools/qa-app-run.py; do
   git check-ignore -q "$p" && echo "IGNORED: $p" || echo "tracked: $p"
 done
 ```
@@ -2193,4 +2380,132 @@ QA_OPENCODE_V2_RESUME='Now count the lines of README.md with a shell command.' \
 sleep 25
 qa/tools/qa-compare.py qa/runs/probe-opencode-two-turns
 qa/tools/qa-attrs.py qa/runs/probe-opencode-two-turns
+```
+
+### copilot-app-toolchain-present
+
+- **proves.** A `copilot-app` run needs the app itself, `go` to build the binary,
+  `python3` and `dash0` for `qa-app-run.py`, and `uuidgen` for the probe.
+- **after.** none
+- **blocking.** true
+- **pass.** `app present` and nothing else.
+- **fail.** `MISSING: <tool>`. The app comes from GitHub; `dash0` from
+  `brew install dash0`.
+- **verified.** 2026-10-06, signals: pass+fail. The fail half was provoked with a
+  nonexistent tool name in the list.
+
+```sh
+for t in go python3 dash0 uuidgen; do command -v "$t" >/dev/null || echo "MISSING: $t"; done
+[ -d "/Applications/GitHub Copilot.app" ] && echo "app present" || echo "MISSING: GitHub Copilot.app"
+```
+
+### copilot-app-extension-is-the-working-tree
+
+- **proves.** The extension the app loads is the one under test. The app loads
+  `~/.copilot/extensions/copilot-app`, not this repository, so an install left
+  over from an earlier branch runs a different `extension.mjs` and the run tests
+  that instead — with nothing in the spans to say so.
+- **after.** copilot-app-toolchain-present
+- **blocking.** true
+- **pass.** `extension is the working tree`.
+- **fail.** `EXTENSION DIFFERS`, or a missing folder. Move the installed folder
+  aside as a backup and copy `copilot-app/` in its place; the app picks it up in
+  the next **new** session, never in a running one. QA does not do this itself,
+  because it replaces the person's own install.
+- **verified.** 2026-10-06, signals: pass+fail. The fail half compared a copy of
+  `copilot-app/` with one line appended to `extension.mjs`.
+
+```sh
+diff -rq copilot-app ~/.copilot/extensions/copilot-app >/dev/null \
+  && echo "extension is the working tree" || echo "EXTENSION DIFFERS"
+```
+
+### copilot-app-binary-is-the-working-tree
+
+- **proves.** The bootstrap runs whatever executable sits in its cache under the
+  pinned name, without checking it. A binary from another branch, or a release,
+  produces spans from other code.
+- **after.** copilot-app-toolchain-present
+- **blocking.** true
+- **pass.** `binary is the working tree`.
+- **fail.** `BINARY DIFFERS`. Run `qa-app-run.py prepare`, which rebuilds it. A
+  difference right after `prepare` means the tree changed in between.
+- **verified.** 2026-10-06, signals: pass+fail. The fail half compared the cache
+  against a build of `cmd/copilot-on-event`. Without `-buildvcs=false` on both
+  sides this check fails on every commit, code or not: Go stamps the revision into
+  the binary, and the first attempt reported a difference between two builds of
+  identical code two documentation commits apart.
+
+```sh
+B=$(python3 -c "import importlib.util as u;s=u.spec_from_file_location('a','qa/tools/qa-app-run.py');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.binary_path())")
+mkdir -p qa/runs/setup-probe-copilot-app/build
+go build -buildvcs=false -o qa/runs/setup-probe-copilot-app/build/b ./cmd/copilot-app-on-event &&
+  { cmp -s qa/runs/setup-probe-copilot-app/build/b "$B" && echo "binary is the working tree" || echo "BINARY DIFFERS"; }
+```
+
+### copilot-app-bootstrap-exports-to-the-target
+
+- **proves.** The whole path below the extension, without paying for a session:
+  the installed bootstrap finds the cached binary, the binary reads the project
+  config `prepare` wrote, exports with the QA token, and Dash0 stores it where QA
+  reads. It runs the four calls the extension makes, for a turn with no events.
+  It cannot prove that the extension makes them; only a real session does.
+- **after.** copilot-app-extension-is-the-working-tree, copilot-app-binary-is-the-working-tree, ingest-token-reaches-the-ingress
+- **blocking.** true
+- **pass.** `configured token: ['chat ']` and `bogus token: []`. The trailing
+  space is real: a turn with no model round has no model for the span name.
+- **fail.** `configured token: []` means the export did not land: re-run
+  `prepare`, then re-query once before believing it, since an empty result is
+  usually ingest lag. `bogus token` returning a span means the control proved
+  nothing: the env option did not outrank the file, which is itself a product
+  defect.
+- **verified.** 2026-10-06, signals: pass+fail. The fail half is the second
+  session, given a bogus `COPILOT_APP_PLUGIN_OPTION_AUTH_TOKEN`, which outranks
+  the file; the ingress answered `401` and Dash0 held nothing for it.
+
+```sh
+P=${QA_APP_PROJECT:-$HOME/Developer/dash0/copilot-app-qa}
+qa/tools/qa-app-run.py prepare setup-probe-copilot-app "$P" >/dev/null
+probe() {
+  id=qa-probe-$(uuidgen | tr 'A-Z' 'a-z')
+  for call in sessionStart userPromptSubmitted turnEnd sessionEnd; do
+    printf '{"sessionId":"%s","cwd":"%s","prompt":"qa probe","reason":"user_exit","events":[]}' "$id" "$P" |
+      (cd "$P" && env "$@" bash ~/.copilot/extensions/copilot-app/copilot-app-on-event.sh "$call") 2>/dev/null
+  done
+  echo "$id"
+}
+good=$(probe) bad=$(probe COPILOT_APP_PLUGIN_OPTION_AUTH_TOKEN=auth_definitely_not_a_real_token_00000)
+sleep 25
+python3 - "$good" "$bad" <<'PY'
+import importlib.util, sys, datetime
+spec = importlib.util.spec_from_file_location("c", "qa/tools/qa-compare.py")
+c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
+cfg, _ = c.load_config(".")
+now = datetime.datetime.now(datetime.timezone.utc)
+for label, sid in zip(("configured token", "bogus token"), sys.argv[1:]):
+    spans, err = c.query_dash0(cfg, sid, cfg["dataset"], (now - datetime.timedelta(minutes=10)).isoformat(),
+                               (now + datetime.timedelta(minutes=2)).isoformat(), 10)
+    print(f"{label}: {err or [s['name'] for s in spans]}")
+PY
+```
+
+### copilot-app-fake-model-answers
+
+- **proves.** The fake model is reachable where the app's provider points, and
+  behaves as its modes say. A session whose provider cannot be reached ends on a
+  connection error that reads exactly like the error a spec provoked on purpose.
+- **after.** copilot-app-toolchain-present
+- **blocking.** false. Only the specs that select `qa-fake` need it.
+- **pass.** `self-test ok`, then a model list naming `qa-fake`.
+- **fail.** An assertion from the self-test means the server is broken; fix it
+  before trusting any run that used it. `FAILED: curl 000` means no server is
+  listening on 8765: start one with
+  `qa/tools/qa-fake-model.py serve --port 8765 --log qa/runs/<run-id>/fake-model.jsonl --mode <mode>`.
+- **verified.** 2026-10-06, signals: pass+fail. The fail half was the same query
+  against an idle port. End to end, the same day: a session on `qa-fake` sent one
+  streaming call and got `done` back.
+
+```sh
+qa/tools/qa-fake-model.py self-test
+curl -sf http://127.0.0.1:8765/v1/models || echo "FAILED: curl 000"
 ```

@@ -3,7 +3,7 @@ id: first-turn-is-traced-with-its-subagent
 area: copilot-app/subagents
 runtime: copilot-app
 status: draft
-input: a new Copilot app session on a worktree with the extension in .github/extensions/, first prompt sent through send_session_message
+input: a new target session, first prompt sent through send_session_message
 duration: ~15s
 settling: 25s
 cleanup: keep
@@ -16,16 +16,7 @@ covers:
 
 ## Given
 
-A fresh worktree session in the Copilot app, before its first prompt. Copy `copilot-app/` into the
-worktree as `.github/extensions/dash0-agent-plugin/`. Give the worktree a
-`.copilot/dash0-agent-plugin.local.md` with the target's `otlp_url`, `auth_token`, and `dataset`,
-plus `omit_io: false`, `debug: "true"` and a `debug_file`. The project file replaces the user file
-entirely, so a user-level `omit_io: true` does not leak in.
-
-If the extension is already installed for the user, in `~/.copilot/extensions/`, skip the copy. A
-second copy risks two extensions joining one session and every span arriving twice. Check that the
-installed folder matches `copilot-app/` with `diff -r` instead, and rebuild the binary into the
-bootstrap's cache as `copilot-app/README.md` describes.
+The runner procedure in [../README.md](../README.md), with a real model and without `--omit-io`.
 
 The spec has to use **the first turn**, because that turn is the hard one. The app starts the
 extension when the first prompt is sent, not when the session is created. In the reference run the
@@ -34,8 +25,6 @@ then and is never delivered live, so the turn exists only if the extension rebui
 `session.getEvents()`. A second turn would pass even with that recovery deleted.
 
 ## When
-
-From another session:
 
 ```text
 send_session_message <session-id>:

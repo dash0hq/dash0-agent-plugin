@@ -186,9 +186,10 @@ async function catchUp() {
     let [history, metrics] = await Promise.all([session.getEvents(), usageMetrics()]);
     // A live prompt opened a turn of its own, or the session is already over.
     if (turnOpen || ended) return;
-    // A held prompt can be in the history too. It is the next turn's, not one
-    // to recover.
-    if (held?.event.id) history = history.filter((e) => e.id !== held.event.id);
+    // A held prompt can be in the history too. It opens the next turn, so the
+    // history to recover from ends there; what follows it came live as well.
+    const heldAt = held?.event.id ? history.findIndex((e) => e.id === held.event.id) : -1;
+    if (heldAt >= 0) history = history.slice(0, heldAt);
     let start = -1;
     let closed = false;
     for (let i = history.length - 1; i >= 0; i--) {

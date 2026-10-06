@@ -360,3 +360,17 @@ func TestCopilotAppExtension_lateHistoryEventsStayOutOfTheHeldTurn(t *testing.T)
 	assert.Contains(t, calls[2], `"toolCallId":"t1"`)
 	assert.NotContains(t, calls[4], `"t1"`)
 }
+
+// The history after a held prompt is the held turn's: an event there that the
+// live stream has not delivered yet stays off the recovered first turn, and
+// reaches the held turn when it arrives.
+func TestCopilotAppExtension_historyAfterTheHeldPromptIsTheHeldTurns(t *testing.T) {
+	t.Setenv("LATE", `[{"id":"x2","type":"tool.execution_start","data":{"toolCallId":"t9","toolName":"bash"}},{"type":"session.idle","data":{}}]`)
+	history := `[{"type":"user.message","data":{"content":"hi"}},{"id":"l1","type":"user.message","data":{"content":"second"}},` +
+		`{"type":"tool.execution_start","data":{"toolCallId":"t9","toolName":"bash"}}]`
+	live := `[{"type":"session.idle","data":{}},{"type":"user.message","data":{"content":"second"}}]`
+	calls := runExtensionWithHistory(t, history, live, 5, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.NotContains(t, calls[2], `"t9"`)
+	assert.Contains(t, calls[4], `"toolCallId":"t9"`)
+}

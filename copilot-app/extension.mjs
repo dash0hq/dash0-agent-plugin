@@ -44,6 +44,8 @@ const KEEP = {
   "subagent.started": ["toolCallId", "agentName", "agentDisplayName", "model"],
   "subagent.completed": ["toolCallId", "agentName", "model"],
   "subagent.failed": ["toolCallId", "agentName", "error", "model"],
+  "session.error": ["errorType", "message"],
+  abort: ["reason"],
 };
 // The binary truncates attributes at 16 KB; this only bounds memory and stdin.
 const MAX_STRING = 32 * 1024;
@@ -80,6 +82,11 @@ let buffer = [];
 // Whether a prompt opened the current turn. Events seen before the first prompt
 // (the extension joined mid-turn) have no chat span to hang off.
 let turnOpen = false;
+// The prompt that opened the turn, and the messages the user steered it with.
+// Steering joins the running turn instead of starting one, so its text goes out
+// with turnEnd as part of the turn's input.
+let turnPrompt = "";
+let steered = [];
 let started = false;
 let ended = false;
 
@@ -176,7 +183,7 @@ async function catchUp() {
     for (let i = history.length - 1; i >= 0; i--) {
       const e = history[i];
       if (turnClosed(e)) break;
-      if (e.type === "user.message" && !e.agentId) {
+      if (e.type === "user.message" && !e.agentId && !isSteering(e)) {
         start = i;
         break;
       }
@@ -184,33 +191,53 @@ async function catchUp() {
     if (start < 0) return;
     const prompt = history[start];
     if (Date.now() - Date.parse(prompt.timestamp) > CATCH_UP_WINDOW_MS) return;
-    const earlier = history.slice(start + 1).filter((e) => KEEP[e.type] && !liveIds.has(e.id));
-    for (const e of earlier) if (e.id) replayed.add(e.id);
+    const later = history.slice(start + 1).filter((e) => !liveIds.has(e.id));
+    const earlier = later.filter((e) => KEEP[e.type]);
+    for (const e of later) if (e.id) replayed.add(e.id);
     buffer = [...earlier.map(slim), ...buffer].slice(0, MAX_EVENTS);
-    turnOpen = true;
-    send("userPromptSubmitted", { timestamp: prompt.timestamp, prompt: clip(prompt.data?.content ?? "") });
+    // Steering that arrived live while the history was read follows the
+    // history's own.
+    const live = steered;
+    openTurn(prompt);
+    steered = [...later.filter(isSteering).map((e) => e.data?.content ?? ""), ...live];
   } catch (err) {
     warn(`could not read the session history: ${err?.message ?? err}`);
   } finally {
     liveIds = null;
-    if (closedDuringCatchUp) endTurn(closedDuringCatchUp);
+    if (closedDuringCatchUp) endTurn(closedDuringCatchUp.timestamp, closedDuringCatchUp.aborted);
     closedDuringCatchUp = null;
   }
 }
 
-// Ends the turn, unless catchUp may still recover the one it belongs to.
-function closeTurn(timestamp) {
-  if (liveIds && !turnOpen) closedDuringCatchUp = timestamp;
-  else endTurn(timestamp);
+// A message the user sent into the running turn, rather than one that starts
+// its own (delivery "idle", or "queued" until the turn before it ends).
+const isSteering = (e) => e.type === "user.message" && !e.agentId && e.data?.delivery === "steering";
+
+function openTurn(message) {
+  turnOpen = true;
+  turnPrompt = message.data?.content ?? "";
+  steered = [];
+  send("userPromptSubmitted", { timestamp: message.timestamp, prompt: clip(turnPrompt) });
 }
 
-function endTurn(timestamp) {
+// Ends the turn, unless catchUp may still recover the one it belongs to.
+// aborted is session.idle's flag for a run the user cancelled.
+function closeTurn(timestamp, aborted = false) {
+  if (liveIds && !turnOpen) closedDuringCatchUp = { timestamp, aborted };
+  else endTurn(timestamp, aborted);
+}
+
+function endTurn(timestamp, aborted = false) {
   const events = buffer;
   const open = turnOpen;
+  const payload = { timestamp, events };
+  if (aborted) payload.aborted = true;
+  if (steered.length) payload.prompt = clip([turnPrompt, ...steered].join("\n"));
   buffer = [];
   replayed = new Set();
   turnOpen = false;
-  if (open) send("turnEnd", { timestamp, events });
+  steered = [];
+  if (open) send("turnEnd", payload);
 }
 
 try {
@@ -263,13 +290,16 @@ try {
           // Sub-agent prompts carry an agentId; they are part of the turn
           // already open, not a new one.
           if (event.agentId) return;
+          if (isSteering(event) && (turnOpen || liveIds)) {
+            steered.push(event.data?.content ?? "");
+            return;
+          }
           closedDuringCatchUp = null;
           endTurn(event.timestamp);
-          turnOpen = true;
-          send("userPromptSubmitted", { timestamp: event.timestamp, prompt: clip(event.data?.content ?? "") });
+          openTurn(event);
           return;
         case "session.idle":
-          closeTurn(event.timestamp);
+          closeTurn(event.timestamp, event.data?.aborted === true);
           return;
         case "session.shutdown":
           endSession(event.timestamp);

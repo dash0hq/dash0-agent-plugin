@@ -60,12 +60,13 @@ func TestCopilotAppExtensionForwardsWhatTheAdapterReads(t *testing.T) {
 		"inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens",
 		"model", "isAuto", "content", "parentToolCallId", "toolCallId", "toolName", "arguments",
 		"mcpServerName", "mcpToolName", "success", "result", "error", "agentName",
+		"errorType", "message", "reason",
 	} {
 		assert.Contains(t, ext, `"`+key+`"`, "extension.mjs does not forward data.%s", key)
 	}
 	for _, typ := range []string{
 		"assistant.usage", "assistant.message", "tool.execution_start", "tool.execution_complete",
-		"subagent.started", "subagent.completed", "subagent.failed",
+		"subagent.started", "subagent.completed", "subagent.failed", "session.error",
 	} {
 		assert.Contains(t, ext, `"`+typ+`"`, "extension.mjs does not buffer %s", typ)
 	}

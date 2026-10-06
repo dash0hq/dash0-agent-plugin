@@ -37,7 +37,11 @@ while (!handler) await new Promise((r) => setTimeout(r, 1));
 
 const now = new Date().toISOString();
 handler({ id: "h3", type: "tool.execution_complete", timestamp: now, data: { toolCallId: "t1", success: true } });
-for (const type of process.argv[2].split(",")) handler({ id: "l-" + type, type, timestamp: now, data: {} });
+// Live events: a comma-separated list of types, or a JSON array of events.
+const live = process.argv[2].startsWith("[")
+  ? JSON.parse(process.argv[2])
+  : process.argv[2].split(",").filter(Boolean).map((type) => ({ type, data: {} }));
+for (const [i, e] of live.entries()) handler({ id: "l" + i, timestamp: now, ...e });
 release([
   { id: "h1", type: "user.message", timestamp: now, data: { content: "hi" } },
   { id: "h2", type: "tool.execution_start", timestamp: now, data: { toolCallId: "t1", toolName: "view" } },
@@ -199,4 +203,23 @@ func TestCopilotAppExtension_shutdownDuringCatchUpStaysEnded(t *testing.T) {
 func TestCopilotAppExtension_userExitWaitsForTheFinalSends(t *testing.T) {
 	calls := runExtension(t, "", 5, "user_exit")
 	assert.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "sessionEnd", "hookReturned"}, eventNames(calls))
+}
+
+// A message steered into the running turn is part of that turn's input, not
+// the start of another: one turn goes out, carrying both prompts.
+func TestCopilotAppExtension_steeringStaysInTheTurn(t *testing.T) {
+	calls := runExtension(t, `[{"type":"user.message","data":{"content":"and the tests","delivery":"steering"}},{"type":"session.idle","data":{}}]`, 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[2], `"prompt":"hi\nand the tests"`)
+}
+
+// A cancelled run and the error a turn ended on both reach the binary, which
+// marks the chat span failed.
+func TestCopilotAppExtension_failureReachesTheBinary(t *testing.T) {
+	calls := runExtension(t, `[{"type":"session.error","data":{"errorType":"quota","message":"over","stack":"dropped"}},{"type":"session.idle","data":{"aborted":true}}]`, 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[2], `"aborted":true`)
+	assert.Contains(t, calls[2], `"type":"session.error"`)
+	assert.Contains(t, calls[2], `"errorType":"quota"`)
+	assert.NotContains(t, calls[2], "stack", "only the keys the adapter reads are forwarded")
 }

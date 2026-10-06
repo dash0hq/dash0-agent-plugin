@@ -68,16 +68,23 @@ stdin, as with every other runtime:
 Everything quantitative comes from the session events, so unlike the CLI there
 is no native-OTel file and no launch function:
 
-- **Tokens and model:** `assistant.usage`, one per model round, summed into the
-  turn's `chat` span. Sub-agent rounds are included, so token attribution is
-  flat, as in the CLI.
+- **Tokens and model:** `assistant.usage`, one per model round. The main agent's
+  rounds are summed into the turn's `chat` span, and each sub-agent's into its
+  own `invoke_agent` span, at its own model. Summing a trace counts every token
+  once.
 - **Response:** the main agent's last `assistant.message`.
 - **Tool spans:** `tool.execution_start` and `tool.execution_complete`, with
   their real timings, arguments, results, and MCP server.
 - **Sub-agents:** `subagent.started` and `subagent.completed` become an
   `invoke_agent` span under the `task` tool span that spawned it. Its tools nest
-  beneath it, matched by `parentToolCallId`. The span carries the sub-agent's
-  own model.
+  beneath it, matched by `parentToolCallId`. The span and the sub-agent's tool
+  spans carry the sub-agent's name and its own model.
+- **Failed turns:** a turn that ends on a `session.error`, or that the user
+  aborted (`abort`, or `session.idle` with `aborted`), gives a failed `chat`
+  span with the error. With `omit_io` on, only the error's category goes out,
+  because the message can quote the request.
+- **Steering:** a `user.message` with `delivery: "steering"` joins the running
+  turn. Its text is added to the turn's input instead of starting a new turn.
 
 The tree matches the other runtimes:
 `chat → execute_tool task → invoke_agent explore → execute_tool view`.
@@ -136,10 +143,6 @@ extension forwards.
 - **The binary ships from v0.1.29.** Until that release exists, the bootstrap
   has nothing to download and the extension stays silent. Use the local build
   above.
-- **No per-sub-agent token attribution.** Same as the CLI: a sub-agent's rounds
-  are summed into the parent turn's `chat` span.
-- **The sub-agent's tool spans report the parent's model.** Its `invoke_agent`
-  span reports its own.
 - **No line counts for edits.** The app's edit tools carry no `structuredPatch`.
 - **A turn interrupted by quitting the app** may be lost if the app never
   delivers `session.idle` or `session.shutdown`.

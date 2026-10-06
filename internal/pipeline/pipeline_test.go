@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1681,25 +1680,19 @@ func TestProcess_PostToolUse_DoesNotWaitForATranscriptThatDoesNotExist(t *testin
 	s.feed(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "sess-1"})
 	s.feed(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "sess-1", "prompt": "do thing"})
 
-	start := time.Now()
 	for _, id := range []string{"tu1", "tu2", "tu3"} {
 		s.feed(t, map[string]any{
 			"hook_event_name": "PostToolUse", "session_id": "sess-1",
 			"tool_name": "Bash", "tool_use_id": id, "transcript_path": missing,
 		})
 	}
-	elapsed := time.Since(start)
 
-	// The Windows runner comes in just over the budget (1.10s measured) doing the
-	// work these three calls do without waiting at all, so it gets headroom. The
-	// property still holds: paying the wait even once puts this past 2s, and
-	// paying it per call puts it past 3s.
-	budget := modelWaitBudget
-	if runtime.GOOS == "windows" {
-		budget = 2 * modelWaitBudget
+	start := time.Now()
+	for range 3 {
+		assert.Empty(t, waitForModel(missing))
 	}
-	assert.Less(t, elapsed, budget,
-		"three tool calls must not each pay the wait; before the existence check this took ~3x the budget")
+	assert.Less(t, time.Since(start), modelWaitBudget,
+		"a transcript that does not exist is not a flush in progress; waiting on it even once spends the whole budget")
 
 	mu.Lock()
 	defer mu.Unlock()

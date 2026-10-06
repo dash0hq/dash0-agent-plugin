@@ -126,6 +126,6 @@ Ask whether to write user-level (applies to all projects) or project-level (only
 
 9. Tell the user:
 
-   > Configuration written. The wrapper re-reads this file on every event, so the change takes effect on your next message — no restart needed. **A restart is needed only if you also changed `opencode.json`**, which OpenCode reads once at startup.
+   > Configuration written. The binary re-reads this file on every event, so the change takes effect on your next message — no restart needed. **A restart is needed only if you also changed `opencode.json`**, which OpenCode reads once at startup.
 
    The `dash0: no team configured` warning cannot be silenced. If the user deliberately runs without a team, say so plainly rather than looking for a way to hide it.

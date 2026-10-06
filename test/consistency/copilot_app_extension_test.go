@@ -42,11 +42,15 @@ const live = process.argv[2].startsWith("[")
   ? JSON.parse(process.argv[2])
   : process.argv[2].split(",").filter(Boolean).map((type) => ({ type, data: {} }));
 for (const [i, e] of live.entries()) handler({ id: "l" + i, timestamp: now, ...e });
-release([
-  { id: "h1", type: "user.message", timestamp: now, data: { content: "hi" } },
-  { id: "h2", type: "tool.execution_start", timestamp: now, data: { toolCallId: "t1", toolName: "view" } },
-  { id: "h3", type: "tool.execution_complete", timestamp: now, data: { toolCallId: "t1", success: true } },
-]);
+// The history the extension reads: HISTORY as a JSON array of events, or a
+// first turn still running.
+release(process.env.HISTORY
+  ? JSON.parse(process.env.HISTORY).map((e, i) => ({ id: "x" + i, timestamp: now, ...e }))
+  : [
+      { id: "h1", type: "user.message", timestamp: now, data: { content: "hi" } },
+      { id: "h2", type: "tool.execution_start", timestamp: now, data: { toolCallId: "t1", toolName: "view" } },
+      { id: "h3", type: "tool.execution_complete", timestamp: now, data: { toolCallId: "t1", success: true } },
+    ]);
 await loaded;
 
 // End the session through the hook, as the app does on exit, and mark when the
@@ -130,6 +134,13 @@ func buildFakeBinary(t *testing.T) string {
 // nothing is downloaded and the whole spawn and stdin path is exercised.
 func runExtension(t *testing.T, live string, want int, exitReason string) []string {
 	t.Helper()
+	return runExtensionWithHistory(t, "", live, want, exitReason)
+}
+
+// runExtensionWithHistory is runExtension with the session history the
+// extension reads at startup, as a JSON array of events.
+func runExtensionWithHistory(t *testing.T, history, live string, want int, exitReason string) []string {
+	t.Helper()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not installed")
 	}
@@ -165,7 +176,7 @@ func runExtension(t *testing.T, live string, want int, exitReason string) []stri
 	log := filepath.Join(dir, "calls.log")
 	cmd := exec.Command("node", "driver.mjs", live, strconv.Itoa(want), exitReason)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LOG="+log, "COPILOT_APP_PLUGIN_DATA="+data, "DASH0_VERSION=")
+	cmd.Env = append(os.Environ(), "LOG="+log, "COPILOT_APP_PLUGIN_DATA="+data, "DASH0_VERSION=", "HISTORY="+history)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "driver: %s", out)
 
@@ -222,4 +233,41 @@ func TestCopilotAppExtension_failureReachesTheBinary(t *testing.T) {
 	assert.Contains(t, calls[2], `"type":"session.error"`)
 	assert.Contains(t, calls[2], `"errorType":"quota"`)
 	assert.NotContains(t, calls[2], "stack", "only the keys the adapter reads are forwarded")
+}
+
+// The event order of a first turn whose model request failed at once, recorded
+// from the app on 2026-10-06: the turn had closed, and the error was written,
+// before the extension listened.
+const failedFirstTurn = `[
+  {"type":"user.message","data":{"content":"hi"}},
+  {"type":"assistant.turn_start","data":{}},
+  {"type":"hook.start","data":{"hookType":"errorOccurred"}},
+  {"type":"assistant.turn_end","data":{}},
+  {"type":"hook.start","data":{"hookType":"sessionEnd"}},
+  {"type":"session.error","data":{"errorType":"query","message":"400 unsupported model"}},
+  {"type":"hook.end","data":{"hookType":"sessionEnd"}}`
+
+// A first turn that failed before the extension started is still reported,
+// with the error it ended on.
+func TestCopilotAppExtension_firstTurnThatEndedBeforeTheJoinIsReported(t *testing.T) {
+	calls := runExtensionWithHistory(t, failedFirstTurn+"]", "", 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[1], `"prompt":"hi"`)
+	assert.Contains(t, calls[2], `"errorType":"query"`)
+}
+
+// A reopened session's last turn was reported when it ran, so it is not
+// replayed when the extension starts again.
+func TestCopilotAppExtension_resumedSessionReplaysNothing(t *testing.T) {
+	calls := runExtensionWithHistory(t, failedFirstTurn+`,{"type":"session.resume","data":{}}]`, "", 1, "")
+	assert.Equal(t, []string{"sessionStart"}, eventNames(calls))
+}
+
+// Only a session's first turn can have ended before the extension listened. A
+// finished turn after an earlier one is not this extension's to report.
+func TestCopilotAppExtension_laterFinishedTurnIsNotReplayed(t *testing.T) {
+	history := `[{"type":"user.message","data":{"content":"one"}},{"type":"hook.start","data":{"hookType":"sessionEnd"}},` +
+		`{"type":"user.message","data":{"content":"two"}},{"type":"hook.start","data":{"hookType":"sessionEnd"}}]`
+	calls := runExtensionWithHistory(t, history, "", 1, "")
+	assert.Equal(t, []string{"sessionStart"}, eventNames(calls))
 }

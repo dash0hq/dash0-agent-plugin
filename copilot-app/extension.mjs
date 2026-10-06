@@ -180,15 +180,25 @@ async function catchUp() {
     // A live prompt opened a turn of its own, or the session is already over.
     if (turnOpen || ended) return;
     let start = -1;
+    let closed = false;
     for (let i = history.length - 1; i >= 0; i--) {
       const e = history[i];
       if (turnClosed(e)) break;
-      if (e.type === "user.message" && !e.agentId && !isSteering(e)) {
+      if (isPrompt(e)) {
         start = i;
         break;
       }
     }
-    if (start < 0) return;
+    if (start < 0) {
+      // The first turn can end before the extension listens: a request that
+      // fails at once (an unsupported model, a quota) closes it in
+      // milliseconds. A session whose only prompt is that one, and that was not
+      // resumed, has reported nothing yet, so its closed turn is still ours.
+      const prompts = history.filter(isPrompt);
+      if (prompts.length !== 1 || history.some((e) => e.type === "session.resume")) return;
+      start = history.indexOf(prompts[0]);
+      closed = true;
+    }
     const prompt = history[start];
     if (Date.now() - Date.parse(prompt.timestamp) > CATCH_UP_WINDOW_MS) return;
     const later = history.slice(start + 1).filter((e) => !liveIds.has(e.id));
@@ -200,6 +210,7 @@ async function catchUp() {
     const live = steered;
     openTurn(prompt);
     steered = [...later.filter(isSteering).map((e) => e.data?.content ?? ""), ...live];
+    if (closed) endTurn(history[history.length - 1].timestamp);
   } catch (err) {
     warn(`could not read the session history: ${err?.message ?? err}`);
   } finally {
@@ -212,6 +223,8 @@ async function catchUp() {
 // A message the user sent into the running turn, rather than one that starts
 // its own (delivery "idle", or "queued" until the turn before it ends).
 const isSteering = (e) => e.type === "user.message" && !e.agentId && e.data?.delivery === "steering";
+// A main-agent message that starts a turn.
+const isPrompt = (e) => e.type === "user.message" && !e.agentId && !isSteering(e);
 
 function openTurn(message) {
   turnOpen = true;

@@ -101,7 +101,9 @@ recorded sessions:
 - **The extension starts with the first prompt, not with the session**, so that
   prompt is already in the history when the extension starts listening. The
   extension rebuilds the turn in progress from `session.getEvents()` and
-  removes duplicates by event id.
+  removes duplicates by event id. A first turn whose request fails at once
+  (an unsupported model, a quota) can be over before the extension listens.
+  It is still reported, with its error, unless the session was resumed.
 - **Sub-agent hooks fire into the parent's extension** under the sub-agent's own
   session id. The extension ignores them. A sub-agent's events carry an
   `agentId`, and the main agent's carry none.

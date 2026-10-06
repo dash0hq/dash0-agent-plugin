@@ -137,3 +137,17 @@ func TestEmitAgentSpans_usageOnlyWhenAttributed(t *testing.T) {
 	assert.Equal(t, "60", agent["gen_ai.usage.cache_read.input_tokens"])
 	assert.Equal(t, "gpt-5.6-luna", agent["gen_ai.request.model"])
 }
+
+// An auto-mode sub-agent keeps "auto" as its request and its resolved model as
+// the response, on its invoke_agent span and its tools, as the turn's chat does.
+func TestEmitAgentSpans_autoSubAgentKeepsBothModels(t *testing.T) {
+	turn := subAgentTurn(&Usage{InputTokens: 70, Model: "auto", ResponseModel: "gpt-5.6-luna"})
+	spans := emitted(t, func(cfg otlp.Config) {
+		EmitAgentSpans(turn, testCtx, cfg, "test")
+		EmitToolSpans(turn, testCtx, cfg, "test")
+	})
+	for _, name := range []string{"invoke_agent explore", "execute_tool view"} {
+		assert.Equal(t, "auto", spans[name]["gen_ai.request.model"], name)
+		assert.Equal(t, "gpt-5.6-luna", spans[name]["gen_ai.response.model"], name)
+	}
+}

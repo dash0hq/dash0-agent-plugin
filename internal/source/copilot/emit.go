@@ -99,9 +99,9 @@ func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefi
 		// instead of falling back to the configured agent name.
 		if sa, ok := agents[tc.ParentSpanID]; ok {
 			addAgentIdentity(event, sa)
-			if sa.Model != "" {
-				event["model"] = sa.Model
-				event["response_model"] = sa.Model
+			if req, resp := agentModels(sa); resp != "" {
+				event["model"] = req
+				event["response_model"] = resp
 			}
 		}
 
@@ -119,6 +119,16 @@ func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefi
 			fmt.Fprintf(os.Stderr, "%s: tool span export: %v\n", logPrefix, err)
 		}
 	}
+}
+
+// agentModels is a sub-agent's requested and responding model. Its own usage
+// keeps the request "auto" when auto mode picked the model; otherwise both are
+// the model its subagent events name. Empty when the source reports neither.
+func agentModels(sa SubAgent) (request, response string) {
+	if sa.Usage != nil && sa.Usage.ResponseModel != "" {
+		return sa.Usage.Model, sa.Usage.ResponseModel
+	}
+	return sa.Model, sa.Model
 }
 
 // EmitAgentSpans emits one invoke_agent span per sub-agent the turn spawned,
@@ -139,9 +149,9 @@ func EmitAgentSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPref
 	for _, sa := range turn.Agents {
 		event := map[string]any{"session_id": ctx.SessionID}
 		addAgentIdentity(event, sa)
-		if sa.Model != "" {
-			event["model"] = sa.Model
-			event["response_model"] = sa.Model
+		if req, resp := agentModels(sa); resp != "" {
+			event["model"] = req
+			event["response_model"] = resp
 		} else {
 			if turn.Usage != nil && turn.Usage.Model != "" {
 				event["model"] = turn.Usage.Model

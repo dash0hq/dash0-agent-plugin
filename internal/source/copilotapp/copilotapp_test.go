@@ -249,3 +249,22 @@ func TestTurnError(t *testing.T) {
 		assert.Equal(t, "turn aborted: user_initiated", TurnError([]Event{abort}, map[string]any{"aborted": true}, true))
 	})
 }
+
+// A sub-agent's auto-mode usage keeps the request "auto" on its own usage, and
+// leaves the turn's models alone.
+func TestBuildTurn_autoSubAgentKeepsAuto(t *testing.T) {
+	turn := BuildTurn([]Event{
+		{Type: "subagent.started", Timestamp: "2026-10-02T12:00:00Z",
+			Data: map[string]any{"toolCallId": "t1", "agentName": "explore", "model": "gpt-5.6-luna"}},
+		{Type: "assistant.usage", Timestamp: "2026-10-02T12:00:01Z", AgentID: "a1",
+			Data: map[string]any{"model": "gpt-5.6-luna", "isAuto": true, "inputTokens": 10.0, "parentToolCallId": "t1"}},
+	}, time.Now())
+	require.NotNil(t, turn)
+	require.Len(t, turn.Agents, 1)
+	require.NotNil(t, turn.Agents[0].Usage)
+	assert.Equal(t, "auto", turn.Agents[0].Usage.Model)
+	assert.Equal(t, "gpt-5.6-luna", turn.Agents[0].Usage.ResponseModel)
+	if turn.Usage != nil {
+		assert.Empty(t, turn.Usage.Model)
+	}
+}

@@ -212,15 +212,17 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 			u.CacheReadInputTokens += e.num("cacheReadTokens")
 			u.CacheCreationInputTokens += e.num("cacheWriteTokens")
 			u.ReasoningOutputTokens += e.num("reasoningTokens")
-			if m := e.str("model"); m != "" && !e.isSubAgent() {
+			// A sub-agent's models go on its own usage; one the turn never saw
+			// start leaves the turn's alone.
+			if m := e.str("model"); m != "" && (u != &usage || !e.isSubAgent()) {
 				// Auto mode resolves per call. What was asked for is "auto",
 				// which is what the CLI reports too; the responding model is the
 				// priceable one.
-				usage.Model = m
+				u.Model = m
 				if auto, _ := e.Data["isAuto"].(bool); auto {
-					usage.Model = "auto"
+					u.Model = "auto"
 				}
-				usage.ResponseModel = m
+				u.ResponseModel = m
 			}
 
 		case "assistant.message":

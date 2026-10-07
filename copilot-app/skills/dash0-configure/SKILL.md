@@ -1,6 +1,6 @@
 ---
 name: dash0-configure
-description: 'Configure the Dash0 telemetry extension for the GitHub Copilot app — write the OTLP URL, auth token, team and dataset to ~/.copilot/dash0-agent-plugin.local.md (or the project-local equivalent). Use when the user wants to set up Dash0, enable telemetry, paste credentials, fix an inactive install, or act on a "dash0: no team configured" message — spans carry no dash0.team.name until the team name is set.'
+description: 'Configure the Dash0 telemetry extension for the GitHub Copilot app — write the OTLP URL, auth token, team and dataset to ~/.copilot/dash0-agent-plugin.local.md. Use when the user wants to set up Dash0, enable telemetry, paste credentials, fix an inactive install, or act on a "dash0: no team configured" message — spans carry no dash0.team.name until the team name is set.'
 ---
 
 # Configure Dash0 for the Copilot app
@@ -34,17 +34,12 @@ secret-looking environment variables before they reach an extension, so the
 config file is the only dependable place for the token. The Copilot CLI plugin
 reads the same files, so one setup covers both.
 
-Ask whether to write user-level (applies to all projects) or project-level (only
-the current workspace — takes precedence over the user-level file entirely, does
-not merge). Default to user-level unless the user asks for project-only. Below,
-`<target>` is the file you settled on. On Windows the user-level file is
-`%USERPROFILE%\.copilot\dash0-agent-plugin.local.md`.
-
-> [!WARNING]
-> A project-level file takes over the auth token for every session in that
-> workspace. If that token is wrong or scoped to a different organization,
-> exports fail as a silent 401. Prefer user-level unless the user needs a
-> different dataset or team for one project.
+Write the user-level file, `~/.copilot/dash0-agent-plugin.local.md`
+(`%USERPROFILE%\.copilot\dash0-agent-plugin.local.md` on Windows). Below, that
+file is `<target>`. Do not offer a project-level file: the app runs each session
+in a git worktree it creates, so a file written there lasts only this session,
+and git would see the token in it. If the user asks for settings for one
+project only, explain why this skill writes only the user-level file.
 
 1. If `<target>` exists, read it, show current values with `auth_token` masked
    (last 4 chars), and ask before overwriting. If they decline, stop.
@@ -61,13 +56,13 @@ not merge). Default to user-level unless the user asks for project-only. Below,
 
    **When telemetry already works,** never ask for the token again. Find out
    where it currently comes from, because the answer decides what `<target>`
-   must contain. Read `<target>`, and read the other level's file too (the
-   user-level one if the target is project-level, and the reverse).
+   must contain. Read `<target>`, and the project-level file if the workspace
+   has one.
 
    | Where the credentials are now | What to write |
    |---|---|
    | In `<target>` | Carry its `otlp_url` and `auth_token` lines over verbatim. |
-   | In the other level's file, and the target is a different level | Copy that file's `otlp_url` and `auth_token` into `<target>` verbatim. The two files do not merge, so a target without them turns telemetry off on the next session. Tell the user the token will exist in a second file, and stop if they would rather set the option user-level instead. |
+   | In the project-level file | It overrides `<target>` entirely, so a change to `<target>` has no effect in this workspace. Tell the user, and stop. |
    | In neither file | They come from `DASH0_*` environment variables. Write neither key, and tell the user where the values live so they know the file is not the source of truth. If the session still says `dash0: telemetry is not active`, the app stripped them: write both keys into `<target>` instead. |
 
 3. Ask for the recommended values. These are what most installs are missing, so

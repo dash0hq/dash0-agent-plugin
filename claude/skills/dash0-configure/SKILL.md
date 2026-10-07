@@ -16,6 +16,8 @@ The user wants to configure or reconfigure the Dash0 plugin. Two common shapes:
 
 ## Before you start
 
+When telemetry is connected and only `TEAM_NAME` is missing, use **Team-only recovery** below and stop. Do not enter the full setup workflow.
+
 If the user prefers OS keychain–backed storage for the auth token over a plaintext file, direct them to `/plugin` → **Installed** → **dash0** → **Configure** instead of running this skill, then stop.
 
 Note the precedence order (highest first) so the user isn't surprised when a value doesn't apply:
@@ -30,6 +32,17 @@ If the user already has values set via the UI or managed settings, the file this
 
 > [!IMPORTANT]
 > `auth_token` follows that list like every other key: a token in `pluginConfigs` or managed settings wins over one in the file. Earlier releases were the other way round, because the wrapper loaded the file's token into the variable the UI writes. So writing `auth_token` for a user on a managed rollout does not override the org token — it has no effect until the UI value is cleared. Say that rather than promising an override.
+
+## Team-only recovery
+
+Use this path when telemetry is already connected and only the team name is missing, including in Claude Desktop. Keychain-backed authentication does not prevent this file edit. Do not redirect this recovery to Plugin UI. This path does not establish Desktop support for the full setup workflow or identify its reporter client.
+
+1. Respect higher-precedence `team_name` values in managed or user `pluginConfigs`. If one is set, a file edit cannot override it. Explain that conflict and stop without clearing or changing those settings. Values for other keys do not prevent a team-only edit.
+2. Select the active project file, `.claude/dash0-agent-plugin.local.md`, if it exists. Otherwise select `~/.claude/dash0-agent-plugin.local.md`, or `%USERPROFILE%\.claude\dash0-agent-plugin.local.md` on Windows. Do not ask for a scope or create a project file. The project file completely shadows the user file, so editing the user file while a project file exists has no effect.
+3. Ask only for the team name. Do not ask about dataset, other options, or credentials. Do not retrieve, copy, move, or display credentials from another file, Plugin UI, managed settings, environment, or keychain.
+4. Read the selected file for an in-place edit without displaying its contents. Preserve all other settings and content verbatim. Update the first `team_name` entry in its YAML frontmatter, since the reader uses the first occurrence, or add it before the closing `---` if absent. If no file exists, create a user-level file containing only YAML frontmatter with `team_name: "<TEAM_NAME>"`. Do not add credential keys.
+5. Show only the target path and the proposed `team_name` change. Ask for confirmation, then apply that edit. Preserve existing file permissions. For a new file, restrict it to its owner as described in full workflow step 6.
+6. Tell the user the team name was saved. In Claude Code, run `/reload-plugins`. Verify the next session's team warning before claiming the change took effect. Do not promise that reopening a Desktop session reloads the file. Stop here.
 
 ## Scope
 

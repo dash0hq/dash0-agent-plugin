@@ -676,6 +676,9 @@ func TestProcess_SessionStart_NoTeamWarning(t *testing.T) {
 		msg := warningOf(t, s.feed(t, sessionStart()))
 		assert.Contains(t, msg.ModelContext, "dash0-configure")
 		assert.Contains(t, msg.ModelContext, "TEAM_NAME")
+		assert.Contains(t, msg.ModelContext, "team-only recovery")
+		assert.Contains(t, msg.ModelContext, "preserve all other settings")
+		assert.Contains(t, msg.ModelContext, "without asking for or copying credentials")
 	})
 
 	t.Run("silent when the team name is set", func(t *testing.T) {

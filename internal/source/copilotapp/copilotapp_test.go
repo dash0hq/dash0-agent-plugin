@@ -324,3 +324,30 @@ func TestBuildTurn_responseIgnoresALaterSubAgentMessage(t *testing.T) {
 	require.NotNil(t, turn)
 	assert.Equal(t, "main", turn.Usage.ResponseText)
 }
+
+// Usage from a sub-agent the turn never saw start keeps its tokens on the chat
+// span, but the turn's model is still the main agent's, from its reply.
+func TestBuildTurn_unknownSubAgentUsageKeepsTheMainModel(t *testing.T) {
+	turn := BuildTurn([]Event{
+		{Type: "assistant.usage", Timestamp: "2026-10-02T12:00:00Z", AgentID: "a1",
+			Data: map[string]any{"model": "gpt-5.6-luna", "inputTokens": 10.0, "parentToolCallId": "gone"}},
+		{Type: "assistant.message", Timestamp: "2026-10-02T12:00:01Z",
+			Data: map[string]any{"content": "done", "model": "claude-opus-5.5"}},
+	}, time.Now())
+	require.NotNil(t, turn)
+	assert.Equal(t, int64(10), turn.Usage.InputTokens)
+	assert.Equal(t, "claude-opus-5.5", turn.Usage.Model)
+	assert.Equal(t, "claude-opus-5.5", turn.Usage.ResponseModel)
+}
+
+// The main agent's usage may arrive without a model; its reply still names one.
+func TestBuildTurn_usageWithoutModelTakesTheReplyModel(t *testing.T) {
+	turn := BuildTurn([]Event{
+		{Type: "assistant.usage", Timestamp: "2026-10-02T12:00:00Z", Data: map[string]any{"inputTokens": 10.0}},
+		{Type: "assistant.message", Timestamp: "2026-10-02T12:00:01Z",
+			Data: map[string]any{"content": "done", "model": "claude-opus-5.5"}},
+	}, time.Now())
+	require.NotNil(t, turn)
+	assert.Equal(t, "claude-opus-5.5", turn.Usage.Model)
+	assert.False(t, turn.Usage.NoTokens)
+}

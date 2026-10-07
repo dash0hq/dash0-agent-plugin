@@ -323,7 +323,7 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 		a.Usage = agentUsage[a.CallID]
 	}
 
-	if !sawUsage && usage.Model == "" {
+	if usage.Model == "" {
 		usage.Model, usage.ResponseModel = messageModel, messageModel
 	}
 	usage.NoTokens = !sawUsage

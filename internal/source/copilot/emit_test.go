@@ -136,6 +136,19 @@ func TestEmitToolSpans_cliSubAgentToolNamesTheSubAgent(t *testing.T) {
 	assert.Equal(t, "claude-opus-5.5", view["gen_ai.request.model"])
 }
 
+// The child spans carry the turn's working directory, as the chat span does.
+func TestEmit_childSpansCarryTheWorkingDirectory(t *testing.T) {
+	turn := subAgentTurn(nil)
+	turn.Cwd = "/work/repo"
+	spans := emitted(t, func(cfg otlp.Config) {
+		EmitAgentSpans(turn, testCtx, cfg, "test")
+		EmitToolSpans(turn, testCtx, cfg, "test")
+	})
+	for _, name := range []string{"invoke_agent explore", "execute_tool task", "execute_tool view"} {
+		assert.Equal(t, "/work/repo", spans[name]["process.working_directory"], name)
+	}
+}
+
 func TestEmitAgentSpans_usageOnlyWhenAttributed(t *testing.T) {
 	spans := emitted(t, func(cfg otlp.Config) { EmitAgentSpans(subAgentTurn(nil), testCtx, cfg, "test") })
 	assert.NotContains(t, spans["invoke_agent explore"], "gen_ai.usage.input_tokens",

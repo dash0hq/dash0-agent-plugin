@@ -86,6 +86,7 @@ type Turn struct {
 	Usage  *Usage
 	Tools  []ToolCall
 	Agents []SubAgent
+	Cwd    string // the hook payload's cwd, for the child spans' process.working_directory
 }
 
 // otelSpan is one native-OTel span record belonging to this conversation.

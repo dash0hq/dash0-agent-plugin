@@ -129,6 +129,7 @@ func run() error {
 	// for these to hang off.
 	if turn != nil && turnCtx != nil && turnCtx.TraceID != "" {
 		// Agents first: a sub-agent's tools parent onto its invoke_agent span.
+		turn.Cwd, _ = event["cwd"].(string)
 		copilot.EmitAgentSpans(turn, turnCtx, cfg, name)
 		copilot.EmitToolSpans(turn, turnCtx, cfg, name)
 	}

@@ -74,6 +74,9 @@ func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefi
 			"session_id": ctx.SessionID,
 			"tool_name":  tc.Name,
 		}
+		if turn.Cwd != "" {
+			event["cwd"] = turn.Cwd
+		}
 		// Native arguments are a JSON string; decode so extractors (command
 		// family, skill name) see the same map shape hooks deliver elsewhere.
 		var args map[string]any
@@ -150,6 +153,9 @@ func agentModels(sa SubAgent) (request, response string) {
 func EmitAgentSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefix string) {
 	for _, sa := range turn.Agents {
 		event := map[string]any{"session_id": ctx.SessionID}
+		if turn.Cwd != "" {
+			event["cwd"] = turn.Cwd
+		}
 		addAgentIdentity(event, sa)
 		if req, resp := agentModels(sa); resp != "" {
 			event["model"] = req

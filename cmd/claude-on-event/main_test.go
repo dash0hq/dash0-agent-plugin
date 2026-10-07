@@ -573,7 +573,10 @@ func TestSessionStartHintWhenTeamMissing(t *testing.T) {
 	assert.Contains(t, resp["systemMessage"], "no team configured")
 	// The pipeline names the missing attribute; this entrypoint adds where to set
 	// it, and tells the agent to offer the skill that does it.
-	assert.Contains(t, resp["systemMessage"], "Set Team Name via /plugin → Configure, then /reload-plugins. If the warning remains, ask Claude to run the dash0-configure skill.")
+	for _, part := range []string{"dash0-configure", "/reload-plugins", "new session"} {
+		assert.Contains(t, resp["systemMessage"], part)
+	}
+	assert.NotContains(t, resp["systemMessage"], "→ Configure")
 	assert.Contains(t, resp["additionalContext"], "dash0-configure")
 }
 

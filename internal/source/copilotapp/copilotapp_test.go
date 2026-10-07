@@ -245,6 +245,12 @@ func TestTurnError(t *testing.T) {
 		sub.AgentID = "a1"
 		assert.Empty(t, TurnError([]Event{sub}, map[string]any{}, false))
 	})
+	t.Run("an error with no message or category", func(t *testing.T) {
+		bare := Event{Type: "session.error", Timestamp: ts, Data: map[string]any{"errorType": "quota"}}
+		assert.Equal(t, "quota", TurnError([]Event{bare}, map[string]any{}, false))
+		bare.Data = map[string]any{}
+		assert.Equal(t, "error", TurnError([]Event{bare}, map[string]any{}, false))
+	})
 	t.Run("an aborted turn", func(t *testing.T) {
 		assert.Equal(t, "turn aborted", TurnError([]Event{reply}, map[string]any{"aborted": true}, true))
 		abort := Event{Type: "abort", Timestamp: ts, Data: map[string]any{"reason": "user_initiated"}}
@@ -289,4 +295,32 @@ func TestBuildTurn_turnWithoutUsageNamesTheModelAndNoTokens(t *testing.T) {
 	for k := range event {
 		assert.NotContains(t, k, "token", "no usage was seen, so no count is known")
 	}
+}
+
+// parentToolCallId is deprecated. Without it, a sub-agent's usage and tools
+// still find their sub-agent through agentId.
+func TestBuildTurn_subAgentFoundByAgentID(t *testing.T) {
+	end := time.Date(2026, 10, 2, 12, 54, 40, 0, time.UTC)
+	want := BuildTurn(loadFixture(t), end)
+	events := loadFixture(t)
+	for _, e := range events {
+		delete(e.Data, "parentToolCallId")
+	}
+	got := BuildTurn(events, end)
+	require.NotNil(t, got)
+	require.Len(t, got.Agents, 1)
+	assert.Equal(t, want.Usage, got.Usage)
+	assert.Equal(t, want.Agents[0].Usage, got.Agents[0].Usage)
+	assert.Equal(t, want.Tools, got.Tools)
+}
+
+// The turn's response is the main agent's, even when a sub-agent replies last.
+func TestBuildTurn_responseIgnoresALaterSubAgentMessage(t *testing.T) {
+	turn := BuildTurn([]Event{
+		{Type: "assistant.message", Timestamp: "2026-10-02T12:00:00Z", Data: map[string]any{"content": "main"}},
+		{Type: "assistant.message", Timestamp: "2026-10-02T12:00:01Z", AgentID: "a1",
+			Data: map[string]any{"content": "sub", "parentToolCallId": "t1"}},
+	}, time.Now())
+	require.NotNil(t, turn)
+	assert.Equal(t, "main", turn.Usage.ResponseText)
 }

@@ -171,14 +171,26 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 
 	// A sub-agent's events name the `task` call that spawned it. Collect those
 	// first so its tools nest under its invoke_agent span whatever the order.
+	// parentToolCallId is deprecated, so fall back to the agentId its
+	// subagent.started carries.
 	spawned := map[string]bool{}
+	agentCall := map[string]string{}
 	for _, e := range events {
 		if e.Type == "subagent.started" && e.str("toolCallId") != "" {
 			spawned[e.str("toolCallId")] = true
+			if e.AgentID != "" {
+				agentCall[e.AgentID] = e.str("toolCallId")
+			}
 		}
 	}
+	parentCall := func(e Event) string {
+		if ptc := e.str("parentToolCallId"); ptc != "" {
+			return ptc
+		}
+		return agentCall[e.AgentID]
+	}
 	parentFor := func(e Event) string {
-		ptc := e.str("parentToolCallId")
+		ptc := parentCall(e)
 		switch {
 		case ptc == "":
 			return "" // main agent → the chat span
@@ -202,7 +214,7 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 		switch e.Type {
 		case "assistant.usage":
 			u := &usage
-			if ptc := e.str("parentToolCallId"); spawned[ptc] {
+			if ptc := parentCall(e); spawned[ptc] {
 				if agentUsage[ptc] == nil {
 					agentUsage[ptc] = &copilot.Usage{}
 				}

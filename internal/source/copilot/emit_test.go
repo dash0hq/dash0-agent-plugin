@@ -123,6 +123,19 @@ func TestEmitToolSpans_subAgentToolNamesTheSubAgent(t *testing.T) {
 	assert.Equal(t, "claude-opus-5.5", task["gen_ai.request.model"])
 }
 
+// On the CLI, a sub-agent has no model or usage of its own. Its tools still
+// name it, as on the other runtimes, and keep the turn's model.
+func TestEmitToolSpans_cliSubAgentToolNamesTheSubAgent(t *testing.T) {
+	turn := subAgentTurn(nil)
+	turn.Agents[0].Model = ""
+	spans := emitted(t, func(cfg otlp.Config) { EmitToolSpans(turn, testCtx, cfg, "test") })
+
+	view := spans["execute_tool view"]
+	assert.Equal(t, "explore", view["gen_ai.agent.name"])
+	assert.Equal(t, "c1", view["gen_ai.agent.id"])
+	assert.Equal(t, "claude-opus-5.5", view["gen_ai.request.model"])
+}
+
 func TestEmitAgentSpans_usageOnlyWhenAttributed(t *testing.T) {
 	spans := emitted(t, func(cfg otlp.Config) { EmitAgentSpans(subAgentTurn(nil), testCtx, cfg, "test") })
 	assert.NotContains(t, spans["invoke_agent explore"], "gen_ai.usage.input_tokens",

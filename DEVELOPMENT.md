@@ -1,5 +1,75 @@
 # Development
 
+## Start here
+
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for event flow, package ownership and
+contracts to preserve. [AGENTS.md](AGENTS.md) is the short repository guide for
+coding agents; the same placement and verification rules apply to human contributors.
+
+Use the Go version declared in `go.mod`. `make go-version-check` checks that
+the Docker test harness uses the same version. The Makefile uses Bash and pins
+the lint tools it installs into `bin/`. Python 3 runs the diagnostic-script tests.
+
+## Coding conventions
+
+- Format Go with `make fmt`. The lint configuration also checks `goimports`,
+  with `github.com/dash0hq/` as the local import prefix. `.golangci.yml` is the
+  source of truth for enabled checks; `.editorconfig` defines whitespace.
+- Follow the SPDX copyright and license headers in existing Go and shell files
+  when adding source files.
+- Keep CLI wiring separate from runtime parsing. Use existing `harness` option
+  accessors and `pipeline` session helpers instead of duplicating precedence or
+  path validation in an entrypoint.
+- Return errors with operation context and wrap underlying errors with `%w`.
+  At the observational hook boundary, report errors on stderr and preserve the
+  fail-open exit contract. Do not print debugging text on stdout where the runtime
+  expects a structured hook response.
+- Test filesystem and environment behavior with temporary directories and
+  isolated environment variables. Reset the harness config cache when a test
+  simulates a new hook process. Use explicit times where existing APIs accept
+  `now`, and mock collectors rather than sending unit tests to Dash0.
+- Add regression cases that distinguish the old behavior from the intended
+  behavior. For attribution changes, cover turn boundaries or sub-agent reuse;
+  for privacy changes, inspect exported content, not just successful delivery.
+- Treat Windows and macOS as supported targets, not optional ports. Check path
+  handling, PowerShell bootstraps and build-tagged code when a change touches
+  platform behavior. Linux tests cannot establish native Windows behavior.
+- Update documentation alongside observable behavior. Preserve the distinction
+  between measured data, absent data and inference in telemetry documentation.
+
+## Verification
+
+Start with the affected package, for example `go test ./internal/source/codex/`.
+Then select the checks that cover the changed contract:
+
+| Command | Coverage |
+| --- | --- |
+| `make build` | All ordinary Go packages compile |
+| `make test` | Python diagnostic tests and Go tests with race detection and coverage |
+| `make lint` | Go and shell lint, Go/Docker version agreement, release-pin agreement |
+| `make ci` | The local lint and test targets above, not every hosted CI job |
+| `GOOS=windows make golangci-lint`, `GOOS=darwin make golangci-lint` | Static checks for platform-specific Go code |
+| `./test/contracts/run.sh <name>` | Install/configuration, bootstrap or release contracts; see [test/contracts/README.md](test/contracts/README.md) for names and prerequisites |
+| `make test-e2e` | Build-tagged integration tests, including live agent canaries |
+
+Run contract scripts serially in a disposable environment with port 4319 free.
+They share fixed `/tmp` paths and delete their scratch directories, so concurrent
+runs can overwrite each other's state or use the wrong mock collector.
+
+The full E2E suite needs agent CLIs and credentials. Claude, Codex and Copilot
+live canaries fail when their credentials are missing, and live runs consume
+provider budget. Do not run them as a credential-free smoke test. Use a targeted
+`-run` filter for deterministic E2E cases; the runtime developer guides document
+examples and setup. Hosted CI runs E2E on Linux and Windows and ordinary Go tests
+on Linux, macOS and Windows. `.github/workflows/ci.yml` is the complete CI definition.
+
+For live product QA, read [qa/AGENTS.md](qa/AGENTS.md) and `qa/setup.md` before
+running a spec. To test unreleased Go changes, select the driver's working-tree
+mode documented there: `QA_SWAP_BINARY=1` for Claude, `QA_CODEX_BINARY=working-tree`,
+`QA_COPILOT_BINARY=working-tree`, or `QA_CURSOR_BINARY=working-tree`. The driver
+builds into the cache it actually uses; manually sideloading a binary into your
+normal development cache does not select it for the isolated QA runs.
+
 ## Testing OpenCode V2
 
 ```bash
@@ -199,6 +269,7 @@ Building, sideloading, and running local changes is documented per runtime:
 - **Cursor** — [cursor/README.md](./cursor/README.md)
 - **OpenAI Codex** — [codex/README.md](./codex/README.md)
 - **OpenCode V2** — [opencode-v2/README.md](./opencode-v2/README.md)
+- **GitHub Copilot CLI** — [copilot/README.md](./copilot/README.md)
 
 ## Telemetry attributes
 

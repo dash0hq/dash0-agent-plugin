@@ -32,7 +32,8 @@ func setupNudge(cfg otlp.Config) (Message, bool) {
 	return Message{
 		UserText: NoTeamPrefix + " — spans carry no dash0.team.name.",
 		ModelContext: "The Dash0 agent plugin is running but TEAM_NAME is unset, so its spans cannot be " +
-			"attributed to a team. The dash0-configure skill collects the value and writes the config file. " +
+			"attributed to a team. Use the dash0-configure skill's team-only recovery to collect only the " +
+			"team name and preserve all other settings without asking for or copying credentials. " +
 			"Offer to run it once, then leave the subject alone for the rest of this session unless the user " +
 			"brings it up.",
 	}, true

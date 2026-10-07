@@ -86,6 +86,8 @@ NONE = USER_CONFIG + ".qa-none"
 
 def write_config(path, config, run_dir, omit_io):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # The mode above applies only to a new file; an existing one keeps its own.
+    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as handle:
         handle.write("---\n"
                      f'otlp_url: "{config["ingestUrl"]}"\n'
@@ -135,6 +137,15 @@ def swap_in(args, config):
 
 
 def prepare(args, config):
+    # The session gets its own config here, so a swapped-in user config goes
+    # back whether or not this succeeds.
+    try:
+        return prepare_session(args, config)
+    finally:
+        restore()
+
+
+def prepare_session(args, config):
     cwd = os.path.abspath(os.path.expanduser(args.session_cwd))
     if not os.path.isdir(cwd):
         print(f"{cwd} does not exist. Create the session in the app first.", file=sys.stderr)
@@ -174,9 +185,7 @@ def prepare(args, config):
     os.makedirs(run_dir, exist_ok=True)
     path = os.path.join(cwd, ".copilot", "dash0-agent-plugin.local.md")
     write_config(path, config, run_dir, args.omit_io)
-    # The session has its own config now, so a swapped-in one goes back. A
-    # kickoff run started before prepare, and swap-in already marked when.
-    restore()
+    # A kickoff run started before prepare, and swap-in already marked when.
     swapped = os.path.join(run_dir, "swapped-in")
     if os.path.exists(swapped):
         os.remove(swapped)

@@ -91,7 +91,7 @@ func printSessionMessage(event map[string]any, result pipeline.Result, cfg otlp.
 		// The pipeline names the missing attribute; where to set it is per-agent, so
 		// the route lives here.
 		if hookEvent == "SessionStart" && strings.HasPrefix(text, pipeline.NoTeamPrefix) {
-			text += " Set Team Name via /plugin → Configure."
+			text += " Ask Claude to run the dash0-configure skill to set Team Name, then run /reload-plugins and start a new session to check."
 		}
 		if text != "" {
 			texts = append(texts, text)

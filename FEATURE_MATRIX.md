@@ -81,18 +81,20 @@ five runtimes.
 
 | | Claude Code | Cursor | Codex | Copilot CLI |
 |---|---|---|---|---|
-| Plugin UI (`/plugin → Configure`) | Yes (token → OS keychain) | No | No | No |
-| `pluginConfigs` in `settings.json` | Yes (user + project) | No | No | No |
+| Plugin UI (`/plugin → Configure`) | CLI: Yes (token → OS keychain); Desktop: see caveat below | No | No | No |
+| `pluginConfigs` in `settings.json` | CLI: user + managed + `--settings`; project ignored since v2.1.207 | No | No | No |
 | `.local.md` config file | Yes (project > user) | Yes (project > user) | Yes (project > user) | Yes (global only) |
 | `DASH0_*` env fallback (non-secret) | Yes (after `CLAUDE_PLUGIN_OPTION_*`) | Yes | Yes | Yes |
 
 Precedence, highest wins:
 
-- **Claude Code:** `settings.json` (project → user) → `.local.md` (project → user) → `DASH0_*`
+- **Claude Code CLI:** `pluginConfigs` (managed and user settings; `--settings` is also read) → `.local.md` (project file if present, else user) → `DASH0_*`. Project `.claude/settings.json` and `.claude/settings.local.json` do not supply `pluginConfigs` in v2.1.207+; project `enabledPlugins` is still honored.
 - **Cursor / Codex:** `.local.md` (project → user) → `DASH0_*`
 - **Copilot CLI:** `.local.md` (global only) → `DASH0_*`
 
 Config files never merge across scopes: if a project file exists, the user file is ignored entirely.
+
+Claude Desktop has a documented plugin identity mismatch with marketplace-keyed Plugin UI configuration. Use the `.local.md` file for `team_name` and verify in a new session; Desktop end-to-end behavior is not verified here. See the [Claude configuration guide](.claude-plugin/README.md#configuration) for exact CLI identities, reload steps, and the config-file workaround.
 
 ## Transferred span properties
 

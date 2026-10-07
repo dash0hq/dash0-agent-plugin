@@ -21,8 +21,10 @@ before changing package ownership or event processing, and
 - Preserve privacy defaults and credential precedence. Use the shared `harness`
   configuration accessors rather than adding independent environment lookups.
   When adding a user-facing plugin option, update Claude's `userConfig` in
-  `.claude-plugin/plugin.json` and its option table in `.claude-plugin/README.md`;
-  hosted consistency checks enforce both.
+  `.claude-plugin/plugin.json` and its option table in `.claude-plugin/README.md`.
+  The hosted userConfig check greps only `cmd/claude-on-event/main.go` and
+  `internal/harness/harness.go` for literal accessor keys, so it does not cover
+  the option table or options read elsewhere.
 - Each hook runs in a new process. Session state on disk, event ordering, and
   concurrent hook invocations matter; do not replace cross-event state with
   process-local variables.

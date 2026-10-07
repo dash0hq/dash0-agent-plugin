@@ -17,7 +17,8 @@ Runtime hook registration
 
 The bootstraps download and verify a release on a cache miss. A source checkout
 does not automatically run the Go code in that checkout. For local development,
-build to the exact cache path documented in the runtime's developer README.
+follow the local-development steps in the runtime's developer README. They
+differ per runtime, and the cache path depends on how the plugin was installed.
 
 Entrypoints read one JSON payload with `pipeline.ReadEvent`. Claude feeds its
 already canonical event shape into the pipeline. Cursor, Codex, and Copilot
@@ -47,6 +48,9 @@ entrypoint after the pipeline processes the turn.
 | `<runtime>/` and runtime manifest directories | Shipped bootstraps, registrations, commands, skills and user documentation | Installation or runtime discovery changes |
 | `scripts/`, `.github/workflows/` | Repository build/release tooling and CI | Verification or release mechanics change |
 | `internal/demo/`, `cmd/demo/` | Synthetic demo telemetry | Demo data or generation changes, not production hook processing |
+| `internal/version/` | The `Version` variable, stamped at build time by GoReleaser through ldflags. The source value is `dev` | Almost never. Release versions come from `scripts/version.sh`, not from this file |
+| `test/` | E2E, contract, consistency and capture tests | A test of a hook, install or release contract is added or changed |
+| `qa/` | Live QA specs, drivers and learnings, run through the engineering plugin | Live product QA changes; follow [qa/AGENTS.md](qa/AGENTS.md) |
 
 These are placement guidelines, not a claim of strict dependency isolation.
 The pipeline's canonical vocabulary comes from Claude, and it still calls
@@ -81,8 +85,13 @@ The runtime developer READMEs and `qa/learnings/` explain the observed limitatio
   `SessionEnd` removes the pipeline's per-session scratch directory. Copilot's
   session-start markers and native-OTel consumption cursors live outside it and
   must survive that cleanup. Codex exposes no `SessionEnd`, so this path does not
-  reclaim its scratch state. Handle ordering and agent reuse explicitly; a session
-  is not necessarily one turn or one process.
+  reclaim its scratch state. `SessionEnd` is not the only deleter. On Copilot,
+  `cmd/copilot-on-event` removes the scratch directory of a suppressed session,
+  and `copilot.SweepOldSessionDirs` runs at `SessionStart` and deletes any marked
+  session directory idle for more than `staleFileTTL`, a live idle session
+  included. Cross-turn state kept in the scratch directory must survive losing
+  the directory. Handle ordering and agent reuse explicitly; a session is not
+  necessarily one turn or one process.
 - Session IDs reach filesystem paths. Reuse the existing safe-ID helpers before
   accessing or deleting session directories, and preserve runtime-specific
   reserved-directory protections.

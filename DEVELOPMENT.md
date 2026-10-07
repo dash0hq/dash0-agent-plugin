@@ -12,9 +12,10 @@ the lint tools it installs into `bin/`. Python 3 runs the diagnostic-script test
 
 ## Coding conventions
 
-- Format Go with `make fmt`. The lint configuration also checks `goimports`,
-  with `github.com/dash0hq/` as the local import prefix. `.golangci.yml` is the
-  source of truth for enabled checks; `.editorconfig` defines whitespace.
+- Format Go with `make fmt`, which runs `go fmt`. The lint configuration also
+  checks `goimports`, with `github.com/dash0hq/` as the local import prefix, and
+  `make golangci-lint-fix` applies that grouping. `.golangci.yml` is the source
+  of truth for enabled checks; `.editorconfig` defines whitespace.
 - Follow the SPDX copyright and license headers in existing Go and shell files
   when adding source files.
 - Keep CLI wiring separate from runtime parsing. Use existing `harness` option
@@ -58,8 +59,9 @@ runs can overwrite each other's state or use the wrong mock collector.
 
 The full E2E suite needs agent CLIs and credentials. Claude, Codex and Copilot
 live canaries fail when their credentials are missing, and live runs consume
-provider budget. Do not run them as a credential-free smoke test. Use a targeted
-`-run` filter for deterministic E2E cases; the runtime developer guides document
+provider budget. Do not run them as a credential-free smoke test. `make test-e2e`
+takes no filter, so run a deterministic case directly with
+`go test -tags=e2e -run <Name> ./test/e2e/`. The runtime developer guides document
 examples and setup. Hosted CI runs E2E on Linux and Windows and ordinary Go tests
 on Linux, macOS and Windows. `.github/workflows/ci.yml` is the complete CI definition.
 

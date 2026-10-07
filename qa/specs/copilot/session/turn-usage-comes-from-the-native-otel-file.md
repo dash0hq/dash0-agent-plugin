@@ -10,6 +10,7 @@ cleanup: keep
 covers:
   - internal/source/copilot/otelfile.go
   - cmd/copilot-on-event/main.go
+  - internal/source/copilot/emit.go
   - internal/pipeline/pipeline.go
 ---
 

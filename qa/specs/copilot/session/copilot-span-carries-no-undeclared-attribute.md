@@ -11,6 +11,7 @@ covers:
   - internal/otlp/otlp.go
   - internal/source/copilot/copilot.go
   - cmd/copilot-on-event/main.go
+  - internal/source/copilot/emit.go
   - DEVELOPMENT.md
 ---
 

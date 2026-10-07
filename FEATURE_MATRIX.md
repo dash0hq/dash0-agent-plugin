@@ -67,7 +67,7 @@ four runtimes.
 
 Precedence, highest wins:
 
-- **Claude Code CLI:** `pluginConfigs` (managed → user; also accepted via `--settings`) → selected `.local.md` → `DASH0_*`. Project `.claude/settings.json` and `.claude/settings.local.json` do not supply `pluginConfigs` in v2.1.207+; project `enabledPlugins` is still honored.
+- **Claude Code CLI:** `pluginConfigs` (managed and user settings; `--settings` is also read) → `.local.md` (project file if present, else user) → `DASH0_*`. Project `.claude/settings.json` and `.claude/settings.local.json` do not supply `pluginConfigs` in v2.1.207+; project `enabledPlugins` is still honored.
 - **Cursor / Codex:** `.local.md` (project → user) → `DASH0_*`
 - **Copilot CLI:** `.local.md` (global only) → `DASH0_*`
 

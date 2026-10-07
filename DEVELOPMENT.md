@@ -66,9 +66,12 @@ on Linux, macOS and Windows. `.github/workflows/ci.yml` is the complete CI defin
 For live product QA, read [qa/AGENTS.md](qa/AGENTS.md) and `qa/setup.md` before
 running a spec. To test unreleased Go changes, select the driver's working-tree
 mode documented there: `QA_SWAP_BINARY=1` for Claude, `QA_CODEX_BINARY=working-tree`,
-`QA_COPILOT_BINARY=working-tree`, or `QA_CURSOR_BINARY=working-tree`. The driver
-builds into the cache it actually uses; manually sideloading a binary into your
-normal development cache does not select it for the isolated QA runs.
+`QA_COPILOT_BINARY=working-tree`, or `QA_CURSOR_BINARY=working-tree`. The Codex,
+Copilot and Cursor drivers build into a cache that belongs to the run, so a binary
+you sideloaded into your normal development cache is not picked up. The Claude
+swap works the other way. It builds the working tree over the installed binary
+cache and restores it on exit, which means it temporarily replaces the binary your
+own live Claude sessions use.
 
 ## Testing OpenCode V2
 

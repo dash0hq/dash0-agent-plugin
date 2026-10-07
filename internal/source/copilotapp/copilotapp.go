@@ -191,6 +191,9 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 
 	var usage copilot.Usage
 	sawUsage := false
+	// The model of the main agent's replies, for a turn whose usage events
+	// never reached the extension: history keeps messages, not usage.
+	messageModel := ""
 	agentUsage := map[string]*copilot.Usage{}
 	toolIndex := map[string]int{}
 	agentIndex := map[string]int{}
@@ -228,6 +231,9 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 		case "assistant.message":
 			if c := e.str("content"); strings.TrimSpace(c) != "" && !e.isSubAgent() {
 				usage.ResponseText = c
+			}
+			if m := e.str("model"); m != "" && !e.isSubAgent() {
+				messageModel = m
 			}
 
 		case "tool.execution_start":
@@ -305,7 +311,11 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 		a.Usage = agentUsage[a.CallID]
 	}
 
-	if sawUsage || usage.ResponseText != "" {
+	if !sawUsage && usage.Model == "" {
+		usage.Model, usage.ResponseModel = messageModel, messageModel
+	}
+	usage.NoTokens = !sawUsage
+	if sawUsage || usage.ResponseText != "" || messageModel != "" {
 		turn.Usage = &usage
 	}
 	if turn.Usage == nil && len(turn.Tools) == 0 && len(turn.Agents) == 0 {

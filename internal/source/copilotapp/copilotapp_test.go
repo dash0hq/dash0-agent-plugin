@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/source/copilot"
 )
 
 // loadFixture reads session events recorded from a real Copilot app session
@@ -266,5 +268,25 @@ func TestBuildTurn_autoSubAgentKeepsAuto(t *testing.T) {
 	assert.Equal(t, "gpt-5.6-luna", turn.Agents[0].Usage.ResponseModel)
 	if turn.Usage != nil {
 		assert.Empty(t, turn.Usage.Model)
+	}
+}
+
+// A turn whose usage events never reached the extension still names its model,
+// from the reply, and leaves the token counts out rather than report zeros.
+func TestBuildTurn_turnWithoutUsageNamesTheModelAndNoTokens(t *testing.T) {
+	turn := BuildTurn([]Event{
+		{Type: "assistant.message", Timestamp: "2026-10-02T12:00:00Z", AgentID: "a1",
+			Data: map[string]any{"content": "sub", "model": "sub-model", "parentToolCallId": "t1"}},
+		{Type: "assistant.message", Timestamp: "2026-10-02T12:00:01Z",
+			Data: map[string]any{"content": "done", "model": "qa-fake"}},
+	}, time.Now())
+	require.NotNil(t, turn)
+	assert.Equal(t, "qa-fake", turn.Usage.Model)
+	assert.Equal(t, "qa-fake", turn.Usage.ResponseModel)
+	event := map[string]any{}
+	copilot.AttachUsage(event, turn.Usage)
+	assert.Equal(t, "qa-fake", event["model"])
+	for k := range event {
+		assert.NotContains(t, k, "token", "no usage was seen, so no count is known")
 	}
 }

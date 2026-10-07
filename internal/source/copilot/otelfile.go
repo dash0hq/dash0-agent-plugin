@@ -27,6 +27,9 @@ type Usage struct {
 	Model                    string // gen_ai.request.model; the literal "auto" when nothing was pinned
 	ResponseModel            string // gen_ai.response.model; the only priceable one when Model is "auto" (SIG-528)
 	ResponseText             string // final assistant text of the turn (from gen_ai.output.messages)
+	// NoTokens is set when the source saw the turn but no token counts for it,
+	// so the counts are unknown rather than zero.
+	NoTokens bool
 }
 
 // ToolCall is one tool execution of the turn, recovered from a native-OTel

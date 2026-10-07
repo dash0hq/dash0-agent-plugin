@@ -19,7 +19,9 @@ import (
 // AttachUsage sets the per-turn token, model and response attributes on the Stop
 // event.
 func AttachUsage(event map[string]any, u *Usage) {
-	attachTokens(event, u)
+	if !u.NoTokens {
+		attachTokens(event, u)
+	}
 	if u.Model != "" {
 		if _, has := event["model"]; !has {
 			event["model"] = u.Model

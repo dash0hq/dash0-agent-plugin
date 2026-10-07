@@ -108,13 +108,13 @@ if [ ! -x "$BINARY" ]; then
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
-  # Abort a stalled transfer, never a merely slow one: an unreachable host must
-  # not hold a hook or a server's exporter for minutes, and a slow link must
-  # still finish the binary. wget's timeout is per read, so it is a stall bound.
+  # Abort a stalled transfer: an unreachable host must not hold a hook or a
+  # server's exporter for minutes. A slow one runs until DOWNLOAD_MAX_TIME, if
+  # the agent sets one. wget's timeout is per read, so it is a stall bound.
   if command -v curl &>/dev/null; then
     STALL=(--connect-timeout 10 --speed-limit 1024 --speed-time 30)
     curl -fsSL "${STALL[@]}" ${DOWNLOAD_MAX_TIME:+--max-time "$DOWNLOAD_MAX_TIME"} -o "$TMP" "$URL" || fail_open "download failed: $URL"
-    CHECKSUMS=$(curl -fsSL "${STALL[@]}" --max-time 30 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
+    CHECKSUMS=$(curl -fsSL "${STALL[@]}" --max-time 15 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
   elif command -v wget &>/dev/null; then
     wget -qO "$TMP" --timeout=30 --tries=2 "$URL" || fail_open "download failed: $URL"
     CHECKSUMS=$(wget -qO- --timeout=30 --tries=2 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"

@@ -156,7 +156,7 @@ After installing, you'll need:
 
 ### Settings file
 
-Plugin options can be set under `pluginConfigs` in **user-level** settings (`~/.claude/settings.json`) — the same file that `/plugin → Configure` writes to. This applies to all projects.
+For the Claude Code CLI, plugin options can be set under `pluginConfigs` in **user-level** settings (`~/.claude/settings.json`), the same file that `/plugin → Configure` writes to. This applies to all projects.
 
 ```json
 {
@@ -165,12 +165,15 @@ Plugin options can be set under `pluginConfigs` in **user-level** settings (`~/.
       "options": {
         "OTLP_URL": "https://ingress.<region>.aws.dash0.com",
         "AUTH_TOKEN": "your-dash0-auth-token",
-        "DATASET": "default"
+        "DATASET": "default",
+        "TEAM_NAME": "your-team"
       }
     }
   }
 }
 ```
+
+The key must match the installed, enabled identity exactly: `dash0@claude-plugins-official` for the official marketplace, or `dash0-agent-plugin@dash0` for the Dash0 marketplace. Use `claude plugin list` to check. A `TEAM_NAME` under the other identity does not configure the active plugin. After changing settings, run `/reload-plugins` or restart the CLI.
 
 > Claude Code reads `pluginConfigs` from only three sources: user settings, the `--settings` flag, and enterprise-managed settings. Project-level `.claude/settings.json` and `.claude/settings.local.json` entries are ignored (v2.1.207+) — see [Project-level installation](#project-level-installation).
 
@@ -178,9 +181,9 @@ Plugin options can be set under `pluginConfigs` in **user-level** settings (`~/.
 
 ### Plugin UI
 
-`/plugin` → **Installed** → **dash0** (or **dash0-agent-plugin** from the Dash0 marketplace) → **Configure**, then `/reload-plugins` to apply. Values are written to `pluginConfigs` in `~/.claude/settings.json`; sensitive values are stored in the OS keychain.
+In the Claude Code CLI, use `/plugin` → **Installed** → **dash0** (or **dash0-agent-plugin** from the Dash0 marketplace) → **Configure** and set **Team Name**, then `/reload-plugins` to apply. Values are written to `pluginConfigs` in `~/.claude/settings.json`; sensitive values are stored in the OS keychain.
 
-> **Claude Desktop limitation:** The Plugin UI writes config keyed to the marketplace plugin identity. Claude Desktop loads plugins under a different internal identity, so Plugin UI configuration is not applied in Desktop sessions. Use the [config file](#config-file) or [settings file](#settings-file) method instead — both work across CLI and Desktop.
+> **Claude Desktop limitation:** The documented identity mismatch means Plugin UI configuration keyed to a marketplace identity may not reach Desktop hooks. Do not assume the CLI settings-file example fixes that mismatch. Use `team_name` in the [config file](#config-file) instead, then start a new Desktop session and verify the missing-team warning is gone. This workaround has not been verified end to end in Desktop.
 
 ### Config file
 
@@ -191,12 +194,13 @@ Create `~/.claude/dash0-agent-plugin.local.md` (applies to all projects), or `.c
 otlp_url: "https://ingress.<region>.aws.dash0.com"
 auth_token: "your-dash0-auth-token"
 dataset: "default"
+team_name: "your-team"
 ---
 ```
 
 Or run `/dash0-configure` to walk through the values interactively — the skill writes the same file for you.
 
-A project file replaces the user-level one entirely; the two are never merged. Where a value is set both here and in `pluginConfigs` (what `/plugin` → **Configure** writes), the `pluginConfigs` value wins.
+A project file replaces the user-level one entirely; the two are never merged. If a project file exists without `team_name`, it hides the user file's team name. Add `team_name` to the project file or remove that file to use the user-level configuration, preserving any other settings you need. Where a value is set both here and in `pluginConfigs` (what `/plugin` → **Configure** writes), the `pluginConfigs` value wins.
 
 
 ### Verify
@@ -214,6 +218,8 @@ If telemetry works but `TEAM_NAME` is unset, a second line names the gap:
 ```
 dash0: no team configured — spans carry no dash0.team.name. Set Team Name via /plugin → Configure.
 ```
+
+If this warning remains after setting Team Name, check the active marketplace identity and reload the CLI plugins as described above. In Desktop, use the config-file guidance instead. Also check whether a project `.local.md` file hides your user-level `team_name`.
 
 Claude also receives this as context, so you can just ask it to finish the setup and it runs `/dash0-agent-plugin:dash0-configure` for you. The warning cannot be silenced — setting a team name is what stops it.
 

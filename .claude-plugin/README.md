@@ -216,7 +216,7 @@ If credentials are missing: `dash0: telemetry is not active — configure the pl
 If telemetry works but `TEAM_NAME` is unset, a second line names the gap:
 
 ```
-dash0: no team configured — spans carry no dash0.team.name. Set Team Name via /plugin → Configure.
+dash0: no team configured — spans carry no dash0.team.name. Set Team Name via /plugin → Configure, then /reload-plugins. If the warning remains, ask Claude to run the dash0-configure skill.
 ```
 
 If this warning remains after setting Team Name, check the active marketplace identity and reload the CLI plugins as described above. In Desktop, use the config-file guidance instead. Also check whether a project `.local.md` file hides your user-level `team_name`.

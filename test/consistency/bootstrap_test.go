@@ -29,7 +29,7 @@ const (
 // error. Claude's is deliberately excluded: it uses `set -euo pipefail` and
 // exits non-zero, and its cache filename is the unprefixed legacy one, so its
 // body cannot be identical.
-var failOpenAgents = []string{"cursor", "codex", "copilot"}
+var failOpenAgents = []string{"cursor", "codex", "copilot", "opencode-v2"}
 
 func bootstrapPath(t *testing.T, agent string) string {
 	t.Helper()
@@ -71,7 +71,7 @@ func powerShellRegion(t *testing.T, agent string) string {
 	return sharedRegion(t, name, string(body))
 }
 
-// The three fail-open bootstraps carry one implementation. Nothing enforces that
+// The fail-open bootstraps carry one implementation. Nothing enforces that
 // at runtime — each agent ships a single self-contained file, because Copilot's
 // marketplace source is ./copilot and both installers fetch one file from a raw
 // URL — so this test is what keeps a fix from landing in one and not the others.
@@ -160,6 +160,7 @@ func runBootstrap(t *testing.T, agent, dataDir string, args ...string) (string, 
 	cmd.Env = append(os.Environ(),
 		"DASH0_PLUGIN_DATA="+dataDir,
 		"COPILOT_PLUGIN_DATA="+dataDir,
+		"OPENCODE_V2_PLUGIN_DATA="+dataDir,
 	)
 	out, err := cmd.CombinedOutput()
 	return string(out), err

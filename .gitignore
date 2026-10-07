@@ -13,3 +13,5 @@ __pycache__/
 qa/runs/
 qa/config.local.json
 .amp/portals/*
+opencode-v2/node_modules/
+.opencode-v2/*.local.md

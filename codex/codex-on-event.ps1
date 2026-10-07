@@ -61,6 +61,11 @@ trap {
 $BinDir = "$Base/bin"
 $Repo = 'dash0hq/dash0-agent-plugin'
 
+# Abort a stalled transfer, never a merely slow one: an unreachable host must
+# not hold a hook or a server's resolver for minutes, and a slow link must still
+# finish a 6-7 MB binary.
+$Stall = @('--connect-timeout', '10', '--speed-limit', '1024', '--speed-time', '30')
+
 # PROCESSOR_ARCHITECTURE reports the *process* architecture, so a 32-bit host
 # process on 64-bit Windows says x86 and puts the machine's real architecture in
 # PROCESSOR_ARCHITEW6432.
@@ -97,13 +102,13 @@ if (-not (Test-Path -LiteralPath $Binary)) {
   # curl.exe, not Invoke-WebRequest: it ships with Windows 10 1803 and later,
   # while Invoke-WebRequest on 5.1 negotiates old TLS on older builds and pays for
   # a progress stream this has no use for.
-  & curl.exe -fsS -L -o $Tmp "$BaseUrl/$Asset"
+  & curl.exe @Stall -fsS -L -o $Tmp "$BaseUrl/$Asset"
   if ($LASTEXITCODE -ne 0) {
     Remove-Item -LiteralPath $Tmp -Force -ErrorAction SilentlyContinue
     Exit-FailOpen "download failed: $BaseUrl/$Asset"
   }
 
-  $Checksums = & curl.exe -fsS -L "$BaseUrl/checksums.txt"
+  $Checksums = & curl.exe @Stall --max-time 30 -fsS -L "$BaseUrl/checksums.txt"
   if ($LASTEXITCODE -ne 0) {
     Remove-Item -LiteralPath $Tmp -Force -ErrorAction SilentlyContinue
     Exit-FailOpen "checksums fetch failed"
@@ -150,6 +155,14 @@ if (-not (Test-Path -LiteralPath $Binary)) {
       Exit-FailOpen "could not move $Tmp into place"
     }
   }
+}
+
+# Persistent hosts resolve the verified executable, then spawn it directly so
+# they own its lifetime rather than leaving it behind a PowerShell wrapper.
+if ($args.Count -eq 1 -and $args[0] -eq '--resolve-binary') {
+  [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+  [Console]::Out.WriteLine($Binary)
+  exit 0
 }
 
 # A harness can deliver the event on PowerShell's pipeline instead of this

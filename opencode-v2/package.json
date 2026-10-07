@@ -1,0 +1,30 @@
+{
+  "name": "@dash0/agent-plugin-opencode-v2",
+  "version": "0.1.28",
+  "type": "module",
+  "exports": "./index.js",
+  "files": [
+    "index.js",
+    "opencode-v2-on-event.sh",
+    "opencode-v2-on-event.ps1",
+    "skills/",
+    "README.md"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dash0hq/dash0-agent-plugin.git",
+    "directory": "opencode-v2"
+  },
+  "scripts": {
+    "test": "node --test index.test.js",
+    "check": "tsc --noEmit --allowJs --checkJs --module nodenext --target es2022 --skipLibCheck index.js"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.0.22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}

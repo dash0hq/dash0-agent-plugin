@@ -1,5 +1,21 @@
 # Development
 
+## Testing OpenCode V2
+
+```bash
+npm --prefix opencode-v2 ci --ignore-scripts
+npm --prefix opencode-v2 run check
+npm --prefix opencode-v2 test
+go test -race ./...
+go test -race -tags=e2e -run OpenCode -v ./test/e2e
+```
+
+The E2E test builds the Go binary and exercises the actual bootstrap, streaming
+before EOF, UTF-8 payloads, and state recovery after consumer restart. Its
+Windows branch resolves the binary through PowerShell, then runs Go directly,
+as the plugin does. It needs no model credentials or external backend.
+For live V2 runs and reloads with a local build, see [opencode-v2/README.md](opencode-v2/README.md).
+
 ## Releasing
 
 **Actions → Release.** One button, and it is the whole thing: pick `patch`
@@ -16,7 +32,7 @@ the new one last, once the binaries are published and proven downloadable:
 
 1. Check out the commit `main` pointed at when the button was pressed.
 2. Work out the version, write it everywhere, commit and tag — **locally**.
-3. Build every binary `.goreleaser.yaml` describes — 24 today: four agents,
+3. Build every binary `.goreleaser.yaml` describes — 30 today: five agents,
    three platforms, two architectures — and upload them to a **draft** release.
 4. Verify: checksums, `dist/` matches that list by name, the Linux binary
    actually runs, and the uploaded assets match what was built.
@@ -64,6 +80,25 @@ that one rather than starting another, which would skip a version.
 > The release job carries its own check for this and refuses outright when the
 > version is already published.
 
+### The npm package
+
+After the release, the `npm` job publishes `@dash0/agent-plugin-opencode-v2` at the
+release version, from the release tag. It uses npm trusted publishing (OIDC),
+so there is no token: npmjs.com accepts the publish because the package's
+trusted publisher names repository `dash0hq/dash0-agent-plugin`, workflow
+`release.yml` and environment `release`. All three must match exactly.
+
+One-time setup, by someone who can publish to the `@dash0` npm scope. npm only
+offers the trusted-publisher setting on a package that exists, so create the
+package first, then add the trusted publisher with the three values above and
+"Allow `npm publish`" checked: the job publishes directly rather than staging.
+Until that is done, the release's `npm` job fails with a message saying so.
+
+A failed `npm` job never touches the GitHub release or `main`. Fix the cause and
+use "Re-run failed jobs" on that job alone. That is safe here, unlike the
+recovery above, because the job only reads the tag and skips a version that is
+already on npm.
+
 ### Dry run
 
 **`dry_run`** — build and check, publish nothing. No tag, no release; the binaries
@@ -76,7 +111,7 @@ anything — a rollback, or a build under test:
 export DASH0_VERSION=0.1.24
 ```
 
-The four POSIX bootstraps read it, and the cache filename embeds the version, so
+The five POSIX bootstraps read it, and the cache filename embeds the version, so
 it never collides with the pinned build. They validate it against the same shape
 a release uses, because it reaches both a download URL and a filesystem path: a
 value containing `..` retargets the download at another repository, and
@@ -85,8 +120,8 @@ attacker's own manifest.
 
 Two gaps, neither closed here:
 
-- **The Windows hooks ignore it.** `cursor-on-event.ps1`, `codex-on-event.ps1`
-  and `copilot-on-event.ps1` always use their pinned `$Version`. Confusingly,
+- **The Windows hooks ignore it.** `cursor-on-event.ps1`, `codex-on-event.ps1`,
+  `copilot-on-event.ps1`, and `opencode-v2-on-event.ps1` always use their pinned `$Version`. Confusingly,
   `install-cursor.ps1` and `install-codex.ps1` *do* read it, so on Windows the
   variable is honoured at install time and ignored at event time.
 - **The installers do not validate it.** `install-cursor.sh`,
@@ -104,7 +139,7 @@ Two gaps, neither closed here:
 ### How it is wired
 
 - **`scripts/version.sh`** — `check`, `set`, `latest`, `next`. The only list of
-  the thirteen places a version is pinned, so the bump and the check cannot disagree
+  the eighteen version pins, so the bump and the check cannot disagree
   about what needs bumping. `next` counts from the newest **published release**,
   not from tags or the manifests, both of which can name a version that was never
   released.
@@ -141,6 +176,7 @@ Building, sideloading, and running local changes is documented per runtime:
 - **Claude Code** — [claude/README.md](./claude/README.md)
 - **Cursor** — [cursor/README.md](./cursor/README.md)
 - **OpenAI Codex** — [codex/README.md](./codex/README.md)
+- **OpenCode V2** — [opencode-v2/README.md](./opencode-v2/README.md)
 
 ## Telemetry attributes
 

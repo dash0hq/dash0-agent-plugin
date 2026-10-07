@@ -5,7 +5,8 @@ config_file: qa/config.local.json
 # The last day every check of every runtime ran. 2026-09-01 added and ran the
 # cursor arm and the shared checks, but did not re-run the claude-only, codex-only
 # or copilot-only ones, so it is not a full pass. 2026-08-28 did the same for the
-# copilot arm.
+# copilot arm. 2026-10-05 added and ran the opencode arm and the shared checks
+# it depends on, and is not a full pass either.
 last_full_pass: 2026-08-25
 ---
 
@@ -29,9 +30,9 @@ spec, learning, finding, and report.
 
 ## Runtimes
 
-All four supported agents are covered here, **one spec tree per runtime**:
-`qa/specs/claude/`, `qa/specs/codex/`, `qa/specs/copilot/` and
-`qa/specs/cursor/`, each split by topic underneath. Each spec also names its
+All five supported agents are covered here, **one spec tree per runtime**:
+`qa/specs/claude/`, `qa/specs/codex/`, `qa/specs/copilot/`,
+`qa/specs/cursor/` and `qa/specs/opencode-v2/`, each split by topic underneath. Each spec also names its
 runtime in frontmatter, so the area and the field cannot drift apart. The split
 is by runtime rather than by topic because a run is one driver, one credential
 and one cost profile — `/qa-run codex` is a coherent thing to execute, while a
@@ -39,16 +40,16 @@ topic area spanning all four would need four drivers mid-run. A spec written for
 one runtime says nothing about the others. They share the Go pipeline and
 therefore share most invariants, but they differ in what a run can prove:
 
-| | claude | codex | copilot | cursor |
-| --- | --- | --- | --- | --- |
-| Driver | `qa/tools/qa-session.sh` | `qa/tools/qa-session-codex.sh` | `qa/tools/qa-session-copilot.sh` | `qa/tools/qa-session-cursor.sh`, through a pty |
-| What is under test | the plugin **as this machine has it installed** | the shipped install path, **provisioned into a throwaway home** | the shipped marketplace install, **provisioned into a throwaway home** | the machine's own registration, which must be the **shipped wrapper** |
-| Who configures it | the managed install; QA cannot | QA, from `qa/config.local.json` | QA, from `qa/config.local.json` | QA, from `qa/config.local.json`, through `CURSOR_PLUGIN_OPTION_*` |
-| Second channel | the transcript, via `claude-code-usage-audit.py` | the rollout, via `qa/tools/qa-rollout.py` (usage only) | the native-OTel file, via `qa/tools/qa-otel.py` (usage **and** tool spans) | the transcript, via `qa/tools/qa-transcript-cursor.py` (turns only; **no usage**) |
-| Harness's own figures | `claude -p --output-format json`, including cost | `codex exec --json`; Codex reports no cost | `copilot --output-format json`; output tokens and AI credits, no input tokens | none. The TUI has no machine-readable output |
-| Sees what was sent | no | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log |
-| Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording |
-| Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run |
+| | claude | codex | copilot | cursor | opencode |
+| --- | --- | --- | --- | --- | --- |
+| Driver | `qa/tools/qa-session.sh` | `qa/tools/qa-session-codex.sh` | `qa/tools/qa-session-copilot.sh` | `qa/tools/qa-session-cursor.sh`, through a pty | `qa/tools/qa-session-opencode-v2.sh`, against a private `opencode serve` |
+| What is under test | the plugin **as this machine has it installed** | the shipped install path, **provisioned into a throwaway home** | the shipped marketplace install, **provisioned into a throwaway home** | the machine's own registration, which must be the **shipped wrapper** | this checkout's `opencode-v2/` package and working-tree exporter, **loaded from a throwaway config** |
+| Who configures it | the managed install; QA cannot | QA, from `qa/config.local.json` | QA, from `qa/config.local.json` | QA, from `qa/config.local.json`, through `CURSOR_PLUGIN_OPTION_*` | QA, from `qa/config.local.json`, as plugin options in a generated `opencode.json` |
+| Second channel | the transcript, via `claude-code-usage-audit.py` | the rollout, via `qa/tools/qa-rollout.py` (usage only) | the native-OTel file, via `qa/tools/qa-otel.py` (usage **and** tool spans) | the transcript, via `qa/tools/qa-transcript-cursor.py` (turns only; **no usage**) | `opencode session export`, via `qa/tools/qa-compare-opencode-v2.py` (turns, tools **and** per-step usage) |
+| Harness's own figures | `claude -p --output-format json`, including cost | `codex exec --json`; Codex reports no cost | `copilot --output-format json`; output tokens and AI credits, no input tokens | none. The TUI has no machine-readable output | `opencode run --format json`, kept but not compared |
+| Sees what was sent | no | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log |
+| Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording | discovered from `opencode run --format json` |
+| Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run | only OpenCode's session database: QA sessions show up in `opencode session list` |
 
 The asymmetry is not a preference, it is what each host allows. Claude Code's
 options arrive from a managed `remote-settings.json` that beats every override,
@@ -112,7 +113,7 @@ the wire.
 
 ## Layout
 
-- specs:     qa/specs/<runtime>/<topic>/   (`claude/session`, `codex/subagents`, `copilot/turns`, `cursor/mcp`, ...)
+- specs:     qa/specs/<runtime>/<topic>/   (`claude/session`, `codex/subagents`, `copilot/turns`, `cursor/mcp`, `opencode-v2/turns`, ...)
 - learnings: qa/learnings/
 - findings:  qa/findings/        (open spec failures only; a fixed one is deleted)
 - runs:      qa/runs/            (gitignored)
@@ -474,6 +475,68 @@ Authoritative shapes: `cursor/hooks.json` for the event list,
 events are dropped, `cursor/README.md` for the design, and `DEVELOPMENT.md` for
 the attribute contract.
 
+### OpenCode
+
+**There is no hook and no recorder.** The plugin subscribes to the OpenCode V2
+server's event stream and pipes it to the Go exporter, so there is no per-event
+payload to capture the way the other runtimes do. The independent record is
+OpenCode's own session store, read after the run with `opencode session export`.
+So the `hooks` column the other runtimes print does not exist here, and a span
+that is missing because its event never reached the plugin looks the same as one
+the pipeline dropped. `plugin-debug.log` still splits "never built" from "built
+and lost".
+
+**QA provisions the configuration, not an install.** `qa/tools/qa-session-opencode-v2.sh`
+writes an `opencode.json` into a `mktemp -d` directory and points
+`XDG_CONFIG_HOME` at it. That file loads this checkout's `opencode-v2/` package with
+the working-tree exporter as its `executable` option. There is no OpenCode release
+asset yet, so the working tree is always what is under test. The developer's own
+`~/.config/opencode/opencode.json`, their installed plugin and their background
+service are not used. The provider login and the session database in
+`~/.local/share/opencode` are the machine's, which is what lets a run authenticate
+without a key.
+
+> [!CAUTION]
+> **Every plugin option must be set explicitly.** Options beat the user file
+> `~/.opencode-v2/dash0-agent-plugin.local.md` key by key, and any key left out is read
+> from it. On a developer machine that file holds a real endpoint and token, so a
+> missing `otlp_url` sends QA spans to the developer's target. The driver sets all
+> of them and `team_name: dash0-qa`, which is how
+> `opencode-driver-isolates-the-config` proves no key leaked. Two things the
+> file can still do: `enabled: false` turns the run off, and a project-level
+> `.opencode-v2/dash0-agent-plugin.local.md` would replace the user file. The driver's
+> scratch project has neither.
+
+**The driver uses a long-lived `opencode serve`**, on a free port with a one-time
+password, and runs each turn with `opencode run --server`. A resumed turn and the
+session export need the server the turns ran on. `opencode run --standalone`
+is covered by `TestE2EOpenCodeV2SurvivesShutdownSignal` in `test/e2e/` instead:
+its server signals its process group with SIGTERM before the plugin delivers
+`session.execution.succeeded`, which is why `cmd/opencode-v2-on-event` ignores those
+signals and ends on stdin EOF. Measured 2026-10-05, a live standalone run exported
+both spans with tokens equal to the export.
+
+> [!WARNING]
+> **The first run after the OpenCode config changes can hang** before the server
+> opens its database, with nothing logged after `cli starting`. Seen four times on
+> 2026-10-05 with OpenCode 2.0.15; the same command run again finished in seconds.
+> The cause is not known. `QA_TURN_TIMEOUT` (default 300 seconds) turns the hang
+> into a failed run instead of a stuck one; re-run it.
+
+**Prerequisite.** `opencode-v2/node_modules` must exist: `(cd opencode-v2 && npm ci)`.
+
+**Knobs.** `QA_MODEL` (default `opencode/muse-spark-1.3-contributor-free`, a
+free model; any `provider/model` this machine is logged in to works),
+`QA_OPENCODE_V2_RESUME="<second prompt>"` (a second turn in the same session, through
+`opencode run -s`), `QA_OMIT_IO=false` (export prompts and tool IO; the default is
+the product's own, `true`), and `QA_KEEP_SCRATCH=1` (keep the scratch config,
+which holds the ingest token).
+
+Authoritative shapes: `opencode-v2/index.js` for which V2 events cross into the
+exporter and which fields survive, `internal/source/opencodev2/opencodev2.go` for how
+they become spans, `opencode-v2/README.md` for the design, and `DEVELOPMENT.md` for
+the attribute contract.
+
 ## Stimulate
 
 ### Claude Code
@@ -714,6 +777,43 @@ all now denied in `attrSkipKeys`. There is no Cursor-only documented key: an MCP
 call's server rides on the standard `dash0.gen_ai.tool.mcp_server`, with the
 literal placeholder `cursor` as its value.
 
+### OpenCode
+
+```sh
+qa/tools/qa-session-opencode-v2.sh "<prompt>" [run-id]
+qa/tools/qa-compare.py qa/runs/<run-id>    # hands off to qa-compare-opencode-v2.py
+qa/tools/qa-attrs.py qa/runs/<run-id>
+```
+
+| Artifact | Holds | Read it as |
+| --- | --- | --- |
+| `session-export.json` | `opencode session export`: every message, tool part and per-step token count | the independent record |
+| `opencode-events.jsonl` | OpenCode's own `run --format json` stream | the harness's own figures |
+| `plugin-debug.log` | every span the plugin emitted, as it emitted it | the product's output |
+| `serve.log` | the private server's log, password line removed | where a plugin load error shows up |
+
+`qa-compare-opencode-v2.py` computes the expectation from the export. A turn starts
+at each `user` message. Each turn implies one `chat` span; each `tool` part in its
+assistant messages implies one `execute_tool`; its input tokens are the sum of
+`input + cache.read + cache.write` over its steps and its output tokens the sum of
+`output + reasoning`. Turns are matched as a multiset of token pairs, because the
+query returns no start times. Tool calls are matched by call ID; an MCP call is
+`<server>_<tool>` in the export and `<tool>` plus `dash0.gen_ai.tool.mcp_server` on
+the span. It also fails a `chat` span in Dash0 with no `gen_ai.input.messages` or
+`gen_ai.output.messages`: the conversation view separates turns on those, and
+their absence once merged every tool of a session into one block. Whether they
+were redacted is judged on `plugin-debug.log`, because Dash0 masks them at
+ingest: under `omit_io` every sent chat span's messages must be exactly the
+redacted structure. The debug log's span counts are held to the export too.
+
+Sub-agents are child sessions with their own exports
+(`session-export-<id>.json`). Each child turn implies one `invoke_agent` span, and
+its tool parts count towards `execute_tool`; their spans carry the parent's
+conversation id, so they come back from the same query.
+
+A run whose `opencode run` or export failed, or whose export has a different
+number of turns than the driver ran, exits 2: it measured nothing.
+
 ## Observe
 
 1. **Dash0** — `dash0 spans query` with the endpoint, token, and dataset from
@@ -931,13 +1031,18 @@ check would have caught. The harness ones are fixed: the transcript reader count
 as a reused run id. The product gap is open —
 [findings/cursor-subagent-work-produces-no-span.md](findings/cursor-subagent-work-produces-no-span.md).
 
-Checks with no prefix apply to every runtime. A `codex-`, `copilot-` or `cursor-`
-prefix means the check belongs to that runtime alone; skip it when a run targets
+The `opencode` checks were added and first run 2026-10-05 against the working
+tree at 0.1.28 and OpenCode 2.0.15. Every one ran green, including `qa-attrs.py`
+on the first probe, at 38 observed keys.
+
+Checks with no prefix apply to every runtime. A `codex-`, `copilot-`, `cursor-` or
+`opencode-` prefix means the check belongs to that runtime alone; skip it when a run targets
 another one, and skip the `claude`-only ones the same way. The runtime-specific
 blocking checks are `probe-session-agrees-with-what-it-was-fed` for `claude`,
 `codex-probe-session-agrees-with-what-it-was-fed` for `codex`,
 `copilot-probe-session-agrees-with-what-it-was-fed` for `copilot`, and
-`cursor-probe-session-agrees-with-what-it-was-fed` for `cursor`.
+`cursor-probe-session-agrees-with-what-it-was-fed` for `cursor`, and
+`opencode-probe-session-agrees-with-what-it-was-fed` for `opencode`.
 
 ### toolchain-present
 
@@ -982,7 +1087,8 @@ for p in qa/tools/qa-session.sh qa/tools/qa-compare.py qa/tools/qa-attrs.py \
          qa/tools/qa-codex-hooks/main.go \
          qa/tools/qa-session-copilot.sh qa/tools/qa-otel.py \
          qa/tools/qa-session-cursor.sh qa/tools/qa-cursor-drive.py \
-         qa/tools/qa-transcript-cursor.py; do
+         qa/tools/qa-transcript-cursor.py \
+         qa/tools/qa-session-opencode-v2.sh qa/tools/qa-compare-opencode-v2.py; do
   git check-ignore -q "$p" && echo "IGNORED: $p" || echo "tracked: $p"
 done
 ```
@@ -2001,4 +2107,90 @@ QA_CURSOR_RESUME='Now run the shell command: echo qa-second. Then reply with exa
 sleep 25
 qa/tools/qa-compare.py qa/runs/setup-probe-cursor-turns
 qa/tools/qa-transcript-cursor.py qa/runs/setup-probe-cursor-turns
+```
+
+### opencode-toolchain-present
+
+- **proves.** An `opencode` run needs `opencode`, `go`, `python3`, `git`, `node`
+  and the plugin's `node_modules` on top of what the shared checks cover. Without
+  `node_modules` the server loads the plugin, logs `Cannot find package
+  '@opencode/plugin'` and carries on, so the session runs and nothing exports.
+- **after.** none
+- **blocking.** true
+- **pass.** No output.
+- **fail.** `MISSING: <tool>`. `opencode` comes from `opencode upgrade` or the
+  install script on opencode.ai. `MISSING: opencode-v2/node_modules` means
+  `(cd opencode-v2 && npm ci)`.
+- **verified.** 2026-10-05, signals: pass+fail. The fail half is the
+  `node_modules` one, observed while setting up a local install: the server log
+  read `failed to load plugin ... Cannot find package '@opencode/plugin'`.
+
+```sh
+for t in opencode go python3 git node; do command -v "$t" >/dev/null || echo "MISSING: $t"; done
+[ -d opencode-v2/node_modules/@opencode/plugin ] || echo "MISSING: opencode-v2/node_modules"
+```
+
+### opencode-driver-isolates-the-config
+
+- **proves.** No plugin option came from the developer's
+  `~/.opencode-v2/dash0-agent-plugin.local.md`. The driver sets `team_name` to
+  `dash0-qa`, so a span carrying any other team name read at least one key from
+  that file, and the endpoint and token could have come from there too.
+- **after.** opencode-probe-session-agrees-with-what-it-was-fed
+- **blocking.** true
+- **pass.** `isolated`.
+- **fail.** `LEAKED: team <name>`. A key is missing from the options the driver
+  writes into `opencode.json`. Add it there, then re-run the probe.
+- **verified.** 2026-10-05, signals: pass+fail. Pass on
+  `qa/runs/probe-opencode-two-turns`. The fail half was observed before the driver
+  set every key: a probe with only `executable`, `debug` and `debug_file` set picked
+  up the developer's endpoint, token and `omit_io` from that file.
+
+```sh
+python3 - <<'PY'
+import importlib.util, json
+spec = importlib.util.spec_from_file_location("q", "qa/tools/qa-compare.py")
+q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+c, _ = q.load_config(".")
+m = json.load(open("qa/runs/probe-opencode-two-turns/manifest.json"))
+spans, err = q.query_dash0(c, m["session_id"], c["dataset"], q.widen(m["started_at"], -60),
+                           q.widen(m["ended_at"], 120), 100)
+teams = {s["attrs"].get("dash0.team.name") for s in spans or []}
+print(err or ("isolated" if teams == {"dash0-qa"} else f"LEAKED: team {teams}"))
+PY
+```
+
+### opencode-probe-session-agrees-with-what-it-was-fed
+
+- **proves.** The whole method on a two-turn OpenCode session: the private server
+  loaded the plugin, the exporter emitted one `chat` per turn, Dash0 stored them,
+  and the turn count, tool counts and per-turn token counts agree with
+  OpenCode's own session export. Two turns rather than one, because a per-turn
+  scoping bug is invisible when the turn and the session are the same number.
+- **after.** opencode-toolchain-present, ingest-token-reaches-the-ingress,
+  token-reads-the-dataset
+- **blocking.** true
+- **pass.** `OK    everything reconciles` and exit `0` from `qa-compare.py`, then
+  `Every attribute is in the documented contract.` and exit `0` from `qa-attrs.py`.
+- **fail.** Exit `1` prints each `DIFF`. A `chat` count of zero in Dash0 **and** in
+  the `debug` column means the turn never closed: read `serve.log` and OpenCode's
+  own log for an exporter that exited early. Zero in Dash0 with a non-zero `debug`
+  column means the spans were built and lost in transport or ingest. Exit `2`
+  means the run was not measured. A count short by one right after the session is
+  ingest lag; re-run after 25 seconds.
+- **verified.** 2026-10-05, signals: pass+fail. Pass on
+  `qa/runs/probe-opencode-two-turns`: 2 `chat` and 2 `execute_tool` in all three
+  columns, per-turn tokens (22283, 271) and (23018, 241) in both Dash0 and the
+  export. The fail half was provoked on a copy of that run with one step's output
+  tokens raised by 1 in `session-export.json`: `DIFF  per-turn token counts
+  differ`, exit `1`.
+
+```sh
+QA_OPENCODE_V2_RESUME='Now count the lines of README.md with a shell command.' \
+  qa/tools/qa-session-opencode-v2.sh \
+  'Read README.md and summarise it in one sentence.' \
+  probe-opencode-two-turns
+sleep 25
+qa/tools/qa-compare.py qa/runs/probe-opencode-two-turns
+qa/tools/qa-attrs.py qa/runs/probe-opencode-two-turns
 ```

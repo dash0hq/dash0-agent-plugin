@@ -1,31 +1,31 @@
 # SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Windows counterpart of cursor-on-event.sh. The installer registers this file by
-# absolute path in ~/.cursor/hooks.json, which Cursor runs through PowerShell:
+# Windows bootstrap for the persistent OpenCode V2 event consumer.
 #
-#   stdin (JSON) -> cursor-on-event.ps1 -> cursor-on-event.exe -> OTLP
+#   stdin (JSONL) -> opencode-v2-on-event.ps1 -> opencode-v2-on-event.exe -> OTLP
 #
 # Windows PowerShell 5.1 is the target: no $IsWindows, no ternary, no
 # null-coalescing, no Join-Path with more than one child path.
 #
 # Fail-open: any error before running the binary writes to stderr and exits 0, so
-# a broken install never breaks the user's Cursor session.
+# a broken install never breaks the user's OpenCode session.
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$Agent = 'cursor'
+$Agent = 'opencode-v2'
 $Version = '0.1.28'
 
-# Where the downloaded binary lives, matching cursor-on-event.sh. internal/harness
-# also honours CURSOR_PLUGIN_DATA; neither bootstrap does, on either platform.
-if ($env:DASH0_PLUGIN_DATA) {
+# Where the downloaded binary lives, matching internal/harness and the shell.
+if ($env:OPENCODE_V2_PLUGIN_DATA) {
+  $Base = $env:OPENCODE_V2_PLUGIN_DATA
+} elseif ($env:DASH0_PLUGIN_DATA) {
   $Base = $env:DASH0_PLUGIN_DATA
 } elseif ($env:XDG_STATE_HOME) {
-  $Base = "$env:XDG_STATE_HOME/dash0-agent-plugin/cursor"
+  $Base = "$env:XDG_STATE_HOME/dash0-agent-plugin/opencode-v2"
 } else {
-  $Base = "$env:USERPROFILE/.local/state/dash0-agent-plugin/cursor"
+  $Base = "$env:USERPROFILE/.local/state/dash0-agent-plugin/opencode-v2"
 }
 
 # >>> shared bootstrap - byte-identical across the PowerShell bootstraps >>>

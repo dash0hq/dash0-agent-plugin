@@ -203,6 +203,7 @@ def query_dash0(config, session_id, dataset, since, until, limit):
                 # whose sub-agent spans hung outside the trace still reconciled.
                 spans.append({"name": span.get("name", ""), "attrs": attrs,
                               "resource": resource,
+                              "trace_id": span.get("traceId", ""),
                               "span_id": span.get("spanId", ""),
                               "parent_span_id": span.get("parentSpanId", "")})
     return spans, None
@@ -276,11 +277,13 @@ def orphans(spans):
     The caller must skip this on a truncated result: a missing span makes its
     children look orphaned when the only thing wrong is the query limit.
     """
-    known = {s["span_id"] for s in spans if s["span_id"]}
+    # Keyed by trace too: a parent span ID that exists only in another trace
+    # is still a hole in this one.
+    known = {(s.get("trace_id"), s["span_id"]) for s in spans if s["span_id"]}
     out = []
     for span in spans:
         parent = span["parent_span_id"]
-        if parent and parent not in known:
+        if parent and (span.get("trace_id"), parent) not in known:
             out.append({"name": span["name"],
                         "agent": span["attrs"].get("gen_ai.agent.id"),
                         "parent": parent})
@@ -1084,6 +1087,16 @@ def main():
         print(f"no manifest.json in {run_dir}; is that a run directory?", file=sys.stderr)
         return 2
     manifest = json.load(open(manifest_path))
+    # OpenCode has no hooks and a different second channel, so its comparison
+    # lives in its own tool rather than as a fifth column set here.
+    if manifest.get("runtime") == "opencode-v2":
+        if args.as_json:
+            print("--json is not supported for OpenCode runs", file=sys.stderr)
+            return 2
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qa-compare-opencode-v2.py")
+        return subprocess.run([sys.executable, tool, run_dir, "--limit", str(args.limit),
+                               *(["--dataset", args.dataset] if args.dataset else [])],
+                              check=False).returncode
 
     root = subprocess.run(["git", "rev-parse", "--show-toplevel"],
                           capture_output=True, text=True, check=True).stdout.strip()

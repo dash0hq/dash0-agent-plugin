@@ -158,8 +158,13 @@ func AgentSpanID(toolCallID string) string { return otlp.SpanIDFromAgentID("agen
 //
 // A sub-agent's usage goes on its own invoke_agent span, priced at its own
 // model; the chat span carries the main agent's. Usage whose sub-agent is not
-// in the turn stays on the chat span, so no tokens are lost. The model and
-// response are the main agent's.
+// in the turn stays on the chat span, so no tokens are lost. The model (the
+// span name) and the response are the main agent's.
+//
+// The chat span's tokens are priced at the response model. That is the main
+// agent's usage model, or its reply's model when the usage names none. Tokens
+// that came only from a sub-agent the turn never saw start are priced at that
+// sub-agent's own model, never the main agent's.
 //
 // end closes tool calls and sub-agents that started but never finished (an
 // aborted turn); they are marked failed.
@@ -202,9 +207,12 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 	}
 
 	var usage copilot.Usage
-	sawUsage := false
+	sawUsage, sawMainUsage := false, false
+	// The model of the usage from a sub-agent the turn never saw start.
+	foreignModel := ""
 	// The model of the main agent's replies, for a turn whose usage events
-	// never reached the extension: history keeps messages, not usage.
+	// never reached the extension (history keeps messages, not usage) or
+	// named no model.
 	messageModel := ""
 	agentUsage := map[string]*copilot.Usage{}
 	toolIndex := map[string]int{}
@@ -221,6 +229,11 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 				u = agentUsage[ptc]
 			} else {
 				sawUsage = true
+				if !e.isSubAgent() {
+					sawMainUsage = true
+				} else if m := e.str("model"); m != "" {
+					foreignModel = m
+				}
 			}
 			u.InputTokens += e.num("inputTokens")
 			u.OutputTokens += e.num("outputTokens")
@@ -325,6 +338,9 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 
 	if usage.Model == "" {
 		usage.Model, usage.ResponseModel = messageModel, messageModel
+		if !sawMainUsage && foreignModel != "" {
+			usage.ResponseModel = foreignModel
+		}
 	}
 	usage.NoTokens = !sawUsage
 	if sawUsage || usage.ResponseText != "" || messageModel != "" {

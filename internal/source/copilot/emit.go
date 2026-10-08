@@ -91,12 +91,7 @@ func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefi
 		if tc.CallID != "" {
 			event["tool_use_id"] = tc.CallID
 		}
-		if turn.Usage != nil && turn.Usage.Model != "" {
-			event["model"] = turn.Usage.Model
-		}
-		if turn.Usage != nil && turn.Usage.ResponseModel != "" {
-			event["response_model"] = turn.Usage.ResponseModel
-		}
+		addTurnModels(event, turn.Usage)
 		if tc.SkillName != "" {
 			event["skill_name"] = tc.SkillName
 		}
@@ -123,6 +118,25 @@ func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefi
 		if err := otlp.SendTrace(span, event, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "%s: tool span export: %v\n", logPrefix, err)
 		}
+	}
+}
+
+// addTurnModels names the turn's models on a span that does not carry the
+// turn's tokens, so its response model is the main agent's reply model, when
+// known, rather than the one the chat span prices at.
+func addTurnModels(event map[string]any, u *Usage) {
+	if u == nil {
+		return
+	}
+	if u.Model != "" {
+		event["model"] = u.Model
+	}
+	response := u.ReplyModel
+	if response == "" {
+		response = u.ResponseModel
+	}
+	if response != "" {
+		event["response_model"] = response
 	}
 }
 
@@ -161,12 +175,7 @@ func EmitAgentSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPref
 			event["model"] = req
 			event["response_model"] = resp
 		} else {
-			if turn.Usage != nil && turn.Usage.Model != "" {
-				event["model"] = turn.Usage.Model
-			}
-			if turn.Usage != nil && turn.Usage.ResponseModel != "" {
-				event["response_model"] = turn.Usage.ResponseModel
-			}
+			addTurnModels(event, turn.Usage)
 		}
 
 		if sa.Usage != nil {

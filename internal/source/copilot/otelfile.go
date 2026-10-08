@@ -26,6 +26,7 @@ type Usage struct {
 	ReasoningOutputTokens    int64
 	Model                    string // gen_ai.request.model; the literal "auto" when nothing was pinned
 	ResponseModel            string // gen_ai.response.model; the only priceable one when Model is "auto" (SIG-528)
+	ReplyModel               string // the main agent's reply model when ResponseModel prices another agent's tokens; empty when the same or unknown
 	ResponseText             string // final assistant text of the turn (from gen_ai.output.messages)
 	// NoTokens is set when the source saw the turn but no token counts for it,
 	// so the counts are unknown rather than zero.

@@ -117,9 +117,8 @@ def plugin_writes(key):
     it at ingest". Tests are excluded because a test asserting a key must *not*
     be emitted would otherwise class it as an export.
 
-    cmd/ is searched as well as internal/. The entrypoints synthesize events of
-    their own -- cmd/copilot-on-event/main.go builds the tool and sub-agent events
-    a Copilot turn's spans come from -- and a search that misses them files a real
+    cmd/ is searched as well as internal/, because an entrypoint can synthesize
+    events of its own, and a search that misses them files a real
     undeclared export under "added at ingest", which is the one class this tool
     never reports.
 

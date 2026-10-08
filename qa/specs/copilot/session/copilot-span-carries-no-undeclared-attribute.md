@@ -11,6 +11,7 @@ covers:
   - internal/otlp/otlp.go
   - internal/source/copilot/copilot.go
   - cmd/copilot-on-event/main.go
+  - internal/source/copilot/emit.go
   - DEVELOPMENT.md
 ---
 
@@ -74,7 +75,7 @@ plugin deliberately does not carry it through — it would sit one attribute awa
 the key is namespaced, a reintroduction would be classed as an "undocumented export" rather than a
 raw payload field, which is exactly the signal this check gives. Nothing denies the key, and
 nothing needs to: it reaches the plugin only through the native-OTel file, so the guard is that
-neither `internal/source/copilot` nor `attachUsage` carries it across. `TestE2ECopilotPerTurnSpans`
+neither `internal/source/copilot` nor `AttachUsage` carries it across. `TestE2ECopilotPerTurnSpans`
 asserts the same absence end to end, on a fixture whose native chat span has it.
 
 ## Oracle

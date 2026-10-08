@@ -11,6 +11,7 @@ covers:
   - internal/source/copilot/copilot.go
   - internal/source/copilot/otelfile.go
   - cmd/copilot-on-event/main.go
+  - internal/source/copilot/emit.go
 ---
 
 ## Given

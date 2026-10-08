@@ -10,6 +10,7 @@ cleanup: keep
 covers:
   - internal/source/copilot/otelfile.go
   - cmd/copilot-on-event/main.go
+  - internal/source/copilot/emit.go
   - internal/pipeline/pipeline.go
 ---
 
@@ -81,7 +82,7 @@ is Copilot checking its own arithmetic rather than the plugin's. On a delegating
 diverge by design; see [../subagents](../subagents/README.md).
 
 **With no OTel file, the expectation is a `chat` span carrying no usage keys at all.** Not zeros:
-`attachUsage` in `cmd/copilot-on-event/main.go` is never reached, so nothing is set.
+`AttachUsage` in `internal/source/copilot/emit.go` is never reached, so nothing is set.
 
 ## Oracle
 

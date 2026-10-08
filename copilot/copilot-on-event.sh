@@ -26,9 +26,9 @@ VERSION="0.1.28"
 # marketplace install; the XDG path is the fallback for a manual one.
 BASE="${COPILOT_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/copilot}"
 
-# Total seconds the binary download may take. Copilot CLI gives a hook 10 s, so
-# a longer download is orphaned and can never move the binary into place.
-DOWNLOAD_MAX_TIME=100
+# Total seconds the binary download may take, or empty for no cap, so a slow link
+# still finishes and the stall bound in the shared region ends a dead one.
+DOWNLOAD_MAX_TIME=""
 
 # >>> shared bootstrap - byte-identical across the fail-open POSIX bootstraps >>>
 # test/consistency asserts these three regions match, so a fix lands in all of

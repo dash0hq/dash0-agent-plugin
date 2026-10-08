@@ -103,6 +103,37 @@ builds:
     binary: "opencode-v2-on-event-{{ .Os }}-{{ .Arch }}"
     no_unique_dist_dir: true
 
+# Developer ID signing and notarization for the darwin binaries, so EDRs such as
+# Elastic Defend do not quarantine them (DAR-428). Quill does it from the Linux
+# runner; `macos_native` is Pro-only and only handles DMG/pkg. Runs before
+# checksums, so checksums.txt hashes the signed binaries.
+#
+# Off for snapshots (the dry run has no access to the secrets), on for every real
+# release: a release without the secrets fails rather than ships unsigned.
+#
+# One entry per build because GoReleaser signs an entry's binaries one after the
+# other but runs entries in parallel (one per CPU), and each waits for Apple's
+# verdict. A new build needs its own entry here; the release job fails otherwise.
+# Bare Mach-O binaries cannot be stapled; Gatekeeper fetches the ticket online.
+notarize:
+  macos:
+    - &notarize
+      enabled: "{{ not .IsSnapshot }}"
+      ids: [claude-on-event]
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 15m
+    - { <<: *notarize, ids: [cursor-on-event] }
+    - { <<: *notarize, ids: [codex-on-event] }
+    - { <<: *notarize, ids: [copilot-on-event] }
+    - { <<: *notarize, ids: [opencode-v2-on-event] }
+
 archives:
   - formats: ["binary"]
     name_template: "{{ .Binary }}"

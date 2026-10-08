@@ -500,6 +500,20 @@ func TestBootstrapDownloadBoundsStallsNotSlowLinks(t *testing.T) {
 		assert.Less(t, held, 2*time.Minute, "the download outlived the extension's kill: %s", held)
 	})
 
+	// Copilot CLI gives a hook 10 s, so its download always outlives the hook,
+	// and the orphan can never move the binary into place. It has to end.
+	t.Run("slow but moving, under the copilot cap", func(t *testing.T) {
+		curlAgainst(t, releaseServer(t, "copilot", body, trickle))
+
+		start := time.Now()
+		out, err := runBootstrap(t, "copilot", t.TempDir())
+		held := time.Since(start) * downloadTimeScale
+
+		assert.NoError(t, err, "the bootstrap must fail open")
+		assert.Contains(t, out, "download failed")
+		assert.Less(t, held, 2*time.Minute, "the download was not capped: %s", held)
+	})
+
 	t.Run("stalled", func(t *testing.T) {
 		curlAgainst(t, releaseServer(t, agent, body, func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write(body[:1024])

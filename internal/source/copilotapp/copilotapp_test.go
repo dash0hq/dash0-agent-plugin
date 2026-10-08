@@ -339,6 +339,11 @@ func TestBuildTurn_unknownSubAgentUsageKeepsTheMainModel(t *testing.T) {
 	assert.Equal(t, int64(10), turn.Usage.InputTokens)
 	assert.Equal(t, "claude-opus-5.5", turn.Usage.Model)
 	assert.Equal(t, "gpt-5.6-luna", turn.Usage.ResponseModel)
+	assert.Equal(t, "claude-opus-5.5", turn.Usage.ReplyModel)
+
+	chat := map[string]any{}
+	copilot.AttachUsage(chat, turn.Usage)
+	assert.Equal(t, "gpt-5.6-luna", chat["response_model"])
 }
 
 // When the main agent also reported usage, with no model, the chat span's

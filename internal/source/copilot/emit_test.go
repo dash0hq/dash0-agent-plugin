@@ -164,6 +164,39 @@ func TestEmitAgentSpans_usageOnlyWhenAttributed(t *testing.T) {
 	assert.Equal(t, "gpt-5.6-luna", agent["gen_ai.request.model"])
 }
 
+// A turn's tokens can be priced at a model the main agent never replied with.
+// The spans that only fall back to the turn's model (the main agent's tools and
+// a sub-agent with no model of its own) carry no tokens, so they name the reply
+// model instead.
+func TestEmit_fallbacksUseTheReplyModel(t *testing.T) {
+	turn := subAgentTurn(nil)
+	turn.Usage = &Usage{Model: "claude-opus-5.5", ResponseModel: "gpt-5.6-luna", ReplyModel: "claude-opus-5.5"}
+	turn.Agents[0].Model = ""
+	spans := emitted(t, func(cfg otlp.Config) {
+		EmitAgentSpans(turn, testCtx, cfg, "test")
+		EmitToolSpans(turn, testCtx, cfg, "test")
+	})
+	for _, name := range []string{"invoke_agent explore", "execute_tool task", "execute_tool view"} {
+		assert.Equal(t, "claude-opus-5.5", spans[name]["gen_ai.request.model"], name)
+		assert.Equal(t, "claude-opus-5.5", spans[name]["gen_ai.response.model"], name)
+	}
+}
+
+// Without a reply model, the fallbacks take the turn's response model.
+func TestEmit_fallbacksTakeTheResponseModelWithoutAReplyModel(t *testing.T) {
+	turn := subAgentTurn(nil)
+	turn.Usage = &Usage{Model: "auto", ResponseModel: "gpt-5.6-luna"}
+	turn.Agents[0].Model = ""
+	spans := emitted(t, func(cfg otlp.Config) {
+		EmitAgentSpans(turn, testCtx, cfg, "test")
+		EmitToolSpans(turn, testCtx, cfg, "test")
+	})
+	for _, name := range []string{"invoke_agent explore", "execute_tool task", "execute_tool view"} {
+		assert.Equal(t, "auto", spans[name]["gen_ai.request.model"], name)
+		assert.Equal(t, "gpt-5.6-luna", spans[name]["gen_ai.response.model"], name)
+	}
+}
+
 // An auto-mode sub-agent keeps "auto" as its request and its resolved model as
 // the response, on its invoke_agent span and its tools, as the turn's chat does.
 func TestEmitAgentSpans_autoSubAgentKeepsBothModels(t *testing.T) {

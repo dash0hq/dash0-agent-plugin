@@ -339,7 +339,7 @@ func BuildTurn(events []Event, end time.Time) *copilot.Turn {
 	if usage.Model == "" {
 		usage.Model, usage.ResponseModel = messageModel, messageModel
 		if !sawMainUsage && foreignModel != "" {
-			usage.ResponseModel = foreignModel
+			usage.ResponseModel, usage.ReplyModel = foreignModel, messageModel
 		}
 	}
 	usage.NoTokens = !sawUsage

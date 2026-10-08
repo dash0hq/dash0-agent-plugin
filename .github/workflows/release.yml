@@ -125,9 +125,12 @@ jobs:
     if: needs.plan.outputs.mode == 'release'
     runs-on: ubuntu-latest
     # GoReleaser cross-compiles 30 targets and uploads them, which is 6-10min on
-    # its own, and the strict asset check can spend minutes more on retries. The
-    # budget below is sized so the two together cannot reach this.
-    timeout-minutes: 30
+    # its own, and notarizing waits on Apple: up to 15min per darwin binary, two
+    # per entry, with only as many entries at once as the runner has CPUs (4), so
+    # the fifth can wait for a free slot. That has no useful upper bound, so the
+    # build step is capped at 40min instead, and the strict asset check after
+    # Publish, which can spend minutes more on retries, always has time left.
+    timeout-minutes: 50
     # The App credentials live only in this environment, which is restricted to
     # main. That is the control, not the REF_NAME check in release-plan.sh:
     # workflow_dispatch runs the workflow file from the branch it is dispatched
@@ -217,7 +220,23 @@ jobs:
             echo "tag $TAG already here — re-run of a release that failed after tagging"
           fi
 
+      - name: The notarization secrets are set
+        env:
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          # A missing secret arrives as "", and GoReleaser then signs but skips
+          # notarization without failing. A missing certificate already fails.
+          for name in MACOS_NOTARY_KEY MACOS_NOTARY_KEY_ID MACOS_NOTARY_ISSUER_ID; do
+            [ -n "${!name}" ] || { echo "::error::$name is not set in the release environment"; exit 1; }
+          done
+
       - name: Build and upload as a draft
+        # See the job's timeout. A draft left behind by the kill is removed at
+        # the end, like any other failure before Publish.
+        timeout-minutes: 40
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -225,6 +244,12 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Developer ID signing and notarization; see `notarize` in .goreleaser.yaml.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
 
       - name: The build is complete and the binary runs
         run: |
@@ -237,6 +262,12 @@ jobs:
           find dist -maxdepth 1 -type f -name '*-on-event-*' -exec basename {} \; \
             | sort >built.txt
           diff expected.txt built.txt || { echo "::error::dist is not what .goreleaser.yaml describes"; exit 1; }
+          # GoReleaser skips a darwin build that no notarize entry names, without
+          # failing. The signing certificate's subject is embedded in the binary.
+          for f in dist/*-on-event-darwin-*; do
+            LC_ALL=C grep -q "Developer ID Application" "$f" \
+              || { echo "::error::$f is not signed with the Developer ID"; exit 1; }
+          done
           CLAUDE_PLUGIN_DATA=$(mktemp -d) \
           DASH0_OTLP_URL=http://127.0.0.1:1 \
             dist/claude-on-event-linux-amd64 \
@@ -289,7 +320,7 @@ jobs:
           # 404 must not be reported as one.
           # Bounded on purpose: 3 attempts, and RETRY_DEADLINE caps the
           # transient retries inside each one. Worst case is about 3 minutes,
-          # against a 30-minute job that has already spent 6-10 on the build.
+          # against a 50-minute job that has already spent up to 40 on the build.
           # Being killed by the job timeout here is the worst outcome available
           # — the release is public and main has not moved — so this budget has
           # to be provably smaller than what is left, not just "small".

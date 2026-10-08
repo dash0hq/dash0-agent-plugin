@@ -80,6 +80,28 @@ that one rather than starting another, which would skip a version.
 > The release job carries its own check for this and refuses outright when the
 > version is already published.
 
+### macOS signing
+
+Every release signs the darwin binaries with Dash0's Developer ID and notarizes
+them (`notarize` in `.goreleaser.yaml`). Without that, EDRs such as Elastic
+Defend quarantine them. The dry run skips this step. A real release fails
+without the secrets below, so an unsigned release cannot ship by mistake. The
+secrets live in the `release` environment:
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_SIGN_P12` | Developer ID Application certificate and private key, exported as `.p12`, base64 encoded |
+| `MACOS_SIGN_PASSWORD` | The password set when exporting the `.p12` |
+| `MACOS_NOTARY_KEY` | App Store Connect API key (`AuthKey_<id>.p8`), base64 encoded |
+| `MACOS_NOTARY_KEY_ID` | That key's ID |
+| `MACOS_NOTARY_ISSUER_ID` | The Issuer ID shown above the keys list in App Store Connect |
+
+The Developer ID certificate expires after 5 years. Renew it and replace both
+`MACOS_SIGN_*` secrets before then. To check a published binary on a Mac:
+`codesign -dv --verbose=2 <binary>` must show `Authority=Developer ID Application: …`
+and a `TeamIdentifier`, and `spctl -a -vvv -t install <binary>` must show
+`source=Notarized Developer ID`.
+
 ### The npm package
 
 After the release, the `npm` job publishes `@dash0/agent-plugin-opencode-v2` at the

@@ -83,7 +83,7 @@ variable instead.
 
 ¹ The Cursor and Codex README example configs show `omit_io: false`, but the installers
 don't write the key. With no explicit setting the binary default (`true`) applies on all
-five runtimes.
+six runtimes.
 
 ## Configuration sources & precedence
 

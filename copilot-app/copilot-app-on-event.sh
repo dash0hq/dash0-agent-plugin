@@ -21,7 +21,8 @@ VERSION="0.1.28"
 BASE="${COPILOT_APP_PLUGIN_DATA:-${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/copilot-app}}"
 
 # Total seconds the binary download may take. The extension SIGKILLs this
-# script at 120 s, which skips the cleanup trap and leaves curl running.
+# script at 120 s, which skips the cleanup trap and leaves curl running, so this
+# plus the 15 s checksums fetch before it must stay under 120.
 DOWNLOAD_MAX_TIME=100
 
 # >>> shared bootstrap - byte-identical across the fail-open POSIX bootstraps >>>
@@ -107,11 +108,11 @@ if [ ! -x "$BINARY" ]; then
   # the agent sets one. wget's timeout is per read, so it is a stall bound.
   if command -v curl &>/dev/null; then
     STALL=(--connect-timeout 10 --speed-limit 1024 --speed-time 30)
-    curl -fsSL "${STALL[@]}" ${DOWNLOAD_MAX_TIME:+--max-time "$DOWNLOAD_MAX_TIME"} -o "$TMP" "$URL" || fail_open "download failed: $URL"
     CHECKSUMS=$(curl -fsSL "${STALL[@]}" --max-time 15 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
+    curl -fsSL "${STALL[@]}" ${DOWNLOAD_MAX_TIME:+--max-time "$DOWNLOAD_MAX_TIME"} -o "$TMP" "$URL" || fail_open "download failed: $URL"
   elif command -v wget &>/dev/null; then
-    wget -qO "$TMP" --timeout=30 --tries=2 "$URL" || fail_open "download failed: $URL"
     CHECKSUMS=$(wget -qO- --timeout=30 --tries=2 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
+    wget -qO "$TMP" --timeout=30 --tries=2 "$URL" || fail_open "download failed: $URL"
   else
     fail_open "neither curl nor wget found"
   fi

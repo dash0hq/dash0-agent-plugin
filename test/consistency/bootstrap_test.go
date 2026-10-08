@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -427,6 +428,32 @@ func releaseServer(t *testing.T, agent string, body []byte, send func(w http.Res
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// checksums.txt is fetched before the binary, so a link that cannot reach it
+// fails fast instead of after a long download that the trap then deletes.
+func TestBootstrapFetchesChecksumsBeforeTheBinary(t *testing.T) {
+	for _, agent := range failOpenAgents {
+		t.Run(agent, func(t *testing.T) {
+			var binaryRequests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/checksums.txt") {
+					http.Error(w, "unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				binaryRequests.Add(1)
+				http.NotFound(w, r)
+			}))
+			t.Cleanup(srv.Close)
+			curlAgainst(t, srv.URL)
+
+			out, err := runBootstrap(t, agent, t.TempDir())
+
+			assert.NoError(t, err, "the bootstrap must fail open")
+			assert.Contains(t, out, "checksums fetch failed")
+			assert.Zero(t, binaryRequests.Load(), "the binary was requested after checksums.txt failed")
+		})
+	}
 }
 
 // A slow link must still install the binary: the bootstrap fails open, so a

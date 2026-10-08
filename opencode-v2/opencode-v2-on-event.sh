@@ -106,11 +106,11 @@ if [ ! -x "$BINARY" ]; then
   # the agent sets one. wget's timeout is per read, so it is a stall bound.
   if command -v curl &>/dev/null; then
     STALL=(--connect-timeout 10 --speed-limit 1024 --speed-time 30)
-    curl -fsSL "${STALL[@]}" ${DOWNLOAD_MAX_TIME:+--max-time "$DOWNLOAD_MAX_TIME"} -o "$TMP" "$URL" || fail_open "download failed: $URL"
     CHECKSUMS=$(curl -fsSL "${STALL[@]}" --max-time 15 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
+    curl -fsSL "${STALL[@]}" ${DOWNLOAD_MAX_TIME:+--max-time "$DOWNLOAD_MAX_TIME"} -o "$TMP" "$URL" || fail_open "download failed: $URL"
   elif command -v wget &>/dev/null; then
-    wget -qO "$TMP" --timeout=30 --tries=2 "$URL" || fail_open "download failed: $URL"
     CHECKSUMS=$(wget -qO- --timeout=30 --tries=2 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
+    wget -qO "$TMP" --timeout=30 --tries=2 "$URL" || fail_open "download failed: $URL"
   else
     fail_open "neither curl nor wget found"
   fi

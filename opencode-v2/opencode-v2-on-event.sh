@@ -13,7 +13,7 @@
 set -u
 
 AGENT="opencode-v2"
-VERSION="0.1.28"
+VERSION="0.1.29"
 
 # Where the downloaded binary lives. Mirrors the per-source scratch root layout
 # from internal/harness so a user can clean up the whole tree at once.

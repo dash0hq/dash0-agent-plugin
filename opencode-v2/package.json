@@ -1,6 +1,6 @@
 {
   "name": "@dash0/agent-plugin-opencode-v2",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "type": "module",
   "exports": "./index.js",
   "files": [

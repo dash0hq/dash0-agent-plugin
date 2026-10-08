@@ -29,7 +29,7 @@ const (
 // error. Claude's is deliberately excluded: it uses `set -euo pipefail` and
 // exits non-zero, and its cache filename is the unprefixed legacy one, so its
 // body cannot be identical.
-var failOpenAgents = []string{"cursor", "codex", "copilot", "opencode-v2"}
+var failOpenAgents = []string{"cursor", "codex", "copilot", "opencode-v2", "copilot-app"}
 
 func bootstrapPath(t *testing.T, agent string) string {
 	t.Helper()
@@ -186,7 +186,7 @@ func powerShellVersion(t *testing.T, agent string) string {
 }
 
 // Each pair of bootstraps pins its own version, outside the shared region because
-// the syntax differs. scripts/version.sh bumps all thirteen pins together, but
+// the syntax differs. scripts/version.sh bumps all fifteen pins together, but
 // nothing stopped a hand edit or a dropped line in that script from moving one and
 // not the other. The cost of drift is silent and total: the version is in the cache
 // filename and the asset name, so Windows would fetch a release asset that does

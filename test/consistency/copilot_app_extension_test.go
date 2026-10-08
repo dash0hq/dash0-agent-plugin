@@ -1,0 +1,474 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+package consistency
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// The SDK stub hands the extension a session whose history read stays pending
+// until the driver releases it, so live events can land in that window.
+const extensionSDKStub = `export async function joinSession(config) { globalThis.__config = config; return globalThis.__session; }`
+
+const extensionDriver = `
+import { appendFileSync, readFileSync } from "node:fs";
+let release, handler;
+const pending = new Promise((r) => (release = r));
+globalThis.__session = {
+  sessionId: "s1",
+  getEvents: () => pending,
+  on: (h) => (handler = h),
+  log: async (line) => appendFileSync(process.env.LOG, "log " + line + "\n"),
+  // The metrics are read with the history, after the live events, unless
+  // METRICS_EARLY has them read before any live event arrives.
+  rpc: process.env.METRICS
+    ? { usage: { getMetrics: () => (process.env.METRICS_EARLY ? Promise.resolve() : pending).then(() => JSON.parse(process.env.METRICS)) } }
+    : undefined,
+};
+const loaded = import("./extension.mjs");
+while (!handler) await new Promise((r) => setTimeout(r, 1));
+
+const now = new Date().toISOString();
+handler({ id: "h3", type: "tool.execution_complete", timestamp: now, data: { toolCallId: "t1", success: true } });
+// Live events: a comma-separated list of types, or a JSON array of events.
+const live = process.argv[2].startsWith("[")
+  ? JSON.parse(process.argv[2])
+  : process.argv[2].split(",").filter(Boolean).map((type) => ({ type, data: {} }));
+for (const [i, e] of live.entries()) handler({ id: "l" + i, timestamp: now, ...e });
+// The history the extension reads: HISTORY as a JSON array of events, or a
+// first turn still running.
+release(process.env.HISTORY
+  ? JSON.parse(process.env.HISTORY).map((e, i) => ({ id: "x" + i, timestamp: now, ...e }))
+  : [
+      { id: "h1", type: "user.message", timestamp: now, data: { content: "hi" } },
+      { id: "h2", type: "tool.execution_start", timestamp: now, data: { toolCallId: "t1", toolName: "view" } },
+      { id: "h3", type: "tool.execution_complete", timestamp: now, data: { toolCallId: "t1", success: true } },
+    ]);
+await loaded;
+// LATE: events the live stream delivers after the history read returned.
+if (process.env.LATE) {
+  await new Promise((r) => setTimeout(r, 50));
+  for (const e of JSON.parse(process.env.LATE)) handler({ timestamp: now, ...e });
+}
+
+// End the session through the hook, as the app does on exit, and mark when the
+// hook's promise settles relative to the sends it should have waited for.
+if (process.argv[4]) {
+  await globalThis.__config.hooks.onSessionEnd({ sessionId: "s1", reason: process.argv[4] });
+  appendFileSync(process.env.LOG, "hookReturned\n");
+}
+
+// Sends are chained child processes; wait for the expected number to land.
+const want = Number(process.argv[3]);
+for (let i = 0; i < 500; i++) {
+  let lines = [];
+  try { lines = readFileSync(process.env.LOG, "utf8").trim().split("\n"); } catch {}
+  if (lines.length >= want) break;
+  await new Promise((r) => setTimeout(r, 10));
+}
+await new Promise((r) => setTimeout(r, 100));
+`
+
+// fakeBinarySrc stands in for copilot-app-on-event: it records its event
+// argument and the payload it read on stdin, one line per call.
+const fakeBinarySrc = `package main
+
+import (
+	"io"
+	"os"
+	"os/exec"
+)
+
+func main() {
+	in, _ := io.ReadAll(os.Stdin)
+	if os.Args[1] == "sessionStart" {
+		os.Stderr.WriteString(os.Getenv("FAKE_STDERR"))
+		// A child that outlives the binary and keeps its stderr open, as a
+		// stalled download does.
+		if os.Getenv("FAKE_HOLD") != "" {
+			child := exec.Command("sleep", os.Getenv("FAKE_HOLD"))
+			child.Stderr = os.Stderr
+			child.Start()
+		}
+	}
+	f, err := os.OpenFile(os.Getenv("LOG"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		os.Exit(1)
+	}
+	defer f.Close()
+	f.WriteString(os.Args[1] + " " + string(in) + "\n")
+}
+`
+
+var (
+	fakeBinaryOnce sync.Once
+	fakeBinary     string
+	fakeBinaryErr  error
+)
+
+// buildFakeBinary compiles fakeBinarySrc once per test run.
+func buildFakeBinary(t *testing.T) string {
+	t.Helper()
+	fakeBinaryOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "copilot-app-fake")
+		if err != nil {
+			fakeBinaryErr = err
+			return
+		}
+		src := filepath.Join(dir, "main.go")
+		if fakeBinaryErr = os.WriteFile(src, []byte(fakeBinarySrc), 0o644); fakeBinaryErr != nil {
+			return
+		}
+		fakeBinary = filepath.Join(dir, "fake")
+		if runtime.GOOS == "windows" {
+			fakeBinary += ".exe"
+		}
+		out, err := exec.Command("go", "build", "-o", fakeBinary, src).CombinedOutput()
+		if err != nil {
+			fakeBinaryErr = fmt.Errorf("%w: %s", err, out)
+		}
+	})
+	require.NoError(t, fakeBinaryErr, "building the fake binary")
+	return fakeBinary
+}
+
+// runExtension loads the real extension.mjs against the stub, delivers the
+// given live events while the history read is pending, optionally ends the
+// session through the sessionEnd hook with exitReason, and returns one
+// "<event> <payload>" line per binary call.
+//
+// The sends go through the real bootstrap for this platform: bash and
+// copilot-app-on-event.sh, or powershell.exe and copilot-app-on-event.ps1 on
+// Windows. Its cache is seeded with a fake binary under the pinned name, so
+// nothing is downloaded and the whole spawn and stdin path is exercised.
+func runExtension(t *testing.T, live string, want int, exitReason string) []string {
+	t.Helper()
+	return runExtensionWithHistory(t, "", live, want, exitReason)
+}
+
+// runExtensionWithHistory is runExtension with the session history the
+// extension reads at startup, as a JSON array of events.
+func runExtensionWithHistory(t *testing.T, history, live string, want int, exitReason string) []string {
+	t.Helper()
+	return runExtensionWithMetrics(t, history, "", live, want, exitReason)
+}
+
+// runExtensionWithMetrics is runExtensionWithHistory with the session's usage
+// metrics, as a JSON object, which the extension reads for its first turn.
+func runExtensionWithMetrics(t *testing.T, history, metrics, live string, want int, exitReason string) []string {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is not installed")
+	}
+	root := repoRoot(t)
+	dir := t.TempDir()
+	sdk := filepath.Join(dir, "node_modules", "@github", "copilot-sdk")
+	require.NoError(t, os.MkdirAll(sdk, 0o755))
+	files := map[string]string{
+		"driver.mjs": extensionDriver,
+		filepath.Join("node_modules", "@github", "copilot-sdk", "package.json"): `{"name":"@github/copilot-sdk","type":"module","exports":{"./extension":"./extension.js"}}`,
+		filepath.Join("node_modules", "@github", "copilot-sdk", "extension.js"): extensionSDKStub,
+	}
+	for _, name := range []string{"extension.mjs", "copilot-app-on-event.sh", "copilot-app-on-event.ps1"} {
+		body, err := os.ReadFile(filepath.Join(root, "copilot-app", name))
+		require.NoError(t, err)
+		files[name] = string(body)
+	}
+	for name, body := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
+	}
+
+	data := filepath.Join(dir, "data")
+	binDir := filepath.Join(data, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	cached := fmt.Sprintf("copilot-app-on-event-%s-%s-%s", bootstrapVersion(t, "copilot-app"), runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		cached += ".exe"
+	}
+	fake, err := os.ReadFile(buildFakeBinary(t))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, cached), fake, 0o755))
+
+	log := filepath.Join(dir, "calls.log")
+	cmd := exec.Command("node", "driver.mjs", live, strconv.Itoa(want), exitReason)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "LOG="+log, "COPILOT_APP_PLUGIN_DATA="+data, "DASH0_VERSION=", "HISTORY="+history, "METRICS="+metrics)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	require.NoError(t, cmd.Run(), "driver: %s", stderr.String())
+	assert.Empty(t, stdout.String(), "stdout is the SDK's JSON-RPC channel")
+
+	body, _ := os.ReadFile(log)
+	return strings.Split(strings.TrimSpace(string(body)), "\n")
+}
+
+func eventNames(calls []string) []string {
+	names := make([]string, len(calls))
+	for i, c := range calls {
+		names[i], _, _ = strings.Cut(c, " ")
+	}
+	return names
+}
+
+// The first prompt is history by the time the extension listens. A turn that
+// goes idle before the history read returns is still that prompt's turn, and
+// carries the events from both the history and the live stream, once each.
+func TestCopilotAppExtension_idleDuringCatchUpKeepsTheFirstTurn(t *testing.T) {
+	calls := runExtension(t, "session.idle", 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Equal(t, 1, strings.Count(calls[2], `"tool.execution_start"`))
+	assert.Equal(t, 1, strings.Count(calls[2], `"tool.execution_complete"`))
+}
+
+// A session that shut down while the history read was pending ends its turn
+// first, and sends nothing after its sessionEnd.
+func TestCopilotAppExtension_shutdownDuringCatchUpEndsTheTurnFirst(t *testing.T) {
+	// want 5 waits out the driver's timeout, so a late send would show.
+	calls := runExtension(t, "session.shutdown", 5, "")
+	assert.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "sessionEnd"}, eventNames(calls))
+}
+
+// The app stops the extension soon after a user exits, so the sessionEnd hook
+// must not return before the open turn and the session end have been sent.
+func TestCopilotAppExtension_userExitWaitsForTheFinalSends(t *testing.T) {
+	calls := runExtension(t, "", 5, "user_exit")
+	assert.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "sessionEnd", "hookReturned"}, eventNames(calls))
+}
+
+// A message steered into the running turn is part of that turn's input, not
+// the start of another: one turn goes out, carrying both prompts.
+func TestCopilotAppExtension_steeringStaysInTheTurn(t *testing.T) {
+	calls := runExtension(t, `[{"type":"user.message","data":{"content":"and the tests","delivery":"steering"}},{"type":"session.idle","data":{}}]`, 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[2], `"prompt":"hi\nand the tests"`)
+}
+
+// A cancelled run and the error a turn ended on both reach the binary, which
+// marks the chat span failed.
+func TestCopilotAppExtension_failureReachesTheBinary(t *testing.T) {
+	calls := runExtension(t, `[{"type":"session.error","data":{"errorType":"quota","message":"over","stack":"dropped"}},{"type":"session.idle","data":{"aborted":true}}]`, 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[2], `"aborted":true`)
+	assert.Contains(t, calls[2], `"type":"session.error"`)
+	assert.Contains(t, calls[2], `"errorType":"quota"`)
+	assert.NotContains(t, calls[2], "stack", "only the keys the adapter reads are forwarded")
+}
+
+// The event order of a first turn whose model request failed at once, recorded
+// from the app on 2026-10-06: the turn had closed, and the error was written,
+// before the extension listened.
+const failedFirstTurn = `[
+  {"type":"user.message","data":{"content":"hi"}},
+  {"type":"assistant.turn_start","data":{}},
+  {"type":"hook.start","data":{"hookType":"errorOccurred"}},
+  {"type":"assistant.turn_end","data":{}},
+  {"type":"hook.start","data":{"hookType":"sessionEnd"}},
+  {"type":"session.error","data":{"errorType":"query","message":"400 unsupported model"}},
+  {"type":"hook.end","data":{"hookType":"sessionEnd"}}`
+
+// A first turn that failed before the extension started is still reported,
+// with the error it ended on.
+func TestCopilotAppExtension_firstTurnThatEndedBeforeTheJoinIsReported(t *testing.T) {
+	calls := runExtensionWithHistory(t, failedFirstTurn+"]", "", 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[1], `"prompt":"hi"`)
+	assert.Contains(t, calls[2], `"errorType":"query"`)
+}
+
+// A reopened session's last turn was reported when it ran, so it is not
+// replayed when the extension starts again.
+func TestCopilotAppExtension_resumedSessionReplaysNothing(t *testing.T) {
+	calls := runExtensionWithHistory(t, failedFirstTurn+`,{"type":"session.resume","data":{}}]`, "", 1, "")
+	assert.Equal(t, []string{"sessionStart"}, eventNames(calls))
+}
+
+// Only a session's first turn can have ended before the extension listened. A
+// finished turn after an earlier one is not this extension's to report.
+func TestCopilotAppExtension_laterFinishedTurnIsNotReplayed(t *testing.T) {
+	history := `[{"type":"user.message","data":{"content":"one"}},{"type":"hook.start","data":{"hookType":"sessionEnd"}},` +
+		`{"type":"user.message","data":{"content":"two"}},{"type":"hook.start","data":{"hookType":"sessionEnd"}}]`
+	calls := runExtensionWithHistory(t, history, "", 1, "")
+	assert.Equal(t, []string{"sessionStart"}, eventNames(calls))
+}
+
+// Usage events are not kept in the history, so the tokens a first turn spent
+// before the extension listened come from the session's metrics, less what
+// arrived live. Sub-agent tokens are left to the sub-agent's own events.
+func TestCopilotAppExtension_firstTurnRecoversTheUsageItMissed(t *testing.T) {
+	metrics := `{"modelMetrics":{"m":{"usage":{"inputTokens":9999}}},"agentMetrics":{"main":{"modelMetrics":{"m":{"usage":{"inputTokens":3000,"outputTokens":30,"cacheReadTokens":0}}}}}}`
+	live := `[{"type":"assistant.usage","data":{"model":"m","inputTokens":1000,"outputTokens":10}},{"type":"session.idle","data":{}}]`
+	calls := runExtensionWithMetrics(t, "", metrics, live, 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[2], `"data":{"model":"m","inputTokens":2000,"outputTokens":20}`)
+	assert.Contains(t, calls[2], `"data":{"model":"m","inputTokens":1000,"outputTokens":10}`)
+	assert.NotContains(t, calls[2], "9999")
+}
+
+// A prompt that arrives live while the history is still being read, after the
+// first turn went idle, starts the second turn only once the first is
+// recovered. Each turn keeps its own events.
+func TestCopilotAppExtension_secondPromptDuringCatchUpKeepsTheFirstTurn(t *testing.T) {
+	live := `[{"type":"session.idle","data":{}},{"type":"user.message","data":{"content":"second"}},` +
+		`{"type":"tool.execution_start","data":{"toolCallId":"t9","toolName":"bash"}},{"type":"session.idle","data":{}}]`
+	calls := runExtension(t, live, 5, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[1], `"prompt":"hi"`)
+	assert.Contains(t, calls[2], `"toolCallId":"t1"`)
+	assert.NotContains(t, calls[2], `"t9"`)
+	assert.Contains(t, calls[3], `"prompt":"second"`)
+	assert.Contains(t, calls[4], `"toolCallId":"t9"`)
+	assert.NotContains(t, calls[4], `"t1"`)
+}
+
+// The sessionEnd hook fires after every run, but the run's error can follow it,
+// so the hook does not end the turn: session.idle does.
+func TestCopilotAppExtension_completedRunHookLeavesTheTurnToIdle(t *testing.T) {
+	calls := runExtension(t, "", 3, "complete")
+	// The hook returns at once, so its mark can land before the sends.
+	assert.ElementsMatch(t, []string{"sessionStart", "userPromptSubmitted", "hookReturned"}, eventNames(calls))
+}
+
+// With a prompt held during catch-up, the held prompt is not taken from the
+// history as the turn to recover, and the first turn's missed usage is the
+// session's less what arrived live for either turn.
+func TestCopilotAppExtension_heldPromptStaysOutOfTheFirstTurn(t *testing.T) {
+	history := `[{"type":"user.message","data":{"content":"hi"}},{"id":"l2","type":"user.message","data":{"content":"second"}}]`
+	metrics := `{"agentMetrics":{"main":{"modelMetrics":{"m":{"usage":{"inputTokens":3000}}}}}}`
+	live := `[{"type":"assistant.usage","data":{"model":"m","inputTokens":1000}},{"type":"session.idle","data":{}},` +
+		`{"type":"user.message","data":{"content":"second"}},{"type":"assistant.usage","data":{"model":"m","inputTokens":500}},{"type":"session.idle","data":{}}]`
+	calls := runExtensionWithMetrics(t, history, metrics, live, 5, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[1], `"prompt":"hi"`)
+	assert.Contains(t, calls[2], `"inputTokens":1500`)
+	assert.Contains(t, calls[2], `"inputTokens":1000`)
+	assert.NotContains(t, calls[2], `"inputTokens":500}`)
+	assert.Contains(t, calls[3], `"prompt":"second"`)
+	assert.Contains(t, calls[4], `"inputTokens":500`)
+	assert.NotContains(t, calls[4], `"inputTokens":1000`)
+}
+
+// A prompt that arrived during catch-up, before the session shut down, gets its
+// turn, and nothing goes out after sessionEnd.
+func TestCopilotAppExtension_promptBeforeShutdownDuringCatchUpIsKept(t *testing.T) {
+	// want 7 waits out the driver's timeout, so a late send would show.
+	calls := runExtension(t, `[{"type":"user.message","data":{"content":"second"}},{"type":"session.shutdown","data":{}}]`, 7, "")
+	assert.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd", "sessionEnd"}, eventNames(calls))
+	assert.Contains(t, calls[3], `"prompt":"second"`)
+}
+
+// History events the live stream delivers after catch-up stay out of the held
+// prompt's turn: they were the first turn's, and went out with it.
+func TestCopilotAppExtension_lateHistoryEventsStayOutOfTheHeldTurn(t *testing.T) {
+	t.Setenv("LATE", `[{"id":"x1","type":"tool.execution_start","data":{"toolCallId":"t1","toolName":"view"}},{"type":"session.idle","data":{}}]`)
+	history := `[{"type":"user.message","data":{"content":"hi"}},{"type":"tool.execution_start","data":{"toolCallId":"t1","toolName":"view"}}]`
+	live := `[{"type":"session.idle","data":{}},{"type":"user.message","data":{"content":"second"}}]`
+	calls := runExtensionWithHistory(t, history, live, 5, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[2], `"toolCallId":"t1"`)
+	assert.NotContains(t, calls[4], `"t1"`)
+}
+
+// The history after a held prompt is the held turn's: an event there that the
+// live stream has not delivered yet stays off the recovered first turn, and
+// reaches the held turn when it arrives.
+func TestCopilotAppExtension_historyAfterTheHeldPromptIsTheHeldTurns(t *testing.T) {
+	t.Setenv("LATE", `[{"id":"x2","type":"tool.execution_start","data":{"toolCallId":"t9","toolName":"bash"}},{"type":"session.idle","data":{}}]`)
+	history := `[{"type":"user.message","data":{"content":"hi"}},{"id":"l1","type":"user.message","data":{"content":"second"}},` +
+		`{"type":"tool.execution_start","data":{"toolCallId":"t9","toolName":"bash"}}]`
+	live := `[{"type":"session.idle","data":{}},{"type":"user.message","data":{"content":"second"}}]`
+	calls := runExtensionWithHistory(t, history, live, 5, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.NotContains(t, calls[2], `"t9"`)
+	assert.Contains(t, calls[4], `"toolCallId":"t9"`)
+}
+
+// Usage that arrives live after the metrics were read is not in them, so it is
+// not subtracted from what the first turn missed.
+func TestCopilotAppExtension_usageAfterTheMetricsReadIsNotSubtracted(t *testing.T) {
+	t.Setenv("METRICS_EARLY", "1")
+	metrics := `{"agentMetrics":{"main":{"modelMetrics":{"m":{"usage":{"inputTokens":100}}}}}}`
+	live := `[{"type":"assistant.usage","data":{"model":"m","inputTokens":100}},{"type":"session.idle","data":{}}]`
+	calls := runExtensionWithMetrics(t, "", metrics, live, 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Equal(t, 2, strings.Count(calls[2], `"inputTokens":100}`), "the missed 100 and the live 100")
+}
+
+// Only a session's first turn recovers usage from the metrics: they count the
+// whole session, so a later turn recovered after a reload would take it all.
+func TestCopilotAppExtension_laterTurnRecoversNoUsage(t *testing.T) {
+	history := `[{"type":"user.message","data":{"content":"one"}},{"type":"hook.start","data":{"hookType":"sessionEnd"}},` +
+		`{"type":"user.message","data":{"content":"two"}}]`
+	metrics := `{"agentMetrics":{"main":{"modelMetrics":{"m":{"usage":{"inputTokens":3000}}}}}}`
+	calls := runExtensionWithMetrics(t, history, metrics, "session.idle", 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Contains(t, calls[1], `"prompt":"two"`)
+	assert.NotContains(t, calls[2], "assistant.usage")
+}
+
+// The history overlaps the live stream. A history event that follows one the
+// stream delivered is left for the stream, so the turn keeps the real order and
+// each event once.
+func TestCopilotAppExtension_historyPastTheLiveStreamIsLeftToIt(t *testing.T) {
+	t.Setenv("LATE", `[{"id":"x9","type":"tool.execution_complete","data":{"toolCallId":"t5","success":true}},{"type":"session.idle","data":{}}]`)
+	history := `[{"type":"user.message","data":{"content":"hi"}},{"id":"l0","type":"tool.execution_start","data":{"toolCallId":"t5","toolName":"bash"}},` +
+		`{"id":"x9","type":"tool.execution_complete","data":{"toolCallId":"t5","success":true}}]`
+	live := `[{"type":"tool.execution_start","data":{"toolCallId":"t5","toolName":"bash"}}]`
+	calls := runExtensionWithHistory(t, history, live, 3, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	start := strings.Index(calls[2], `"tool.execution_start"`)
+	require.GreaterOrEqual(t, start, 0)
+	assert.Less(t, start, strings.Index(calls[2], `"toolCallId":"t5","success":true`))
+	assert.Equal(t, 1, strings.Count(calls[2], `"toolCallId":"t5","success":true`))
+}
+
+// Every prompt that arrives during catch-up gets its own turn, in order, with
+// its own events and its own steering.
+func TestCopilotAppExtension_promptsDuringCatchUpKeepTheirTurns(t *testing.T) {
+	live := `[{"type":"session.idle","data":{}},{"type":"user.message","data":{"content":"P2"}},` +
+		`{"type":"user.message","data":{"content":"steer P2","delivery":"steering"}},` +
+		`{"type":"tool.execution_start","data":{"toolCallId":"t9","toolName":"bash"}},{"type":"session.idle","data":{}},` +
+		`{"type":"user.message","data":{"content":"P3"}}]`
+	calls := runExtension(t, live, 6, "")
+	require.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd", "userPromptSubmitted", "turnEnd", "userPromptSubmitted"}, eventNames(calls))
+	assert.Contains(t, calls[1], `"prompt":"hi"`)
+	assert.Contains(t, calls[2], `"toolCallId":"t1"`)
+	assert.NotContains(t, calls[2], "steer")
+	assert.Contains(t, calls[3], `"prompt":"P2"`)
+	assert.Contains(t, calls[4], `"toolCallId":"t9"`)
+	assert.Contains(t, calls[4], `"prompt":"P2\nsteer P2"`)
+	assert.Contains(t, calls[5], `"prompt":"P3"`)
+}
+
+// The setup warnings name the skill that fixes them, since nothing else in the
+// app points the user at it.
+func TestCopilotAppExtension_setupWarningNamesTheSkill(t *testing.T) {
+	t.Setenv("FAKE_STDERR", "dash0: no team configured — spans carry no dash0.team.name.\n")
+	calls := runExtension(t, "", 3, "")
+	assert.Contains(t, calls, "log dash0: no team configured — spans carry no dash0.team.name. Run /dash0-configure.")
+}
+
+// A send ends when the bootstrap exits, even if something it started still
+// holds its stderr open, so one stalled download does not hold up the rest.
+func TestCopilotAppExtension_sendDoesNotWaitForTheBootstrapsChildren(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sleep")
+	}
+	t.Setenv("FAKE_HOLD", "8")
+	start := time.Now()
+	calls := runExtension(t, "session.idle", 3, "")
+	assert.Equal(t, []string{"sessionStart", "userPromptSubmitted", "turnEnd"}, eventNames(calls))
+	assert.Less(t, time.Since(start), 6*time.Second)
+}

@@ -2,7 +2,7 @@
 
 The plugin starts a short-lived Go binary for each coding-agent hook event.
 It keeps session state on disk and exports OTLP JSON over HTTP. It is not a
-daemon, and the five runtimes do not expose equivalent data.
+daemon, and the six runtimes do not expose equivalent data.
 
 ## Event flow
 
@@ -21,7 +21,7 @@ follow the local-development steps in the runtime's developer README. They
 differ per runtime, and the cache path depends on how the plugin was installed.
 
 Entrypoints read one JSON payload with `pipeline.ReadEvent`. Claude feeds its
-already canonical event shape into the pipeline. Cursor, Codex, and Copilot
+already canonical event shape into the pipeline. Cursor, Codex, Copilot, and the Copilot app
 translate runtime fields and event names before calling `pipeline.Process`.
 Normalizers can return `nil` to drop events that have no consumer or duplicate
 another event.
@@ -30,7 +30,8 @@ another event.
 event, and returns messages for the entrypoint to render. Rendering stays
 runtime-specific because stdout and stderr have different meanings to each CLI.
 Copilot also exports recovered native tool and sub-agent spans from its
-entrypoint after the pipeline processes the turn.
+entrypoint after the pipeline processes the turn. The Copilot app does the same
+with the tool and sub-agent spans it builds from the turn's session events.
 
 ## Package ownership
 
@@ -66,6 +67,7 @@ context. Follow existing callers before moving behavior between packages.
 | Codex | Normalized hooks; tool duration can be reconstructed from matching events | Codex rollout files |
 | GitHub Copilot CLI | Hooks drive lifecycle; native OTel supplies tool and sub-agent spans | Copilot's native OTel files |
 | OpenCode V2 | Live V2 event stream, no hooks | `session.step.ended` token counts |
+| GitHub Copilot app | Session extension buffers the app's session events, one binary call per turn; no hooks | `assistant.usage` events, and for a first turn missed before the extension listened, the session's usage metrics |
 
 Do not infer support in one runtime from support in another. Missing measurements
 are not measured zeroes. Copilot's native OTel input cannot independently prove

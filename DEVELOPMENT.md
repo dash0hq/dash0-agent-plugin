@@ -218,7 +218,8 @@ attacker's own manifest.
 Two gaps, neither closed here:
 
 - **The Windows hooks ignore it.** `cursor-on-event.ps1`, `codex-on-event.ps1`,
-  `copilot-on-event.ps1`, and `opencode-v2-on-event.ps1` always use their pinned `$Version`. Confusingly,
+  `copilot-on-event.ps1`, `opencode-v2-on-event.ps1`, and `copilot-app-on-event.ps1` always use
+  their pinned `$Version`. Confusingly,
   `install-cursor.ps1` and `install-codex.ps1` *do* read it, so on Windows the
   variable is honoured at install time and ignored at event time.
 - **The installers do not validate it.** `install-cursor.sh`,
@@ -236,7 +237,7 @@ Two gaps, neither closed here:
 ### How it is wired
 
 - **`scripts/version.sh`** — `check`, `set`, `latest`, `next`. The only list of
-  the eighteen version pins, so the bump and the check cannot disagree
+  the twenty version pins, so the bump and the check cannot disagree
   about what needs bumping. `next` counts from the newest **published release**,
   not from tags or the manifests, both of which can name a version that was never
   released.
@@ -344,6 +345,7 @@ omitted when its value is empty.
 |---|---|--------------------------------|
 | `gen_ai.operation.name` | `chat` or `invoke_agent`                                             |                                |
 | `gen_ai.request.model` | `claude-…`, `gpt-…`, `cursor-auto`, …                                |                                |
+| `gen_ai.response.model` | `claude-…`, `gpt-…`, …                                               | Copilot CLI and app only. The model that answered, which differs from `gen_ai.request.model` when that is `auto`, and is then the only priceable one. On `invoke_agent`, the sub-agent's own model when it is known. |
 | `gen_ai.conversation.name` | Session title                                                        | Claude only (from transcript). Content-gated by `omit_io`: the title is derived from the first prompt. |
 | `gen_ai.usage.input_tokens` | integer                                                              |                                |
 | `gen_ai.usage.output_tokens` | integer                                                              |                                |
@@ -568,6 +570,7 @@ Codex-scoped as a reader diagnostic.
 |---|---|---|
 | `gen_ai.operation.name` | `execute_tool` | |
 | `gen_ai.request.model` | `claude-…`, `gpt-…`, … | The model of the actor that made the call. A tool call carrying `agent_id` is resolved from that sub-agent's own transcript, so it agrees with the `invoke_agent` span above it; omitted rather than filled from the session's model when that transcript is not on disk yet. |
+| `gen_ai.response.model` | `claude-…`, `gpt-…`, … | Copilot CLI and app only. Same meaning as on the chat span; a sub-agent's tool carries that sub-agent's model. |
 | `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh` | Claude only. Same source and meaning as on the chat span. |
 | `gen_ai.tool.type` | `function` | Constant. |
 | `gen_ai.tool.name` | `Bash`, `Read`, … | MCP tool names are stripped of their `mcp__<server>__` prefix; the server goes to `dash0.gen_ai.tool.mcp_server`. |

@@ -4,6 +4,7 @@
 package consistency
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -168,9 +169,42 @@ func runBootstrap(t *testing.T, agent, dataDir string, args ...string) (string, 
 		"DASH0_PLUGIN_DATA="+dataDir,
 		"COPILOT_PLUGIN_DATA="+dataDir,
 		"OPENCODE_V2_PLUGIN_DATA="+dataDir,
+		"COPILOT_APP_PLUGIN_DATA="+dataDir,
 	)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// A data directory set in the shell running the tests must not leak in, or a
+// bootstrap would run the user's installed binary and write into their cache.
+func TestRunBootstrapIgnoresTheCallersDataDir(t *testing.T) {
+	stubIn := func(dir, agent, marker string) {
+		binDir := filepath.Join(dir, "bin")
+		require.NoError(t, os.MkdirAll(binDir, 0o755))
+		name := fmt.Sprintf("%s-on-event-%s-%s-%s", agent, bootstrapVersion(t, agent), runtime.GOOS, runtime.GOARCH)
+		require.NoError(t, os.WriteFile(filepath.Join(binDir, name),
+			[]byte("#!/bin/sh\necho "+marker+"\ncat >/dev/null\n"), 0o755))
+	}
+
+	for _, agent := range failOpenAgents {
+		t.Run(agent, func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				t.Skip("the cache name carries .exe under Git Bash")
+			}
+			callers := t.TempDir()
+			stubIn(callers, agent, "CALLERS-RAN")
+			for _, v := range []string{"DASH0_PLUGIN_DATA", "PLUGIN_DATA", "COPILOT_PLUGIN_DATA", "COPILOT_APP_PLUGIN_DATA"} {
+				t.Setenv(v, callers)
+			}
+			dataDir := t.TempDir()
+			stubIn(dataDir, agent, "STUB-RAN")
+
+			out, err := runBootstrap(t, agent, dataDir)
+
+			assert.NoError(t, err)
+			assert.Contains(t, out, "STUB-RAN", "the bootstrap used the caller's data directory")
+		})
+	}
 }
 
 // bootstrapVersion reads the VERSION the bootstrap pins.
@@ -394,17 +428,56 @@ func curlAgainst(t *testing.T, server string) {
 args=()
 scale=""
 for a in "$@"; do
-  if [ -n "$scale" ]; then
-    a=$((a / %d)); scale=""
-  else
-    case "$a" in --max-time|-m|--speed-time|-y|--connect-timeout) scale=1 ;; esac
-  fi
-  args+=("${a/https:\/\/github.com/%s}")
+  case "$scale" in
+    decimal) a=$(LC_ALL=C awk -v t="$a" 'BEGIN { print t / %[1]d }') ;;
+    # curl takes whole seconds only here; round up, since 0 means no limit.
+    whole) a=$(( (a + %[1]d - 1) / %[1]d )) ;;
+  esac
+  scale=""
+  case "$a" in
+    --max-time|-m|--connect-timeout) scale=decimal ;;
+    --speed-time|-y) scale=whole ;;
+  esac
+  args+=("${a/https:\/\/github.com/%[2]s}")
 done
-exec %q "${args[@]}"
+exec %[3]q "${args[@]}"
 `, downloadTimeScale, server, realCurl)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "curl"), []byte(script), 0o755))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// curl reads a timeout of 0 as no limit, so a timeout under downloadTimeScale
+// must still bind once the shim has scaled it.
+func TestCurlShimKeepsSubScaleTimeouts(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags []string
+	}{
+		{"max-time", []string{"--max-time", "5"}},
+		{"speed-time", []string{"--speed-limit", "1024", "--speed-time", "5"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte("x"))
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			}))
+			t.Cleanup(srv.Close)
+			curlAgainst(t, srv.URL)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			args := append(append([]string{"-fsS"}, tt.flags...), "-o", os.DevNull, "https://github.com/stalled")
+			out, err := exec.CommandContext(ctx, "curl", args...).CombinedOutput()
+
+			require.NoError(t, ctx.Err(), "the scaled %s no longer bounds the transfer", tt.name)
+			var exit *exec.ExitError
+			require.ErrorAs(t, err, &exit, "output: %s", out)
+			assert.Equal(t, 28, exit.ExitCode(), "curl did not time out; output: %s", out)
+		})
+	}
 }
 
 // releaseServer serves a release whose binary is body, written by send, and a

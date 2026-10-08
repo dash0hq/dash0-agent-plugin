@@ -99,10 +99,11 @@ func TestCopilotAppExtensionPathsExist(t *testing.T) {
 }
 
 // stdout is the SDK's JSON-RPC channel: one stray write corrupts the session's
-// connection to the extension.
+// connection to the extension. Several console methods write to it, so the
+// extension uses none. The behavioural tests also assert an empty stdout.
 func TestCopilotAppExtensionNeverWritesStdout(t *testing.T) {
 	ext := readExtension(t)
-	for _, banned := range []string{"console.log", "console.info", "process.stdout"} {
+	for _, banned := range []string{"console.", "process.stdout"} {
 		assert.NotContains(t, ext, banned)
 	}
 }

@@ -29,6 +29,8 @@ const POWERSHELL = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "Wi
 // A hung bootstrap would stall every later event on the chain. Generous, since
 // the first run downloads the binary.
 const SPAWN_TIMEOUT_MS = 120_000;
+// How long a send waits for the bootstrap's output after the bootstrap exits.
+const EXIT_GRACE_MS = 1_000;
 // How long the sessionEnd hook waits for the final sends, under the 5s the app
 // allows between SIGTERM and SIGKILL.
 const EXIT_BUDGET_MS = 4_000;
@@ -107,19 +109,28 @@ function send(eventName, payload, { surface = false } = {}) {
           killSignal: "SIGKILL",
         });
         let stderr = "";
-        child.stderr.on("data", (d) => (stderr += d));
-        child.on("error", (err) => {
-          warn(`could not run ${BOOTSTRAP}: ${err.message}`);
-          resolve();
-        });
-        child.on("close", () => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          child.stderr.destroy();
           for (const line of stderr.split(/\r?\n/)) {
             if (!line.trim()) continue;
-            if (surface && line.startsWith("dash0:")) session?.log(line).catch(() => {});
+            if (surface && line.startsWith("dash0:")) session?.log(withHint(line)).catch(() => {});
             else warn(line);
           }
           resolve();
+        };
+        child.stderr.on("data", (d) => (stderr += d));
+        child.on("error", (err) => {
+          warn(`could not run ${BOOTSTRAP}: ${err.message}`);
+          finish();
         });
+        child.on("close", finish);
+        // close waits for every holder of stderr, and a download the bootstrap
+        // started can outlive it. Once the bootstrap exits, give its output a
+        // moment, then stop holding up the chain.
+        child.on("exit", () => setTimeout(finish, EXIT_GRACE_MS).unref());
         child.stdin.on("error", () => {});
         child.stdin.end(JSON.stringify({ sessionId: session.sessionId, cwd: process.cwd(), ...payload }));
       } catch (err) {
@@ -130,6 +141,10 @@ function send(eventName, payload, { surface = false } = {}) {
   chain = chain.then(run, run);
   return chain;
 }
+
+// The app has no other way to point the user at the setup skill.
+const withHint = (line) =>
+  /^dash0: (telemetry is not active|no team configured)/.test(line) ? `${line} Run /dash0-configure.` : line;
 
 // Hooks fire for sub-agents too, with their own session id. Only the session
 // this extension joined is a session to trace.
@@ -150,19 +165,17 @@ function endSession(timestamp) {
   return send("sessionEnd", { timestamp });
 }
 
-// Ids of events delivered live while catchUp reads the history, so an event
-// seen both ways is buffered once. Null once catchUp is done.
-let liveIds = new Set();
-// When a turn ended live while catchUp was still reading the history, and no
-// live prompt had opened one. That turn is the history's, so catchUp ends it.
-let closedDuringCatchUp = null;
+// Live events that arrive while catchUp reads the history, in order. Null once
+// catchUp is done, which then handles them as if they had just arrived.
+let pending = [];
+// How many of them had arrived when the usage metrics were read: the metrics
+// count those, and not the ones after.
+let beforeMetrics = 0;
 // Ids catchUp took from the history, which the live stream may still deliver.
-let replayed = new Set();
-// A live prompt that arrived while catchUp was reading the history, before it
-// had opened the first turn. Opening it there would end that turn unrecovered,
-// so catchUp opens it once the first turn is done. split is where its events
-// begin in the buffer; closed is the first turn's close, if it came before.
-let held = null;
+const replayed = new Set();
+// Ends catchUp's wait for the history early, when the user exits.
+let stopCatchUp = () => {};
+let caughtUp = Promise.resolve();
 
 // Persisted events that only follow a finished main-agent turn. session.idle
 // would be the natural marker, but it is ephemeral and never in the history.
@@ -175,75 +188,75 @@ const turnClosed = (e) =>
 
 // A prompt older than this is not the one that started the extension.
 const CATCH_UP_WINDOW_MS = 60_000;
+// Live events wait for the history, so a read that hangs must not hold them.
+const HISTORY_TIMEOUT_MS = 30_000;
 
 // The app starts the extension when the first prompt is sent, so that prompt
 // is already history by the time the extension listens. Recover the turn in
-// progress from the history rather than lose every session's first turn.
+// progress from the history rather than lose every session's first turn, then
+// handle the live events that arrived meanwhile, in order.
 async function catchUp() {
   try {
-    // Both at once: a second wait here would be a window in which the session
-    // can end, or a live prompt open a turn, after the check below.
-    let [history, metrics] = await Promise.all([session.getEvents(), usageMetrics()]);
-    // A live prompt opened a turn of its own, or the session is already over.
-    if (turnOpen || ended) return;
-    // A held prompt can be in the history too. It opens the next turn, so the
-    // history to recover from ends there; what follows it came live as well.
-    const heldAt = held?.event.id ? history.findIndex((e) => e.id === held.event.id) : -1;
-    if (heldAt >= 0) history = history.slice(0, heldAt);
-    let start = -1;
-    let closed = false;
-    for (let i = history.length - 1; i >= 0; i--) {
-      const e = history[i];
-      if (turnClosed(e)) break;
-      if (isPrompt(e)) {
-        start = i;
-        break;
-      }
-    }
-    if (start < 0) {
-      // The first turn can end before the extension listens: a request that
-      // fails at once (an unsupported model, a quota) closes it in
-      // milliseconds. A session whose only prompt is that one, and that was not
-      // resumed, has reported nothing yet, so its closed turn is still ours.
-      const prompts = history.filter(isPrompt);
-      if (prompts.length !== 1 || history.some((e) => e.type === "session.resume")) return;
-      start = history.indexOf(prompts[0]);
-      closed = true;
-    }
-    const prompt = history[start];
-    if (Date.now() - Date.parse(prompt.timestamp) > CATCH_UP_WINDOW_MS) return;
-    const first = history.filter(isPrompt).length === 1 && !history.some((e) => e.type === "session.resume");
-    if (held) held.tail = buffer.splice(held.split);
-    // The metrics also count a held turn's usage, which all arrived live.
-    const missed = first ? usageMissed(metrics, prompt.timestamp, [...buffer, ...(held?.tail ?? [])]) : [];
-    const later = history.slice(start + 1).filter((e) => !liveIds.has(e.id));
-    const earlier = later.filter((e) => KEEP[e.type]);
-    for (const e of later) if (e.id) replayed.add(e.id);
-    buffer = [...missed, ...earlier.map(slim), ...buffer].slice(0, MAX_EVENTS);
-    // Steering that arrived live while the history was read follows the
-    // history's own.
-    const live = steered;
-    openTurn(prompt);
-    steered = [...later.filter(isSteering).map((e) => e.data?.content ?? ""), ...live];
-    if (closed) endTurn(history[history.length - 1].timestamp);
+    const read = Promise.all([
+      session.getEvents(),
+      usageMetrics().then((m) => {
+        beforeMetrics = pending.length;
+        return m;
+      }),
+    ]);
+    const stop = new Promise((_, reject) => {
+      stopCatchUp = () => reject(new Error("the session ended"));
+      setTimeout(stopCatchUp, HISTORY_TIMEOUT_MS).unref();
+    });
+    const [history, metrics] = await Promise.race([read, stop]);
+    recover(history, metrics);
   } catch (err) {
     warn(`could not read the session history: ${err?.message ?? err}`);
   } finally {
-    liveIds = null;
-    if (held && !ended) {
-      const { event, split, tail, closed } = held;
-      const rest = tail ?? buffer.slice(split);
-      // History events can still arrive live after this; they stay replayed.
-      const seen = replayed;
-      endTurn(closed?.timestamp ?? event.timestamp, closed?.aborted);
-      replayed = seen;
-      buffer = rest;
-      openTurn(event);
-    }
-    held = null;
-    if (closedDuringCatchUp) endTurn(closedDuringCatchUp.timestamp, closedDuringCatchUp.aborted);
-    closedDuringCatchUp = null;
+    const live = pending;
+    pending = null;
+    for (const e of live) handle(e);
   }
+}
+
+// Opens the turn the history shows in progress, with the events and usage it
+// had before the extension listened.
+function recover(history, metrics) {
+  // The history runs up to the read, so it overlaps the live events. Only what
+  // precedes the first of them was missed; the rest arrives live.
+  const live = new Set(pending.map((e) => e.id).filter(Boolean));
+  const cut = history.findIndex((e) => live.has(e.id));
+  if (cut >= 0) history = history.slice(0, cut);
+  for (const e of history) if (e.id) replayed.add(e.id);
+
+  let start = -1;
+  let closed = false;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const e = history[i];
+    if (turnClosed(e)) break;
+    if (isPrompt(e)) {
+      start = i;
+      break;
+    }
+  }
+  const first = history.filter(isPrompt).length === 1 && !history.some((e) => e.type === "session.resume");
+  if (start < 0) {
+    // The first turn can end before the extension listens: a request that
+    // fails at once (an unsupported model, a quota) closes it in
+    // milliseconds. A session whose only prompt is that one, and that was not
+    // resumed, has reported nothing yet, so its closed turn is still ours.
+    if (!first) return;
+    start = history.findIndex(isPrompt);
+    closed = true;
+  }
+  const prompt = history[start];
+  if (Date.now() - Date.parse(prompt.timestamp) > CATCH_UP_WINDOW_MS) return;
+  const later = history.slice(start + 1);
+  const missed = first ? usageMissed(metrics, prompt.timestamp, pending.slice(0, beforeMetrics)) : [];
+  openTurn(prompt);
+  buffer = [...missed, ...later.filter((e) => KEEP[e.type]).map(slim)].slice(0, MAX_EVENTS);
+  steered = later.filter(isSteering).map((e) => e.data?.content ?? "");
+  if (closed) endTurn(history[history.length - 1].timestamp);
 }
 
 const TOKEN_KEYS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"];
@@ -260,7 +273,8 @@ async function usageMetrics() {
 
 // assistant.usage is ephemeral, so the history has none of the usage spent
 // before the extension listened. The session's metrics have it all: for the
-// session's first turn, they less what arrived live is what was missed. Returns
+// session's first turn, they less what arrived live before them is what was
+// missed. Returns
 // assistant.usage events per model carrying that difference.
 function usageMissed(metrics, timestamp, seen) {
   const perModel = metrics?.agentMetrics?.main?.modelMetrics;
@@ -271,7 +285,7 @@ function usageMissed(metrics, timestamp, seen) {
     for (const k of TOKEN_KEYS) {
       let n = Number(m?.usage?.[k]) || 0;
       for (const e of seen) {
-        if (e.type === "assistant.usage" && !e.data.parentToolCallId && e.data.model === model) n -= Number(e.data[k]) || 0;
+        if (e.type === "assistant.usage" && !e.agentId && !e.data?.parentToolCallId && e.data?.model === model) n -= Number(e.data[k]) || 0;
       }
       if (n > 0) data[k] = n;
     }
@@ -293,13 +307,7 @@ function openTurn(message) {
   send("userPromptSubmitted", { timestamp: message.timestamp, prompt: clip(turnPrompt) });
 }
 
-// Ends the turn, unless catchUp may still recover the one it belongs to.
 // aborted is session.idle's flag for a run the user cancelled.
-function closeTurn(timestamp, aborted = false) {
-  if (liveIds && !turnOpen) closedDuringCatchUp = { timestamp, aborted };
-  else endTurn(timestamp, aborted);
-}
-
 function endTurn(timestamp, aborted = false) {
   const events = buffer;
   const open = turnOpen;
@@ -307,10 +315,40 @@ function endTurn(timestamp, aborted = false) {
   if (aborted) payload.aborted = true;
   if (steered.length) payload.prompt = clip([turnPrompt, ...steered].join("\n"));
   buffer = [];
-  replayed = new Set();
   turnOpen = false;
   steered = [];
   if (open) send("turnEnd", payload);
+}
+
+function handle(event) {
+  try {
+    if (ended || replayed.has(event.id)) return;
+    if (KEEP[event.type]) {
+      if (buffer.length < MAX_EVENTS) buffer.push(slim(event));
+      return;
+    }
+    switch (event.type) {
+      case "user.message":
+        // Sub-agent prompts carry an agentId; they are part of the turn
+        // already open, not a new one.
+        if (event.agentId) return;
+        if (isSteering(event) && turnOpen) {
+          steered.push(event.data?.content ?? "");
+          return;
+        }
+        endTurn(event.timestamp);
+        openTurn(event);
+        return;
+      case "session.idle":
+        endTurn(event.timestamp, event.data?.aborted === true);
+        return;
+      case "session.shutdown":
+        endSession(event.timestamp);
+        return;
+    }
+  } catch (err) {
+    warn(`event ${event?.type} dropped: ${err?.message ?? err}`);
+  }
 }
 
 try {
@@ -336,8 +374,10 @@ try {
           // The app stops the extension once the session ends (SIGTERM, then
           // SIGKILL 5s later). Returning the sends keeps it alive until
           // turnEnd and sessionEnd have run, within that window.
+          // A history read still pending would hold the final sends back.
+          stopCatchUp();
           return Promise.race([
-            endSession(timestamp),
+            caughtUp.then(() => endSession(timestamp)),
             new Promise((resolve) => setTimeout(resolve, EXIT_BUDGET_MS).unref()),
           ]);
         } catch (err) {
@@ -353,44 +393,12 @@ try {
   startSession(new Date().toISOString());
 
   session.on((event) => {
-    try {
-      if (liveIds && event.id) liveIds.add(event.id);
-      if (replayed.size && replayed.has(event.id)) return;
-      if (KEEP[event.type]) {
-        if (buffer.length < MAX_EVENTS) buffer.push(slim(event));
-        return;
-      }
-      switch (event.type) {
-        case "user.message":
-          // Sub-agent prompts carry an agentId; they are part of the turn
-          // already open, not a new one.
-          if (event.agentId) return;
-          if (isSteering(event) && (turnOpen || liveIds)) {
-            steered.push(event.data?.content ?? "");
-            return;
-          }
-          if (liveIds && !turnOpen && !held) {
-            held = { event, split: buffer.length, closed: closedDuringCatchUp };
-            closedDuringCatchUp = null;
-            return;
-          }
-          closedDuringCatchUp = null;
-          endTurn(event.timestamp);
-          openTurn(event);
-          return;
-        case "session.idle":
-          closeTurn(event.timestamp, event.data?.aborted === true);
-          return;
-        case "session.shutdown":
-          endSession(event.timestamp);
-          return;
-      }
-    } catch (err) {
-      warn(`event ${event?.type} dropped: ${err?.message ?? err}`);
-    }
+    if (pending) pending.push(event);
+    else handle(event);
   });
 
-  await catchUp();
+  caughtUp = catchUp();
+  await caughtUp;
 } catch (err) {
   warn(`extension failed to start: ${err?.message ?? err}`);
 }

@@ -9,7 +9,7 @@ the bundled `@github/copilot-sdk`. No manifest is needed.
 | File | Purpose |
 |---|---|
 | `extension.mjs` | Entry point. Joins the session, buffers its events per turn, and hands them to the binary |
-| `copilot-app-on-event.sh` / `.ps1` | Shared bootstrap: downloads the `copilot-app-on-event` binary, verifies its checksum, and honours `DASH0_VERSION` |
+| `copilot-app-on-event.sh` / `.ps1` | Shared bootstrap: downloads the `copilot-app-on-event` binary and verifies its checksum. Only the `.sh` one honours `DASH0_VERSION` |
 | `skills/dash0-configure/` | Configure skill, which writes the config file |
 
 ## Install
@@ -100,13 +100,16 @@ recorded sessions:
   Only `user_exit` and `session.shutdown` end the session.
 - **The extension starts with the first prompt, not with the session**, so that
   prompt is already in the history when the extension starts listening. The
-  extension rebuilds the turn in progress from `session.getEvents()` and
-  removes duplicates by event id. A first turn whose request fails at once
+  extension rebuilds the turn in progress from `session.getEvents()`. Live
+  events that arrive during that read wait, and are handled in order once the
+  turn is rebuilt. The history overlaps them, so only the history before the
+  first of them is used. A first turn whose request fails at once
   (an unsupported model, a quota) can be over before the extension listens.
   It is still reported, with its error, unless the session was resumed.
   `assistant.usage` is not kept in the history, so the tokens that first turn
   spent before the extension listened come from the session's usage metrics
-  (`usage.getMetrics()`), less what arrived live. A turn with no usage at all
+  (`usage.getMetrics()`), less what arrived live before the metrics were
+  read. A turn with no usage at all
   takes its model from `assistant.message` and carries no token counts.
 - **Sub-agent hooks fire into the parent's extension** under the sub-agent's own
   session id. The extension ignores them. A sub-agent's events carry an

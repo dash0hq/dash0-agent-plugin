@@ -20,7 +20,7 @@ VERSION="0.1.28"
 # binary cache and the session state stay in one tree.
 BASE="${COPILOT_APP_PLUGIN_DATA:-${DASH0_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/copilot-app}}"
 
-# >>> shared bootstrap — byte-identical across cursor, codex and copilot >>>
+# >>> shared bootstrap - byte-identical across the fail-open POSIX bootstraps >>>
 # test/consistency asserts these three regions match, so a fix lands in all of
 # them or in none. Everything agent-specific is declared above.
 
@@ -98,12 +98,16 @@ if [ ! -x "$BINARY" ]; then
   URL="${BASE_URL}/${ASSET}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
+  # Abort a stalled transfer, never a merely slow one: an unreachable host must
+  # not hold a hook or a server's exporter for minutes, and a slow link must
+  # still finish the binary. wget's timeout is per read, so it is a stall bound.
   if command -v curl &>/dev/null; then
-    curl -fsSL -o "$TMP" "$URL" || fail_open "download failed: $URL"
-    CHECKSUMS=$(curl -fsSL "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
+    STALL=(--connect-timeout 10 --speed-limit 1024 --speed-time 30)
+    curl -fsSL "${STALL[@]}" -o "$TMP" "$URL" || fail_open "download failed: $URL"
+    CHECKSUMS=$(curl -fsSL "${STALL[@]}" --max-time 30 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
   elif command -v wget &>/dev/null; then
-    wget -qO "$TMP" "$URL" || fail_open "download failed: $URL"
-    CHECKSUMS=$(wget -qO- "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
+    wget -qO "$TMP" --timeout=30 --tries=2 "$URL" || fail_open "download failed: $URL"
+    CHECKSUMS=$(wget -qO- --timeout=30 --tries=2 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
   else
     fail_open "neither curl nor wget found"
   fi

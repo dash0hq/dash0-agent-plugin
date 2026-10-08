@@ -100,7 +100,8 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: latest
+          # Same as the release job; see there.
+          version: v2.18.2
           args: release --snapshot --clean --skip=publish
 
       - name: The build is complete
@@ -220,16 +221,19 @@ jobs:
             echo "tag $TAG already here — re-run of a release that failed after tagging"
           fi
 
-      - name: The notarization secrets are set
+      - name: The signing and notarization secrets are set
         env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
         run: |
           set -euo pipefail
-          # A missing secret arrives as "", and GoReleaser then signs but skips
-          # notarization without failing. A missing certificate already fails.
-          for name in MACOS_NOTARY_KEY MACOS_NOTARY_KEY_ID MACOS_NOTARY_ISSUER_ID; do
+          # A missing secret arrives as "". For the notary secrets GoReleaser then
+          # signs but skips notarization without failing; the signing secrets
+          # would fail later inside quill. Either way, fail here and say which.
+          for name in MACOS_SIGN_P12 MACOS_SIGN_PASSWORD MACOS_NOTARY_KEY MACOS_NOTARY_KEY_ID MACOS_NOTARY_ISSUER_ID; do
             [ -n "${!name}" ] || { echo "::error::$name is not set in the release environment"; exit 1; }
           done
 
@@ -240,7 +244,9 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: latest
+          # Exact, because this step holds the signing keys. Keep in step with
+          # the dry run, so it tests the version that releases.
+          version: v2.18.2
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

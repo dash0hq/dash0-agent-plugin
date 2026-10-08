@@ -24,6 +24,10 @@ VERSION="0.1.28"
 #   3. ~/.local/state/…   — the installer (config.toml) path.
 BASE="${DASH0_PLUGIN_DATA:-${PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/dash0-agent-plugin/codex}}"
 
+# Total seconds the binary download may take, or empty for no cap, so a slow link
+# still finishes and the stall bound in the shared region ends a dead one.
+DOWNLOAD_MAX_TIME=""
+
 # >>> shared bootstrap - byte-identical across the fail-open POSIX bootstraps >>>
 # test/consistency asserts these three regions match, so a fix lands in all of
 # them or in none. Everything agent-specific is declared above.
@@ -107,7 +111,7 @@ if [ ! -x "$BINARY" ]; then
   # still finish the binary. wget's timeout is per read, so it is a stall bound.
   if command -v curl &>/dev/null; then
     STALL=(--connect-timeout 10 --speed-limit 1024 --speed-time 30)
-    curl -fsSL "${STALL[@]}" -o "$TMP" "$URL" || fail_open "download failed: $URL"
+    curl -fsSL "${STALL[@]}" ${DOWNLOAD_MAX_TIME:+--max-time "$DOWNLOAD_MAX_TIME"} -o "$TMP" "$URL" || fail_open "download failed: $URL"
     CHECKSUMS=$(curl -fsSL "${STALL[@]}" --max-time 30 "$CHECKSUMS_URL") || fail_open "checksums fetch failed"
   elif command -v wget &>/dev/null; then
     wget -qO "$TMP" --timeout=30 --tries=2 "$URL" || fail_open "download failed: $URL"

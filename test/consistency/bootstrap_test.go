@@ -4,7 +4,11 @@
 package consistency
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,6 +112,7 @@ func TestBootstrapsDeclareTheSharedInputs(t *testing.T) {
 			assert.Contains(t, head, "AGENT=\""+agent+"\"")
 			assert.Regexp(t, `(?m)^VERSION="[0-9]+\.[0-9]+\.[0-9]+"$`, head)
 			assert.Regexp(t, `(?m)^BASE=`, head)
+			assert.Regexp(t, `(?m)^DOWNLOAD_MAX_TIME=(""|[0-9]+)$`, head)
 		})
 	}
 }
@@ -362,4 +368,124 @@ func TestPowerShellFilesAreASCII(t *testing.T) {
 			}
 		})
 	}
+}
+
+// downloadTimeScale is how much faster than real time the download tests run.
+// The curl shim divides every timeout the bootstrap passes by it.
+const downloadTimeScale = 10
+
+// curlAgainst puts a `curl` on PATH that sends the bootstrap's GitHub requests to
+// server and divides its timeouts by downloadTimeScale. Every other flag reaches
+// the real curl unchanged, so the timeouts are enforced by curl itself.
+func curlAgainst(t *testing.T, server string) {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Git Bash resolves its own curl.exe ahead of the shim")
+	}
+	realCurl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("curl is not on PATH")
+	}
+
+	dir := t.TempDir()
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+args=()
+scale=""
+for a in "$@"; do
+  if [ -n "$scale" ]; then
+    a=$((a / %d)); scale=""
+  else
+    case "$a" in --max-time|-m|--speed-time|-y|--connect-timeout) scale=1 ;; esac
+  fi
+  args+=("${a/https:\/\/github.com/%s}")
+done
+exec %q "${args[@]}"
+`, downloadTimeScale, server, realCurl)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "curl"), []byte(script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// releaseServer serves a release whose binary is body, written by send, and a
+// checksums.txt that matches it.
+func releaseServer(t *testing.T, agent string, body []byte, send func(w http.ResponseWriter, r *http.Request)) string {
+	t.Helper()
+
+	asset := fmt.Sprintf("%s-on-event-%s-%s", agent, runtime.GOOS, runtime.GOARCH)
+	sum := sha256.Sum256(body)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/checksums.txt"):
+			_, _ = fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), asset)
+		case strings.HasSuffix(r.URL.Path, "/"+asset):
+			w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+			send(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// A slow link must still install the binary: the bootstrap fails open, so a
+// download cut off while it is still moving silently costs every event's
+// telemetry. A link that stops moving must still release the hook.
+func TestBootstrapDownloadBoundsStallsNotSlowLinks(t *testing.T) {
+	agent := failOpenAgents[0]
+
+	// At 2 KiB/s, twice what counts as stalled, this takes 14 s here: 140 s at
+	// production timeouts, past the 100 s total cap the bootstraps used to set.
+	stub := []byte("#!/bin/sh\necho STUB-RAN\ncat >/dev/null\nexit 0\n")
+	body := append(stub, []byte(strings.Repeat("#", 28*1024-len(stub)))...)
+	trickle := func(w http.ResponseWriter, r *http.Request) {
+		const chunk = 256
+		for i := 0; i < len(body); i += chunk {
+			if _, err := w.Write(body[i:min(i+chunk, len(body))]); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			time.Sleep(125 * time.Millisecond)
+		}
+	}
+
+	t.Run("slow but moving", func(t *testing.T) {
+		curlAgainst(t, releaseServer(t, agent, body, trickle))
+
+		out, err := runBootstrap(t, agent, t.TempDir())
+
+		assert.NoError(t, err)
+		assert.Contains(t, out, "STUB-RAN", "a download that was still moving was abandoned")
+	})
+
+	// The Copilot app's extension SIGKILLs the bootstrap after 120 s, which skips
+	// the cleanup trap and leaves curl running. Its download has to end first.
+	t.Run("slow but moving, under the copilot-app kill", func(t *testing.T) {
+		curlAgainst(t, releaseServer(t, "copilot-app", body, trickle))
+
+		start := time.Now()
+		out, err := runBootstrap(t, "copilot-app", t.TempDir())
+		held := time.Since(start) * downloadTimeScale
+
+		assert.NoError(t, err, "the bootstrap must fail open")
+		assert.Contains(t, out, "download failed")
+		assert.Less(t, held, 2*time.Minute, "the download outlived the extension's kill: %s", held)
+	})
+
+	t.Run("stalled", func(t *testing.T) {
+		curlAgainst(t, releaseServer(t, agent, body, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write(body[:1024])
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}))
+
+		start := time.Now()
+		out, err := runBootstrap(t, agent, t.TempDir())
+		held := time.Since(start) * downloadTimeScale
+
+		assert.NoError(t, err, "the bootstrap must fail open")
+		assert.Contains(t, out, "download failed")
+		assert.Less(t, held, time.Minute, "a stalled download held the hook for %s of real time", held)
+	})
 }

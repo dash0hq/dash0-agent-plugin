@@ -2,7 +2,7 @@
 
 The plugin starts a short-lived Go binary for each coding-agent hook event.
 It keeps session state on disk and exports OTLP JSON over HTTP. It is not a
-daemon, and the four runtimes do not expose equivalent data.
+daemon, and the five runtimes do not expose equivalent data.
 
 ## Event flow
 
@@ -65,6 +65,7 @@ context. Follow existing callers before moving behavior between packages.
 | Cursor | Normalized generic tool hooks; duplicate specialized hooks are dropped | `afterAgentResponse` hook payload |
 | Codex | Normalized hooks; tool duration can be reconstructed from matching events | Codex rollout files |
 | GitHub Copilot CLI | Hooks drive lifecycle; native OTel supplies tool and sub-agent spans | Copilot's native OTel files |
+| OpenCode V2 | Live V2 event stream, no hooks | `session.step.ended` token counts |
 
 Do not infer support in one runtime from support in another. Missing measurements
 are not measured zeroes. Copilot's native OTel input cannot independently prove

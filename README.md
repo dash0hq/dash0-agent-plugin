@@ -32,6 +32,13 @@ This repo ships one shared Go pipeline (`cmd/`, `internal/`) and runtime-specifi
 
 The dotted directories are fixed by each agent's plugin discovery and cannot move. Keeping every other runtime asset under `claude/`, `cursor/`, `codex/`, `copilot/`, and `opencode-v2/` stops one marketplace from auto-discovering another runtime's components. `scripts/` is repo tooling only (release, version checks, the Docker test harness) — nothing there is shipped to a user.
 
+## Contributing
+
+Start with [DEVELOPMENT.md](DEVELOPMENT.md) for coding conventions, verification
+commands and local runtime development. [ARCHITECTURE.md](ARCHITECTURE.md) explains
+event flow, package ownership and telemetry contracts.
+[AGENTS.md](AGENTS.md) provides the short version for coding agents.
+
 ## Releasing
 
 **Actions → Release.** Pick `patch`, `minor` or `major`; the workflow bumps every

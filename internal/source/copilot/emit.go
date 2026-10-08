@@ -12,18 +12,15 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
 )
 
-// The emitters below turn a recovered Turn into spans. They live beside the Turn
-// model rather than in the CLI entrypoint so that any source able to build a
-// Turn emits the same spans.
+// The emitters below are shared by both Copilot entrypoints: the CLI recovers a
+// Turn from the native-OTel file, the desktop app (internal/source/copilotapp)
+// builds one from session events. Either way the same spans go out.
 
 // AttachUsage sets the per-turn token, model and response attributes on the Stop
 // event.
 func AttachUsage(event map[string]any, u *Usage) {
-	event["gen_ai.usage.input_tokens"] = u.InputTokens
-	event["gen_ai.usage.output_tokens"] = u.OutputTokens
-	event["gen_ai.usage.cache_read.input_tokens"] = u.CacheReadInputTokens
-	if u.ReasoningOutputTokens > 0 {
-		event["gen_ai.usage.reasoning.output_tokens"] = u.ReasoningOutputTokens
+	if !u.NoTokens {
+		attachTokens(event, u)
 	}
 	if u.Model != "" {
 		if _, has := event["model"]; !has {
@@ -46,6 +43,18 @@ func AttachUsage(event map[string]any, u *Usage) {
 	}
 }
 
+func attachTokens(event map[string]any, u *Usage) {
+	event["gen_ai.usage.input_tokens"] = u.InputTokens
+	event["gen_ai.usage.output_tokens"] = u.OutputTokens
+	event["gen_ai.usage.cache_read.input_tokens"] = u.CacheReadInputTokens
+	if u.CacheCreationInputTokens > 0 {
+		event["gen_ai.usage.cache_creation.input_tokens"] = u.CacheCreationInputTokens
+	}
+	if u.ReasoningOutputTokens > 0 {
+		event["gen_ai.usage.reasoning.output_tokens"] = u.ReasoningOutputTokens
+	}
+}
+
 // EmitToolSpans emits one execute_tool span per tool call recovered from the
 // native-OTel file, onto the turn's trace: native span ids are reused verbatim
 // (same 16-hex format as ours — idempotent across re-reads), timings are the
@@ -56,10 +65,17 @@ func AttachUsage(event map[string]any, u *Usage) {
 // hook-sourced tool events on the other runtimes, so OmitIO redaction and the
 // dash0.gen_ai.* details stay uniform.
 func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefix string) {
+	agents := map[string]SubAgent{}
+	for _, sa := range turn.Agents {
+		agents[sa.SpanID] = sa
+	}
 	for _, tc := range turn.Tools {
 		event := map[string]any{
 			"session_id": ctx.SessionID,
 			"tool_name":  tc.Name,
+		}
+		if turn.Cwd != "" {
+			event["cwd"] = turn.Cwd
 		}
 		// Native arguments are a JSON string; decode so extractors (command
 		// family, skill name) see the same map shape hooks deliver elsewhere.
@@ -75,14 +91,18 @@ func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefi
 		if tc.CallID != "" {
 			event["tool_use_id"] = tc.CallID
 		}
-		if turn.Usage != nil && turn.Usage.Model != "" {
-			event["model"] = turn.Usage.Model
-		}
-		if turn.Usage != nil && turn.Usage.ResponseModel != "" {
-			event["response_model"] = turn.Usage.ResponseModel
-		}
+		addTurnModels(event, turn.Usage)
 		if tc.SkillName != "" {
 			event["skill_name"] = tc.SkillName
+		}
+		// A sub-agent's tool names that sub-agent, as its invoke_agent span does,
+		// instead of falling back to the configured agent name.
+		if sa, ok := agents[tc.ParentSpanID]; ok {
+			addAgentIdentity(event, sa)
+			if req, resp := agentModels(sa); resp != "" {
+				event["model"] = req
+				event["response_model"] = resp
+			}
 		}
 
 		// Derive the shared semantic attributes (URLs, line counts, bash/skill,
@@ -101,6 +121,35 @@ func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefi
 	}
 }
 
+// addTurnModels names the turn's models on a span that does not carry the
+// turn's tokens, so its response model is the main agent's reply model, when
+// known, rather than the one the chat span prices at.
+func addTurnModels(event map[string]any, u *Usage) {
+	if u == nil {
+		return
+	}
+	if u.Model != "" {
+		event["model"] = u.Model
+	}
+	response := u.ReplyModel
+	if response == "" {
+		response = u.ResponseModel
+	}
+	if response != "" {
+		event["response_model"] = response
+	}
+}
+
+// agentModels is a sub-agent's requested and responding model. Its own usage
+// keeps the request "auto" when auto mode picked the model; otherwise both are
+// the model its subagent events name. Empty when the source reports neither.
+func agentModels(sa SubAgent) (request, response string) {
+	if sa.Usage != nil && sa.Usage.ResponseModel != "" {
+		return sa.Usage.Model, sa.Usage.ResponseModel
+	}
+	return sa.Model, sa.Model
+}
+
 // EmitAgentSpans emits one invoke_agent span per sub-agent the turn spawned,
 // between the `task` tool that spawned it and the tools it ran. Copilot's own
 // OpenTelemetry describes that layer and the plugin used to collapse it, which
@@ -111,30 +160,26 @@ func EmitToolSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefi
 // agent_type becomes gen_ai.agent.name and drives the invoke_agent span name,
 // agent_id becomes gen_ai.agent.id. Same keys as Claude and Codex produce.
 //
-// No usage is attached. Attribution stays flat — a sub-agent's chat spans fold
-// into the parent turn's total, which is what Copilot's file supports today —
-// so putting the same tokens here as well would double them for anyone summing
-// across a trace. The native span carries no usage either.
+// Usage is attached only when the source attributed it to the sub-agent (the
+// app does), and then the turn's chat span leaves it out. The CLI's file folds
+// a sub-agent's tokens into the parent turn's total, so there the same tokens
+// here as well would double them for anyone summing across a trace.
 func EmitAgentSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPrefix string) {
 	for _, sa := range turn.Agents {
-		agentType := sa.AgentType
-		if agentType == "" {
-			// NewLLMSpan reads agent_type to decide it is an invoke_agent span at
-			// all, so an unnamed agent would silently become a chat span.
-			agentType = "agent"
+		event := map[string]any{"session_id": ctx.SessionID}
+		if turn.Cwd != "" {
+			event["cwd"] = turn.Cwd
 		}
-		event := map[string]any{
-			"session_id": ctx.SessionID,
-			"agent_type": agentType,
+		addAgentIdentity(event, sa)
+		if req, resp := agentModels(sa); resp != "" {
+			event["model"] = req
+			event["response_model"] = resp
+		} else {
+			addTurnModels(event, turn.Usage)
 		}
-		if sa.CallID != "" {
-			event["agent_id"] = sa.CallID
-		}
-		if turn.Usage != nil && turn.Usage.Model != "" {
-			event["model"] = turn.Usage.Model
-		}
-		if turn.Usage != nil && turn.Usage.ResponseModel != "" {
-			event["response_model"] = turn.Usage.ResponseModel
+
+		if sa.Usage != nil {
+			attachTokens(event, sa.Usage)
 		}
 
 		parent := sa.ParentSpanID
@@ -145,5 +190,20 @@ func EmitAgentSpans(turn *Turn, ctx *otlp.TraceContext, cfg otlp.Config, logPref
 		if err := otlp.SendTrace(span, event, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "%s: agent span export: %v\n", logPrefix, err)
 		}
+	}
+}
+
+// addAgentIdentity names the sub-agent on an event: agent_type becomes
+// gen_ai.agent.name, agent_id gen_ai.agent.id.
+func addAgentIdentity(event map[string]any, sa SubAgent) {
+	agentType := sa.AgentType
+	if agentType == "" {
+		// NewLLMSpan reads agent_type to decide it is an invoke_agent span at
+		// all, so an unnamed agent would silently become a chat span.
+		agentType = "agent"
+	}
+	event["agent_type"] = agentType
+	if sa.CallID != "" {
+		event["agent_id"] = sa.CallID
 	}
 }

@@ -17,13 +17,20 @@ import (
 // native-OTel file. Copilot's own cost figure is not among them: see the note in
 // ReadTurn's chat branch.
 type Usage struct {
-	InputTokens           int64
-	OutputTokens          int64
-	CacheReadInputTokens  int64
-	ReasoningOutputTokens int64
-	Model                 string // gen_ai.request.model; the literal "auto" when nothing was pinned
-	ResponseModel         string // gen_ai.response.model; the only priceable one when Model is "auto" (SIG-528)
-	ResponseText          string // final assistant text of the turn (from gen_ai.output.messages)
+	InputTokens          int64
+	OutputTokens         int64
+	CacheReadInputTokens int64
+	// CacheCreationInputTokens is set by the desktop app only; the CLI's file
+	// does not report cache writes.
+	CacheCreationInputTokens int64
+	ReasoningOutputTokens    int64
+	Model                    string // gen_ai.request.model; the literal "auto" when nothing was pinned
+	ResponseModel            string // gen_ai.response.model; the only priceable one when Model is "auto" (SIG-528)
+	ReplyModel               string // the main agent's reply model when ResponseModel prices another agent's tokens; empty when the same or unknown
+	ResponseText             string // final assistant text of the turn (from gen_ai.output.messages)
+	// NoTokens is set when the source saw the turn but no token counts for it,
+	// so the counts are unknown rather than zero.
+	NoTokens bool
 }
 
 // ToolCall is one tool execution of the turn, recovered from a native-OTel
@@ -61,7 +68,14 @@ type SubAgent struct {
 	// hook session id (call_<toolCallId>), so it joins the two records there;
 	// an interactive session names that hook session with a plain UUID instead,
 	// and the join does not hold.
-	CallID     string
+	CallID string
+	// Model is the sub-agent's own model when the source reports one (the
+	// Copilot app's subagent.* events do). Empty falls back to the turn's.
+	Model string
+	// Usage is the sub-agent's own tokens when the source attributes them (the
+	// app does). Nil leaves them folded into the turn's chat span, as the CLI's
+	// file requires.
+	Usage      *Usage
 	Start, End time.Time
 	Failed     bool
 }
@@ -73,6 +87,7 @@ type Turn struct {
 	Usage  *Usage
 	Tools  []ToolCall
 	Agents []SubAgent
+	Cwd    string // the hook payload's cwd, for the child spans' process.working_directory
 }
 
 // otelSpan is one native-OTel span record belonging to this conversation.

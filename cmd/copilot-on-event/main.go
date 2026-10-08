@@ -206,6 +206,7 @@ func run() error {
 		if turn != nil && turnCtx != nil && turnCtx.TraceID != "" {
 			// Agents first: a sub-agent's tools parent onto its invoke_agent span,
 			// so the parent is on the wire before its children.
+			turn.Cwd, _ = event["cwd"].(string)
 			copilot.EmitAgentSpans(turn, turnCtx, cfg, "copilot-on-event")
 			copilot.EmitToolSpans(turn, turnCtx, cfg, "copilot-on-event")
 			copilot.SaveCursor(turnSession, turnCursor)

@@ -107,7 +107,7 @@ the new one last, once the binaries are published and proven downloadable:
 
 1. Check out the commit `main` pointed at when the button was pressed.
 2. Work out the version, write it everywhere, commit and tag — **locally**.
-3. Build every binary `.goreleaser.yaml` describes — 30 today: five agents,
+3. Build every binary `.goreleaser.yaml` describes — 36 today: six agents,
    three platforms, two architectures — and upload them to a **draft** release.
 4. Verify: checksums, `dist/` matches that list by name, the Linux binary
    actually runs, and the uploaded assets match what was built.

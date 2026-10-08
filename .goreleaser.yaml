@@ -102,6 +102,22 @@ builds:
     main: ./cmd/opencode-v2-on-event
     binary: "opencode-v2-on-event-{{ .Os }}-{{ .Arch }}"
     no_unique_dist_dir: true
+  - id: copilot-app-on-event
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/dash0hq/dash0-agent-plugin/internal/version.Version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    dir: ./
+    main: ./cmd/copilot-app-on-event
+    binary: "copilot-app-on-event-{{ .Os }}-{{ .Arch }}"
+    no_unique_dist_dir: true
 
 # Developer ID signing and notarization for the darwin binaries, so EDRs such as
 # Elastic Defend do not quarantine them (DAR-428). Quill does it from the Linux
@@ -133,6 +149,7 @@ notarize:
     - { <<: *notarize, ids: [codex-on-event] }
     - { <<: *notarize, ids: [copilot-on-event] }
     - { <<: *notarize, ids: [opencode-v2-on-event] }
+    - { <<: *notarize, ids: [copilot-app-on-event] }
 
 archives:
   - formats: ["binary"]

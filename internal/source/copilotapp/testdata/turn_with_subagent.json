@@ -1,0 +1,184 @@
+[
+  {
+    "type": "assistant.usage",
+    "timestamp": "2026-10-02T12:54:27.552Z",
+    "data": {
+      "model": "claude-opus-5.5",
+      "isAuto": false,
+      "inputTokens": 124277,
+      "outputTokens": 307,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 124275,
+      "reasoningTokens": 0
+    }
+  },
+  {
+    "type": "assistant.message",
+    "timestamp": "2026-10-02T12:54:27.555Z",
+    "data": {
+      "content": "Running both in parallel."
+    }
+  },
+  {
+    "type": "tool.execution_start",
+    "timestamp": "2026-10-02T12:54:27.557Z",
+    "data": {
+      "toolCallId": "toolu_011zGKqf8eDxEcZEkGfhK3BV",
+      "toolName": "bash",
+      "arguments": {
+        "command": "git --no-pager log --oneline -3",
+        "description": "Show recent commits"
+      }
+    }
+  },
+  {
+    "type": "tool.execution_start",
+    "timestamp": "2026-10-02T12:54:27.558Z",
+    "data": {
+      "toolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy",
+      "toolName": "task",
+      "arguments": {
+        "agent_type": "explore",
+        "description": "Read README",
+        "prompt": "Summarize README.md in one line."
+      }
+    }
+  },
+  {
+    "type": "subagent.started",
+    "timestamp": "2026-10-02T12:54:27.568Z",
+    "agentId": "d8744b4f-bca0-491a-ad15-d88bcad659cf",
+    "data": {
+      "toolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy",
+      "agentName": "explore",
+      "agentType": "explore",
+      "model": "gpt-5.6-luna"
+    }
+  },
+  {
+    "type": "assistant.usage",
+    "timestamp": "2026-10-02T12:54:29.337Z",
+    "agentId": "d8744b4f-bca0-491a-ad15-d88bcad659cf",
+    "data": {
+      "model": "gpt-5.6-luna",
+      "isAuto": false,
+      "inputTokens": 7723,
+      "outputTokens": 51,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 7720,
+      "reasoningTokens": 0,
+      "parentToolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy"
+    }
+  },
+  {
+    "type": "assistant.message",
+    "timestamp": "2026-10-02T12:54:29.340Z",
+    "agentId": "d8744b4f-bca0-491a-ad15-d88bcad659cf",
+    "data": {
+      "content": "",
+      "parentToolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy"
+    }
+  },
+  {
+    "type": "tool.execution_start",
+    "timestamp": "2026-10-02T12:54:29.341Z",
+    "agentId": "d8744b4f-bca0-491a-ad15-d88bcad659cf",
+    "data": {
+      "toolCallId": "call_qvu1hCeXzE3h0pu7H7eHXm1R",
+      "toolName": "view",
+      "arguments": {
+        "path": "/repo/README.md"
+      },
+      "parentToolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy"
+    }
+  },
+  {
+    "type": "tool.execution_complete",
+    "timestamp": "2026-10-02T12:54:29.343Z",
+    "agentId": "d8744b4f-bca0-491a-ad15-d88bcad659cf",
+    "data": {
+      "toolCallId": "call_qvu1hCeXzE3h0pu7H7eHXm1R",
+      "success": true,
+      "result": {
+        "content": "# Dash0 agent plugin"
+      },
+      "parentToolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy"
+    }
+  },
+  {
+    "type": "assistant.usage",
+    "timestamp": "2026-10-02T12:54:30.234Z",
+    "agentId": "d8744b4f-bca0-491a-ad15-d88bcad659cf",
+    "data": {
+      "model": "gpt-5.6-luna",
+      "isAuto": false,
+      "inputTokens": 7796,
+      "outputTokens": 27,
+      "cacheReadTokens": 7720,
+      "cacheWriteTokens": 73,
+      "reasoningTokens": 0,
+      "parentToolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy"
+    }
+  },
+  {
+    "type": "assistant.message",
+    "timestamp": "2026-10-02T12:54:30.238Z",
+    "agentId": "d8744b4f-bca0-491a-ad15-d88bcad659cf",
+    "data": {
+      "content": "README describes the plugin.",
+      "parentToolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy"
+    }
+  },
+  {
+    "type": "subagent.completed",
+    "timestamp": "2026-10-02T12:54:30.242Z",
+    "agentId": "d8744b4f-bca0-491a-ad15-d88bcad659cf",
+    "data": {
+      "toolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy",
+      "agentName": "explore",
+      "model": "gpt-5.6-luna"
+    }
+  },
+  {
+    "type": "tool.execution_complete",
+    "timestamp": "2026-10-02T12:54:30.246Z",
+    "data": {
+      "toolCallId": "toolu_011zGKqf8eDxEcZEkGfhK3BV",
+      "success": true,
+      "result": {
+        "content": "abc1234 first\ndef5678 second"
+      }
+    }
+  },
+  {
+    "type": "tool.execution_complete",
+    "timestamp": "2026-10-02T12:54:30.259Z",
+    "data": {
+      "toolCallId": "toolu_01D6LVSaYcS6R1tivgmw1Gfy",
+      "success": true,
+      "result": {
+        "content": "README describes the plugin."
+      }
+    }
+  },
+  {
+    "type": "assistant.usage",
+    "timestamp": "2026-10-02T12:54:33.975Z",
+    "data": {
+      "model": "claude-opus-5.5",
+      "isAuto": false,
+      "inputTokens": 124696,
+      "outputTokens": 219,
+      "cacheReadTokens": 124275,
+      "cacheWriteTokens": 419,
+      "reasoningTokens": 0
+    }
+  },
+  {
+    "type": "assistant.message",
+    "timestamp": "2026-10-02T12:54:33.978Z",
+    "data": {
+      "content": "Both done: three commits, and the README describes the plugin."
+    }
+  }
+]

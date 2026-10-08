@@ -285,6 +285,13 @@ jobs:
             <<<'{"type":"session.created","created":1,"data":{"sessionID":"release-verify"}}'
           # The exporter logs errors and exits 0, so check it handled the event.
           grep -q release-verify "$opencode_data/opencode-v2.json"
+          copilot_app_data=$(mktemp -d)
+          COPILOT_APP_PLUGIN_DATA=$copilot_app_data \
+          DASH0_OTLP_URL=http://127.0.0.1:1 \
+            dist/copilot-app-on-event-linux-amd64 sessionStart \
+            <<<'{"sessionId":"release-verify"}'
+          # The binary logs errors and exits 0, so check it handled the event.
+          test -f "$copilot_app_data/started/release-verify"
 
       - name: The draft carries exactly what was built
         run: |

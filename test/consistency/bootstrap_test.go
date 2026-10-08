@@ -170,6 +170,7 @@ func runBootstrap(t *testing.T, agent, dataDir string, args ...string) (string, 
 		"COPILOT_PLUGIN_DATA="+dataDir,
 		"OPENCODE_V2_PLUGIN_DATA="+dataDir,
 		"COPILOT_APP_PLUGIN_DATA="+dataDir,
+		"DASH0_VERSION=",
 	)
 	out, err := cmd.CombinedOutput()
 	return string(out), err

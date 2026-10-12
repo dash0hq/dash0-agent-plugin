@@ -93,7 +93,8 @@ Execute mode must wait for plugins to load:
 amp --plugin-ready-timeout -x 'Your task'
 ```
 
-For Orb execute mode, install in the remote project setup, then use
+For Orb execute mode, install into the Orb first — see [Orbs](#orbs), since
+nothing from a laptop reaches one — then use
 `amp --plugin-ready-timeout -ox 'Your task'`. The stream-json wrapper is not the
 telemetry source. Verify hook delivery for the Amp version you deploy.
 

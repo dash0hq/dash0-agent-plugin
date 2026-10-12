@@ -146,7 +146,7 @@ fi
 # other's, with a warning to remove the stale entry. Failing instead would turn
 # every PR red between a release and that one-line cleanup. Never skipped under
 # --strict.
-UNRELEASED_AGENTS=(opencode-v2 copilot-app amp)
+UNRELEASED_AGENTS=(amp)
 fail=0
 predates() { # <agent> <candidate names…>
   local agent="$1" name listed

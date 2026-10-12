@@ -55,7 +55,8 @@ to waste runs.
 
 ## Then
 
-`qa-amp-compare.py` prints `AGREEMENT`, and on the two `execute_tool` spans:
+`qa-amp-compare.py` prints `AGREEMENT`, with its two tool rows marked
+`UNPROVABLE` — see the sharp edge below — and on the two `execute_tool` spans:
 
 - **the prefix is stripped.** Span names are `execute_tool echo_text` and
   `execute_tool always_fails`; `gen_ai.tool.name` matches. `mcp__…` appearing
@@ -67,7 +68,19 @@ to waste runs.
 - **the failure sets the span status.** `always_fails` has status `ERROR`;
   `echo_text` does not.
 
-Measured on `qa/runs/amp-mcp-b`, all four hold.
+Measured on `qa/runs/amp-mcp-b`, and re-measured 2026-10-12 on
+`qa/runs/spec-amp-mcp` against amp `0.0.1791792883-gf1ab8d`: all four hold,
+with usage reconciling exactly at 185 output tokens on both channels.
+
+**The second channel is blind to MCP tool calls on current Amp.** It now
+reaches an MCP tool by running code inside `code_exec`, after finding it with
+`tool_search`. Neither fires a plugin hook, so `--stream-json` names the
+wrapper while the spans name the MCP call inside it, and the tool-name
+comparison proves nothing either way — `qa-amp-compare.py` says so rather than
+reporting a mismatch. What this spec proves is therefore span shape, per-call
+server naming and failure status, all of which come from the hooks. The call
+*count* is no longer independently witnessed. See
+[amp-mcp-calls-run-inside-code-exec](../../../findings/amp-mcp-calls-run-inside-code-exec.md).
 
 ## Why this is the spec that proves the error path
 

@@ -264,10 +264,22 @@ The turn root is a top-level `chat` span, matching the other harnesses, so the
 Sessions API counts it as one turn of this thread and operation-based prompt and
 request-latency metrics read it the same way they read a Claude or Codex turn.
 No `invoke_agent` span is emitted: Amp's hooks expose no sub-agent ancestry, so
-inventing one would misreport the turn as a sub-agent invocation. A multi-model
-turn still emits one extra zero-duration `chat` child per earlier model call,
-which those metrics count as an additional prompt with no measured latency.
-The shared pipeline is unchanged.
+inventing one would misreport the turn as a sub-agent invocation. The shared
+pipeline is unchanged.
+
+A turn emits one extra zero-duration `chat` child per **earlier model call**,
+not per distinct model — so an ordinary tool-using turn has one, and a turn
+that needed four tool rounds has four. That is almost every turn: of 882 real
+turns measured on 2026-10-12, 725 emitted two `chat` spans and only one used
+more than one model.
+
+**Those children are not counted as prompts.** Dash0 classifies operations at
+ingest, and it classifies only the root: across 399 real turns, every root
+carried `dash0.operation.type=headless` and all 340 children carried none. So
+operation-based prompt and request-latency metrics see one operation per turn,
+the same as a Claude or Codex turn. Cost is different and correct: it is
+computed per span from the tokens, so a turn's cost is the sum over its root
+and children, each of which really was a billed model call.
 
 ## Lifecycle and operational limits
 

@@ -17,26 +17,33 @@ build usage, so agreement there would prove a faithful copy rather than a
 correct measurement. It is read only to explain a usage mismatch after one has
 been found.
 
-**Amp writes to its own dataset, not `default`.** Both the driver and every
-verification tool must be pointed at it — `qa-attrs.py` needs
-`--dataset <ampDataset>` explicitly — the `ampDataset` value from
-`qa/config.local.json` — and its default would report a clean pass over zero
-spans. See `### Amp writes to its own dataset, not default` in
-[../../setup.md](../../setup.md).
+**Amp reads its own dataset key.** Both the driver and every verification tool
+must be pointed at `ampDataset` from `qa/config.local.json` — `qa-attrs.py`
+needs `--dataset <ampDataset>` explicitly — because a tool's own default can
+report a clean pass over zero spans. See `### Amp reads its own dataset key` in
+[../../setup.md](../../setup.md) for what that value is today and why.
 
 ## What a run here can and cannot prove
 
 | Area | State |
 | --- | --- |
-| [session](session/) | Turn shape, multi-turn threads, tool status, attribute surface. Solid. |
-| [mcp](mcp/) | Prefix stripping, per-call server naming, failure status. Solid, and the only place the tool-error path is reachable. |
+| [session](session/) | Turn shape, multi-turn threads, tool status, attribute surface, and how many `chat` spans a turn emits. Solid. |
+| [mcp](mcp/) | Prefix stripping, per-call server naming, failure status. Solid, and the only place the tool-error path is reachable. The call *count* is no longer independently witnessed: current Amp runs MCP tools inside `code_exec`, which fires no hook. |
 | [skills](skills/) | Solid, after a fix. |
-| [tools](tools/) | Server-executed tools reach no span at all. One open finding, and it stays open. |
-| [usage](usage/) | Opt-in, and correct after a fix — every model call attributed, tokens reconciling against the stream. |
+| [tools](tools/) | Tool names are copied verbatim. Server-executed tools, and now `code_exec`/`tool_search`, reach no span at all — two open findings, and they stay open. |
+| [usage](usage/) | On by default, and correct — every model call attributed, tokens reconciling exactly against the stream. The opt-out is covered too. |
 | [subagents](subagents/) | Not applicable — Amp exposes no spawn tool. |
 | orb executor | Not runnable. `QA_AMP_EXECUTOR=orb` exists in the driver, but nothing copies a hand-built local plugin install into an orb. |
 
-## Spans arrive after the run finishes
+## Spans arrive after the run finishes, sometimes minutes after
+
+**Measured 2026-10-12: a batch Dash0 answered `200` took between 2.5 and 5.5
+minutes to become queryable, while four runs in the same hour were readable in
+30 s.** `qa-amp-compare.py` now waits for the turn roots rather than reading
+once, so a spec stays autonomous. A single read that reports "no spans" is a
+statement about the backend's mood, not about the plugin.
+
+
 
 With usage export on, the helper polls `amp threads export` for up to twenty
 seconds, and the bridge detaches it rather than making the turn wait — Amp

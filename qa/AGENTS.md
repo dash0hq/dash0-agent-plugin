@@ -57,10 +57,11 @@ The helper is **detached**: it polls for up to twenty seconds and a turn's spans
 
 ## Findings
 
-Report spec failures that are unaddressed in `findings/`. Two are open today:
-[cursor-subagent-work-produces-no-span](findings/cursor-subagent-work-produces-no-span.md) and
-[amp-server-side-tools-produce-no-span](findings/amp-server-side-tools-produce-no-span.md).
-The second is a limit of Amp's plugin API, not a bug — it stays open and documented.
+Report spec failures that are unaddressed in `findings/`. Three are open today:
+[cursor-subagent-work-produces-no-span](findings/cursor-subagent-work-produces-no-span.md),
+[amp-server-side-tools-produce-no-span](findings/amp-server-side-tools-produce-no-span.md) and
+[amp-mcp-calls-run-inside-code-exec](findings/amp-mcp-calls-run-inside-code-exec.md).
+The amp two are limits of Amp's plugin API, not bugs — they stay open and documented.
 
 Two amp findings were fixed on 2026-09-15 and are kept for their measurements:
 [amp-answering-model-call-is-never-attributed](findings/amp-answering-model-call-is-never-attributed.md)

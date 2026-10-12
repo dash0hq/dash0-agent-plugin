@@ -202,9 +202,9 @@ shell hooks and the on-disk pipeline lifecycle. See [installation and research](
 | Identity/config | `harness.Amp`, `AMP_PLUGIN_OPTION_*`, `.amp/dash0-agent-plugin.local.md` |
 | Session / turn | Thread ID / typed initiating message ID; completed-turn batches |
 | Root operation | `chat`; the answering exported message names it and supplies its usage, both absent when usage is off |
-| Tools | Paired `tool.call`/`tool.result`; observed timing and status. **Client-side tools only** — server-executed built-ins fire no plugin event and get no span |
+| Tools | Paired `tool.call`/`tool.result`; observed timing and status. **Client-side tools only** — server-executed built-ins, and the `code_exec`/`tool_search` wrappers an MCP call now runs inside, fire no plugin event and get no span |
 | Per-model tokens | On by default (`export_usage: false` opts out). Exact assistant-ID lookup in unstable `threads export` JSON, polled up to 20s because the export materializes seconds after the turn ends |
-| Mixed models in a turn | Separate usage-bearing `chat` children; no root duplication |
+| Mixed models in a turn | Separate usage-bearing `chat` children; no root duplication. One child per earlier model *call*, so an ordinary tool-using turn has one; Dash0 classifies only the root as an operation, so prompt counts are unaffected |
 | Missing usage | Omitted, never estimated or filled with zero |
 | Content | Prompt, response, and tool arguments/output under the shared `omit_io` rule; thinking and image blocks dropped in the bridge |
 | Subagent usage / tree | Only selected exported messages; hidden usage and ancestry not inferred |

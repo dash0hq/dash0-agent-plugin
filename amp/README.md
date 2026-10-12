@@ -303,6 +303,13 @@ and children, each of which really was a billed model call.
   move, so treat those as examples rather than a list. There is nothing to fix
   in the bridge, and nothing should reconstruct the missing calls from
   `threads export` — that read has its own timing problem, below.
+- **MCP calls run inside `code_exec`, which also produces no span.** On amp
+  `0.0.1791792883-gf1ab8d` a model reaches an MCP tool by finding it with
+  `tool_search` and calling it from code inside `code_exec`. Neither wrapper
+  fires a hook, so neither reaches a span — but the hooks _do_ fire for the MCP
+  tool called inside, which keeps `execute_tool echo_text`, its server name and
+  its error status intact. What is missing is the wrapper: a turn's spans show
+  which MCP tools ran, not that they ran inside one `code_exec` call.
 - At most 32 active threads, 512 tool calls and 512 selected assistant IDs per
   turn, and four concurrent deliveries. Overflow can drop data;
   `dash0.amp.truncated=true` marks per-turn truncation. Excess deliveries are

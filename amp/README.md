@@ -41,10 +41,26 @@ carries this integration onwards; it does not assume an already published
 release contains it, and an older pin fails rather than installing something
 that cannot run. Until then, use the from-source path below.
 
-For an Orb, run the same Linux installation in the Orb, or add the installer to
-the project's setup script. A local installation is not copied to an Orb.
-User-local installations inside an Orb last only as long as that Orb. For new
-Orbs, automate installation in project setup.
+### Orbs
+
+An Orb is a fresh executor every time: nothing from a laptop is copied into it,
+and anything installed by hand inside one dies with it. So an Orb needs its own
+installation — run the same Linux installer there, with `DASH0_OTLP_URL`,
+`DASH0_AUTH_TOKEN`, `DASH0_DATASET` and `DASH0_TEAM_NAME` in the environment so
+it prompts for nothing, and the token delivered through the project's **Secrets
+& Env Vars** rather than committed. Pin the release with `DASH0_VERSION` to keep
+every Orb on one version. Do not commit the helper binary into `.amp/plugins/`.
+
+The two plugin directories are a scope choice: `~/.config/amp/plugins/dash0/`
+(the default) covers every project on that executor, `--project` writes
+`.amp/plugins/dash0/` instead and covers one checkout. Either works in an Orb.
+
+The plugin itself is verified there: a live Linux Orb CLI run delivered root and
+tool spans to Dash0 with an ingest-only token and the configured dataset, and
+usage-enabled delivery was verified the same way (see
+[Compatibility evidence](#compatibility-evidence)). Usage export additionally
+needs working `amp` authentication on the executor; without it turns still
+export and carry `dash0.amp.usage.status=unavailable` instead of tokens.
 
 To uninstall, run `uninstall-amp.sh` (`uninstall-amp.ps1` on Windows), which
 removes only the `dash0` plugin directory and the credential file. Reload

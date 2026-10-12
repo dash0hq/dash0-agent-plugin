@@ -358,6 +358,14 @@ Write-Host "  1. Reload plugins from Amp's command palette (or start a new Amp s
 Write-Host '  2. Run a prompt. Spans should land in your Dash0 dataset with gen_ai.harness.name=amp.'
 Write-Host ''
 Write-Host "Execute mode must wait for plugins to load: amp --plugin-ready-timeout -x 'Your task'"
-Write-Host 'An Orb needs its own installation - run the Linux installer from the project setup script; a local install is not copied.'
+Write-Host 'An Orb needs its own installation - run the Linux installer there; a local install is not copied.'
+# Token accounting is on with no option written to the config, so the one place a
+# user learns it is running - and how it fails - is here.
+Write-Host ''
+Write-Host 'Token accounting is on' -ForegroundColor Cyan
+Write-Host "  Each completed turn runs 'amp threads export' to read its models and token counts."
+Write-Host '  It needs working Amp authentication here, and never delays a turn: the helper is detached.'
+Write-Host '  If that read fails, the turn still exports, carrying dash0.amp.usage.status=unavailable instead of tokens.'
+Write-Host "  To turn it off, add 'export_usage: false' to $ConfigPath."
 Write-Host "To reconfigure later, edit $ConfigPath (a workspace .amp\dash0-agent-plugin.local.md outranks it; keep it out of Git)."
 Write-Host 'To uninstall, run uninstall-amp.ps1.'

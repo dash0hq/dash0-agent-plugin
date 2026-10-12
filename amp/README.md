@@ -55,12 +55,13 @@ The two plugin directories are a scope choice: `~/.config/amp/plugins/dash0/`
 (the default) covers every project on that executor, `--project` writes
 `.amp/plugins/dash0/` instead and covers one checkout. Either works in an Orb.
 
-The plugin itself is verified there: a live Linux Orb CLI run delivered root and
-tool spans to Dash0 with an ingest-only token and the configured dataset, and
-usage-enabled delivery was verified the same way (see
-[Compatibility evidence](#compatibility-evidence)). Usage export additionally
-needs working `amp` authentication on the executor; without it turns still
-export and carry `dash0.amp.usage.status=unavailable` instead of tokens.
+Orbs are where this was dogfooded. The plugin ran in them for weeks before
+release, and a live Linux Orb CLI run is the measurement behind
+[Compatibility evidence](#compatibility-evidence) — root and tool spans
+delivered with an ingest-only token into the configured dataset, and
+usage-enabled delivery verified the same way. Usage export additionally needs
+working `amp` authentication on the executor; without it turns still export and
+carry `dash0.amp.usage.status=unavailable` instead of tokens.
 
 To uninstall, run `uninstall-amp.sh` (`uninstall-amp.ps1` on Windows), which
 removes only the `dash0` plugin directory and the credential file. Reload

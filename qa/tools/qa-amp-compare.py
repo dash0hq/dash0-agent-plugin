@@ -127,13 +127,11 @@ WRAPPER_TOOLS = {"code_exec", "tool_search"}
 def expectation(turns: list[list[dict]]) -> dict:
     tools: Counter[str] = Counter()
     wrappers: Counter[str] = Counter()
-    model_calls = 0
     output_tokens = 0
     for events in turns:
         for event in events:
             if event.get("type") != "assistant":
                 continue
-            model_calls += 1
             message = event.get("message") or {}
             for block in message.get("content") or []:
                 if block.get("type") == "tool_use" and block.get("name"):
@@ -142,9 +140,7 @@ def expectation(turns: list[list[dict]]) -> dict:
             usage = message.get("usage") or {}
             output_tokens += int(usage.get("output_tokens") or 0)
     return {"turns": len(turns), "tools": tools, "wrappers": wrappers,
-            "model_calls": model_calls, "output_tokens": output_tokens}
-
-
+            "output_tokens": output_tokens}
 
 
 def main() -> int:

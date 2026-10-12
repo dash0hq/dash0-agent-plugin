@@ -51,7 +51,7 @@ func setup(t *testing.T) chan []byte {
 		close(requests)
 		for r := range requests {
 			require.Equal(t, "/v1/traces", r.URL.Path)
-			require.True(t, r.Header.Get("Authorization") == "Bearer test-token")
+			require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
 			require.Equal(t, "test-dataset", r.Header.Get("Dash0-Dataset"))
 		}
 	})
@@ -81,10 +81,8 @@ func TestAmpHelperExportsPerModelUsageOnce(t *testing.T) {
 	require.NotEqual(t, spans[0].StartTimeUnixNano, spans[0].EndTimeUnixNano)
 	require.Equal(t, "chat gpt-6-astra", spans[2].Name)
 	require.Equal(t, spans[2].StartTimeUnixNano, spans[2].EndTimeUnixNano)
-	for i, span := range spans {
-		if i > 0 {
-			require.Equal(t, spans[0].SpanID, span.ParentSpanID)
-		}
+	for _, span := range spans[1:] {
+		require.Equal(t, spans[0].SpanID, span.ParentSpanID)
 	}
 	toolEncoded, _ := json.Marshal(spans[1])
 	require.NotContains(t, string(toolEncoded), "gen_ai.usage.")
@@ -194,8 +192,11 @@ func TestTurnWithoutAssistantIDsSkipsTheExportEntirely(t *testing.T) {
 }
 
 func TestUsageFailureDoesNotSuppressLifecycle(t *testing.T) {
-	for _, failure := range []bool{true, false} {
-		t.Run(map[bool]string{true: "unavailable", false: "malformed"}[failure], func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		failure bool
+	}{{"unavailable", true}, {"malformed", false}} {
+		t.Run(tc.name, func(t *testing.T) {
 			got := setup(t)
 			t.Setenv("AMP_PLUGIN_OPTION_EXPORT_USAGE", "true")
 			// An export that always errors leaves the status at "unavailable",
@@ -203,7 +204,7 @@ func TestUsageFailureDoesNotSuppressLifecycle(t *testing.T) {
 			// out the whole real deadline.
 			fastPoll(t)
 			require.NoError(t, run(strings.NewReader(envelope), func(string) ([]byte, error) {
-				if failure {
+				if tc.failure {
 					return nil, errors.New("SECRET")
 				}
 				return []byte(`{"messages":`), nil

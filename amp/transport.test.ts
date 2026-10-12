@@ -30,6 +30,11 @@ type Handler<E extends keyof PluginEventMap> = (
   event: PluginEventMap[E],
 ) => PluginHandlerResult<E>;
 
+const attributesOf = (span: OTLPSpan): Record<string, OTLPValue> =>
+  Object.fromEntries(
+    (span.attributes ?? []).map(({ key, value }) => [key, value]),
+  );
+
 test("installed plugin exports lifecycle and per-model usage through its Go helper", async () => {
   const dir = mkdtempSync(join(tmpdir(), "dash0-amp-"));
   onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
@@ -212,11 +217,7 @@ test("installed plugin exports lifecycle and per-model usage through its Go help
     expect(toolKeys).not.toContain("gen_ai.request.model");
     expect(toolKeys).not.toContain("gen_ai.usage.input_tokens");
     expect(toolKeys).not.toContain("gen_ai.usage.output_tokens");
-    const attributes = [spans[2], spans[0]].map((span) =>
-      Object.fromEntries(
-        (span.attributes ?? []).map(({ key, value }) => [key, value]),
-      ),
-    );
+    const attributes = [spans[2], spans[0]].map(attributesOf);
     expect(attributes[0]["gen_ai.request.model"].stringValue).toBe(
       "gpt-6-astra",
     );
@@ -231,12 +232,6 @@ test("installed plugin exports lifecycle and per-model usage through its Go help
       expect(request.resourceSpans[0].scopeSpans[0].spans).toHaveLength(1);
     }
     // omit_io is false here, so the turn's conversation reaches the exporter.
-    const attributesOf = (span: {
-      attributes?: { key: string; value: any }[];
-    }) =>
-      Object.fromEntries(
-        (span.attributes ?? []).map(({ key, value }) => [key, value]),
-      );
     const root = attributesOf(spans[0]);
     expect(root["gen_ai.input.messages"].stringValue).toContain(
       "private prompt",

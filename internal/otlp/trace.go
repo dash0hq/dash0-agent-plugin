@@ -225,7 +225,12 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 	attrs := eventAttributes(event, cfg)
 
 	opName := "chat"
-	spanName := strings.TrimSpace("chat " + model)
+	// A turn can have no model at all — an Amp root whose usage was disabled or
+	// never arrived — and "chat " with a trailing space is not a span name.
+	spanName := "chat"
+	if m := strings.TrimSpace(model); m != "" {
+		spanName += " " + m
+	}
 	// gen_ai.agent.name is set from agent_type by eventAttributes (via attrKeyMap);
 	// here we only adjust the operation/span name for sub-agent invocations.
 	agentType, _ := event["agent_type"].(string)

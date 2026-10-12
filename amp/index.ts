@@ -75,7 +75,10 @@ function clip(value: string, max: number): string {
   // byteLength measures without copying, and take() re-measures the result, so
   // the common case never allocates a Buffer for the whole field.
   if (Buffer.byteLength(value, "utf8") <= max) return value;
-  return Buffer.from(value, "utf8")
+  // slice first: every UTF-16 unit encodes to at least one byte, so the first
+  // `max` units always cover the first `max` bytes. Encoding the whole value
+  // would copy a multi-megabyte tool output to keep 16 KiB of it.
+  return Buffer.from(value.slice(0, max), "utf8")
     .subarray(0, max)
     .toString("utf8")
     .replace(/�+$/, "");
@@ -101,6 +104,12 @@ const validString = (s: unknown): s is string =>
  */
 function take(state: Active, value: string): string | undefined {
   if (!value) return undefined;
+  // Checked before clipping: once the turn's budget is gone, rendering and
+  // clipping the rest of a tool-heavy turn only produces strings to discard.
+  if (state.content >= maxContent) {
+    state.turn.truncated = true;
+    return undefined;
+  }
   const text = clip(value, maxField);
   if (text !== value) state.turn.truncated = true;
   const size = Buffer.byteLength(text, "utf8");
@@ -222,7 +231,10 @@ export function register(amp: PluginAPI, send: (turn: Turn) => Promise<void>) {
       end: new Date().toISOString(),
       status: event.status,
     };
-    let answer = "";
+    // The turn's answer is the last assistant text, matching what the other
+    // harnesses put on their chat span. Thinking blocks are never read, and
+    // only the answer is charged to the budget.
+    const assistants: { content?: unknown }[] = [];
     if (Array.isArray(event.messages)) {
       for (const message of event.messages) {
         if (message?.role !== "assistant" || !validID(message.id)) continue;
@@ -231,12 +243,15 @@ export function register(amp: PluginAPI, send: (turn: Turn) => Promise<void>) {
           break;
         }
         turn.assistant_ids.push(message.id);
-        // The turn's answer is the last assistant text, matching what the other
-        // harnesses put on their chat span. Thinking blocks are never read, and
-        // only the answer is charged to the budget.
-        const text = messageText(message);
-        if (text) answer = text;
+        assistants.push(message);
       }
+    }
+    // Backwards, stopping at the first text: rendering every message to keep
+    // the last one joins and discards the whole turn's assistant text, on the
+    // path Amp awaits.
+    let answer = "";
+    for (let i = assistants.length - 1; i >= 0 && !answer; i--) {
+      answer = messageText(assistants[i]);
     }
     turn.response = take(state, answer);
     // take() runs after the spread above, and the assistant_ids loop sets the
@@ -293,9 +308,10 @@ export default function (amp: PluginAPI) {
           return;
         }
         live++;
-        // Resolve configuration and VCS metadata in the event's workspace.
         const started = Date.now();
         const child = spawn(binary, [], {
+          // The helper resolves configuration and VCS metadata relative to its
+          // own working directory, so it has to start in the event's workspace.
           cwd,
           stdio: ["pipe", "ignore", "ignore"],
           // Detached and unref'd so the helper outlives this process. With

@@ -39,7 +39,7 @@
 #   qa/tools/qa-session-amp.sh "<prompt>" [run-id]
 #   QA_AMP_RESUME="<second prompt>" qa/tools/qa-session-amp.sh "..."  # two turns, one thread
 #   QA_AMP_TURNS=<file> qa/tools/qa-session-amp.sh "..."  # one prompt per line, one thread
-#   QA_AMP_USAGE=1 qa/tools/qa-session-amp.sh "..."   # opt into per-model usage export
+#   QA_AMP_USAGE=0 qa/tools/qa-session-amp.sh "..."   # opt OUT of per-model usage export
 #   QA_AMP_MCP=1 qa/tools/qa-session-amp.sh "..."     # two stub MCP servers, isolated
 #   QA_AMP_SKILL=1 qa/tools/qa-session-amp.sh "..."   # the qa-echo skill fixture
 #   QA_AMP_EXECUTOR=orb qa/tools/qa-session-amp.sh "..."  # run in an orb, see setup.md
@@ -148,7 +148,13 @@ export AMP_PLUGIN_OPTION_DATASET="$QA_DATASET"
 export AMP_PLUGIN_OPTION_DEBUG=true
 export AMP_PLUGIN_OPTION_DEBUG_FILE="$PWD/$RUN_DIR/plugin-debug.log"
 export AMP_PLUGIN_OPTION_OMIT_IO=true
-[ "${QA_AMP_USAGE:-0}" = "1" ] && export AMP_PLUGIN_OPTION_EXPORT_USAGE=true
+# Set either way, never left to the default: the run records which it used, and
+# a product default that flips again must not silently change what QA measured.
+if [ "${QA_AMP_USAGE:-1}" = "0" ]; then
+  export AMP_PLUGIN_OPTION_EXPORT_USAGE=false
+else
+  export AMP_PLUGIN_OPTION_EXPORT_USAGE=true
+fi
 
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 echo "run: $RUN_DIR" >&2
@@ -220,7 +226,7 @@ amp threads export "$THREAD_ID" > "$RUN_DIR/thread-export.json" 2>/dev/null || t
 # write, which is why the attribute-surface check needs no amp-specific port.
 python3 - "$RUN_DIR" "$RUN_ID" "$THREAD_ID" "$PROMPT" "$STARTED" "$AMP_STATUS" \
          "$QA_DATASET" "$QA_API_URL" "${QA_AMP_RESUME:-}" "${QA_AMP_EXECUTOR:-local}" \
-         "${QA_AMP_USAGE:-0}" <<'PY'
+         "${QA_AMP_USAGE:-1}" <<'PY'
 import json, sys, datetime
 (run_dir, run_id, thread, prompt, started, status, dataset, api_url,
  resume, executor, usage) = sys.argv[1:12]
@@ -246,7 +252,7 @@ write("meta.json", {
     "prompt": prompt, "resume_prompt": resume or None,
     "started": started, "finished": finished,
     "amp_exit": int(status), "executor": executor,
-    "export_usage": usage == "1",
+    "export_usage": usage != "0",
     "dataset": dataset, "api_url": api_url,
     "invocation": "amp --plugin-ready-timeout 10 --stream-json "
                   "--no-archive-after-execute -x <prompt>",

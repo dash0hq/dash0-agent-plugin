@@ -92,13 +92,21 @@ Every amp check and spec settles for 30 s, not 10 s, whenever usage export is
 on. A read taken too early reports `partial`, or no spans at all, for a
 perfectly healthy run.
 
-### Amp writes to its own dataset, not `default`
+### Amp reads its own dataset key
 
-Every other runtime's arm reads `dataset`, which is `default`, because that is
-where those installs write. The `amp` arm reads **`ampDataset`**, which is a
-dataset of your own choosing, so QA sessions do not land in the shared
-`default` dataset alongside real work. Every `<ampDataset>` below means that
+Every other runtime's arm reads `dataset`. The `amp` arm reads **`ampDataset`**
+instead, so QA sessions can be pointed at a dataset of their own rather than at
+the shared `default` alongside real work. Every `<ampDataset>` below means that
 value from `qa/config.local.json`.
+
+**On this machine the two are both `default` today.** Measured 2026-10-12: the
+QA token reads `default` and answers 403 for every other dataset name,
+including one that does not exist, so it is scoped to that one dataset and the
+separation the mechanism allows is not in effect here. Nothing about a run's
+correctness depends on it — every read filters by `gen_ai.conversation.id`, so
+a run never counts another session's spans — but a QA session's spans do land
+next to real work, and they cannot be deleted afterwards. Point `ampDataset`
+somewhere else as soon as a token that can read it exists.
 
 That is possible without provisioning anything, because the harness prefix
 outranks the config file. Measured 2026-09-15 against a local listener capturing
@@ -2817,10 +2825,19 @@ python3 qa/tools/qa-amp-dataset-header.py
   loaded and skip `agent.start`/`agent.end` entirely. A tool-count mismatch is
   a real defect. A turn where the model declined to call the tool is a failed
   run rather than a failing check; re-run it.
-- **verified.** 2026-09-15, signals: pass-only. Measured on
-  `qa/runs/setup-probe-amp`: 1 chat span, 1 `execute_tool shell_command`, both
-  channels agreeing, `AGREEMENT`, exit `0`. Provoking the failure would mean
-  breaking the export on purpose, which this check exists to notice.
+- **verified.** 2026-10-12, signals: pass-only. Re-measured on
+  `qa/runs/setup-probe-amp`: 1 chat root, 1 zero-duration usage child, 1
+  `execute_tool shell_command`, `usage status: matched`, output tokens
+  reconciling exactly (68 on both channels), `AGREEMENT`, exit `0`. The
+  2026-09-15 run was the same except that usage was opt-in then. Provoking the
+  failure would mean breaking the export on purpose, which this check exists to
+  notice.
+
+  **The turn row counts roots, not `chat` spans.** A turn's root and its usage
+  children are all named `chat`, so the old count read 2 for a one-turn run and
+  reported `MISMATCH` the moment usage became the default. `qa-amp-compare.py`
+  now separates them on `dash0.amp.timing=observation` and prints the children
+  as their own line.
 
 ```sh
 qa/tools/qa-session-amp.sh \

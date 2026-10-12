@@ -44,7 +44,8 @@ awaits the `agent.end` handler, so anything waited for there is latency the
 user feels between turns. **A turn's spans can therefore land after `amp` has
 exited.**
 
-Every spec here settles for 30 s, not 10 s, whenever `QA_AMP_USAGE=1`. A read
+Every spec here settles for 30 s, not 10 s, because usage export is on by
+default (`QA_AMP_USAGE=0` is the only way off). A read
 taken too early reports `dash0.amp.usage.status=partial`, or no spans at all,
 for a run that is completely healthy — which looks exactly like the defect this
 replaced. Check the settle time before believing a regression.

@@ -138,17 +138,23 @@ def main() -> int:
         )
 
     names = Counter(str(s["name"]) for s in spans)
-    chat = sum(count for name, count in names.items() if name.startswith("chat"))
     got_tools = Counter({name.removeprefix("execute_tool "): count
                          for name, count in names.items()
                          if name.startswith("execute_tool ")})
 
-    # With usage on, each extra model call adds a chat child, so the turn row is
-    # a lower bound rather than an equality.
-    turns_ok = (chat >= want["turns"] if meta.get("export_usage")
-                else chat == want["turns"])
+    # A turn's root and its usage children are all `chat` spans, so counting the
+    # name alone cannot say how many turns there were. The children carry
+    # dash0.amp.timing=observation; the roots never do. Splitting them keeps the
+    # turn row an equality — a lower bound would pass on a run that lost a turn
+    # and gained a model call — and makes the extra chat spans countable, which
+    # is what any prompt-count metric will see.
+    chats = [s for s in spans if str(s["name"]).startswith("chat")]
+    roots = [s for s in chats
+             if s["attrs"].get("dash0.amp.timing") != "observation"]
+    children = len(chats) - len(roots)
     rows = [
-        ("turns -> chat spans", want["turns"], chat, turns_ok),
+        ("turns -> chat roots", want["turns"], len(roots),
+         want["turns"] == len(roots)),
         ("tool calls", sum(want["tools"].values()), sum(got_tools.values()),
          sum(want["tools"].values()) == sum(got_tools.values())),
         ("tool names", dict(want["tools"]), dict(got_tools),
@@ -158,7 +164,7 @@ def main() -> int:
     print(f"run     : {run_dir}")
     print(f"thread  : {thread}")
     print(f"dataset : {dataset}")
-    print(f"usage   : {'on' if meta.get('export_usage') else 'off (opt-in)'}")
+    print(f"usage   : {'on (default)' if meta.get('export_usage') else 'off'}")
     print()
     width = max(len(r[0]) for r in rows)
     failures = 0
@@ -168,6 +174,10 @@ def main() -> int:
               f"{'ok' if ok else 'MISMATCH'}")
 
     if meta.get("export_usage"):
+        # Not a verdict: one per earlier model call of a turn is correct. It is
+        # printed because these are `chat` spans like the roots, so an
+        # operation-based prompt count reads each one as another prompt.
+        print(f"\nextra chat spans (earlier model calls): {children}")
         status = {s["attrs"].get("dash0.amp.usage.status") for s in spans}
         status.discard(None)
         print(f"\nusage status: {', '.join(sorted(status)) or '(absent)'}")

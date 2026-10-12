@@ -102,6 +102,7 @@ printf '%sDash0 → Amp telemetry installer%s\n\n' "$C_B" "$C_N"
 SOURCE_DIR="${DASH0_SOURCE_DIR:-}"
 
 # 1. Platform detection.
+AGENT="amp"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -178,7 +179,12 @@ else
   RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${VERSION}"
   # Published per platform, installed under the plain name: amp/index.ts spawns
   # exactly ./amp-on-event next to itself.
-  BIN_ASSET="amp-on-event-${OS}-${ARCH}"
+  #
+  # Built from ${AGENT} rather than written out, so that
+  # scripts/verify-release-assets.sh reads the same asset names from this file
+  # that it reads from the other agents' bootstraps and probes them after a
+  # release. A literal here would be invisible to that check.
+  BIN_ASSET="${AGENT}-on-event-${OS}-${ARCH}"
 
   info "downloading amp-on-event v${VERSION}..."
   # Staged under a temp name and renamed: curl and wget both create the

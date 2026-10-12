@@ -126,6 +126,11 @@ Write-Host ''
 
 $SourceDir = $env:DASH0_SOURCE_DIR
 
+# At the top, unindented, and assigned a literal: this is the line
+# scripts/verify-release-assets.sh parses to learn which assets this installer
+# downloads, exactly as it does for the other agents' PowerShell bootstraps.
+$Agent = 'amp'
+
 # ---------------------------------------------------------------------------
 # 1. Platform detection.
 # ---------------------------------------------------------------------------
@@ -227,7 +232,10 @@ if ($SourceDir) {
   $RawBase = "https://raw.githubusercontent.com/$Repo/v$Version"
   # Published per platform, installed under the plain name: amp/index.ts spawns
   # exactly .\amp-on-event.exe next to itself.
-  $BinAsset = "amp-on-event-windows-$Arch.exe"
+  #
+  # Built from $Agent for the same reason as install-amp.sh: it is what
+  # scripts/verify-release-assets.sh reads to know which assets to probe.
+  $BinAsset = "$Agent-on-event-windows-$Arch.exe"
 
   Write-Info "downloading amp-on-event v$Version..."
   # Staged, not written straight to the destination: curl creates the file before

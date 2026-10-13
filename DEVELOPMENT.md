@@ -370,7 +370,7 @@ omitted when its value is empty.
 | `dash0.gen_ai.rate_limit.reached_type` | Which window blocked                                                 | Codex only. Omitted until a limit is actually hit. |
 | `dash0.gen_ai.credits.available` | boolean                                                              | Codex only. CLI ≥ ~14 Jul 2026. |
 | `dash0.gen_ai.credits.unlimited` | boolean                                                              | Codex only. |
-| `dash0.gen_ai.credits.balance` | float                                                                | Codex only. Omitted when unreported. |
+| `dash0.gen_ai.credits.balance` | float                                                                | Codex only. Accepts JSON numbers or numeric strings in the rollout. Omitted when unreported or invalid, without discarding token usage. |
 
 #### Skill invocations come by two routes
 

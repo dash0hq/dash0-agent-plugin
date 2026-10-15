@@ -29,6 +29,17 @@ stops instrumenting the event. `TestCodexHookEventsMatchManifest` in
 `HasMatcher` value checked against real Codex behaviour — see the notes in
 `trust.go`.
 
+## Reasoning effort
+
+The stop-family hooks recover reasoning effort from the current turn's latest
+`turn_context.payload.effort` in the rollout and export it as
+`gen_ai.request.reasoning.level` on chat/invoke_agent spans. `SubagentStop` uses
+`agent_transcript_path` when provided. Each turn resets the recovered value;
+missing, empty, null or non-string rollout effort stays absent. A hook `effort`
+key, when present, takes precedence even if its value is empty or invalid. Values
+such as `xhigh` and `ultra` are preserved as recorded, without consulting global
+configuration. Tool spans do not gain rollout effort.
+
 ## Build & run locally
 
 Wire once against your local build, then rebuild-and-run.

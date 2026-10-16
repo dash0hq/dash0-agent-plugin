@@ -43,6 +43,7 @@ func Normalize(event map[string]any, sessionDir string, now time.Time) map[strin
 	case "PostToolUse", "PostToolUseFailure":
 		ensureDurationMs(event, sessionDir, now)
 		anchorSpawnAgent(event)
+		injectSkillFile(event)
 	case "Stop", "StopFailure", "SubagentStop":
 		injectRollout(event)
 	}

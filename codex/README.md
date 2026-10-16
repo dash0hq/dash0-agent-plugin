@@ -29,6 +29,40 @@ stops instrumenting the event. `TestCodexHookEventsMatchManifest` in
 `HasMatcher` value checked against real Codex behaviour — see the notes in
 `trust.go`.
 
+## Skills loaded from files
+
+Native `<skill>` injections continue to be attributed on the turn's chat span.
+Codex hosts that load skills through ordinary tools also report
+`dash0.gen_ai.tool.skill.name` and `.source` on the successful read's existing
+`execute_tool` span. The name comes from the returned YAML frontmatter; this
+tool-driven route has source `model`, like Claude Code's `Skill` tool. It records
+a file load, not proof that every instruction in the skill was followed.
+
+Recognition requires one literal `SKILL.md` path and returned frontmatter with
+string `name` and nonempty string `description`. Supported reads are `Read` /
+`read_file`, and `Bash` / `exec_command` running a single `cat`, `head [-n N]`,
+or `sed -n '1,Np'` command. Quoted paths, relative paths, Windows file-reader
+paths and CRLF frontmatter are supported. Home-relative `~/` paths are accepted.
+Variable/glob/brace expansion, comma-separated paths, pipelines, command lists,
+scripts, concatenated files and outputs without complete frontmatter are
+deliberately omitted. The hook never opens the referenced file itself.
+Shell paths containing `,`, `(`, `)`, `#` or `^` are also omitted, even inside
+quotes, to avoid interpreting argument lists or extended glob syntax.
+
+The desktop `Bash` route uses plain stdout and has been verified against actual
+hook payloads. Other host shapes are best-effort: `exec_command` accepts an
+`output` string with a successful `exit_code`; file readers accept plain text,
+`content` / `text`, or `file.content`, starting at the beginning of the file.
+Line-numbered text and shell-report headers are not stripped. Names are exactly
+the frontmatter names; a native loader may qualify them with a plugin prefix.
+
+Failed or unfinished reads and catalogue mentions do not count. Each observed
+successful read has its own span, so rereading a file counts again; these are
+load counts, not unique skill invocations. Nothing is copied onto the chat span
+from this route. Native injections keep their existing last-skill-per-turn
+behavior. `omit_io` / `omit_user_info` do not remove the two skill attributes,
+and no new attribute contains the file path or skill contents.
+
 ## Build & run locally
 
 Wire once against your local build, then rebuild-and-run.

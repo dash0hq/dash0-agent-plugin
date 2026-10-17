@@ -15,6 +15,7 @@
   ],
   "skills": "./claude/skills/",
   "hooks": "./claude/hooks.json",
+  "types": "./claude/live/types/index.d.ts",
   "userConfig": {
     "OTLP_URL": {
       "title": "OTLP Endpoint URL",

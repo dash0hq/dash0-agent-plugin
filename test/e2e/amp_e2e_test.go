@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -138,6 +139,80 @@ func TestE2EAmpHelperDeliversACompletedTurn(t *testing.T) {
 	assert.Equal(t, "amp", attrs["gen_ai.harness.name"])
 	// Only set when content was shed, and this turn is tiny.
 	assert.NotContains(t, attrs, "dash0.amp.truncated")
+}
+
+// TestE2EAmpLiveTurnReachesTheCollector is the live canary: a real `amp` turn
+// with the real plugin installed, which is the only thing that proves Amp still
+// calls the handlers this integration is built on. It costs credits, so it runs
+// only where `amp` is authenticated — CI passes AMP_API_KEY.
+func TestE2EAmpLiveTurnReachesTheCollector(t *testing.T) {
+	if os.Getenv("AMP_API_KEY") == "" && os.Getenv("DASH0_AMP_LIVE") == "" {
+		t.Skip("set AMP_API_KEY (CI) or DASH0_AMP_LIVE=1 (a logged-in machine) to run the live Amp canary")
+	}
+	if _, err := exec.LookPath("amp"); err != nil {
+		t.Fatal("amp CLI not found — install it before running the live canary")
+	}
+	capture, server := newOTLPCapture(t)
+	defer server.Close()
+
+	// A project-scoped plugin: Amp loads .amp/plugins/* from the working
+	// directory, so the canary needs no writable HOME and leaves nothing behind.
+	workspace := t.TempDir()
+	pluginDir := filepath.Join(workspace, ".amp", "plugins", "dash0")
+	require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+	root := repoRootDir(t)
+	index, err := os.ReadFile(filepath.Join(root, "amp", "index.ts"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "index.ts"), index, 0o644))
+	helper := filepath.Join(pluginDir, "amp-on-event")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", helper, "./cmd/amp-on-event")
+	build.Dir = root
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "building the helper into the plugin dir: %s", out)
+
+	// --plugin-ready-timeout: Amp waits for plugins at turn start, and without
+	// it a fast turn can finish before the bridge has registered its handlers.
+	// The flag takes seconds as a bare number; "30s" is rejected.
+	cmd := exec.Command("amp", "--plugin-ready-timeout", "30", "-x",
+		"Reply with the single word: pong. Do not use any tools.")
+	cmd.Dir = workspace
+	cmd.Env = append(os.Environ(),
+		"AMP_PLUGIN_OPTION_OTLP_URL="+server.URL,
+		"AMP_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+		"AMP_PLUGIN_OPTION_DATASET=e2e-dataset",
+		"AMP_PLUGIN_OPTION_OMIT_IDENTITY_FALLBACK=true",
+	)
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "amp turn failed: %s", out)
+
+	// The helper is detached and polls `amp threads export` for up to twenty
+	// seconds, so spans legitimately arrive after `amp` has exited.
+	require.Eventually(t, func() bool {
+		bodies, _ := capture.snapshot()
+		return len(bodies) > 0
+	}, 40*time.Second, 250*time.Millisecond, "no spans from a live Amp turn")
+
+	bodies, auths := capture.snapshot()
+	assert.Equal(t, "Bearer e2e-token", auths[0])
+	spans := collectSpans(t, bodies)
+	logSpanTree(t, spans)
+	var roots int
+	for _, s := range spans {
+		if s.ParentSpanID == "" {
+			roots++
+			attrs := attributesOfSpan(s)
+			assert.Equal(t, "amp", attrs["gen_ai.harness.name"])
+			assert.True(t, strings.HasPrefix(s.Name, "chat"), "root is a chat span, got %q", s.Name)
+			assert.NotEmpty(t, attrs["gen_ai.conversation.id"], "the root carries its thread id")
+			// Content defaults to redacted; the point here is that the field
+			// exists at all, which is what a broken bridge would lose.
+			assert.Contains(t, attrs, "gen_ai.input.messages")
+		}
+	}
+	assert.Equal(t, 1, roots, "one turn is one root")
 }
 
 // attributesOfSpan flattens a span's attributes to their string form. Every

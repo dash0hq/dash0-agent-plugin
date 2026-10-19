@@ -15,10 +15,10 @@ the project moves.
 
 One writer per directory, so a hand edit in the wrong place gets overwritten or quietly ignored.
 
-## Six runtimes
+## Seven runtimes
 
-Specs target Claude Code, Codex, GitHub Copilot CLI, Cursor, OpenCode or the GitHub Copilot app, and
-say which in their `runtime:` frontmatter. Each has its own driver, its own second channel, and its
+Specs target Claude Code, Codex, GitHub Copilot CLI, Cursor, OpenCode, Amp or the GitHub Copilot app,
+and say which in their `runtime:` frontmatter. Each has its own driver, its own second channel, and its
 own limits on what a run can prove. `## Runtimes` in [setup.md](setup.md) is the table; read it
 before running or writing anything, and never carry a result from one runtime over to another. The
 Copilot app (`runtime: copilot-app`) is driven by a runner, an agent session inside the app that
@@ -26,7 +26,7 @@ creates and prompts target sessions with the app's session tools. Read
 [specs/copilot-app/README.md](specs/copilot-app/README.md) before writing one of its specs: no spec
 there may need a person.
 
-Three of them differ in kind rather than in detail, and each has a page to read before writing or
+Four of them differ in kind rather than in detail, and each has a page to read before writing or
 judging one of its specs.
 
 **Copilot.** Its hooks carry no numbers and no tool events the plugin uses, so its second channel —
@@ -45,7 +45,24 @@ is correct. Read `## The two things to know before reading any spec here` in
 the V2 event stream, and the independent record is `opencode session export`. Read `### OpenCode` under
 `## Configure` in [setup.md](setup.md).
 
+**Amp.** It has no shell hooks at all: the plugin is a TypeScript bridge Amp loads in-process, so the
+recorder is a second Amp plugin rather than a wrapper, installed project-scoped into
+`.amp/plugins/qa-recorder/`. Its second channel is Amp's own `--stream-json`, which is genuinely
+independent and carries per-call usage. `amp threads export` is **not** a second channel: the plugin
+reads it itself. Amp writes to its own dataset (`ampDataset` in the config), not `default`, so
+every verification tool must be pointed at it — `qa-attrs.py` needs `--dataset <ampDataset>`
+explicitly, and its default reports a clean pass over zero spans. Amp exposes no subagent spawn tool.
+The helper is **detached**: it polls for up to twenty seconds and a turn's spans can arrive after
+`amp` has exited, so amp runs settle for 30 s, not 10 s. Read [specs/amp](specs/amp/README.md).
+
 ## Findings
 
-Report spec failures that are unaddressed in `findings/`. One is open today:
-[cursor-subagent-work-produces-no-span](findings/cursor-subagent-work-produces-no-span.md).
+Report spec failures that are unaddressed in `findings/`. Three are open today:
+[cursor-subagent-work-produces-no-span](findings/cursor-subagent-work-produces-no-span.md),
+[amp-server-side-tools-produce-no-span](findings/amp-server-side-tools-produce-no-span.md) and
+[amp-mcp-calls-run-inside-code-exec](findings/amp-mcp-calls-run-inside-code-exec.md).
+The amp two are limits of Amp's plugin API, not bugs — they stay open and documented.
+
+Two amp findings were fixed on 2026-09-15 and are kept for their measurements:
+[amp-answering-model-call-is-never-attributed](findings/amp-answering-model-call-is-never-attributed.md)
+and [amp-skill-invocation-is-not-attributed](findings/amp-skill-invocation-is-not-attributed.md).

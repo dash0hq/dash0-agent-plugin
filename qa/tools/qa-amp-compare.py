@@ -193,7 +193,7 @@ def usage_verdict(export_usage, status, children, want_output, got_output,
         # cannot be compared and a pass would be a pass over whatever happened
         # to resolve. `partial` was the normal result while the answering call
         # went unattributed; that is fixed, and
-        # specs/amp/session/answering-call-supplies-the-root-model-and-tokens.md
+        # specs/amp/usage/answering-call-supplies-the-root-model-and-tokens.md
         # now requires every turn to match, so a partial turn is a regression
         # rather than the status quo.
         lines.append("  MISMATCH: with usage on every turn must reach "

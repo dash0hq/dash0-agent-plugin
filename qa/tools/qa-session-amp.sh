@@ -212,7 +212,7 @@ RESUMES=()
 [ -n "${QA_AMP_RESUME:-}" ] && RESUMES+=("$QA_AMP_RESUME")
 if [ -n "${QA_AMP_TURNS:-}" ]; then
   [ -f "$QA_AMP_TURNS" ] || { echo "QA_AMP_TURNS: no such file: $QA_AMP_TURNS" >&2; exit 2; }
-  while IFS= read -r line; do
+  while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] && RESUMES+=("$line")
   done < "$QA_AMP_TURNS"
 fi

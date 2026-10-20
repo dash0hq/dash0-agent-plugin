@@ -298,7 +298,7 @@ class AmpToolComparison(unittest.TestCase):
 
 
 class AmpDriver(unittest.TestCase):
-    def test_rerun_clears_logs_but_continued_turns_append(self):
+    def test_rerun_clears_logs_and_preserves_every_continued_turn(self):
         import pathlib
         import subprocess
         import tempfile
@@ -318,17 +318,20 @@ if [ "$1 $2" = "threads export" ]; then
   echo '{}'
   exit 0
 fi
-echo current >> "$QA_AMP_RECORD"
-echo current >> "$AMP_PLUGIN_OPTION_DEBUG_FILE"
+for prompt do :; done
+printf '%s\\n' "$prompt" >> "$QA_AMP_RECORD"
+printf '%s\\n' "$prompt" >> "$AMP_PLUGIN_OPTION_DEBUG_FILE"
 echo '{"type":"system","session_id":"T-test"}'
 ''')
             fake_amp.chmod(0o755)
             run = root / "qa/runs/reused"
             run.mkdir(parents=True)
+            turns = root / "turns.txt"
             env = {**os.environ, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
                    "QA_AMP_RESUME": "second turn", "QA_AMP_MCP": "0",
-                   "QA_AMP_SKILL": "0", "QA_AMP_TURNS": "", "QA_AMP_EXECUTOR": "local"}
-            for _ in range(2):
+                   "QA_AMP_SKILL": "0", "QA_AMP_TURNS": str(turns), "QA_AMP_EXECUTOR": "local"}
+            for ending in ("\n", ""):
+                turns.write_text("third turn\n\nfourth \\turn" + ending)
                 for name in ("record.jsonl", "plugin-debug.log"):
                     (run / name).write_text("stale\n")
                 result = subprocess.run(
@@ -336,7 +339,8 @@ echo '{"type":"system","session_id":"T-test"}'
                     cwd=directory, env=env, text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 for name in ("record.jsonl", "plugin-debug.log"):
-                    self.assertEqual((run / name).read_text(), "current\ncurrent\n")
+                    self.assertEqual((run / name).read_text(),
+                                     "first turn\nsecond turn\nthird turn\nfourth \\turn\n")
 
 
 if __name__ == "__main__":

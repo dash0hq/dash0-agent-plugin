@@ -65,7 +65,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 text = path.read_text()
-path.write_text(text.rsplit('---', 1)[0] +
+path.write_text('\ufeff' + text.rsplit('---', 1)[0] +
                 'export_usage: false\nteam_name: platform\n---\n' +
                 'Notes stay outside config.\nexport_usage: true\nauth_token: not-a-token')
 PY
@@ -78,6 +78,8 @@ assert 'auth_token: "amp-contract-token"' in front, 're-run blanked token'
 assert 'export_usage: false' in front, 're-run dropped export_usage'
 assert 'team_name: "platform"' in front, 're-run dropped unquoted team'
 assert front.count('auth_token:') == 1, 're-run duplicated token'
+assert front.count('export_usage:') == 1, 're-run promoted body settings into frontmatter'
+assert 'Notes stay' not in front, 're-run promoted prose into frontmatter'
 assert body == '\nNotes stay outside config.\nexport_usage: true\nauth_token: not-a-token', \
     're-run promoted or changed the Markdown body'
 PY
@@ -94,7 +96,7 @@ import sys
 import time
 
 installer, config = sys.argv[1:]
-for token, team in (('rotated-contract-token', '-'), ('', '')):
+for token, team in (('rotated-contract-token', ''), ('', '-')):
     pid, fd = pty.fork()
     if pid == 0:
         for key in ('DASH0_OTLP_URL', 'DASH0_AUTH_TOKEN', 'DASH0_DATASET', 'DASH0_TEAM_NAME'):
@@ -132,7 +134,12 @@ for token, team in (('rotated-contract-token', '-'), ('', '')):
     assert b'rotated-contract-token' not in transcript, 'secret echoed in terminal'
     front = Path(config).read_text().split('---', 2)[1]
     assert 'auth_token: "rotated-contract-token"' in front, 'token not rotated or kept'
-    assert 'team_name:' not in front, 'team not cleared'
+    assert 'otlp_url: "http://localhost:4319"' in front, 'Enter blanked endpoint'
+    assert 'dataset: "amp-contract-ds"' in front, 'Enter blanked dataset'
+    if team == '-':
+        assert 'team_name:' not in front, 'team not cleared'
+    else:
+        assert 'team_name: "platform"' in front, 'Enter blanked team'
     assert 'export_usage: false' in front, 'interactive edit dropped other settings'
 PY
 echo "PASS: interactive re-run rotates or keeps a hidden token and clears a team"

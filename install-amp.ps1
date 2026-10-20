@@ -369,7 +369,7 @@ function Get-ConfigValue {
   param([string] $Key)
   # Quotes optional - a hand-edited unquoted value must not be read as absent.
   $match = $ExistingConfig.Frontmatter | Select-String -Pattern "^\s*$Key`:\s*(.*)$" | Select-Object -First 1
-  if ($match) { return $match.Matches[0].Groups[1].Value -replace '^"(.*)"$', '$1' }
+  if ($match) { return $match.Matches[0].Groups[1].Value.Trim() -replace '^"(.*)"$', '$1' }
   return ''
 }
 $Endpoint = Read-Value $Endpoint 'Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)' (Get-ConfigValue 'otlp_url')

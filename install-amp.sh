@@ -282,8 +282,8 @@ DASH0_AGENT_NAME="amp"
 # blank the token the other projects are exporting with.
 FRONTMATTER=""; BODY_START=0; EXTRA_CONFIG=""
 if [ -f "$CONFIG_PATH" ]; then
-  FRONTMATTER=$(awk '/^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) exit; next } markers == 1 { sub(/\r$/, ""); print }' "$CONFIG_PATH")
-  BODY_START=$(awk '/^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) { print NR + 1; exit } } END { if (markers < 2) print (markers == 0 ? 1 : 0) }' "$CONFIG_PATH")
+  FRONTMATTER=$(awk 'NR == 1 { sub(/^\357\273\277/, "") } /^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) exit; next } markers == 1 { sub(/\r$/, ""); print }' "$CONFIG_PATH")
+  BODY_START=$(awk 'NR == 1 { sub(/^\357\273\277/, "") } /^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) { print NR + 1; exit } } END { if (markers < 2) print (markers == 0 ? 1 : 0) }' "$CONFIG_PATH")
   # Quotes are optional: this installer writes them, a hand-edit often does
   # not, and the key is stripped from EXTRA_CONFIG either way — so reading only
   # the quoted form would drop an unquoted token instead of preserving it.
@@ -292,7 +292,7 @@ if [ -f "$CONFIG_PATH" ]; then
   # accounting back on for someone who switched it off.
   EXTRA_CONFIG=$(printf '%s\n' "$FRONTMATTER" | grep -vE '^[[:space:]]*(otlp_url:|auth_token:|dataset:|agent_name:|team_name:)' || true)
 fi
-existing() { printf '%s\n' "$FRONTMATTER" | sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" | head -1 | sed 's/^"\(.*\)"$/\1/'; }
+existing() { printf '%s\n' "$FRONTMATTER" | sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" | head -1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
 DATASET_DEFAULT=$(existing dataset)
 [ ! -f "$CONFIG_PATH" ] && DATASET_DEFAULT=default
 prompt_value  DASH0_OTLP_URL    "Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)" "$(existing otlp_url)"

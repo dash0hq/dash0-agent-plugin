@@ -97,8 +97,8 @@ func TestE2EAmpInstallerRerun(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	const body = "Notes stay outside config.\r\nexport_usage: true\r\nauth_token: body-only"
 	require.NoError(t, os.WriteFile(path, []byte("---\r\n"+
-		"otlp_url: https://example.invalid\r\nauth_token: rerun-fixture-token\r\n"+
-		"dataset: Prüfung\r\nteam_name: Plattform-Übersicht\r\nexport_usage: false\r\n"+
+		"otlp_url: https://example.invalid  \r\nauth_token: \"rerun-fixture-token\" \t\r\n"+
+		"dataset: Prüfung \t\r\nteam_name: Plattform-Übersicht  \r\nexport_usage: false\r\n"+
 		"enabled: false\r\nauth_token_keychain_service: fixture-service\r\n---\r\n"+body), 0o600))
 	root := repoRootDir(t)
 	for run := 0; run < 2; run++ {
@@ -133,6 +133,8 @@ if (Get-Variable Token,lines,existing,parts,ExistingConfig,ExtraConfig -ErrorAct
 		require.NoError(t, err)
 		parts := strings.SplitN(string(content), "---", 3)
 		require.Len(t, parts, 3)
+		assert.Equal(t, 1, strings.Count(parts[1], "export_usage:"), "body settings stay outside frontmatter")
+		assert.NotContains(t, parts[1], "Notes stay outside config.")
 		assert.Equal(t, "\n"+body, parts[2], "Markdown body, including CRLF and missing final newline, is unchanged")
 	}
 }

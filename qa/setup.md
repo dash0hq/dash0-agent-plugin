@@ -1444,10 +1444,30 @@ except FileNotFoundError:
     sys.exit('qa/config.local.json does not exist')
 except json.JSONDecodeError as e:
     sys.exit(f'qa/config.local.json is not valid JSON: {e}')
-missing = [k for k in ('apiUrl','appUrl','ingestUrl','authToken','dataset','ampDataset') if not c.get(k)]
+missing = [k for k in ('apiUrl','appUrl','ingestUrl','authToken','dataset') if not c.get(k)]
 if missing: sys.exit('missing: ' + ', '.join(missing))
 if any('REPLACE_ME' in str(v) for v in c.values()): sys.exit('placeholder left in the config')
 print('config ok')
+"
+```
+
+### amp-config-has-dataset
+
+- **proves.** Amp has its separate dataset configured. Other runtimes use
+  `dataset` and do not need `ampDataset`.
+- **after.** config-is-complete
+- **blocking.** true
+- **pass.** `amp dataset ok`.
+- **fail.** `missing: ampDataset` means add the Amp QA dataset to
+  `qa/config.local.json` before running an Amp spec.
+- **verified.** 2026-10-20, signals: pass+fail with synthetic configs.
+
+```sh
+python3 -c "
+import json, sys
+c = json.load(open('qa/config.local.json'))
+if not c.get('ampDataset'): sys.exit('missing: ampDataset')
+print('amp dataset ok')
 "
 ```
 

@@ -28,6 +28,13 @@ team, and writes them to `~/.amp/dash0-agent-plugin.local.md` (mode 600). Pass
 Run `install-amp.sh --help` for the full list. No JavaScript dependencies are
 needed at runtime; Amp runs `index.ts` with Bun and erases the type-only import.
 
+On a rerun, Enter keeps the existing value, including a hidden token. Type `-`
+at the optional dataset or team prompt to clear it. Without a terminal the
+installer keeps existing values; explicit flags and environment values still
+take precedence. It preserves other frontmatter keys and the Markdown body.
+Options such as `export_usage: false` belong between the `---` markers, not
+appended after them.
+
 Reload plugins from Amp's command palette. Install just this plugin once per
 executor. To restrict installation to one workspace, run the installer with
 `--project` (`-Project` on Windows), which uses `.amp/plugins/dash0/` in the

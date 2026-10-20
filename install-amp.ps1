@@ -22,9 +22,10 @@ powershell -ExecutionPolicy Bypass -File install-amp.ps1 `
   -Endpoint https://ingress.us1.aws.dash0.com -Token dash0_... -Dataset default
 
 .NOTES
-Every flag is optional. A flag that is not supplied is prompted for, or left
-blank in a non-interactive run - the plugin then installs but stays inactive
-until the config file is filled in.
+Every flag is optional. Missing values are prompted for, with existing values
+as defaults. Enter keeps the current value; - clears an optional dataset/team.
+Without a terminal, existing values are kept. A new install without credentials
+stays inactive until the config file is filled in.
 
 -Project installs into .\.amp\plugins\dash0 instead of the user directory.
 
@@ -107,7 +108,6 @@ function Stop-WithError {
 # auth token with a trailing CR fails to authenticate with nothing reporting why.
 function Write-TextFile {
   param([string] $Path, [string] $Content)
-  $Content = $Content -replace "`r`n", "`n"
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
@@ -319,24 +319,28 @@ if ($SourceDir) {
 function Read-Value {
   param([string] $Current, [string] $Label, [string] $Default = '')
   if ($Current) { return $Current }
-  if (-not [Environment]::UserInteractive) { return $Default }
+  if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { return $Default }
   if ($Default) {
     $answer = Read-Host "$Label [$Default]"
   } else {
     $answer = Read-Host $Label
   }
   if (-not $answer) { return $Default }
+  if ($answer -eq '-') { return '' }
   return $answer
 }
 
 function Read-Secret {
-  param([string] $Current, [string] $Label)
+  param([string] $Current, [string] $Label, [string] $Default = '')
   if ($Current) { return $Current }
-  if (-not [Environment]::UserInteractive) { return '' }
+  if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { return $Default }
+  if ($Default) { $Label += ' [Enter to keep current]' }
   $secure = Read-Host "$Label (input hidden)" -AsSecureString
   $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
   try {
-    return [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    $answer = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    if (-not $answer) { return $Default }
+    return $answer
   } finally {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
   }
@@ -347,27 +351,33 @@ $AgentName = 'amp'
 # file is machine-wide and shared with every -Project install, so a re-run that
 # answers nothing must not blank the token the other projects export with.
 $ExtraConfig = @()
+$ExistingConfig = @{ Frontmatter = @(); Body = '' }
 if (Test-Path -LiteralPath $ConfigPath) {
-  $existing = Get-Content -LiteralPath $ConfigPath
-  function Get-ConfigValue {
-    param([string] $Key)
-    # Quotes optional - see install-amp.sh for why a hand-edited unquoted
-    # value must be preserved rather than read as absent.
-    $match = $existing | Select-String -Pattern "^$Key`:\s*(.*)$" | Select-Object -First 1
-    if ($match) { return $match.Matches[0].Groups[1].Value -replace '^"(.*)"$', '$1' }
-    return ''
+  # Write-TextFile emits BOM-less UTF-8; PS 5.1's default ANSI read corrupts it.
+  $existing = [IO.File]::ReadAllText($ConfigPath, [Text.Encoding]::UTF8)
+  $parts = ([regex]'(?m)^[ \t]*---[ \t]*\r?$(?:\n)?').Split($existing, 3)
+  if ($parts.Count -gt 1) {
+    $ExistingConfig.Frontmatter = @($parts[1] -split '\r?\n')
+    if ($parts.Count -gt 2) { $ExistingConfig.Body = $parts[2] }
+  } else {
+    $ExistingConfig.Body = $existing
   }
-  if (-not $Endpoint) { $Endpoint = Get-ConfigValue 'otlp_url' }
-  if (-not $Token) { $Token = Get-ConfigValue 'auth_token' }
-  if (-not $Dataset) { $Dataset = Get-ConfigValue 'dataset' }
-  if (-not $Team) { $Team = Get-ConfigValue 'team_name' }
   # Keys this installer does not write belong to the user, export_usage above all.
-  $ExtraConfig = @($existing | Where-Object { $_ -notmatch '^(---|otlp_url:|auth_token:|dataset:|agent_name:|team_name:)' })
+  $ExtraConfig = @($ExistingConfig.Frontmatter | Where-Object { $_ -and $_ -notmatch '^\s*(otlp_url:|auth_token:|dataset:|agent_name:|team_name:)' })
 }
-$Endpoint = Read-Value $Endpoint 'Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)'
-$Token = Read-Secret $Token 'Dash0 auth token'
-$Dataset = Read-Value $Dataset 'Dash0 dataset (optional)' 'default'
-$Team = Read-Value $Team 'Team name (optional)'
+function Get-ConfigValue {
+  param([string] $Key)
+  # Quotes optional - a hand-edited unquoted value must not be read as absent.
+  $match = $ExistingConfig.Frontmatter | Select-String -Pattern "^\s*$Key`:\s*(.*)$" | Select-Object -First 1
+  if ($match) { return $match.Matches[0].Groups[1].Value -replace '^"(.*)"$', '$1' }
+  return ''
+}
+$Endpoint = Read-Value $Endpoint 'Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)' (Get-ConfigValue 'otlp_url')
+$Token = Read-Secret $Token 'Dash0 auth token' (Get-ConfigValue 'auth_token')
+$DatasetDefault = Get-ConfigValue 'dataset'
+if (-not (Test-Path -LiteralPath $ConfigPath)) { $DatasetDefault = 'default' }
+$Dataset = Read-Value $Dataset 'Dash0 dataset (optional; - to clear)' $DatasetDefault
+$Team = Read-Value $Team 'Team name (optional; - to clear)' (Get-ConfigValue 'team_name')
 
 if (-not $Endpoint -or -not $Token) {
   Write-Warn 'OTLP URL or auth token not provided. The plugin installs but stays inactive.'
@@ -387,15 +397,15 @@ if ($AgentName) { $lines += "agent_name: `"$AgentName`"" }
 if ($Team) { $lines += "team_name: `"$Team`"" }
 $lines += $ExtraConfig
 $lines += '---'
-Write-TextFile $ConfigPath (($lines -join "`n") + "`n")
+Write-TextFile $ConfigPath (($lines -join "`n") + "`n" + $ExistingConfig.Body)
 Protect-File $ConfigPath
 Write-Ok "wrote config -> $ConfigPath (owner only)"
 
 # The token lives in the config file from here on. Under the documented
 # `irm ... | iex` install the script's variables outlive the run, because the
-# text executes in the caller's session, so both variables that carry the token
+# text executes in the caller's session, so all variables that carry the token
 # are dropped rather than left reachable through Get-Variable.
-Remove-Variable Token, lines -ErrorAction SilentlyContinue
+Remove-Variable Token, lines, existing, parts, ExistingConfig, ExtraConfig -ErrorAction SilentlyContinue
 Restore-CallerSession
 
 # ---------------------------------------------------------------------------
@@ -416,6 +426,6 @@ Write-Host 'Token accounting is on' -ForegroundColor Cyan
 Write-Host "  Each completed turn runs 'amp threads export' to read its models and token counts."
 Write-Host '  It needs working Amp authentication here, and never delays a turn: the helper is detached.'
 Write-Host '  If that read fails, the turn still exports, carrying dash0.amp.usage.status=unavailable instead of tokens.'
-Write-Host "  To turn it off, add 'export_usage: false' to $ConfigPath."
+Write-Host "  To turn it off, add 'export_usage: false' between the --- markers in $ConfigPath."
 Write-Host "To reconfigure later, edit $ConfigPath (a workspace .amp\dash0-agent-plugin.local.md outranks it; keep it out of Git)."
 Write-Host 'To uninstall, run uninstall-amp.ps1.'

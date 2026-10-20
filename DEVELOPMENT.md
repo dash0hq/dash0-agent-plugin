@@ -10,6 +10,7 @@ Use the Go version declared in `go.mod`. The GitHub Actions workflows read it
 from `go.mod`. `make go-version-check` checks that the Docker test harness uses
 the same version. The Makefile uses Bash and pins
 the lint tools it installs into `bin/`. Python 3 runs the diagnostic-script tests.
+Bun is required for the Amp bridge tests, including `make test` and `make ci`.
 
 ## Coding conventions
 
@@ -47,7 +48,8 @@ Then select the checks that cover the changed contract:
 | Command | Coverage |
 | --- | --- |
 | `make build` | All ordinary Go packages compile |
-| `make test` | Python diagnostic tests and Go tests with race detection and coverage |
+| `make test` | Python diagnostic tests, Amp bridge tests (Bun required), and Go tests with race detection and coverage |
+| `make test-amp` | Amp TypeScript bridge tests and type checking; requires Bun |
 | `make lint` | Go and shell lint, Go/Docker version agreement, release-pin agreement |
 | `make ci` | The local lint and test targets above, not every hosted CI job |
 | `GOOS=windows make golangci-lint`, `GOOS=darwin make golangci-lint` | Static checks for platform-specific Go code |

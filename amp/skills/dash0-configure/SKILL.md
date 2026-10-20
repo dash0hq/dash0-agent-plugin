@@ -36,9 +36,19 @@ Ask whether to write user-level (`~/.amp/dash0-agent-plugin.local.md`, applies t
 
 An Orb is a fresh executor with none of this on it. Configure Orbs through the project's **Secrets & Env Vars**, not by writing a file inside one — see `### Orbs` in the plugin's README.
 
+## Team-only recovery
+
+When telemetry already works and only the team name needs changing, use this path instead of the full workflow.
+
+1. Check whether `AMP_PLUGIN_OPTION_TEAM_NAME` overrides the file. If it does, explain that conflict and stop without changing it.
+2. Select the active project file if it exists, otherwise the user-level file. Do not create a project override or copy credentials between files.
+3. Ask only for the team name. Do not read the whole file into the transcript. Inspect only frontmatter markers and `team_name` lines with a filtered command that prints no credentials.
+4. Show the target path and proposed team change and ask for confirmation. Then use a silent line-level read-modify-write command to update the first `team_name` inside the frontmatter or insert it before the closing `---`. Preserve every other line, the Markdown body, and existing permissions. Do not use a file-editing tool that requires a full Read. If no file exists, create an owner-only user-level file with just `team_name` in frontmatter, without credential keys.
+5. Tell the user the next completed turn reads the new team name. Stop here.
+
 ## Workflow
 
-1. If the target file already exists, read it and show the user the current values with the `auth_token` masked (show only the last 4 chars). Ask whether to overwrite. If they decline, stop.
+1. If the target file already exists, inspect its frontmatter through a command that masks `auth_token` before printing anything. Never Read or print the raw file into the transcript. Ask which values to change, not whether to replace the whole file. Preserve every existing key and the Markdown body verbatim unless the user explicitly changes or removes it, including `export_usage`, `enabled`, and `auth_token_keychain_service` / `auth_token_keychain_account`.
 
 2. Decide whether credentials are part of this run.
 
@@ -46,13 +56,13 @@ An Orb is a fresh executor with none of this on it. Configure Orbs through the p
    - **OTLP URL** (required) — Dash0 OTLP ingress, e.g. `https://ingress.us-west-2.aws.dash0.com`
    - **Auth token** (required) — treat as a secret; do not echo it back in later messages
 
-   **When telemetry already works,** never ask the user for the token again. Find out where it currently comes from, because the answer decides what the target file must contain. Read the target file, and read the other level's file too (the user-level one if the target is project-level, and the reverse).
+   **When telemetry already works,** never ask the user for the token again. Find out where it currently comes from using filtered commands that report key presence and non-secret values only. Keep credentials inside the local read-modify-write process, never in tool output or the transcript.
 
    | Where the credentials are now                                  | What to write                                                                                                                                                                                                                                                                           |
    | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
    | In the target file                                             | Carry its `otlp_url` and `auth_token` lines over verbatim.                                                                                                                                                                                                                              |
    | In the other level's file, and the target is a different level | Copy that file's `otlp_url` and `auth_token` into the target verbatim. The two files do not merge, so a target without them turns telemetry off on the next turn. Tell the user the token will exist in a second file, and stop if they would rather set the option user-level instead. |
-   | In neither file                                                | They come from the environment or the keychain. Write neither key, and tell the user where the values live so they know the file is not the source of truth.                                                                                                                            |
+   | In neither file                                                | They come from the environment or the keychain. Do not add plaintext credential keys. Preserve any existing keychain service/account settings, and tell the user where the values live.                                                                                                 |
 
 3. Ask for the recommended values. These are what most installs are missing, so ask explicitly rather than defaulting past them.
    - **Team name** (`team_name`) — tags every span with `dash0.team.name`. Without it, spans cannot be attributed to a team. Suggest the user's team as they would name it in Dash0.
@@ -73,7 +83,7 @@ An Orb is a fresh executor with none of this on it. Configure Orbs through the p
 
    `export_usage` is worth naming if the user asks why turns pause or why `amp` authentication matters: it shells out to `amp threads export` in a detached helper after the turn. It never delays the user, but it does need working Amp auth on that machine.
 
-5. Show the user the exact file you are about to write, with `auth_token` masked to its last 4 chars, and ask them to confirm. Write it only after they agree. Omit every key whose value is blank, and include the `otlp_url` and `auth_token` lines exactly as step 2 settled them.
+5. Show only the proposed changes, with any `auth_token` value masked, and ask for confirmation. After they agree, edit only the selected keys inside the frontmatter with a silent local read-modify-write command. Keep all untouched keys, credential lines, and the body verbatim. A declined step-4 option means keep its existing value, not remove it. Omit blank keys only when creating a new file or when the user explicitly clears them. Include credential lines exactly as step 2 settled them, without printing them. A new file has this shape:
 
    ```
    ---

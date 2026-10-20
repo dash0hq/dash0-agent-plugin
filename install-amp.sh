@@ -13,9 +13,9 @@
 #     --token <auth-token> \
 #     --dataset <dataset>
 #
-# All flags are optional. Any flag not provided is prompted for interactively,
-# or (non-interactively) left blank — the plugin then installs but stays inactive
-# until ~/.amp/dash0-agent-plugin.local.md is filled in.
+# All flags are optional. Missing values are prompted for interactively, with
+# existing values as defaults. Without a terminal, existing values are kept.
+# A new install without credentials stays inactive until the file is filled in.
 #
 # Flags:
 #   --endpoint URL   Dash0 OTLP endpoint URL
@@ -68,7 +68,9 @@ while [ $# -gt 0 ]; do
       cat <<'EOF'
 Usage: install-amp.sh [--endpoint URL] [--token TOKEN] [--dataset NAME] [--team NAME] [--project]
 
-All flags optional; missing ones are prompted for (or left blank non-interactively).
+All flags optional; missing ones are prompted for, with existing values as defaults.
+Without a terminal, existing values are kept. Enter keeps a prompt default;
+type - at an optional dataset/team prompt to clear it.
 
 Flags:
   --endpoint URL   Dash0 OTLP endpoint URL
@@ -243,23 +245,31 @@ else
   fi
 fi
 
-# 6. Collect configuration (env var > interactive prompt > skip).
+# 6. Collect configuration (env var > interactive prompt > existing default).
+INTERACTIVE=0
+if ( : < /dev/tty ) 2>/dev/null; then INTERACTIVE=1; fi
 prompt_value() {
   local var="$1" label="$2" default="${3:-}"; local val="${!var:-}"
   if [ -z "$val" ]; then
-    if [ -r /dev/tty ]; then
+    if [ "$INTERACTIVE" -eq 1 ]; then
       if [ -n "$default" ]; then printf "%s [%s]: " "$label" "$default" > /dev/tty; else printf "%s: " "$label" > /dev/tty; fi
       IFS= read -r val < /dev/tty || val=""; val="${val:-$default}"
     else val="$default"; fi
   fi
+  [ "$val" = '-' ] && val=""
   printf -v "$var" "%s" "$val"
 }
 prompt_secret() {
-  local var="$1" label="$2"; local val="${!var:-}"
-  if [ -z "$val" ] && [ -r /dev/tty ]; then
-    printf "%s (input hidden): " "$label" > /dev/tty
-    stty -echo < /dev/tty 2>/dev/null; IFS= read -r val < /dev/tty || val=""; stty echo < /dev/tty 2>/dev/null
-    printf "\n" > /dev/tty
+  local var="$1" label="$2" default="${3:-}"; local val="${!var:-}"
+  if [ -z "$val" ]; then
+    if [ "$INTERACTIVE" -eq 1 ]; then
+      [ -n "$default" ] && label="$label [Enter to keep current]"
+      stty -echo < /dev/tty 2>/dev/null
+      printf "%s (input hidden): " "$label" > /dev/tty
+      IFS= read -r val < /dev/tty || val=""; stty echo < /dev/tty 2>/dev/null
+      printf "\n" > /dev/tty
+    fi
+    val="${val:-$default}"
   fi
   printf -v "$var" "%s" "$val"
 }
@@ -270,25 +280,25 @@ DASH0_AGENT_NAME="amp"
 # uninstaller refuses to take it — so a re-run that answers nothing, a
 # non-interactive second workspace being the easy way to get there, must not
 # blank the token the other projects are exporting with.
-EXTRA_CONFIG=""
+FRONTMATTER=""; BODY_START=0; EXTRA_CONFIG=""
 if [ -f "$CONFIG_PATH" ]; then
+  FRONTMATTER=$(awk '/^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) exit; next } markers == 1 { sub(/\r$/, ""); print }' "$CONFIG_PATH")
+  BODY_START=$(awk '/^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) { print NR + 1; exit } } END { if (markers < 2) print (markers == 0 ? 1 : 0) }' "$CONFIG_PATH")
   # Quotes are optional: this installer writes them, a hand-edit often does
   # not, and the key is stripped from EXTRA_CONFIG either way — so reading only
   # the quoted form would drop an unquoted token instead of preserving it.
-  existing() { sed -n "s/^$1:[[:space:]]*//p" "$CONFIG_PATH" | head -1 | sed 's/^"\(.*\)"$/\1/'; }
-  : "${DASH0_OTLP_URL:=$(existing otlp_url)}"
-  : "${DASH0_AUTH_TOKEN:=$(existing auth_token)}"
-  : "${DASH0_DATASET:=$(existing dataset)}"
-  : "${DASH0_TEAM_NAME:=$(existing team_name)}"
   # Keys this installer does not write belong to the user. Step 8 tells them to
   # put export_usage here, so dropping it on a re-run would silently turn token
   # accounting back on for someone who switched it off.
-  EXTRA_CONFIG=$(grep -vE '^(---|otlp_url:|auth_token:|dataset:|agent_name:|team_name:)' "$CONFIG_PATH" || true)
+  EXTRA_CONFIG=$(printf '%s\n' "$FRONTMATTER" | grep -vE '^[[:space:]]*(otlp_url:|auth_token:|dataset:|agent_name:|team_name:)' || true)
 fi
-prompt_value  DASH0_OTLP_URL    "Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)"
-prompt_secret DASH0_AUTH_TOKEN  "Dash0 auth token"
-prompt_value  DASH0_DATASET     "Dash0 dataset (optional)" "default"
-prompt_value  DASH0_TEAM_NAME   "Team name (optional)"
+existing() { printf '%s\n' "$FRONTMATTER" | sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" | head -1 | sed 's/^"\(.*\)"$/\1/'; }
+DATASET_DEFAULT=$(existing dataset)
+[ ! -f "$CONFIG_PATH" ] && DATASET_DEFAULT=default
+prompt_value  DASH0_OTLP_URL    "Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)" "$(existing otlp_url)"
+prompt_secret DASH0_AUTH_TOKEN  "Dash0 auth token" "$(existing auth_token)"
+prompt_value  DASH0_DATASET     "Dash0 dataset (optional; - to clear)" "$DATASET_DEFAULT"
+prompt_value  DASH0_TEAM_NAME   "Team name (optional; - to clear)" "$(existing team_name)"
 
 if [ -z "$DASH0_OTLP_URL" ] || [ -z "$DASH0_AUTH_TOKEN" ]; then
   warn "OTLP URL or auth token not provided. The plugin will install but stay inactive."
@@ -299,6 +309,8 @@ fi
 #    Always user scope, even with --project: a workspace-level
 #    .amp/dash0-agent-plugin.local.md is a token inside a Git working tree, and
 #    that is a decision for whoever owns the repository, not for this installer.
+CONFIG_TMP=$(mktemp "$CONFIG_PATH.XXXXXX")
+trap 'rm -f "$CONFIG_TMP"' EXIT
 {
   echo "---"
   echo "otlp_url: \"$DASH0_OTLP_URL\""
@@ -308,8 +320,12 @@ fi
   [ -n "$DASH0_TEAM_NAME" ]  && echo "team_name: \"$DASH0_TEAM_NAME\""
   [ -n "$EXTRA_CONFIG" ]     && printf '%s\n' "$EXTRA_CONFIG"
   echo "---"
-} > "$CONFIG_PATH"
-chmod 600 "$CONFIG_PATH"
+} > "$CONFIG_TMP"
+# Append the original body directly: command substitution would lose its last
+# newlines, and reading it as configuration would promote prose into options.
+if [ "$BODY_START" -gt 0 ]; then tail -n +"$BODY_START" "$CONFIG_PATH" >> "$CONFIG_TMP"; fi
+chmod 600 "$CONFIG_TMP"
+mv -f "$CONFIG_TMP" "$CONFIG_PATH"
 ok "wrote config → $CONFIG_PATH (chmod 600)"
 
 # 8. Done.
@@ -324,6 +340,6 @@ printf '\n%sToken accounting is on%s\n' "$C_B" "$C_N"
 printf "  Each completed turn runs 'amp threads export' to read its models and token counts.\n"
 printf "  It needs working Amp authentication here, and never delays a turn: the helper is detached.\n"
 printf "  If that read fails, the turn still exports, carrying dash0.amp.usage.status=unavailable instead of tokens.\n"
-printf "  To turn it off, add 'export_usage: false' to %s.\n" "$CONFIG_PATH"
+printf "  To turn it off, add 'export_usage: false' between the --- markers in %s.\n" "$CONFIG_PATH"
 printf "To reconfigure later, edit %s (a workspace .amp/dash0-agent-plugin.local.md outranks it; keep it out of Git).\n" "$CONFIG_PATH"
 printf "To uninstall: curl -fsSL https://raw.githubusercontent.com/%s/main/uninstall-amp.sh | bash\n" "$REPO"

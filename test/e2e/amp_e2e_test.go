@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/config"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
@@ -78,6 +79,61 @@ func repoRootDir(t *testing.T) string {
 	dir, err := os.Getwd() // test/e2e
 	require.NoError(t, err)
 	return filepath.Dir(filepath.Dir(dir))
+}
+
+// TestE2EAmpInstallerRerun preserves the public configuration contract on both
+// platforms. Windows uses stock PowerShell 5.1, not pwsh, so a default ANSI
+// read of the installer's BOM-less UTF-8 output cannot hide behind PS 7.
+func TestE2EAmpInstallerRerun(t *testing.T) {
+	home, source := t.TempDir(), t.TempDir()
+	name := "amp-on-event"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	// The installer copies these files; it never executes the helper.
+	require.NoError(t, os.WriteFile(filepath.Join(source, name), []byte("unused"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "index.ts"), []byte("export {}"), 0o600))
+	path := filepath.Join(home, ".amp", config.Name)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	const body = "Notes stay outside config.\r\nexport_usage: true\r\nauth_token: body-only"
+	require.NoError(t, os.WriteFile(path, []byte("---\r\n"+
+		"otlp_url: https://example.invalid\r\nauth_token: rerun-fixture-token\r\n"+
+		"dataset: Prüfung\r\nteam_name: Plattform-Übersicht\r\nexport_usage: false\r\n"+
+		"enabled: false\r\nauth_token_keychain_service: fixture-service\r\n---\r\n"+body), 0o600))
+	root := repoRootDir(t)
+	for run := 0; run < 2; run++ {
+		cmd := exec.Command("bash", filepath.Join(root, "install-amp.sh"))
+		if runtime.GOOS == "windows" {
+			// iex executes in the caller's session. Check no token-bearing
+			// installer variables survive, not just the primary $Token.
+			cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `
+Invoke-Expression ([IO.File]::ReadAllText($env:AMP_INSTALLER, [Text.Encoding]::UTF8))
+if (Get-Variable Token,lines,existing,parts,ExistingConfig,ExtraConfig -ErrorAction SilentlyContinue) {
+  throw 'token-bearing installer variables survived iex'
+}`)
+		}
+		cmd.Dir = t.TempDir()
+		cmd.Stdin = strings.NewReader("")
+		cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home,
+			"DASH0_SOURCE_DIR="+source, "DASH0_OTLP_URL=", "DASH0_AUTH_TOKEN=", "DASH0_DATASET=", "DASH0_TEAM_NAME=",
+			"AMP_INSTALLER="+filepath.Join(root, "install-amp.ps1"))
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "installer run %d: %s", run, out)
+		assert.NotContains(t, string(out), "rerun-fixture-token")
+		loaded := config.Load(path)
+		for key, value := range map[string]string{
+			"otlp_url": "https://example.invalid", "auth_token": "rerun-fixture-token",
+			"dataset": "Prüfung", "team_name": "Plattform-Übersicht", "export_usage": "false",
+			"enabled": "false", "auth_token_keychain_service": "fixture-service",
+		} {
+			assert.Equal(t, value, loaded.Get(key), "run %d key %s", run, key)
+		}
+		content, err := os.ReadFile(path)
+		require.NoError(t, err)
+		parts := strings.SplitN(string(content), "---", 3)
+		require.Len(t, parts, 3)
+		assert.Equal(t, "\n"+body, parts[2], "Markdown body, including CRLF and missing final newline, is unchanged")
+	}
 }
 
 // TestE2EAmpHelperDeliversACompletedTurn runs the helper exactly as the bridge

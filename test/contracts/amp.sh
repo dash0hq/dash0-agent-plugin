@@ -4,7 +4,7 @@
 #   - --project installs into the workspace instead of the user directory
 #   - uninstall-amp.sh removes only the dash0 plugin directory
 #   - --project uninstall leaves the machine-wide config file in place
-# Requires: go, make, bash. No network: the contract installs from a local build
+# Requires: go, make, bash, python3. No network: the contract installs from a local build
 # via DASH0_SOURCE_DIR, which is also how a contributor installs a working tree.
 # The release download path needs a published release and is not covered here.
 set -euo pipefail
@@ -48,21 +48,85 @@ echo "== a re-run with no credentials keeps the config it would otherwise blank 
 # non-interactive re-run that answers nothing used to write auth_token: "" and
 # stop every other project exporting. It also dropped export_usage: false, the
 # one key step 8 tells the user to add.
-echo 'export_usage: false' >> "$HOME/.amp/dash0-agent-plugin.local.md"
 # Unquoted is valid YAML and what a hand-edit usually produces. Reading only
 # the quoted form would treat this one as absent while still stripping its
 # line, which loses the value rather than preserving it.
-echo 'team_name: platform' >> "$HOME/.amp/dash0-agent-plugin.local.md"
+python3 - "$HOME/.amp/dash0-agent-plugin.local.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+path.write_text(text.rsplit('---', 1)[0] +
+                'export_usage: false\nteam_name: platform\n---\n' +
+                'Notes stay outside config.\nexport_usage: true\nauth_token: not-a-token')
+PY
 ( unset DASH0_OTLP_URL DASH0_AUTH_TOKEN DASH0_DATASET; bash "$REPO/install-amp.sh" < /dev/null ) >/dev/null
-grep -q 'auth_token: "amp-contract-token"' "$HOME/.amp/dash0-agent-plugin.local.md" \
-  || { echo "ERROR: a credential-free re-run blanked the token"; exit 1; }
-grep -q '^export_usage: false$' "$HOME/.amp/dash0-agent-plugin.local.md" \
-  || { echo "ERROR: a re-run dropped the user's export_usage setting"; exit 1; }
-grep -q 'team_name: "\{0,1\}platform"\{0,1\}' "$HOME/.amp/dash0-agent-plugin.local.md" \
-  || { echo "ERROR: a re-run dropped a hand-edited unquoted value"; exit 1; }
-[ "$(grep -c 'auth_token:' "$HOME/.amp/dash0-agent-plugin.local.md")" -eq 1 ] \
-  || { echo "ERROR: the re-run duplicated keys instead of rewriting them"; exit 1; }
+python3 - "$HOME/.amp/dash0-agent-plugin.local.md" <<'PY'
+from pathlib import Path
+import sys
+_, front, body = Path(sys.argv[1]).read_text().split('---', 2)
+assert 'auth_token: "amp-contract-token"' in front, 're-run blanked token'
+assert 'export_usage: false' in front, 're-run dropped export_usage'
+assert 'team_name: "platform"' in front, 're-run dropped unquoted team'
+assert front.count('auth_token:') == 1, 're-run duplicated token'
+assert body == '\nNotes stay outside config.\nexport_usage: true\nauth_token: not-a-token', \
+    're-run promoted or changed the Markdown body'
+PY
 echo "PASS: the re-run preserved the token and the user's own keys"
+
+echo "== interactive re-runs can rotate the token, keep defaults, and clear a team =="
+python3 - "$REPO/install-amp.sh" "$HOME/.amp/dash0-agent-plugin.local.md" <<'PY'
+import errno
+import os
+from pathlib import Path
+import pty
+import select
+import sys
+import time
+
+installer, config = sys.argv[1:]
+for token, team in (('rotated-contract-token', '-'), ('', '')):
+    pid, fd = pty.fork()
+    if pid == 0:
+        for key in ('DASH0_OTLP_URL', 'DASH0_AUTH_TOKEN', 'DASH0_DATASET', 'DASH0_TEAM_NAME'):
+            os.environ.pop(key, None)
+        os.execvp('bash', ['bash', installer])
+    pending = b''
+    transcript = b''
+    answers = iter([b'\n', (token + '\n').encode(), b'\n', (team + '\n').encode()])
+    deadline = time.monotonic() + 20
+    try:
+        while time.monotonic() < deadline:
+            if not select.select([fd], [], [], 1)[0]:
+                continue
+            try:
+                data = os.read(fd, 4096)
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    break
+                raise
+            if not data:
+                break
+            transcript += data
+            pending += data
+            if pending.endswith(b': '):
+                os.write(fd, next(answers))
+                pending = b''
+        else:
+            os.kill(pid, 9)
+            raise AssertionError('installer did not finish its prompts')
+    finally:
+        os.close(fd)
+        _, status = os.waitpid(pid, 0)
+    assert status == 0, 'interactive installer failed'
+    assert next(answers, None) is None, 'existing values skipped interactive prompts'
+    assert b'rotated-contract-token' not in transcript, 'secret echoed in terminal'
+    front = Path(config).read_text().split('---', 2)[1]
+    assert 'auth_token: "rotated-contract-token"' in front, 'token not rotated or kept'
+    assert 'team_name:' not in front, 'team not cleared'
+    assert 'export_usage: false' in front, 'interactive edit dropped other settings'
+PY
+echo "PASS: interactive re-run rotates or keeps a hidden token and clears a team"
 
 echo "== --project installs into the workspace instead of the user directory =="
 WORKSPACE=$(mktemp -d)

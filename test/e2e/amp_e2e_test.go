@@ -117,6 +117,7 @@ if (Get-Variable Token,lines,existing,parts,ExistingConfig,ExtraConfig -ErrorAct
 		cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home,
 			"DASH0_SOURCE_DIR="+source, "DASH0_OTLP_URL=", "DASH0_AUTH_TOKEN=", "DASH0_DATASET=", "DASH0_TEAM_NAME=",
 			"AMP_INSTALLER="+filepath.Join(root, "install-amp.ps1"))
+		detachTerminal(cmd)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "installer run %d: %s", run, out)
 		assert.NotContains(t, string(out), "rerun-fixture-token")

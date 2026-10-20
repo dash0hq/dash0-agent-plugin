@@ -8,6 +8,15 @@
 # via DASH0_SOURCE_DIR, which is also how a contributor installs a working tree.
 # The release download path needs a published release and is not covered here.
 set -euo pipefail
+# Redirecting stdin alone does not hide /dev/tty. Run the unattended contracts
+# in a new session; the explicit pty.fork test below creates its own terminal.
+if ( : < /dev/tty ) 2>/dev/null; then
+  exec python3 - "$0" "$@" <<'PY'
+import subprocess
+import sys
+sys.exit(subprocess.call(['bash'] + sys.argv[1:], start_new_session=True))
+PY
+fi
 # shellcheck source=test/contracts/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 

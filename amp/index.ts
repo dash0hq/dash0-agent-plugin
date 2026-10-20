@@ -234,8 +234,8 @@ export function register(amp: PluginAPI, send: (turn: Turn) => Promise<void>) {
   amp.on("agent.end", async (event) => {
     const state = active.get(event?.thread?.id);
     if (!state || state.turn.id !== event.id) return;
-    active.delete(event.thread.id);
     if (!["done", "error", "cancelled"].includes(event.status)) return;
+    active.delete(event.thread.id);
     const turn: Turn = {
       ...state.turn,
       end: new Date().toISOString(),

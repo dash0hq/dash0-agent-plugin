@@ -185,8 +185,8 @@ test("remote threads remain isolated with parallel tools and stale callbacks", a
   ]);
 });
 
-test("typed turn IDs and duplicate starts preserve the active turn", async () => {
-  const { sent, fire } = setup();
+test("typed turn IDs and rejected callbacks preserve the active turn", async () => {
+  const { sent, fire, fireRaw } = setup();
   const thread = { id: "T-test" } as const;
   fire("agent.start", { thread, id: 42 });
   fire("tool.call", { thread, toolUseID: "call", tool: "Bash" });
@@ -198,6 +198,7 @@ test("typed turn IDs and duplicate starts preserve the active turn", async () =>
     status: "done",
   });
   await fire("agent.end", { thread, id: "42", status: "done" });
+  await fireRaw("agent.end", { thread, id: 42, status: "running" });
   expect(sent).toHaveLength(0);
   await fire("agent.end", { thread, id: 42, status: "done" });
   await fire("agent.end", { thread, id: 42, status: "done" });

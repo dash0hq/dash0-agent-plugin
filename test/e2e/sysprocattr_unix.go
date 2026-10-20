@@ -16,3 +16,9 @@ import (
 func setNewProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
+
+// detachTerminal prevents an unattended command from reading /dev/tty even
+// when the tests themselves were launched from an interactive terminal.
+func detachTerminal(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+}

@@ -263,11 +263,9 @@ def main() -> int:
     roots = [s for s in chats
              if s["attrs"].get("dash0.amp.timing") != "observation"]
     children = len(chats) - len(roots)
-    # A run that went through a wrapper tool cannot have its tool calls compared:
-    # the stream names the wrapper, the spans name what ran inside it, and
-    # neither channel can see the other's layer. That is not agreement and not a
-    # mismatch — it is a question this run cannot answer, and saying so is the
-    # only honest option. The turn and usage rows are unaffected.
+    # Wrappers prevent exact equality: the stream names the wrapper and the
+    # spans name what ran inside it. Ordinary tools remain observable, so their
+    # counts are still a lower bound, even when inner MCP calls add more spans.
     blind = bool(want["wrappers"])
     rows = [
         ("turns -> chat roots", want["turns"], len(roots),
@@ -278,6 +276,10 @@ def main() -> int:
         ("tool names", dict(want["tools"]), dict(got_tools),
          None if blind else want["tools"] == got_tools),
     ]
+    if blind:
+        rows.append(("ordinary tools (minimum)", dict(want["tools"]), dict(got_tools),
+                     all(got_tools[name] >= count
+                         for name, count in want["tools"].items())))
 
     print(f"run     : {run_dir}")
     print(f"thread  : {thread}")
@@ -292,10 +294,10 @@ def main() -> int:
         print(f"{label:<{width}}  stream={wanted!s:<24} dash0={got!s:<24} "
               f"{verdict}")
     if blind:
-        print(f"\nthe stream saw only wrapper tools: {dict(want['wrappers'])}. "
+        print(f"\nthe stream used wrapper tools: {dict(want['wrappers'])}. "
               "Amp runs an MCP tool inside `code_exec`, which fires no plugin "
-              "hook, so the two channels name different layers and the tool "
-              "rows above prove nothing. See "
+              "hook, so exact tool equality is unprovable. Ordinary tool "
+              "counts are still checked as a minimum. See "
               "findings/amp-mcp-calls-run-inside-code-exec.md.")
 
     # Not discarded: every root carries this attribute, so a missing one is a

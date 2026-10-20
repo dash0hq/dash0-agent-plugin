@@ -73,6 +73,10 @@ PY
 )"
 
 mkdir -p "$RUN_DIR"
+# A run ID may be reused. Both writers append, including across resumed turns,
+# so clear their previous run once, before starting the first Amp invocation.
+: > "$RUN_DIR/record.jsonl"
+: > "$RUN_DIR/plugin-debug.log"
 
 # The recorder is a second Amp plugin bound to the same four events, installed
 # project-scoped so the developer's ~/.config/amp/plugins/ is untouched. It is

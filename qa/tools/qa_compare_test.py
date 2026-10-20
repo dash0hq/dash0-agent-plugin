@@ -20,6 +20,7 @@ def load(name, file):
 
 qa = load("qa_compare", "qa-compare.py")
 oc = load("qa_compare_opencode_v2", "qa-compare-opencode-v2.py")
+amp = load("qa_amp_compare", "qa-amp-compare.py")
 
 
 def span(trace, span_id, parent=""):
@@ -184,13 +185,6 @@ class Comparer(unittest.TestCase):
         self.assertEqual(self.reload("500", "800"), 2)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-amp = load("qa_amp_compare", "qa-amp-compare.py")
-
-
 class AmpUsageVerdict(unittest.TestCase):
     """The amp comparer's token accounting. Every case here is a run that used
     to print AGREEMENT while proving nothing."""
@@ -250,3 +244,100 @@ class AmpUsageVerdict(unittest.TestCase):
                     export_usage, {others, "(absent)"})
                 self.assertEqual(failures, 1)
                 self.assertIn("(absent)", "".join(lines))
+
+
+class AmpToolComparison(unittest.TestCase):
+    def run_compare(self, wrappers, tools):
+        import contextlib
+        import io
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as directory:
+            run = pathlib.Path(directory)
+            events = [{"type": "system"}, {"type": "assistant", "message": {
+                "content": [{"type": "tool_use", "name": name}
+                            for name in wrappers + ["shell_command"] * 2]}}]
+            (run / "stream.jsonl").write_text(
+                "\n".join(json.dumps(event) for event in events))
+            (run / "thread-id").write_text("T-test")
+            (run / "meta.json").write_text(json.dumps({"export_usage": False}))
+            spans = [{"name": "chat", "attrs": {"dash0.amp.usage.status": "disabled"}}]
+            spans += [{"name": "execute_tool " + name, "attrs": {}} for name in tools]
+            output = io.StringIO()
+            with mock.patch.object(amp.sys, "argv", ["qa-amp-compare.py", directory]), \
+                 mock.patch.object(amp.compare, "load_config",
+                                   return_value=({"ampDataset": "amp"}, None)), \
+                 mock.patch.object(amp, "wait_for_spans", return_value=(spans, None)), \
+                 contextlib.redirect_stdout(output):
+                return amp.main(), output.getvalue()
+
+    def test_wrappers_do_not_hide_a_missing_ordinary_tool_span(self):
+        # Extra MCP spans make the total large enough, but cannot replace a
+        # missing second shell_command. Check counts per name, not the total.
+        for wrapper in ("tool_search", "code_exec"):
+            with self.subTest(wrapper=wrapper):
+                status, output = self.run_compare(
+                    [wrapper], ["shell_command", "echo_text", "echo_text"])
+                self.assertEqual(status, 1)
+                self.assertIn("MISMATCH", output)
+
+    def test_wrappers_allow_extra_inner_calls_without_claiming_exact_agreement(self):
+        status, output = self.run_compare(
+            ["tool_search", "code_exec"], ["shell_command"] * 2 + ["echo_text"])
+        self.assertEqual(status, 0)
+        self.assertIn("UNPROVABLE", output)
+        self.assertNotIn("only wrapper tools", output)
+
+    def test_without_wrappers_tool_counts_must_match_exactly(self):
+        for tools, expected in ((["shell_command"] * 2, 0),
+                                (["shell_command"] * 2 + ["echo_text"], 1)):
+            with self.subTest(tools=tools):
+                self.assertEqual(self.run_compare([], tools)[0], expected)
+
+
+class AmpDriver(unittest.TestCase):
+    def test_rerun_clears_logs_but_continued_turns_append(self):
+        import pathlib
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            subprocess.run(["git", "init", "-q", directory], check=True)
+            (root / "qa/recorder/amp").mkdir(parents=True)
+            (root / "qa/recorder/amp/index.ts").write_text("// fixture\n")
+            (root / "qa/config.local.json").write_text(json.dumps({
+                "ingestUrl": "unused", "authToken": "fake", "ampDataset": "amp",
+                "apiUrl": "unused"}))
+            (root / "bin").mkdir()
+            fake_amp = root / "bin/amp"
+            fake_amp.write_text('''#!/bin/sh
+if [ "$1 $2" = "threads export" ]; then
+  echo '{}'
+  exit 0
+fi
+echo current >> "$QA_AMP_RECORD"
+echo current >> "$AMP_PLUGIN_OPTION_DEBUG_FILE"
+echo '{"type":"system","session_id":"T-test"}'
+''')
+            fake_amp.chmod(0o755)
+            run = root / "qa/runs/reused"
+            run.mkdir(parents=True)
+            env = {**os.environ, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
+                   "QA_AMP_RESUME": "second turn", "QA_AMP_MCP": "0",
+                   "QA_AMP_SKILL": "0", "QA_AMP_TURNS": "", "QA_AMP_EXECUTOR": "local"}
+            for _ in range(2):
+                for name in ("record.jsonl", "plugin-debug.log"):
+                    (run / name).write_text("stale\n")
+                result = subprocess.run(
+                    ["bash", os.path.join(HERE, "qa-session-amp.sh"), "first turn", "reused"],
+                    cwd=directory, env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for name in ("record.jsonl", "plugin-debug.log"):
+                    self.assertEqual((run / name).read_text(), "current\ncurrent\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

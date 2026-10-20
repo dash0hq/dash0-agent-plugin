@@ -309,6 +309,40 @@ class AmpToolComparison(unittest.TestCase):
 
 
 class AmpDriver(unittest.TestCase):
+    def test_incomplete_config_stops_before_starting_amp(self):
+        import pathlib
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            subprocess.run(["git", "init", "-q", directory], check=True)
+            (root / "qa/recorder/amp").mkdir(parents=True)
+            (root / "qa/recorder/amp/index.ts").write_text("// fixture\n")
+            (root / "bin").mkdir()
+            fake_amp = root / "bin/amp"
+            fake_amp.write_text('#!/bin/sh\ntouch amp-was-started\nexit 1\n')
+            fake_amp.chmod(0o755)
+            config = {"ingestUrl": "unused", "authToken": "fake",
+                      "ampDataset": "amp", "apiUrl": "unused"}
+            # Stale environment values must not fill in a missing config key.
+            env = {**os.environ,
+                   "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
+                   "QA_OTLP_URL": "unused", "QA_AUTH_TOKEN": "fake",
+                   "QA_DATASET": "stale-dataset", "QA_API_URL": "unused",
+                   "QA_AMP_MCP": "0", "QA_AMP_SKILL": "0"}
+            for missing in config:
+                with self.subTest(missing=missing):
+                    (root / "amp-was-started").unlink(missing_ok=True)
+                    (root / "qa/config.local.json").write_text(json.dumps(
+                        {key: value for key, value in config.items() if key != missing}))
+                    result = subprocess.run(
+                        ["bash", os.path.join(HERE, "qa-session-amp.sh"), "unused", "invalid"],
+                        cwd=directory, env=env, text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(missing + " is missing", result.stderr)
+                    self.assertFalse((root / "amp-was-started").exists(), result.stderr)
+
     def test_rerun_clears_logs_and_preserves_every_continued_turn(self):
         import pathlib
         import subprocess

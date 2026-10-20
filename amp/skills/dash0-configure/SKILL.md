@@ -1,6 +1,6 @@
 ---
 name: dash0-configure
-description: 'Set up or finish setting up the Dash0 → Amp telemetry integration by writing ~/.amp/dash0-agent-plugin.local.md (or the project-local equivalent). Use when the user wants to configure Dash0, enable telemetry, paste credentials, fix a plugin that emits nothing, or act on a "dash0: no team configured" message — spans carry no dash0.team.name until the team name is set.'
+description: "Set up or finish setting up the Dash0 → Amp telemetry integration by writing ~/.amp/dash0-agent-plugin.local.md (or the project-local equivalent). Use when the user wants to configure Dash0, enable telemetry, paste credentials, fix a plugin that emits nothing, or find that spans carry no team — they have no dash0.team.name attribute until team_name is set."
 ---
 
 # Configure Dash0
@@ -32,7 +32,7 @@ The plugin writes no transcript and keeps no state on disk, so there is nothing 
 Ask whether to write user-level (`~/.amp/dash0-agent-plugin.local.md`, applies to every project on this executor) or project-level (`.amp/dash0-agent-plugin.local.md`, only the current workspace — overrides the user-level file entirely, does not merge). Default to user-level unless the user asks for project-only. On Windows the user-level file is `%USERPROFILE%\.amp\dash0-agent-plugin.local.md`.
 
 > [!WARNING]
-> A project-level file takes over the auth token for every session in that workspace. If that token is wrong or scoped to a different organization, exports fail as a silent 401. Prefer user-level unless the user needs a different dataset or team for one project.
+> A project-level file takes over the auth token for every session in that workspace. If that token is wrong or scoped to a different organization, exports fail as a silent 401. Prefer user-level unless the user needs a different dataset or team for one project. If you do write a project-level file, check that `.amp/dash0-agent-plugin.local.md` is git-ignored and offer to add it to `.gitignore` if not — it holds the token in cleartext inside a working tree.
 
 An Orb is a fresh executor with none of this on it. Configure Orbs through the project's **Secrets & Env Vars**, not by writing a file inside one — see `### Orbs` in the plugin's README.
 

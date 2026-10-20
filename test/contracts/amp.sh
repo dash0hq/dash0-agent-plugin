@@ -40,6 +40,21 @@ grep -q 'auth_token: "amp-contract-token"' "$HOME/.amp/dash0-agent-plugin.local.
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: install-amp.sh laid out the plugin directory and wrote the config"
 
+echo "== a re-run with no credentials keeps the config it would otherwise blank =="
+# The config file is machine-wide and shared with every --project install, so a
+# non-interactive re-run that answers nothing used to write auth_token: "" and
+# stop every other project exporting. It also dropped export_usage: false, the
+# one key step 8 tells the user to add.
+echo 'export_usage: false' >> "$HOME/.amp/dash0-agent-plugin.local.md"
+( unset DASH0_OTLP_URL DASH0_AUTH_TOKEN DASH0_DATASET; bash "$REPO/install-amp.sh" < /dev/null ) >/dev/null
+grep -q 'auth_token: "amp-contract-token"' "$HOME/.amp/dash0-agent-plugin.local.md" \
+  || { echo "ERROR: a credential-free re-run blanked the token"; exit 1; }
+grep -q '^export_usage: false$' "$HOME/.amp/dash0-agent-plugin.local.md" \
+  || { echo "ERROR: a re-run dropped the user's export_usage setting"; exit 1; }
+[ "$(grep -c 'auth_token:' "$HOME/.amp/dash0-agent-plugin.local.md")" -eq 1 ] \
+  || { echo "ERROR: the re-run duplicated keys instead of rewriting them"; exit 1; }
+echo "PASS: the re-run preserved the token and the user's own keys"
+
 echo "== --project installs into the workspace instead of the user directory =="
 WORKSPACE=$(mktemp -d)
 ( cd "$WORKSPACE" && bash "$REPO/install-amp.sh" --project < /dev/null )

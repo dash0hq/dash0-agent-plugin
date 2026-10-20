@@ -343,6 +343,25 @@ function Read-Secret {
 }
 
 $AgentName = 'amp'
+# An existing config supplies the defaults - see install-amp.sh for why: this
+# file is machine-wide and shared with every -Project install, so a re-run that
+# answers nothing must not blank the token the other projects export with.
+$ExtraConfig = @()
+if (Test-Path -LiteralPath $ConfigPath) {
+  $existing = Get-Content -LiteralPath $ConfigPath
+  function Get-ConfigValue {
+    param([string] $Key)
+    $match = $existing | Select-String -Pattern "^$Key`: `"(.*)`"$" | Select-Object -First 1
+    if ($match) { return $match.Matches[0].Groups[1].Value }
+    return ''
+  }
+  if (-not $Endpoint) { $Endpoint = Get-ConfigValue 'otlp_url' }
+  if (-not $Token) { $Token = Get-ConfigValue 'auth_token' }
+  if (-not $Dataset) { $Dataset = Get-ConfigValue 'dataset' }
+  if (-not $Team) { $Team = Get-ConfigValue 'team_name' }
+  # Keys this installer does not write belong to the user, export_usage above all.
+  $ExtraConfig = @($existing | Where-Object { $_ -notmatch '^(---|otlp_url:|auth_token:|dataset:|agent_name:|team_name:)' })
+}
 $Endpoint = Read-Value $Endpoint 'Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)'
 $Token = Read-Secret $Token 'Dash0 auth token'
 $Dataset = Read-Value $Dataset 'Dash0 dataset (optional)' 'default'
@@ -364,6 +383,7 @@ $lines = @('---', "otlp_url: `"$Endpoint`"", "auth_token: `"$Token`"")
 if ($Dataset) { $lines += "dataset: `"$Dataset`"" }
 if ($AgentName) { $lines += "agent_name: `"$AgentName`"" }
 if ($Team) { $lines += "team_name: `"$Team`"" }
+$lines += $ExtraConfig
 $lines += '---'
 Write-TextFile $ConfigPath (($lines -join "`n") + "`n")
 Protect-File $ConfigPath
@@ -385,7 +405,7 @@ Write-Host 'Next steps' -ForegroundColor Cyan
 Write-Host "  1. Reload plugins from Amp's command palette (or start a new Amp session)."
 Write-Host '  2. Run a prompt. Spans should land in your Dash0 dataset with gen_ai.harness.name=amp.'
 Write-Host ''
-Write-Host "Execute mode must wait for plugins to load: amp --plugin-ready-timeout -x 'Your task'"
+Write-Host "Execute mode must wait for plugins to load: amp --plugin-ready-timeout 30 -x 'Your task'"
 Write-Host 'An Orb needs its own installation - run the Linux installer there; a local install is not copied.'
 # Token accounting is on with no option written to the config, so the one place a
 # user learns it is running - and how it fails - is here.

@@ -211,7 +211,7 @@ shell hooks and the on-disk pipeline lifecycle. See [installation and research](
 | Subagent usage / tree | Only selected exported messages; hidden usage and ancestry not inferred |
 | Reload/pause recovery | No guarantee; unmatched/in-flight turns may be lost. The helper is detached and outlives the CLI, so a turn's spans can arrive after it exits |
 | Usage-child timing | Zero-duration observation; not automatically excluded from request-latency metrics |
-| Operation-based metrics | Root counts as one turn like Claude/Codex; each earlier model call adds one zero-latency `chat` prompt; no full metric parity |
+| Operation-based metrics | Root counts as one turn like Claude/Codex. Dash0 classifies only the root as an operation, so prompt counts are unaffected by the earlier model calls; only a metric counting raw spans by `gen_ai.operation.name=chat` sees the extra zero-latency children. No full metric parity |
 | Failures | Bounded helper; static diagnostics; tool calls always allowed |
 | Installation | `install-amp.sh` / `install-amp.ps1`: download + checksum, installed as `amp-on-event` next to `index.ts`; `--project` for one workspace; `DASH0_SOURCE_DIR` for a source build. No hook or settings-file registration |
 | Shipped skill | `dash0-configure`, registered by `index.ts` through `registerSkill` rather than a manifest, so Amp exposes it as `dash0:dash0-configure`. Registration is optional — an Amp without `registerSkill` still gets a working bridge |

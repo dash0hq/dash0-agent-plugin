@@ -52,19 +52,24 @@ An Orb is a fresh executor every time: nothing from a laptop is copied into it,
 and anything installed by hand inside one dies with it. So an Orb needs its own
 installation. There are two routes, and they are for different situations.
 
-**For a team, add it once as a workspace plugin** in Amp's settings. A
-workspace plugin loads wherever that workspace's members run Amp, so one
-registration covers every laptop and every Orb and nobody runs an installer.
-This is the recommended path, and the reason the bridge keeps the helper next
-to `index.ts` under a fixed name — the plugin directory is the whole unit.
+**Run the Linux installer from the project's setup script.** This is the
+recommended route. Give it `DASH0_OTLP_URL`, `DASH0_AUTH_TOKEN`,
+`DASH0_DATASET` and `DASH0_TEAM_NAME` in the environment so it prompts for
+nothing, with the token delivered through the project's **Secrets & Env Vars**
+rather than committed. Pin the release with `DASH0_VERSION` to keep every Orb
+on one version. Do not commit the helper binary into `.amp/plugins/`. This is
+how the plugin was dogfooded and how QA installs into an Orb.
 
-**For an Orb you control**, or to pin one project to one version, run the Linux
-installer from the project's setup script with `DASH0_OTLP_URL`,
-`DASH0_AUTH_TOKEN`, `DASH0_DATASET` and `DASH0_TEAM_NAME` in the environment so
-it prompts for nothing, and the token delivered through the project's **Secrets
-& Env Vars** rather than committed. Pin the release with `DASH0_VERSION` to keep
-every Orb on one version. Do not commit the helper binary into `.amp/plugins/`.
-This is how the plugin was dogfooded and how QA installs into an Orb.
+**A workspace plugin** added once in Amp's settings loads wherever that
+workspace's members run Amp, which is fewer moving parts — but it carries one
+caveat you have to plan around. The bridge spawns `./amp-on-event` (or
+`./amp-on-event.exe`) next to `index.ts`, under that one name, so a plugin
+directory holds the helper for exactly one OS and architecture. A workspace
+whose members are on macOS while its Orbs are Linux cannot be served by a
+single directory: one side logs `dash0: telemetry unavailable`. Use this route
+when every executor that loads the plugin is the same platform, or ship a
+directory per platform. We have not run this route in an Orb — the setup-script
+route is the one with live evidence behind it.
 
 The two plugin directories are a scope choice: `~/.config/amp/plugins/dash0/`
 (the default) covers every project on that executor, `--project` writes
@@ -105,12 +110,12 @@ directory, under the same names, and requires Go 1.25+.
 Execute mode must wait for plugins to load:
 
 ```sh
-amp --plugin-ready-timeout -x 'Your task'
+amp --plugin-ready-timeout 30 -x 'Your task'
 ```
 
 For Orb execute mode, install into the Orb first — see [Orbs](#orbs), since
 nothing from a laptop reaches one — then use
-`amp --plugin-ready-timeout -ox 'Your task'`. The stream-json wrapper is not the
+`amp --plugin-ready-timeout 30 -ox 'Your task'`. The stream-json wrapper is not the
 telemetry source. Verify hook delivery for the Amp version you deploy.
 
 ## Configure on the executor

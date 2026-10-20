@@ -3,7 +3,13 @@
 
 import { expect, onTestFinished, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -276,3 +282,85 @@ test("installed plugin exports lifecycle and per-model usage through its Go help
   // Locally, with a warm build cache, this is ~6 s; CI runs it before any
   // other Go step, so the cache is cold and the compile dominates.
 }, 180000);
+
+// The guarantee the whole bridge is shaped around: Amp awaits agent.end, so
+// the turn is handed off when the envelope reaches the helper's stdin, not
+// when the helper exits. Nothing else pins it — the real helper exits in
+// milliseconds, so a regression to waiting for exit would keep every other
+// test green and show up only as a slower suite.
+//
+// Skipped on Windows, where the bridge spawns amp-on-event.exe and a shell
+// script cannot stand in for it. `make test-amp` is Linux-only anyway.
+test.skipIf(process.platform === "win32")(
+  "agent.end resolves on stdin flush, not when the helper exits",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-amp-handoff-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    copyFileSync(
+      fileURLToPath(new URL("./index.ts", import.meta.url)),
+      join(dir, "index.ts"),
+    );
+    // Reads the envelope, then outlives the turn by far more than the 2000 ms
+    // backstop — so a bridge that waited for exit, or that fell through to the
+    // timer, could not pass the assertion below.
+    const helperSleep = 8;
+    writeFileSync(
+      join(dir, "amp-on-event"),
+      `#!/bin/sh\ncat > /dev/null\nsleep ${helperSleep}\n`,
+      { mode: 0o755 },
+    );
+
+    const savedEnvironment = { ...process.env };
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("AMP_PLUGIN_OPTION_") || key.startsWith("DASH0_")) {
+          delete process.env[key];
+        }
+      }
+      // No collector and no credentials: this test is about the clock, and the
+      // helper is a stub that exports nothing either way.
+      const handlers = new Map<
+        keyof PluginEventMap,
+        Handler<keyof PluginEventMap>
+      >();
+      const plugin = (await import(pathToFileURL(join(dir, "index.ts")).href))
+        .default;
+      plugin({
+        on: (
+          name: keyof PluginEventMap,
+          handler: Handler<keyof PluginEventMap>,
+        ) => {
+          handlers.set(name, handler);
+          return { dispose() {} };
+        },
+        system: {
+          executor: { kind: "local" },
+          workspaceRoot: pathToFileURL(dir),
+        },
+        helpers: { filePathFromURI: (uri: URL) => fileURLToPath(uri) },
+        logger: { log: () => {} },
+      } as unknown as PluginAPI);
+
+      const thread = { id: "T-handoff" } as const;
+      handlers.get("agent.start")!({
+        thread,
+        id: "M-a",
+        message: "the ask",
+      } as PluginEventMap["agent.start"]);
+      const started = Date.now();
+      await handlers.get("agent.end")!({
+        thread,
+        id: "M-a",
+        status: "done",
+        message: "the answer",
+        messages: [],
+      } as PluginEventMap["agent.end"]);
+      const waited = Date.now() - started;
+
+      // Well inside the 2000 ms backstop, and nowhere near the helper's life.
+      expect(waited).toBeLessThan(1000);
+    } finally {
+      process.env = savedEnvironment;
+    }
+  },
+);

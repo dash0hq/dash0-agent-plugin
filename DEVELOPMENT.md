@@ -65,7 +65,10 @@ provider budget. Do not run them as a credential-free smoke test.
 Amp is the exception: its live canary
 (`TestE2EAmpLiveTurnReachesTheCollector`) **skips** unless `AMP_API_KEY` is set,
 because the repository has no Amp secret yet. Adding `AMP_API_KEY` to the
-repository secrets is what turns it on; CI passes it on Linux only, since Amp
+repository secrets is what turns it on, and the skip should become a failure
+in the same change — otherwise a renamed or expired secret silently turns the
+only real-Amp check back into a no-op, which is how the other canaries behave
+and why they fail loudly instead. CI passes it on Linux only, since Amp
 ships an install script rather than an npm package and has no documented
 unattended Windows install. On a machine already logged into Amp, run it with
 `DASH0_AMP_LIVE=1 go test -tags=e2e -run TestE2EAmpLiveTurn ./test/e2e/` — it
@@ -399,7 +402,7 @@ omitted when its value is empty.
 | `dash0.amp.turn.id` | The Amp message ID that started the turn, prefixed `s:` for an actor ID or `n:` for a legacy numeric one | Amp only. On both `chat` and `execute_tool`. Joins a turn's spans to the thread message that began it; the thread ID is `gen_ai.conversation.id`. The prefix keeps `"2"` and `2` distinct, which Amp treats as different messages. |
 | `dash0.amp.executor.kind` | `local` \| `remote` \| `unknown` | Amp only. On both `chat` and `execute_tool`. Where the turn ran, as Amp's plugin API reports it. `remote` is not proof that an executor is an Orb. |
 | `dash0.amp.truncated` | `true` | Amp only. On the turn root, and only when the bridge dropped content or tools to stay inside its envelope budget, so an absent content field on such a turn is a deliberate omission rather than an empty one. Absent on turns that kept everything. |
-| `dash0.amp.usage.status` | `disabled` \| `unavailable` \| `unsupported` \| `invalid` \| `partial` \| `matched` | Amp only. On the turn root. Why the turn does or does not carry tokens; usage export is on by default; `export_usage: false` or `AMP_PLUGIN_OPTION_EXPORT_USAGE=false` turns it off. `partial` is currently the normal result on a real session — see `qa/findings/amp-answering-model-call-is-never-attributed.md`. |
+| `dash0.amp.usage.status` | `disabled` \| `unavailable` \| `unsupported` \| `invalid` \| `partial` \| `matched` | Amp only. On the turn root. Why the turn does or does not carry tokens; usage export is on by default; `export_usage: false` or `AMP_PLUGIN_OPTION_EXPORT_USAGE=false` turns it off. `partial` means the thread had not finished persisting when the poll gave up, so some of the turn's assistant messages carried no usage record yet; the turn still exports, with every record it did find as a child and an unlabelled root. |
 | `dash0.amp.usage.source` | `thread-export` | Amp only. On the turn root when usage was matched. Names where the tokens came from, since Amp's hooks carry none. |
 | `dash0.amp.timing` | `observation` | Amp only. On the per-model-call usage child spans, which exist only when a turn's usage matched. Marks the span as a zero-duration observation recorded at turn completion rather than a measurement of provider request duration, so it must not be read as latency. |
 

@@ -265,6 +265,23 @@ prompt_secret() {
 }
 
 DASH0_AGENT_NAME="amp"
+# An existing config supplies the defaults. This file is always machine-wide,
+# shared by every project and by every --project install — which is why the
+# uninstaller refuses to take it — so a re-run that answers nothing, a
+# non-interactive second workspace being the easy way to get there, must not
+# blank the token the other projects are exporting with.
+EXTRA_CONFIG=""
+if [ -f "$CONFIG_PATH" ]; then
+  existing() { sed -n "s/^$1: \"\(.*\)\"\$/\1/p" "$CONFIG_PATH" | head -1; }
+  : "${DASH0_OTLP_URL:=$(existing otlp_url)}"
+  : "${DASH0_AUTH_TOKEN:=$(existing auth_token)}"
+  : "${DASH0_DATASET:=$(existing dataset)}"
+  : "${DASH0_TEAM_NAME:=$(existing team_name)}"
+  # Keys this installer does not write belong to the user. Step 8 tells them to
+  # put export_usage here, so dropping it on a re-run would silently turn token
+  # accounting back on for someone who switched it off.
+  EXTRA_CONFIG=$(grep -vE '^(---|otlp_url:|auth_token:|dataset:|agent_name:|team_name:)' "$CONFIG_PATH" || true)
+fi
 prompt_value  DASH0_OTLP_URL    "Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)"
 prompt_secret DASH0_AUTH_TOKEN  "Dash0 auth token"
 prompt_value  DASH0_DATASET     "Dash0 dataset (optional)" "default"
@@ -286,6 +303,7 @@ fi
   [ -n "$DASH0_DATASET" ]    && echo "dataset: \"$DASH0_DATASET\""
   [ -n "$DASH0_AGENT_NAME" ] && echo "agent_name: \"$DASH0_AGENT_NAME\""
   [ -n "$DASH0_TEAM_NAME" ]  && echo "team_name: \"$DASH0_TEAM_NAME\""
+  [ -n "$EXTRA_CONFIG" ]     && printf '%s\n' "$EXTRA_CONFIG"
   echo "---"
 } > "$CONFIG_PATH"
 chmod 600 "$CONFIG_PATH"
@@ -295,7 +313,7 @@ ok "wrote config → $CONFIG_PATH (chmod 600)"
 printf '\n%sNext steps%s\n' "$C_B" "$C_N"
 printf "  1. Reload plugins from Amp's command palette (or start a new Amp session).\n"
 printf "  2. Run a prompt. Spans should land in your Dash0 dataset with gen_ai.harness.name=amp.\n"
-printf "\nExecute mode must wait for plugins to load: amp --plugin-ready-timeout -x 'Your task'\n"
+printf "\nExecute mode must wait for plugins to load: amp --plugin-ready-timeout 30 -x 'Your task'\n"
 printf "An Orb needs its own installation — a local install is not copied.\n"
 # Token accounting is on with no option written to the config, so the one place a
 # user learns it is running — and how it fails — is here.

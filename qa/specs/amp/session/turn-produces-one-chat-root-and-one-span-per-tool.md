@@ -5,7 +5,7 @@ runtime: amp
 status: active
 input: qa/tools/qa-session-amp.sh, one local turn with one tool call
 duration: ~20s
-settling: 10s
+settling: 30s
 cleanup: keep
 covers:
   - amp/index.ts
@@ -31,7 +31,10 @@ installed plugin is a hand-built directory copy that no `git checkout` updates.
 qa/tools/qa-session-amp.sh \
   'Run the shell command: echo qa-amp-first. Then reply with exactly the word done.' \
   spec-amp-session
-sleep 10
+# 30s, not 10s: the helper is detached and polls the export for up to twenty
+# seconds, so a turn's spans can arrive after `amp` has exited. See
+# `### Amp` in ../../README.md.
+sleep 30
 qa/tools/qa-amp-compare.py qa/runs/spec-amp-session
 ```
 
@@ -53,10 +56,12 @@ whole dataset is meaningless.
 
 ## Not asserted here
 
-**Tokens.** Usage export is off in this spec, so the root carries no model and
-no token attributes, and that is correct rather than a failure. Turning it on
-does not fix it either — see
-[amp-answering-model-call-is-never-attributed](../../../findings/amp-answering-model-call-is-never-attributed.md).
+**Tokens.** Usage export is on here, because the driver defaults to it, and
+`qa-amp-compare.py` does check that every root reached `matched` and that the
+token totals agree. This spec is about span *shape*, so it asserts nothing
+about the numbers themselves —
+[answering-call-supplies-the-root-model-and-tokens](answering-call-supplies-the-root-model-and-tokens.md)
+is where per-call attribution is the subject.
 
 **That the tool actually ran.** The spec asserts the span shape, not the shell
 effect. A turn where the model declines to call the tool is a failed *run* of

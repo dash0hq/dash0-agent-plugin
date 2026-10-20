@@ -186,3 +186,56 @@ class Comparer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+amp = load("qa_amp_compare", "qa-amp-compare.py")
+
+
+class AmpUsageVerdict(unittest.TestCase):
+    """The amp comparer's token accounting. Every case here is a run that used
+    to print AGREEMENT while proving nothing."""
+
+    def verdict(self, export_usage, status, children=0, want=10, got=10,
+                priced=()):
+        return amp.usage_verdict(export_usage, set(status), children, want, got,
+                                 list(priced))
+
+    def test_every_turn_matched_and_the_totals_agree(self):
+        failures, _ = self.verdict(True, {"matched"})
+        self.assertEqual(failures, 0)
+
+    def test_matched_but_the_totals_disagree(self):
+        failures, lines = self.verdict(True, {"matched"}, got=9)
+        self.assertEqual(failures, 1)
+        self.assertIn("must be equal", "".join(lines))
+
+    def test_one_partial_turn_among_matched_ones_fails(self):
+        # The run this exists for: the answering-call fix regressing on some
+        # turns, which used to print a note and pass.
+        failures, lines = self.verdict(True, {"matched", "partial"})
+        self.assertEqual(failures, 1)
+        self.assertIn("every turn must reach 'matched'", "".join(lines))
+
+    def test_no_turn_matched_fails(self):
+        self.assertEqual(self.verdict(True, {"unavailable"})[0], 1)
+
+    def test_usage_off_with_nothing_accounted_passes(self):
+        failures, lines = self.verdict(False, {"disabled"})
+        self.assertEqual(failures, 0)
+        self.assertIn("usage off", "".join(lines))
+
+    def test_usage_off_but_a_root_says_unavailable(self):
+        # "unavailable" means the read was attempted and failed; "disabled"
+        # means it was never made. Only the second is usage actually off.
+        failures, lines = self.verdict(False, {"unavailable"})
+        self.assertEqual(failures, 1)
+        self.assertIn("must report 'disabled'", "".join(lines))
+
+    def test_usage_off_but_tokens_were_still_reported(self):
+        failures, lines = self.verdict(
+            False, {"disabled"}, children=2,
+            priced=["gen_ai.request.model", "gen_ai.usage.output_tokens"])
+        self.assertEqual(failures, 2)
+        joined = "".join(lines)
+        self.assertIn("no per-model-call chat children", joined)
+        self.assertIn("model or token attribute", joined)

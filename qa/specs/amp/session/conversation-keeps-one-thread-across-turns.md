@@ -74,12 +74,13 @@ qa/tools/qa-attrs.py qa/runs/spec-amp-conversation --dataset <ampDataset>
 
 ## Not asserted here
 
-**Token totals.** Usage export is on, and it is normal for most roots to report
-`dash0.amp.usage.status=partial` with no model and no tokens — see
-[amp-answering-model-call-is-never-attributed](../../../findings/amp-answering-model-call-is-never-attributed.md).
-The measured run had one turn of five reach `matched`, which is a race, not a
-number to assert. `qa-amp-compare.py` treats the turn row as a lower bound when
-usage is on, because a `matched` turn adds a `chat` child.
+**Token totals.** Usage export is on, and `qa-amp-compare.py` requires every
+root to reach `matched` — a `partial` turn now fails the run. It was the normal
+result while the answering model call went unattributed, which is what the
+measurement in
+[amp-answering-model-call-is-never-attributed](../../../findings/amp-answering-model-call-is-never-attributed.md)
+records; that is fixed. What this spec does not assert is the token *numbers*,
+only that the five turns stay on one thread.
 
 **That turn three's tool span is an error.** It is not, and that is correct —
 see [tool-status-is-copied-from-amp-not-inferred](tool-status-is-copied-from-amp-not-inferred.md).

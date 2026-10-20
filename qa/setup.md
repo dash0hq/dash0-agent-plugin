@@ -83,9 +83,11 @@ limitation of Amp's plugin API rather than a bug:
   they reach no span. Nothing to fix in the bridge; it is documented in
   `amp/README.md` and `FEATURE_MATRIX.md` and pinned by a failing check.
 
-The orb arm installs through the project's setup script, which is what
-`amp-orb-install-path-exists` checks. That is a QA convenience, not the route a
-team takes — real installs are workspace plugins added in Amp's settings.
+The orb arm is `QA_AMP_EXECUTOR=orb` on the same driver — it adds `--executor`
+to the `amp` call — and it is **not runnable from this repository**, because
+nothing here installs the plugin into the orb. `amp-orb-install-path-exists` is
+what proves an orb has one; it was verified through another project's setup
+script, which is also the route `amp/README.md` recommends for orbs.
 
 **The fix changed when spans arrive.** The helper is detached and polls for up
 to twenty seconds, so a turn's spans can land after `amp` itself has exited.
@@ -139,10 +141,11 @@ and keeps the workspace plugins), so a throwaway home is available and was
 deliberately not taken. Testing the real install is the point here, since the
 install is a hand-built directory copy rather than a marketplace artifact.
 
-The orb arm is a second driver, not a flag on the first. A local install is not
-copied to an orb, so the orb needs its own build and copy; `amp/README.md` says
-so and this repository has no `.amp/` setup script to do it. See
-`amp-orb-install-path-exists` below for what that check will have to prove.
+The orb arm is a flag on the same driver, `QA_AMP_EXECUTOR=orb`, but a local
+install is not copied to an orb, so the orb needs its own install and this
+repository has no `.amp/` setup script to do it. That is what makes the arm
+unrunnable here rather than merely untested. See `amp-orb-install-path-exists`
+below for what an orb has to have before the arm is worth running.
 
 The asymmetry is not a preference, it is what each host allows. Claude Code's
 options arrive from a managed `remote-settings.json` that beats every override,
@@ -2941,11 +2944,10 @@ qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-usage
   Vars**, which is what makes the orb arm runnable at all: the plugin loaded
   and exported from an orb this way for weeks before release.
 
-  Do not read this check as the install path a team uses. For real use the
-  plugin is added once as a **workspace plugin** in Amp's settings, so it loads
-  wherever that workspace's members run Amp, orbs included. The setup script is
-  how QA installs into a throwaway executor it controls, not the recommended
-  route — see `### Orbs` in `amp/README.md`.
+  This is also the route `amp/README.md` recommends for orbs. The alternative,
+  one **workspace plugin** added in Amp's settings, holds a helper for a single
+  OS and architecture, so it cannot serve a workspace whose laptops and orbs
+  differ — see `### Orbs` there.
 
 ### amp-conversation-keeps-one-thread-across-turns
 

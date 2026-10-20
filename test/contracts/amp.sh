@@ -22,6 +22,9 @@ export DASH0_SOURCE_DIR="$SRC"
 export DASH0_OTLP_URL=http://localhost:4319
 export DASH0_AUTH_TOKEN=amp-contract-token
 export DASH0_DATASET=amp-contract-ds
+# Not set by this contract, so a developer's own value would otherwise reach
+# the installer and write a team_name the re-run case does not expect.
+unset DASH0_TEAM_NAME
 
 echo "== install-amp.sh installs index.ts + the helper under the names the bridge resolves =="
 bash "$REPO/install-amp.sh" < /dev/null

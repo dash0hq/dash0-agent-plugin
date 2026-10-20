@@ -2695,6 +2695,7 @@ curl -sf http://127.0.0.1:8765/v1/models || echo "FAILED: curl 000"
 
 ```sh
 ls "$HOME"/.copilot/dash0-agent-plugin.local.md.qa-* >/dev/null 2>&1 && echo "NOT RESTORED" || echo RESTORED
+```
 
 ### amp-toolchain-present
 

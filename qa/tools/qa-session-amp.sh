@@ -60,7 +60,7 @@ CONFIG=qa/config.local.json
 
 # The dataset is read from ampDataset, not dataset: the amp arm deliberately
 # stays out of the shared one. See '### Amp reads its own dataset key' in setup.md.
-eval "$(python3 - "$CONFIG" <<'PY'
+CONFIG_VARS=$(python3 - "$CONFIG" <<'PY'
 import json, shlex, sys
 c = json.load(open(sys.argv[1]))
 for key, var in (("ingestUrl", "QA_OTLP_URL"), ("authToken", "QA_AUTH_TOKEN"),
@@ -70,7 +70,8 @@ for key, var in (("ingestUrl", "QA_OTLP_URL"), ("authToken", "QA_AUTH_TOKEN"),
         sys.exit(f"{sys.argv[1]}: {key} is missing")
     print(f"{var}={shlex.quote(value)}")
 PY
-)"
+)
+eval "$CONFIG_VARS"
 
 mkdir -p "$RUN_DIR"
 # A run ID may be reused. Both writers append, including across resumed turns,

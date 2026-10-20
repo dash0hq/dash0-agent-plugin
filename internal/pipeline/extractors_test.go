@@ -346,6 +346,22 @@ func TestEnrichToolEvent_skillSource(t *testing.T) {
 		assert.Equal(t, skillSourceModel, event["skill_source"])
 	})
 
+	// OpenCode V2 reaches both: it sets skill_name from the event metadata and
+	// passes the tool's arguments through. The metadata is the resolved name,
+	// so an argument that disagrees must not rename the skill — without this
+	// the "name" key ExtractSkillName learned for Amp silently renames every
+	// OpenCode V2 skill span whose arguments spell it differently.
+	t.Run("the source's name beats a disagreeing argument", func(t *testing.T) {
+		event := map[string]any{
+			"tool_name":  "skill",
+			"skill_name": "from-metadata",
+			"tool_input": map[string]any{"name": "from-args"},
+		}
+		EnrichToolEvent(event)
+		assert.Equal(t, "from-metadata", event["skill_name"])
+		assert.Equal(t, skillSourceModel, event["skill_source"])
+	})
+
 	t.Run("no skill name anywhere", func(t *testing.T) {
 		event := map[string]any{"tool_name": "skill"}
 		EnrichToolEvent(event)

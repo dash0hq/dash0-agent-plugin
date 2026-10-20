@@ -239,3 +239,14 @@ class AmpUsageVerdict(unittest.TestCase):
         joined = "".join(lines)
         self.assertIn("no per-model-call chat children", joined)
         self.assertIn("model or token attribute", joined)
+
+    def test_a_root_with_no_usage_status_fails_either_way(self):
+        # Every root carries the attribute, so an absent one is a broken
+        # export. It used to be discarded from the set, which let the other
+        # roots carry the run.
+        for export_usage, others in ((True, "matched"), (False, "disabled")):
+            with self.subTest(export_usage=export_usage):
+                failures, lines = self.verdict(
+                    export_usage, {others, "(absent)"})
+                self.assertEqual(failures, 1)
+                self.assertIn("(absent)", "".join(lines))

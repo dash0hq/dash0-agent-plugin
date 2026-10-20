@@ -38,13 +38,14 @@ spec, learning, finding, and report.
 
 ## Runtimes
 
-All six supported agents are covered here, **one spec tree per runtime**:
+All supported agents are covered here, **one spec tree per runtime**:
 `qa/specs/claude/`, `qa/specs/codex/`, `qa/specs/copilot/`,
-`qa/specs/cursor/`, `qa/specs/opencode-v2/` and `qa/specs/copilot-app/`, each split by topic underneath. Each spec also names its
+`qa/specs/cursor/`, `qa/specs/opencode-v2/`, `qa/specs/copilot-app/` and
+`qa/specs/amp/`, each split by topic underneath. Each spec also names its
 runtime in frontmatter, so the area and the field cannot drift apart. The split
 is by runtime rather than by topic because a run is one driver, one credential
 and one cost profile — `/qa-run codex` is a coherent thing to execute, while a
-topic area spanning all four would need four drivers mid-run. A spec written for
+topic area spanning runtimes would need different drivers mid-run. A spec written for
 one runtime says nothing about the others. They share the Go pipeline and
 therefore share most invariants, but they differ in what a run can prove:
 
@@ -60,14 +61,15 @@ therefore share most invariants, but they differ in what a run can prove:
 | Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run | only OpenCode's session database: QA sessions show up in `opencode session list` | yes: the binary cache, the extension folder, and the worktree the app created | no, on the local arm. The orb arm installs into the orb |
 
 The `amp` arm is **runnable** for the local executor: driver, recorder,
-comparison tool, fourteen checks and seven specs, all exercised against real
-sessions on 2026-09-15, including a five-turn conversation, MCP with two
-servers, and a skill. Coverage now matches the other four runtimes except for
-subagents, which Amp has no tool for — see
+comparison tool, [checks](#amp-toolchain-present) and [specs](specs/amp/).
+The initial checks and specs were exercised against real sessions on
+2026-09-15, including a five-turn conversation, MCP with two servers, and a
+skill. For current coverage and its limits, see [specs/amp](specs/amp/README.md),
+including subagents, which Amp has no tool for — see
 [specs/amp/subagents](specs/amp/subagents/README.md).
 
-The arm found three defects. Two are **fixed and verified**; the third is a
-limitation of Amp's plugin API rather than a bug:
+Two findings are **fixed and verified**. Two remain open because of Amp's
+plugin API limitations:
 
 - [amp-answering-model-call-is-never-attributed](findings/amp-answering-model-call-is-never-attributed.md)
   — **fixed.** `threads export` returns the thread empty for seconds after a
@@ -82,6 +84,10 @@ limitation of Amp's plugin API rather than a bug:
   — **open, and staying open.** Server-executed tools fire no plugin events, so
   they reach no span. Nothing to fix in the bridge; it is documented in
   `amp/README.md` and `FEATURE_MATRIX.md` and pinned by a failing check.
+- [amp-mcp-calls-run-inside-code-exec](findings/amp-mcp-calls-run-inside-code-exec.md)
+  — **open, and staying open.** MCP wrappers fire no plugin events and reach no
+  span. The stream names the wrappers while spans name the inner calls, so
+  exact MCP tool counts cannot be verified independently.
 
 The orb arm is `QA_AMP_EXECUTOR=orb` on the same driver — it adds `--executor`
 to the `amp` call — and it is **not runnable from this repository**, because

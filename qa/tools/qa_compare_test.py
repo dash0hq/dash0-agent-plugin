@@ -247,7 +247,7 @@ class AmpUsageVerdict(unittest.TestCase):
 
 
 class AmpToolComparison(unittest.TestCase):
-    def run_compare(self, wrappers, tools):
+    def run_compare(self, wrappers, tools, root_statuses=("disabled",)):
         import contextlib
         import io
         import pathlib
@@ -259,11 +259,13 @@ class AmpToolComparison(unittest.TestCase):
             events = [{"type": "system"}, {"type": "assistant", "message": {
                 "content": [{"type": "tool_use", "name": name}
                             for name in wrappers + ["shell_command"] * 2]}}]
+            events *= len(root_statuses)
             (run / "stream.jsonl").write_text(
                 "\n".join(json.dumps(event) for event in events))
             (run / "thread-id").write_text("T-test")
             (run / "meta.json").write_text(json.dumps({"export_usage": False}))
-            spans = [{"name": "chat", "attrs": {"dash0.amp.usage.status": "disabled"}}]
+            spans = [{"name": "chat", "attrs": {} if status is None else
+                      {"dash0.amp.usage.status": status}} for status in root_statuses]
             spans += [{"name": "execute_tool " + name, "attrs": {}} for name in tools]
             output = io.StringIO()
             with mock.patch.object(amp.sys, "argv", ["qa-amp-compare.py", directory]), \
@@ -272,6 +274,15 @@ class AmpToolComparison(unittest.TestCase):
                  mock.patch.object(amp, "wait_for_spans", return_value=(spans, None)), \
                  contextlib.redirect_stdout(output):
                 return amp.main(), output.getvalue()
+
+    def test_an_unlabelled_root_cannot_hide_behind_a_disabled_root(self):
+        for second_status, expected in (("disabled", 0), (None, 1)):
+            with self.subTest(second_status=second_status):
+                status, output = self.run_compare(
+                    [], ["shell_command"] * 4, ("disabled", second_status))
+                self.assertEqual(status, expected, output)
+                if second_status is None:
+                    self.assertIn("(absent)", output)
 
     def test_wrappers_do_not_hide_a_missing_ordinary_tool_span(self):
         # Extra MCP spans make the total large enough, but cannot replace a

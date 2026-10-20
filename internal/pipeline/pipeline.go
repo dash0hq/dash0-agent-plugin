@@ -483,8 +483,14 @@ func EnrichToolEvent(event map[string]any) {
 		}
 	}
 	if strings.EqualFold(toolName, "Skill") {
-		if skill := ExtractSkillName(toolInput); skill != "" {
-			event["skill_name"] = skill
+		// Only when the source has not already named it: OpenCode V2 takes the
+		// name from the event's metadata before calling this, and reading the
+		// tool input as a second opinion would let a disagreeing argument
+		// rename a skill that was already resolved correctly.
+		if _, has := event["skill_name"]; !has {
+			if skill := ExtractSkillName(toolInput); skill != "" {
+				event["skill_name"] = skill
+			}
 		}
 		// The name can also arrive pre-set: Copilot ships no arguments for the
 		// skill tool and names the skill in a vendor attribute instead, so its

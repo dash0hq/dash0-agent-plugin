@@ -119,8 +119,15 @@ func run(input io.Reader, export func(string) ([]byte, error)) error {
 		for _, wait := range waits {
 			// The plan assumes instant reads; a slow export can still run the
 			// clock out, and nothing is gained by starting another one then.
-			if !time.Now().Before(deadline) {
+			// Clamping rather than checking again after the sleep, because the
+			// last wait is meant to land exactly on the deadline: a second
+			// check there would skip the read the window was extended for.
+			left := time.Until(deadline)
+			if left <= 0 {
 				break
+			}
+			if wait > left {
+				wait = left
 			}
 			time.Sleep(wait)
 			data, err := export(turn.ThreadID)

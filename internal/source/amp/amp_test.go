@@ -208,6 +208,45 @@ func TestTurnAttributesAndUsageAreAttributedOncePerModel(t *testing.T) {
 	require.NotContains(t, string(encoded), "wrong-turn")
 }
 
+// A "partial" export means the thread had not finished persisting, so the last
+// record is whichever one happened to land — not the message that answered the
+// turn. Promoting it would name the root after an arbitrary model and report
+// its tokens as the turn's. Every record stays a child instead.
+//
+// Without this case the status half of the guard is dead weight: the existing
+// partial tests all feed exports that yield no usage at all, so dropping
+// `usageStatus == "matched"` keeps the whole package green.
+func TestAPartialExportLeavesTheRootUnlabelled(t *testing.T) {
+	start := time.Now()
+	turn := Turn{ThreadID: "T-test", ID: json.RawMessage(`7`), Start: start, End: start.Add(time.Second), Status: "done", Executor: "local"}
+	usage := []Usage{
+		{Model: "gpt-6-astra", Attributes: map[string]any{"gen_ai.usage.input_tokens": int64(11), "gen_ai.usage.output_tokens": int64(2)}},
+		{Model: "claude-sonnet-4-6", Attributes: map[string]any{"gen_ai.usage.input_tokens": int64(31), "gen_ai.usage.output_tokens": int64(17)}},
+	}
+	req, err := BuildTrace(turn, usage, "partial", otlp.Config{AgentName: "amp", HarnessName: "amp", OmitIO: true})
+	require.NoError(t, err)
+	spans := req.ResourceSpans[0].ScopeSpans[0].Spans
+	// Both records are still reported, as children of an unnamed root.
+	require.Len(t, spans, 3)
+	require.Equal(t, "chat", spans[0].Name)
+	require.Equal(t, "chat gpt-6-astra", spans[1].Name)
+	require.Equal(t, "chat claude-sonnet-4-6", spans[2].Name)
+
+	root := map[string]otlp.AttrValue{}
+	for _, attr := range spans[0].Attributes {
+		root[attr.Key] = attr.Value
+	}
+	require.Equal(t, otlp.StringVal("partial"), root["dash0.amp.usage.status"])
+	require.NotContains(t, root, "gen_ai.request.model")
+	require.NotContains(t, root, "dash0.amp.usage.source")
+	for key := range root {
+		require.NotContains(t, key, "gen_ai.usage.", "the root borrowed a model's tokens")
+	}
+	for i, span := range spans[1:] {
+		require.Equal(t, spans[0].SpanID, span.ParentSpanID, "record %d hangs off the root", i)
+	}
+}
+
 func TestConversationFollowsSharedOmitIORules(t *testing.T) {
 	start := time.Now()
 	turn := Turn{

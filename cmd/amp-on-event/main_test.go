@@ -133,6 +133,31 @@ func TestPollWaitsCoverTheWholeWindow(t *testing.T) {
 	require.Equal(t, 20*time.Second, total, "the last read must land on the deadline")
 }
 
+// The schedule in pollWaits assumes reads are instant. They are not: each
+// export is a subprocess. Sleeping a full wait and only then noticing the
+// window has closed lets a read start after the deadline, so the helper — which
+// nothing kills, and which holds one of the bridge's helper slots — outlives
+// the budget its own comment promises.
+func TestASlowExportNeverStartsAReadPastTheDeadline(t *testing.T) {
+	setup(t)
+	t.Setenv("AMP_PLUGIN_OPTION_EXPORT_USAGE", "true")
+	fastPoll(t) // for its cleanup; the schedule below needs its own numbers
+	// Scaled so one wait straddles the end: reads land at 50, 155 and — before
+	// the clamp — 260 ms, which is 60 ms past a 200 ms window. Sleep jitter is
+	// an order of magnitude smaller than that gap.
+	usagePollDelay, usagePollWindow = 50*time.Millisecond, 200*time.Millisecond
+	const slowExport, grace = 30 * time.Millisecond, 10 * time.Millisecond
+
+	start := time.Now()
+	require.NoError(t, run(strings.NewReader(envelope), func(string) ([]byte, error) {
+		require.LessOrEqual(t, time.Since(start), usagePollWindow+grace,
+			"a read started after the poll window closed")
+		time.Sleep(slowExport)
+		// Never matches, so the loop runs its whole schedule.
+		return []byte(`{"id":"T-test","messages":[]}`), nil
+	}))
+}
+
 func TestPartialUsageIsPolledUntilItMatches(t *testing.T) {
 	got := setup(t)
 	t.Setenv("AMP_PLUGIN_OPTION_EXPORT_USAGE", "true")

@@ -166,9 +166,8 @@ def usage_verdict(export_usage, status, children, want_output, got_output,
         failures = 0
         if status != {"disabled"}:
             failures += 1
-            seen = ", ".join(sorted(x or "(absent)" for x in status)) or "(absent)"
             lines.append("\nMISMATCH: usage is off, so every root must report "
-                         f"'disabled'; saw {seen}.")
+                         f"'disabled'; saw {', '.join(sorted(status))}.")
         if children:
             failures += 1
             lines.append("MISMATCH: usage is off, so there must be no "
@@ -299,8 +298,12 @@ def main() -> int:
               "rows above prove nothing. See "
               "findings/amp-mcp-calls-run-inside-code-exec.md.")
 
-    status = {s["attrs"].get("dash0.amp.usage.status") for s in roots}
-    status.discard(None)
+    # Not discarded: every root carries this attribute, so a missing one is a
+    # failure, and dropping it would let a run with one unlabelled root pass on
+    # the strength of the others. (The observation children legitimately have
+    # none, which is why this reads roots rather than every span.)
+    status = {s["attrs"].get("dash0.amp.usage.status") or "(absent)"
+              for s in roots}
     got_out = sum(int(s["attrs"].get("gen_ai.usage.output_tokens") or 0)
                   for s in spans)
     priced = sorted({key for s in spans for key in s["attrs"]

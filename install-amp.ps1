@@ -351,8 +351,10 @@ if (Test-Path -LiteralPath $ConfigPath) {
   $existing = Get-Content -LiteralPath $ConfigPath
   function Get-ConfigValue {
     param([string] $Key)
-    $match = $existing | Select-String -Pattern "^$Key`: `"(.*)`"$" | Select-Object -First 1
-    if ($match) { return $match.Matches[0].Groups[1].Value }
+    # Quotes optional - see install-amp.sh for why a hand-edited unquoted
+    # value must be preserved rather than read as absent.
+    $match = $existing | Select-String -Pattern "^$Key`:\s*(.*)$" | Select-Object -First 1
+    if ($match) { return $match.Matches[0].Groups[1].Value -replace '^"(.*)"$', '$1' }
     return ''
   }
   if (-not $Endpoint) { $Endpoint = Get-ConfigValue 'otlp_url' }

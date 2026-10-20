@@ -272,7 +272,10 @@ DASH0_AGENT_NAME="amp"
 # blank the token the other projects are exporting with.
 EXTRA_CONFIG=""
 if [ -f "$CONFIG_PATH" ]; then
-  existing() { sed -n "s/^$1: \"\(.*\)\"\$/\1/p" "$CONFIG_PATH" | head -1; }
+  # Quotes are optional: this installer writes them, a hand-edit often does
+  # not, and the key is stripped from EXTRA_CONFIG either way — so reading only
+  # the quoted form would drop an unquoted token instead of preserving it.
+  existing() { sed -n "s/^$1:[[:space:]]*//p" "$CONFIG_PATH" | head -1 | sed 's/^"\(.*\)"$/\1/'; }
   : "${DASH0_OTLP_URL:=$(existing otlp_url)}"
   : "${DASH0_AUTH_TOKEN:=$(existing auth_token)}"
   : "${DASH0_DATASET:=$(existing dataset)}"

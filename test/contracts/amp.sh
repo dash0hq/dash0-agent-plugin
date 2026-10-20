@@ -46,11 +46,17 @@ echo "== a re-run with no credentials keeps the config it would otherwise blank 
 # stop every other project exporting. It also dropped export_usage: false, the
 # one key step 8 tells the user to add.
 echo 'export_usage: false' >> "$HOME/.amp/dash0-agent-plugin.local.md"
+# Unquoted is valid YAML and what a hand-edit usually produces. Reading only
+# the quoted form would treat this one as absent while still stripping its
+# line, which loses the value rather than preserving it.
+echo 'team_name: platform' >> "$HOME/.amp/dash0-agent-plugin.local.md"
 ( unset DASH0_OTLP_URL DASH0_AUTH_TOKEN DASH0_DATASET; bash "$REPO/install-amp.sh" < /dev/null ) >/dev/null
 grep -q 'auth_token: "amp-contract-token"' "$HOME/.amp/dash0-agent-plugin.local.md" \
   || { echo "ERROR: a credential-free re-run blanked the token"; exit 1; }
 grep -q '^export_usage: false$' "$HOME/.amp/dash0-agent-plugin.local.md" \
   || { echo "ERROR: a re-run dropped the user's export_usage setting"; exit 1; }
+grep -q 'team_name: "\{0,1\}platform"\{0,1\}' "$HOME/.amp/dash0-agent-plugin.local.md" \
+  || { echo "ERROR: a re-run dropped a hand-edited unquoted value"; exit 1; }
 [ "$(grep -c 'auth_token:' "$HOME/.amp/dash0-agent-plugin.local.md")" -eq 1 ] \
   || { echo "ERROR: the re-run duplicated keys instead of rewriting them"; exit 1; }
 echo "PASS: the re-run preserved the token and the user's own keys"

@@ -18,7 +18,10 @@ import sys
 import tempfile
 import threading
 
-seen: list[str | None] = []
+# No PEP 604 union: this annotation is evaluated at import time, and stock
+# macOS python3 is 3.9, where `str | None` raises TypeError before the check
+# can run. Every other tool here stays inside 3.9 too.
+seen: list = []
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

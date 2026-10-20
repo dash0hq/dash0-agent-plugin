@@ -5,7 +5,7 @@ runtime: amp
 status: active
 input: qa/tools/qa-session-amp.sh, one turn whose shell command exits 127
 duration: ~25s
-settling: 10s
+settling: 30s
 cleanup: keep
 covers:
   - amp/index.ts
@@ -34,7 +34,10 @@ whose nonzero exit is expected.
 qa/tools/qa-session-amp.sh \
   'Run the shell command: qa-this-command-does-not-exist. Do not try an alternative and do not fix it. Then reply with exactly the word done.' \
   spec-amp-tool-status
-sleep 10
+# 30s, not 10s: the helper is detached and polls the export for up to twenty
+# seconds, so a turn's spans can arrive after `amp` has exited. See
+# `### Amp` in ../../README.md.
+sleep 30
 ```
 
 Then read both channels. The recorder is the important one: it shows what Amp

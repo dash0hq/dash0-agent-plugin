@@ -59,7 +59,7 @@ CONFIG=qa/config.local.json
 [ -f "$CONFIG" ] || { echo "missing $CONFIG; see '## Configure' in qa/setup.md" >&2; exit 2; }
 
 # The dataset is read from ampDataset, not dataset: the amp arm deliberately
-# stays out of the shared one. See '### Amp writes to its own dataset' in setup.md.
+# stays out of the shared one. See '### Amp reads its own dataset key' in setup.md.
 eval "$(python3 - "$CONFIG" <<'PY'
 import json, shlex, sys
 c = json.load(open(sys.argv[1]))
@@ -144,6 +144,12 @@ fi
 # would silently leave spans in the developer's own dataset.
 export AMP_PLUGIN_OPTION_OTLP_URL="$QA_OTLP_URL"
 export AMP_PLUGIN_OPTION_AUTH_TOKEN="$QA_AUTH_TOKEN"
+# internal/harness ranks a successful keychain lookup ABOVE this token, and
+# this driver reads the machine's real ~/.amp config. Without a service name
+# that resolves to nothing, a developer whose config declares
+# auth_token_keychain_service would send their own token to the QA endpoint and
+# see rejected spans reported as "no spans". Same guard as the OpenCode driver.
+export AMP_PLUGIN_OPTION_AUTH_TOKEN_KEYCHAIN_SERVICE=dash0-qa-no-keychain
 export AMP_PLUGIN_OPTION_DATASET="$QA_DATASET"
 export AMP_PLUGIN_OPTION_DEBUG=true
 export AMP_PLUGIN_OPTION_DEBUG_FILE="$PWD/$RUN_DIR/plugin-debug.log"
@@ -261,11 +267,20 @@ write("manifest.json", {
     "runtime": "amp", "run_id": run_id,
     "session_id": thread,
     "started_at": stamp(started),
-    "ended_at": finished,
+    # Also stamped: isoformat() drops the fraction when microseconds happen to
+    # be zero, and qa-attrs.py then cannot parse the window at all.
+    "ended_at": stamp(finished),
     "dataset": dataset,
 })
 PY
 
 echo "amp exit: $AMP_STATUS" >&2
-[ "$AMP_STATUS" -eq 0 ] || echo "WARNING: amp exited non-zero; the run may be incomplete" >&2
 echo "verify with: qa/tools/qa-amp-compare.py $RUN_DIR" >&2
+# Exit, not warn. The comparer takes its expected turn count from the stream,
+# so a `threads continue` turn that died before writing any stream event
+# vanishes from both channels and the run still reconciles. The files above are
+# written first, so a failed run is still there to read.
+if [ "$AMP_STATUS" -ne 0 ]; then
+  echo "ERROR: amp exited $AMP_STATUS; the run is incomplete" >&2
+  exit "$AMP_STATUS"
+fi

@@ -33,7 +33,7 @@ report a clean pass over zero spans. See `### Amp reads its own dataset key` in
 | [tools](tools/) | Tool names are copied verbatim. Server-executed tools, and now `code_exec`/`tool_search`, reach no span at all — two open findings, and they stay open. |
 | [usage](usage/) | On by default, and correct — every model call attributed, tokens reconciling exactly against the stream. The opt-out is covered too. |
 | [subagents](subagents/) | Not applicable — Amp exposes no spawn tool. |
-| orb executor | Not runnable. `QA_AMP_EXECUTOR=orb` exists in the driver, but nothing copies a hand-built local plugin install into an orb. |
+| orb executor | Not runnable from this repository. `QA_AMP_EXECUTOR=orb` is a flag on the driver, but nothing here installs the plugin into the orb and a local install is not copied — see `amp-orb-install-path-exists` in setup.md. |
 
 ## Spans arrive after the run finishes, sometimes minutes after
 

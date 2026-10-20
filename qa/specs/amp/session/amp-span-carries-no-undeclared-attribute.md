@@ -5,7 +5,7 @@ runtime: amp
 status: active
 input: any qa-session-amp.sh run; one with QA_AMP_USAGE=1 that reached `matched`
 duration: ~5s over an existing run
-settling: 10s
+settling: 30s
 cleanup: keep
 covers:
   - internal/otlp/otlp.go
@@ -57,7 +57,7 @@ qa/tools/qa-attrs.py qa/runs/<run-id> --dataset <ampDataset>
 `--dataset <ampDataset>` — the `ampDataset` value from `qa/config.local.json` —
 is not optional. The amp arm writes to `ampDataset`, not
 the shared `dataset`, so the tool's default reads an empty window and reports a
-clean pass over zero spans. See `### Amp writes to its own dataset, not default` in
+clean pass over zero spans. See `### Amp reads its own dataset key` in
 [../../setup.md](../../../setup.md).
 
 Reference run: `qa/runs/conv-amp-5turn-b`, five turns, ten spans.

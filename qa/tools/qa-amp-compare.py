@@ -143,6 +143,74 @@ def expectation(turns: list[list[dict]]) -> dict:
             "output_tokens": output_tokens}
 
 
+def usage_verdict(export_usage, status, children, want_output, got_output,
+                  priced):
+    """Judge a run's token accounting. Returns (failures, lines to print).
+
+    Pure, and separate from main(), because this is where a comparer is most
+    tempting to get wrong: every branch here can print something reassuring
+    while proving nothing, and main() needs a run directory and a live Dash0
+    query before it reaches any of them.
+
+    `status` is the set of statuses the turn *roots* carried, `priced` the
+    model and token attribute keys present anywhere in the run.
+    """
+    lines = []
+    if not export_usage:
+        # usage-off-disables-accounting-and-keeps-the-turn.md runs only this
+        # script, so everything it asserts has to be checked here: with usage
+        # off nothing else in the comparison touches a usage attribute, and a
+        # fleet still reporting tokens — or reporting `unavailable`, which
+        # means the read was attempted and failed rather than never made —
+        # would otherwise print AGREEMENT.
+        failures = 0
+        if status != {"disabled"}:
+            failures += 1
+            seen = ", ".join(sorted(x or "(absent)" for x in status)) or "(absent)"
+            lines.append("\nMISMATCH: usage is off, so every root must report "
+                         f"'disabled'; saw {seen}.")
+        if children:
+            failures += 1
+            lines.append("MISMATCH: usage is off, so there must be no "
+                         f"per-model-call chat children; saw {children}.")
+        if priced:
+            failures += 1
+            lines.append("MISMATCH: usage is off, so no span may carry a model "
+                         f"or token attribute; saw {', '.join(priced)}.")
+        if not failures:
+            lines.append("\nusage off: every root reports 'disabled', with no "
+                         "model call children and no token attributes.")
+        return failures, lines
+
+    # Not a verdict: one per earlier model call of a turn is correct. It is
+    # printed because these are `chat` spans like the roots, so an
+    # operation-based prompt count reads each one as another prompt.
+    lines.append(f"\nextra chat spans (earlier model calls): {children}")
+    lines.append(f"\nusage status: {', '.join(sorted(status)) or '(absent)'}")
+    lines.append(f"output tokens  stream={want_output} dash0={got_output}")
+    if status != {"matched"}:
+        # Anything else, a mixed {matched, partial} included: the turns that
+        # did not match contributed no sourced token count, so the totals above
+        # cannot be compared and a pass would be a pass over whatever happened
+        # to resolve. `partial` was the normal result while the answering call
+        # went unattributed; that is fixed, and
+        # specs/amp/session/answering-call-supplies-the-root-model-and-tokens.md
+        # now requires every turn to match, so a partial turn is a regression
+        # rather than the status quo.
+        lines.append("  MISMATCH: with usage on every turn must reach "
+                     f"'matched'; saw {', '.join(sorted(status)) or '(absent)'}.")
+        return 1, lines
+    # Every model call resolved a usage record, so the exporter's per-call
+    # attribution must add up to exactly what the stream reported per assistant
+    # message. This is the strongest check here: the two channels are
+    # independent, and it is only available once nothing is partial.
+    if got_output != want_output:
+        lines.append("  MISMATCH: every turn matched, so these must be equal.")
+        return 1, lines
+    lines.append("  ok — every model call is accounted for.")
+    return 0, lines
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         bail(__doc__)
@@ -154,12 +222,18 @@ def main() -> int:
     stream = run_dir / "stream.jsonl"
     thread = (run_dir / "thread-id").read_text().strip()
     meta = json.loads((run_dir / "meta.json").read_text())
+    # The expected turn count comes from the stream, so a turn that failed
+    # before writing a stream event is missing from both channels and the run
+    # reconciles anyway. Refuse rather than reconcile.
+    if meta.get("amp_exit"):
+        bail(f"amp exited {meta['amp_exit']}; the run is incomplete and "
+             "cannot be reconciled")
 
     config, config_error = compare.load_config(ROOT)
     if config_error:
         bail(config_error)
     # The amp arm reads ampDataset, not dataset: it deliberately stays out of
-    # the shared one. See '### Amp writes to its own dataset' in qa/setup.md.
+    # the shared one. See '### Amp reads its own dataset key' in qa/setup.md.
     dataset = config.get("ampDataset")
     if not dataset:
         bail("qa/config.local.json is missing: ampDataset")
@@ -225,40 +299,18 @@ def main() -> int:
               "rows above prove nothing. See "
               "findings/amp-mcp-calls-run-inside-code-exec.md.")
 
-    if meta.get("export_usage"):
-        # Not a verdict: one per earlier model call of a turn is correct. It is
-        # printed because these are `chat` spans like the roots, so an
-        # operation-based prompt count reads each one as another prompt.
-        print(f"\nextra chat spans (earlier model calls): {children}")
-        status = {s["attrs"].get("dash0.amp.usage.status") for s in spans}
-        status.discard(None)
-        print(f"\nusage status: {', '.join(sorted(status)) or '(absent)'}")
-        got_out = sum(int(s["attrs"].get("gen_ai.usage.output_tokens") or 0)
-                      for s in spans)
-        print(f"output tokens  stream={want['output_tokens']} dash0={got_out}")
-        if status == {"matched"}:
-            # Every model call resolved a usage record, so the exporter's
-            # per-call attribution must add up to exactly what the stream
-            # reported per assistant message. This is the strongest check here:
-            # the two channels are independent, and it is only available once
-            # nothing is partial.
-            if got_out != want["output_tokens"]:
-                failures += 1
-                print("  MISMATCH: every turn matched, so these must be equal.")
-            else:
-                print("  ok — every model call is accounted for.")
-        elif "matched" in status:
-            print("  'partial' means some model call's usage never persisted, so "
-                  "these are not expected to agree. See "
-                  "findings/amp-answering-model-call-is-never-attributed.md.")
-        else:
-            # Usage export was on and no turn ever matched, so every token count
-            # above is unsourced. Printing AGREEMENT here would report a passing
-            # comparison of nothing.
-            failures += 1
-            print("  MISMATCH: usage export is on but no turn reached 'matched', "
-                  "so no token count was proven. See "
-                  "findings/amp-answering-model-call-is-never-attributed.md.")
+    status = {s["attrs"].get("dash0.amp.usage.status") for s in roots}
+    status.discard(None)
+    got_out = sum(int(s["attrs"].get("gen_ai.usage.output_tokens") or 0)
+                  for s in spans)
+    priced = sorted({key for s in spans for key in s["attrs"]
+                     if key == "gen_ai.request.model"
+                     or key.startswith("gen_ai.usage.")})
+    hits, lines = usage_verdict(bool(meta.get("export_usage")), status, children,
+                                want["output_tokens"], got_out, priced)
+    failures += hits
+    for line in lines:
+        print(line)
 
     print()
     print("AGREEMENT" if not failures else f"{failures} MISMATCH(ES)")

@@ -17,7 +17,7 @@
 #   -e DASH0_TEAM_NAME="my-test-team"
 
 # ---- Stage 1: build the on-event binary from local source ----
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.27.3-bookworm AS builder
 
 WORKDIR /src
 COPY go.mod go.sum ./

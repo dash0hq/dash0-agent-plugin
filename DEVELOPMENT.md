@@ -6,8 +6,9 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for event flow, package ownership and
 contracts to preserve. [AGENTS.md](AGENTS.md) is the short repository guide for
 coding agents; the same placement and verification rules apply to human contributors.
 
-Use the Go version declared in `go.mod`. `make go-version-check` checks that
-the Docker test harness uses the same version. The Makefile uses Bash and pins
+Use the Go version declared in `go.mod`. The GitHub Actions workflows read it
+from `go.mod`. `make go-version-check` checks that the Docker test harness uses
+the same version. The Makefile uses Bash and pins
 the lint tools it installs into `bin/`. Python 3 runs the diagnostic-script tests.
 
 ## Coding conventions

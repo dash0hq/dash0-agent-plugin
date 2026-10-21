@@ -12,7 +12,7 @@ $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
 GOLANGCI_LINT := $(LOCALBIN)/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.9.0
+GOLANGCI_LINT_VERSION ?= v2.15.0
 GOLANGCI_LINT_VERSION_NUMBER = $(patsubst v%,%,$(GOLANGCI_LINT_VERSION))
 
 SHELLCHECK := $(LOCALBIN)/shellcheck
@@ -60,7 +60,7 @@ go-mod-tidy: ## Run go mod tidy and fail if go.mod/go.sum change.
 	git diff --exit-code go.mod go.sum
 
 .PHONY: go-version-check
-go-version-check: ## Check go.mod Go version matches scripts/docker/Dockerfile.
+go-version-check: ## Check that go.mod and scripts/docker/Dockerfile use the same Go version.
 	./scripts/go-version-check.sh
 
 .PHONY: version-check
@@ -69,13 +69,22 @@ version-check: ## Check every manifest and bootstrap pins the same release versi
 
 .PHONY: golangci-lint-install
 golangci-lint-install: $(LOCALBIN)
-	@installed_version="$$( [ -x $(GOLANGCI_LINT) ] && $(GOLANGCI_LINT) --version 2>/dev/null | awk '{print $$4; exit}' || true )"; \
+	@set -euo pipefail; \
+	installed_version="$$( [ -x $(GOLANGCI_LINT) ] && $(GOLANGCI_LINT) --version 2>/dev/null | awk '{print $$4; exit}' || true )"; \
 	if [ "$$installed_version" != "$(GOLANGCI_LINT_VERSION_NUMBER)" ]; then \
 	  tmp="$$(mktemp -d)"; staged="$$(mktemp "$(LOCALBIN)/.golangci-lint.XXXXXX")"; \
 	  trap 'rm -rf "$$tmp"; rm -f "$$staged"' EXIT; \
-	  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-	    | sh -s -- -b "$$tmp" $(GOLANGCI_LINT_VERSION); \
-	  install -m 0755 "$$tmp/golangci-lint" "$$staged"; \
+	  name="golangci-lint-$(GOLANGCI_LINT_VERSION_NUMBER)-$$(go env GOHOSTOS)-$$(go env GOHOSTARCH)"; \
+	  base="https://github.com/golangci/golangci-lint/releases/download/$(GOLANGCI_LINT_VERSION)"; \
+	  curl -sSfL -o "$$tmp/$$name.tar.gz" "$$base/$$name.tar.gz"; \
+	  curl -sSfL -o "$$tmp/checksums.txt" "$$base/golangci-lint-$(GOLANGCI_LINT_VERSION_NUMBER)-checksums.txt"; \
+	  want="$$(awk -v f="$$name.tar.gz" '$$2 == f { print $$1 }' "$$tmp/checksums.txt")"; \
+	  got="$$(shasum -a 256 "$$tmp/$$name.tar.gz" | awk '{ print $$1 }')"; \
+	  if [ -z "$$want" ] || [ "$$want" != "$$got" ]; then \
+	    echo "golangci-lint-install: checksum mismatch for $$name.tar.gz (want '$$want', got '$$got')" >&2; exit 1; \
+	  fi; \
+	  tar -xzf "$$tmp/$$name.tar.gz" -C "$$tmp"; \
+	  install -m 0755 "$$tmp/$$name/golangci-lint" "$$staged"; \
 	  mv -f "$$staged" $(GOLANGCI_LINT); \
 	fi
 

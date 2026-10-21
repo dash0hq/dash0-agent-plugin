@@ -1,7 +1,8 @@
 # Feature support matrix across coding agents
 
-Six runtimes are implemented — **Claude Code**, **Cursor**, **OpenAI Codex**,
-**GitHub Copilot CLI**, **OpenCode V2**, and the **GitHub Copilot app** — sharing Go configuration and OTLP
+Seven runtimes are implemented — **Claude Code**, **Cursor**, **OpenAI Codex**,
+**GitHub Copilot CLI**, **OpenCode V2**, the **GitHub Copilot app**, and
+**Amp** — sharing Go configuration and OTLP
 export (`internal/harness`, `internal/otlp`). The hook adapters and the
 Copilot app adapter use `internal/pipeline`; OpenCode's stream consumer uses its tool enrichment helpers.
 They differ in how they're installed, how config reaches
@@ -83,7 +84,7 @@ variable instead.
 
 ¹ The Cursor and Codex README example configs show `omit_io: false`, but the installers
 don't write the key. With no explicit setting the binary default (`true`) applies on all
-six runtimes.
+seven runtimes.
 
 ## Configuration sources & precedence
 
@@ -190,3 +191,27 @@ doesn't normally see, so the banner does not render there.
 For Cursor, Codex and the Copilot CLI, injecting the session link as model context is
 the only portable fallback — it lets the agent surface the link if asked, but
 does not display it directly.
+
+## Amp CLI and Orbs
+
+Amp uses a native TypeScript plugin and the shared Go OTLP builders instead of
+shell hooks and the on-disk pipeline lifecycle. See [installation and research](amp/README.md).
+
+| Capability | Amp |
+| --- | --- |
+| Local CLI / Orb executor | Same native plugin, installed on each executor |
+| Identity/config | `harness.Amp`, `AMP_PLUGIN_OPTION_*`, `.amp/dash0-agent-plugin.local.md` |
+| Session / turn | Thread ID / typed initiating message ID; completed-turn batches |
+| Root operation | `chat`; the answering exported message names it and supplies its usage, both absent when usage is off |
+| Tools | Paired `tool.call`/`tool.result`; observed timing and status. **Client-side tools only** — server-executed built-ins, and the `code_exec`/`tool_search` wrappers an MCP call now runs inside, fire no plugin event and get no span |
+| Per-model tokens | On by default (`export_usage: false` opts out). Exact assistant-ID lookup in unstable `threads export` JSON, polled up to 20s because the export materializes seconds after the turn ends |
+| Mixed models in a turn | Separate usage-bearing `chat` children; no root duplication. One child per earlier model *call*, so an ordinary tool-using turn has one; Dash0 classifies only the root as an operation, so prompt counts are unaffected |
+| Missing usage | Omitted, never estimated or filled with zero |
+| Content | Prompt, response, and tool arguments/output under the shared `omit_io` rule; thinking and image blocks dropped in the bridge |
+| Subagent usage / tree | Only selected exported messages; hidden usage and ancestry not inferred |
+| Reload/pause recovery | No guarantee; unmatched/in-flight turns may be lost. The helper is detached and outlives the CLI, so a turn's spans can arrive after it exits |
+| Usage-child timing | Zero-duration observation; not automatically excluded from request-latency metrics |
+| Operation-based metrics | Root counts as one turn like Claude/Codex. Dash0 classifies only the root as an operation, so prompt counts are unaffected by the earlier model calls; only a metric counting raw spans by `gen_ai.operation.name=chat` sees the extra zero-latency children. No full metric parity |
+| Failures | Bounded helper; static diagnostics; tool calls always allowed |
+| Installation | `install-amp.sh` / `install-amp.ps1`: download + checksum, installed as `amp-on-event` next to `index.ts`; `--project` for one workspace; `DASH0_SOURCE_DIR` for a source build. No hook or settings-file registration |
+| Shipped skill | `dash0-configure`, registered by `index.ts` through `registerSkill` rather than a manifest, so Amp exposes it as `dash0:dash0-configure`. Registration is optional — an Amp without `registerSkill` still gets a working bridge |

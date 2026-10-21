@@ -32,6 +32,10 @@ var skillManifests = []struct {
 	{"cursor", ".cursor-plugin/plugin.json", "."},
 	{"copilot", "copilot/plugin.json", "copilot"},
 	{"copilot-app", "", "copilot-app/skills"},
+	// Amp has no manifest either: index.ts calls registerSkill with a path
+	// relative to the installed plugin directory, which the installers lay out
+	// to match this one.
+	{"amp", "", "amp/skills"},
 }
 
 // TestSkillFrontmatterParses parses the frontmatter of every shipped skill with

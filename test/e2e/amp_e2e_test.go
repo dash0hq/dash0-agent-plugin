@@ -12,10 +12,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dash0hq/dash0-agent-plugin/internal/config"
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
@@ -79,6 +81,64 @@ func repoRootDir(t *testing.T) string {
 	return filepath.Dir(filepath.Dir(dir))
 }
 
+// TestE2EAmpInstallerRerun preserves the public configuration contract on both
+// platforms. Windows uses stock PowerShell 5.1, not pwsh, so a default ANSI
+// read of the installer's BOM-less UTF-8 output cannot hide behind PS 7.
+func TestE2EAmpInstallerRerun(t *testing.T) {
+	home, source := t.TempDir(), t.TempDir()
+	name := "amp-on-event"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	// The installer copies these files; it never executes the helper.
+	require.NoError(t, os.WriteFile(filepath.Join(source, name), []byte("unused"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "index.ts"), []byte("export {}"), 0o600))
+	path := filepath.Join(home, ".amp", config.Name)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	const body = "Notes stay outside config.\r\nexport_usage: true\r\nauth_token: body-only"
+	require.NoError(t, os.WriteFile(path, []byte("---\r\n"+
+		"otlp_url: https://example.invalid  \r\nauth_token: \"rerun-fixture-token\" \t\r\n"+
+		"dataset: Prüfung \t\r\nteam_name: Plattform-Übersicht  \r\nexport_usage: false\r\n"+
+		"enabled: false\r\nauth_token_keychain_service: fixture-service\r\n---\r\n"+body), 0o600))
+	root := repoRootDir(t)
+	for run := 0; run < 2; run++ {
+		cmd := exec.Command("bash", filepath.Join(root, "install-amp.sh"))
+		if runtime.GOOS == "windows" {
+			// iex executes in the caller's session. Check no token-bearing
+			// installer variables survive, not just the primary $Token.
+			cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `
+Invoke-Expression ([IO.File]::ReadAllText($env:AMP_INSTALLER, [Text.Encoding]::UTF8))
+if (Get-Variable Token,lines,existing,parts,ExistingConfig,ExtraConfig -ErrorAction SilentlyContinue) {
+  throw 'token-bearing installer variables survived iex'
+}`)
+		}
+		cmd.Dir = t.TempDir()
+		cmd.Stdin = strings.NewReader("")
+		cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home,
+			"DASH0_SOURCE_DIR="+source, "DASH0_OTLP_URL=", "DASH0_AUTH_TOKEN=", "DASH0_DATASET=", "DASH0_TEAM_NAME=",
+			"AMP_INSTALLER="+filepath.Join(root, "install-amp.ps1"))
+		detachTerminal(cmd)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "installer run %d: %s", run, out)
+		assert.NotContains(t, string(out), "rerun-fixture-token")
+		loaded := config.Load(path)
+		for key, value := range map[string]string{
+			"otlp_url": "https://example.invalid", "auth_token": "rerun-fixture-token",
+			"dataset": "Prüfung", "team_name": "Plattform-Übersicht", "export_usage": "false",
+			"enabled": "false", "auth_token_keychain_service": "fixture-service",
+		} {
+			assert.Equal(t, value, loaded.Get(key), "run %d key %s", run, key)
+		}
+		content, err := os.ReadFile(path)
+		require.NoError(t, err)
+		parts := strings.SplitN(string(content), "---", 3)
+		require.Len(t, parts, 3)
+		assert.Equal(t, 1, strings.Count(parts[1], "export_usage:"), "body settings stay outside frontmatter")
+		assert.NotContains(t, parts[1], "Notes stay outside config.")
+		assert.Equal(t, "\n"+body, parts[2], "Markdown body, including CRLF and missing final newline, is unchanged")
+	}
+}
+
 // TestE2EAmpHelperDeliversACompletedTurn runs the helper exactly as the bridge
 // does: a real process, one completed-turn envelope on stdin, nothing else.
 func TestE2EAmpHelperDeliversACompletedTurn(t *testing.T) {
@@ -138,6 +198,80 @@ func TestE2EAmpHelperDeliversACompletedTurn(t *testing.T) {
 	assert.Equal(t, "amp", attrs["gen_ai.harness.name"])
 	// Only set when content was shed, and this turn is tiny.
 	assert.NotContains(t, attrs, "dash0.amp.truncated")
+}
+
+// TestE2EAmpLiveTurnReachesTheCollector is the live canary: a real `amp` turn
+// with the real plugin installed, which is the only thing that proves Amp still
+// calls the handlers this integration is built on. It costs credits, so it runs
+// only where `amp` is authenticated — CI passes AMP_API_KEY.
+func TestE2EAmpLiveTurnReachesTheCollector(t *testing.T) {
+	if os.Getenv("AMP_API_KEY") == "" && os.Getenv("DASH0_AMP_LIVE") == "" {
+		t.Skip("set AMP_API_KEY (CI) or DASH0_AMP_LIVE=1 (a logged-in machine) to run the live Amp canary")
+	}
+	if _, err := exec.LookPath("amp"); err != nil {
+		t.Fatal("amp CLI not found — install it before running the live canary")
+	}
+	capture, server := newOTLPCapture(t)
+	defer server.Close()
+
+	// A project-scoped plugin: Amp loads .amp/plugins/* from the working
+	// directory, so the canary needs no writable HOME and leaves nothing behind.
+	workspace := t.TempDir()
+	pluginDir := filepath.Join(workspace, ".amp", "plugins", "dash0")
+	require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+	root := repoRootDir(t)
+	index, err := os.ReadFile(filepath.Join(root, "amp", "index.ts"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "index.ts"), index, 0o644))
+	helper := filepath.Join(pluginDir, "amp-on-event")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", helper, "./cmd/amp-on-event")
+	build.Dir = root
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "building the helper into the plugin dir: %s", out)
+
+	// --plugin-ready-timeout: Amp waits for plugins at turn start, and without
+	// it a fast turn can finish before the bridge has registered its handlers.
+	// The flag takes seconds as a bare number; "30s" is rejected.
+	cmd := exec.Command("amp", "--plugin-ready-timeout", "30", "-x",
+		"Reply with the single word: pong. Do not use any tools.")
+	cmd.Dir = workspace
+	cmd.Env = append(os.Environ(),
+		"AMP_PLUGIN_OPTION_OTLP_URL="+server.URL,
+		"AMP_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+		"AMP_PLUGIN_OPTION_DATASET=e2e-dataset",
+		"AMP_PLUGIN_OPTION_OMIT_IDENTITY_FALLBACK=true",
+	)
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "amp turn failed: %s", out)
+
+	// The helper is detached and polls `amp threads export` for up to twenty
+	// seconds, so spans legitimately arrive after `amp` has exited.
+	require.Eventually(t, func() bool {
+		bodies, _ := capture.snapshot()
+		return len(bodies) > 0
+	}, 40*time.Second, 250*time.Millisecond, "no spans from a live Amp turn")
+
+	bodies, auths := capture.snapshot()
+	assert.Equal(t, "Bearer e2e-token", auths[0])
+	spans := collectSpans(t, bodies)
+	logSpanTree(t, spans)
+	var roots int
+	for _, s := range spans {
+		if s.ParentSpanID == "" {
+			roots++
+			attrs := attributesOfSpan(s)
+			assert.Equal(t, "amp", attrs["gen_ai.harness.name"])
+			assert.True(t, strings.HasPrefix(s.Name, "chat"), "root is a chat span, got %q", s.Name)
+			assert.NotEmpty(t, attrs["gen_ai.conversation.id"], "the root carries its thread id")
+			// Content defaults to redacted; the point here is that the field
+			// exists at all, which is what a broken bridge would lose.
+			assert.Contains(t, attrs, "gen_ai.input.messages")
+		}
+	}
+	assert.Equal(t, 1, roots, "one turn is one root")
 }
 
 // attributesOfSpan flattens a span's attributes to their string form. Every

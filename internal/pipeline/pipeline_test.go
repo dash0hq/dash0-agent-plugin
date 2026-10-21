@@ -63,6 +63,28 @@ func (s *setup) feedAt(t *testing.T, event map[string]any, ts time.Time) Result 
 	return res
 }
 
+// feedConcurrently drives Process for every event at once, one goroutine each,
+// and returns when all of them have finished. Hooks really do arrive this way:
+// one process per hook, with no ordering guarantee between them.
+func (s *setup) feedConcurrently(t *testing.T, events ...map[string]any) {
+	t.Helper()
+
+	errs := make([]error, len(events))
+	var wg sync.WaitGroup
+	for i, event := range events {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = Process(event, s.cfg, s.dataDir, time.Now().UTC())
+		}()
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+}
+
 func (s *setup) sessionDir(sessionID string) string {
 	return filepath.Join(s.dataDir, sessionID)
 }
@@ -251,6 +273,32 @@ func TestProcess_SessionStartAfterUserPromptSubmit_PreservesTurnContext(t *testi
 	assert.Equal(t, before.SpanID, after.SpanID, "late SessionStart must not blank the chat span")
 	assert.Equal(t, "opus", after.Model, "SessionStart's model should merge into the existing context")
 	assert.Equal(t, "sess-1", after.SessionID)
+}
+
+// The harder half of the reordering above: Copilot does not just deliver the
+// two events out of order, it launches them as two hook processes at once.
+// Both read-modify-write one trace_context.json, so unserialized they lose an
+// update and leave the turn with a blank trace_id. Repeated because the losing
+// interleave is timing-dependent.
+func TestProcess_ConcurrentSessionStartAndUserPromptSubmit_KeepsTurnContext(t *testing.T) {
+	const iterations = 40
+
+	for i := 0; i < iterations; i++ {
+		s := newSetup(t, "")
+		sessionID := "sess-" + strconv.Itoa(i)
+
+		s.feedConcurrently(t,
+			map[string]any{"hook_event_name": "SessionStart", "session_id": sessionID, "model": "opus"},
+			map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": sessionID, "prompt": "hi"},
+		)
+
+		ctx, err := otlp.LoadTraceContext(s.sessionDir(sessionID))
+		require.NoError(t, err)
+		require.NotNil(t, ctx)
+		require.NotEmptyf(t, ctx.TraceID, "iteration %d: a concurrent SessionStart blanked the turn's trace_id", i)
+		require.NotEmptyf(t, ctx.SpanID, "iteration %d: a concurrent SessionStart blanked the chat span id", i)
+		assert.Equal(t, sessionID, ctx.SessionID)
+	}
 }
 
 // A Stop whose loaded trace context has a blank TraceID (a context that somehow

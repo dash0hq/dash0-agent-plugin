@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // TraceContext holds the active trace and root span IDs for a session,
@@ -26,11 +27,63 @@ type TraceContext struct {
 	StartTime string `json:"start_time,omitempty"`
 }
 
-const traceContextFile = "trace_context.json"
+const (
+	traceContextFile     = "trace_context.json"
+	traceContextLockFile = "trace_context.lock"
+
+	lockAcquireBudget = 2 * time.Second
+	lockPollInterval  = 5 * time.Millisecond
+)
 
 // SaveTraceContext persists trace context to the data directory.
 func SaveTraceContext(ctx TraceContext, dataDir string) error {
 	return writeContextFile(filepath.Join(dataDir, traceContextFile), ctx)
+}
+
+// UpdateTraceContext applies mutate to the stored trace context — a zero value
+// when there is none yet — and saves the result, locked for the whole
+// read-modify-write.
+//
+// One hook runs per process and runtimes fire them concurrently: Copilot
+// launches sessionStart and userPromptSubmitted at the same moment. Two
+// unserialized read-modify-writes lose an update — the later save writes back
+// what it read before the earlier one landed — leaving the turn without the
+// TraceID it needs to emit.
+func UpdateTraceContext(dataDir string, mutate func(ctx *TraceContext)) error {
+	release := acquireLock(filepath.Join(dataDir, traceContextLockFile))
+	defer release()
+
+	ctx, _ := LoadTraceContext(dataDir)
+	if ctx == nil {
+		ctx = &TraceContext{}
+	}
+	mutate(ctx)
+	return SaveTraceContext(*ctx, dataDir)
+}
+
+// acquireLock takes an exclusive cross-process lock on path and returns its
+// release. O_CREATE|O_EXCL is atomic on both POSIX and Windows and needs no
+// dependency.
+//
+// Telemetry must never block the agent, so this is best-effort: when the lock
+// cannot be taken — budget spent, or an unwritable directory — the caller
+// proceeds unlocked rather than hanging. SessionEnd removes the session
+// directory, so a lock orphaned by a killed hook cannot outlive the session.
+func acquireLock(path string) (release func()) {
+	nothingToRelease := func() {}
+	deadline := time.Now().Add(lockAcquireBudget)
+
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			_ = f.Close()
+			return func() { _ = os.Remove(path) }
+		}
+		if !os.IsExist(err) || time.Now().After(deadline) {
+			return nothingToRelease
+		}
+		time.Sleep(lockPollInterval)
+	}
 }
 
 // writeContextFile serializes ctx to path atomically, by writing a temporary

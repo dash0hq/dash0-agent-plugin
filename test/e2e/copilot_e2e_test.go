@@ -677,6 +677,71 @@ func TestE2ECopilotDefersTurnWhenTraceContextMissing(t *testing.T) {
 	assert.FileExists(t, cursorFile, "the cursor advances once the turn is actually emitted")
 }
 
+// TestE2ECopilotConcurrentStartupKeepsTurnContext (L2) is the cross-process
+// half of the pipeline's concurrency regression test — two real hook
+// processes, the only shape the lock has to hold across. Copilot launches
+// sessionStart and userPromptSubmitted at the same moment; unserialized they
+// lose the turn's TraceID, and agentStop then defers a turn that should have
+// been emitted.
+func TestE2ECopilotConcurrentStartupKeepsTurnContext(t *testing.T) {
+	const iterations = 10
+
+	pluginDir := findPluginDir(t)
+	bin := buildCopilotBinary(t, pluginDir)
+
+	for i := 0; i < iterations; i++ {
+		cap, srv := newOTLPCapture(t)
+
+		pluginData := t.TempDir()
+		otelDir := t.TempDir()
+		stagedOtelTurn(otelDir, copilotConvID)
+		cwd := t.TempDir()
+
+		run := func(eventName, payload string) error {
+			cmd := exec.Command(bin, eventName)
+			cmd.Env = append(hermeticEnv(t),
+				"DASH0_OTLP_URL="+srv.URL,
+				"COPILOT_PLUGIN_OPTION_AUTH_TOKEN=e2e-token",
+				"COPILOT_PLUGIN_DATA="+pluginData,
+				"DASH0_COPILOT_OTEL_DIR="+otelDir,
+			)
+			cmd.Stdin = strings.NewReader(payload)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("%s failed: %w\n%s", eventName, err, out)
+			}
+			return nil
+		}
+
+		sid := `"sessionId":"` + copilotConvID + `"`
+		startPayload := `{` + sid + `,"cwd":` + strconv.Quote(cwd) + `,"source":"new"}`
+		promptPayload := `{` + sid + `,"prompt":"run echo hi"}`
+		stopPayload := `{` + sid + `,"stopReason":"end_turn"}`
+
+		var (
+			wg                  sync.WaitGroup
+			startErr, promptErr error
+		)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			startErr = run("sessionStart", startPayload)
+		}()
+		go func() {
+			defer wg.Done()
+			promptErr = run("userPromptSubmitted", promptPayload)
+		}()
+		wg.Wait()
+		require.NoError(t, startErr)
+		require.NoError(t, promptErr)
+
+		require.NoError(t, run("agentStop", stopPayload))
+
+		bodies, _ := cap.snapshot()
+		require.NotEmptyf(t, collectSpans(t, bodies), "iteration %d: concurrent startup hooks lost the turn's trace context, so the turn emitted nothing", i)
+		srv.Close()
+	}
+}
+
 // TestE2ECopilotVCSAttributes (L2) proves the binary chdirs into the hook
 // payload's `cwd` before vcs.Detect() runs. It invokes the built binary from a
 // deliberately NON-repo working directory while the payload's cwd points at a

@@ -134,17 +134,16 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 			// Merge, don't overwrite. Most runtimes deliver SessionStart first, so
 			// there is no context yet and this builds a fresh one. But an agent may
 			// deliver UserPromptSubmit before SessionStart (e.g. Copilot's
-			// nondeterministic startup ordering), which has already established this
-			// turn's TraceID/SpanID — preserve them rather than blanking the context.
-			ctx, _ := otlp.LoadTraceContext(sessionDir)
-			if ctx == nil {
-				ctx = &otlp.TraceContext{}
-			}
-			ctx.SessionID = sessionID
-			if model, _ := event["model"].(string); model != "" {
-				ctx.Model = model
-			}
-			if err := otlp.SaveTraceContext(*ctx, sessionDir); err != nil {
+			// nondeterministic startup ordering), or fire the two concurrently —
+			// either way the turn's TraceID/SpanID must survive.
+			model, _ := event["model"].(string)
+			err := otlp.UpdateTraceContext(sessionDir, func(ctx *otlp.TraceContext) {
+				ctx.SessionID = sessionID
+				if model != "" {
+					ctx.Model = model
+				}
+			})
+			if err != nil {
 				return res, err
 			}
 			_ = os.WriteFile(startedFile, nil, 0o644)
@@ -162,19 +161,15 @@ func Process(event map[string]any, cfg otlp.Config, dataDir string, now time.Tim
 		}
 		event["chat_span_id"] = chatSpanID
 
-		model := ""
+		// A new turn owns new IDs; the session's model carries forward.
 		previousTraceID := ""
-		if ctx, err := otlp.LoadTraceContext(sessionDir); err == nil && ctx != nil {
-			model = ctx.Model
+		err = otlp.UpdateTraceContext(sessionDir, func(ctx *otlp.TraceContext) {
 			previousTraceID = ctx.TraceID
-		}
-
-		if err := otlp.SaveTraceContext(otlp.TraceContext{
-			TraceID:   traceID,
-			SpanID:    chatSpanID,
-			SessionID: sessionID,
-			Model:     model,
-		}, sessionDir); err != nil {
+			ctx.TraceID = traceID
+			ctx.SpanID = chatSpanID
+			ctx.SessionID = sessionID
+		})
+		if err != nil {
 			return res, err
 		}
 		if previousTraceID != "" {

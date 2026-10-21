@@ -79,7 +79,7 @@ golangci-lint-install: $(LOCALBIN)
 	  curl -sSfL -o "$$tmp/$$name.tar.gz" "$$base/$$name.tar.gz"; \
 	  curl -sSfL -o "$$tmp/checksums.txt" "$$base/golangci-lint-$(GOLANGCI_LINT_VERSION_NUMBER)-checksums.txt"; \
 	  want="$$(awk -v f="$$name.tar.gz" '$$2 == f { print $$1 }' "$$tmp/checksums.txt")"; \
-	  got="$$(shasum -a 256 "$$tmp/$$name.tar.gz" | awk '{ print $$1 }')"; \
+	  got="$$( { sha256sum "$$tmp/$$name.tar.gz" 2>/dev/null || shasum -a 256 "$$tmp/$$name.tar.gz"; } | awk '{ print $$1 }')"; \
 	  if [ -z "$$want" ] || [ "$$want" != "$$got" ]; then \
 	    echo "golangci-lint-install: checksum mismatch for $$name.tar.gz (want '$$want', got '$$got')" >&2; exit 1; \
 	  fi; \

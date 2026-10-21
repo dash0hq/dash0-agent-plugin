@@ -14,7 +14,7 @@
 set -u
 
 AGENT="copilot-app"
-VERSION="0.1.29"
+VERSION="0.1.30"
 
 # Where the downloaded binary lives. Mirrors internal/harness.DataDir, so the
 # binary cache and the session state stay in one tree.

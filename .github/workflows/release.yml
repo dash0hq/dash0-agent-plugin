@@ -292,6 +292,24 @@ jobs:
             <<<'{"sessionId":"release-verify"}'
           # The binary logs errors and exits 0, so check it handled the event.
           test -f "$copilot_app_data/started/release-verify"
+          # Amp is configured through its harness prefix, not DASH0_*: a config
+          # file outranks the latter, so on a machine with one the plain
+          # variable would not be what the helper used.
+          #
+          # `|| true` because this helper does not fail open — it is detached
+          # from the turn, so a delivery failure is reported by exiting 1, and
+          # the endpoint above is unreachable on purpose. The grep is the
+          # assertion: it proves the binary ran, parsed the turn and built the
+          # span, which is what this step exists to catch.
+          amp_data=$(mktemp -d)
+          AMP_PLUGIN_OPTION_OTLP_URL=http://127.0.0.1:1 \
+          AMP_PLUGIN_OPTION_AUTH_TOKEN=release-verify \
+          AMP_PLUGIN_OPTION_DEBUG=true \
+          AMP_PLUGIN_OPTION_DEBUG_FILE=$amp_data/debug.log \
+            dist/amp-on-event-linux-amd64 \
+            <<<'{"thread_id":"T-release-verify","id":1,"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:01Z","status":"done","executor":"local","tools":[],"assistant_ids":[]}' \
+            || true
+          grep -q T-release-verify "$amp_data/debug.log"
 
       - name: The draft carries exactly what was built
         run: |

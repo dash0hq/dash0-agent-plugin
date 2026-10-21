@@ -43,6 +43,8 @@ var (
 	// file as the CLI (~/.copilot), so one setup covers both, but reports its own
 	// identity and keeps its session state apart.
 	CopilotApp = Harness{Name: "github-copilot-app", EnvPrefix: "COPILOT_APP", DataSubdir: "copilot-app", ConfigDir: ".copilot"}
+	// Amp serves multiple models and providers within a single turn.
+	Amp = Harness{Name: "amp", EnvPrefix: "AMP", DataSubdir: "amp", ConfigDir: ".amp"}
 )
 
 // Harness names one coding agent's environment conventions.

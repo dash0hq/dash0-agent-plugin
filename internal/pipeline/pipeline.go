@@ -483,8 +483,14 @@ func EnrichToolEvent(event map[string]any) {
 		}
 	}
 	if strings.EqualFold(toolName, "Skill") {
-		if skill := ExtractSkillName(toolInput); skill != "" {
-			event["skill_name"] = skill
+		// Only when the source has not already named it: OpenCode V2 takes the
+		// name from the event's metadata before calling this, and reading the
+		// tool input as a second opinion would let a disagreeing argument
+		// rename a skill that was already resolved correctly.
+		if _, has := event["skill_name"]; !has {
+			if skill := ExtractSkillName(toolInput); skill != "" {
+				event["skill_name"] = skill
+			}
 		}
 		// The name can also arrive pre-set: Copilot ships no arguments for the
 		// skill tool and names the skill in a vendor attribute instead, so its
@@ -923,8 +929,20 @@ func ExtractBashCommandFamily(v any) string {
 	return ""
 }
 
+// A skill tool's argument is spelled "skill" or "name" depending on the
+// runtime, the same way tool names themselves are spelled differently and are
+// matched case-insensitively above. "skill" wins when both are present, so
+// adding the alternative cannot change an answer that already resolved.
+func skillNameFrom(m map[string]any) string {
+	if name, _ := m["skill"].(string); name != "" {
+		return name
+	}
+	name, _ := m["name"].(string)
+	return name
+}
+
 // ExtractSkillName parses the skill name from a Skill tool's input.
-// Input may be a JSON string or an already-decoded map with a "skill" field.
+// Input may be a JSON string or an already-decoded map.
 func ExtractSkillName(v any) string {
 	switch val := v.(type) {
 	case string:
@@ -935,11 +953,9 @@ func ExtractSkillName(v any) string {
 		if err := json.Unmarshal([]byte(val), &m); err != nil {
 			return ""
 		}
-		name, _ := m["skill"].(string)
-		return name
+		return skillNameFrom(m)
 	case map[string]any:
-		name, _ := val["skill"].(string)
-		return name
+		return skillNameFrom(val)
 	default:
 		return ""
 	}

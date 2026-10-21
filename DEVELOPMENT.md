@@ -355,8 +355,8 @@ omitted when its value is empty.
 | `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
 | `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript), Codex (from the rollout) and Copilot, all only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
 | `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh`                                     | Claude only, from the payload's `effort` field. The request-side counterpart to `reasoning.output_tokens`: the setting that produced the thinking those tokens paid for. The attribute is a free-form string — the convention asks for "the exact string value sent to the provider" and gives `low`/`medium`/`high` only as examples — so Claude Code's `xhigh` is reported as-is. |
-| `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude and Codex, on the chat span of a turn that a person's slash command or `$mention` started, and for Codex on any turn that loaded a skill at all. See below. |
-| `dash0.gen_ai.tool.skill.source` | `command`, `model`                                                   | Same rows as above. `model` reaches a chat span only on Codex, where the model's own choice also loads without a tool call. |
+| `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude and Codex skill attribution: native injections on chat spans, tool-driven loads on the existing tool spans. See below. |
+| `dash0.gen_ai.tool.skill.source` | `command`, `model`                                                   | `command` for native user-selected loads; `model` for model-selected native loads and tool-driven reads. See below. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On `invoke_agent` spans. Per invocation, not per kind: on Copilot it is the `call_…` id of the `task` tool that spawned the sub-agent, which is also the session id Copilot gives that sub-agent's own hooks under `copilot -p` (interactively that session id is a plain UUID instead, so the join holds in prompt mode only). If the spawning tool's span flushed into a later turn than the agent's, no `invoke_agent` span is emitted for that sub-agent at all — see `copilot/README.md`. |
@@ -386,13 +386,21 @@ A skill can be invoked two ways, and they are recorded on different spans.
 Both carry `dash0.gen_ai.tool.skill.name` with the same plugin-qualified value, so one query
 counts every invocation and `source` splits it by who decided.
 
-**Codex has the same two routes and neither is a tool call.** It loads a skill by injecting
+**Codex's native skill loader has the same two routes and neither is a tool call.** It loads a skill by injecting
 it into the conversation — "progressive disclosure": the model sees every skill's name and
 description, and the full `SKILL.md` arrives only once it picks one. So both routes land on
 the turn's `chat` span, and the split comes from whether the person named the skill with
 Codex's `$mention`: `command` when they did, `model` when the model chose from the
-catalogue. There is no `execute_tool Skill` span on Codex at all, which is worth knowing
-before comparing counts across runtimes.
+catalogue.
+
+**Codex can also read a skill file through ordinary tools.** A successful, recognized
+single-file read of `SKILL.md`, with valid skill frontmatter in the result, adds the
+same two attributes to that existing tool span. Its name comes from the frontmatter
+and its source is `model`, matching Claude's tool-driven route. This creates no extra
+span and copies no tokens. Rereads count as separate loads, not unique invocations;
+failed reads, listings and mere mentions do not count. The file path and contents
+are not new attributes, and skill metadata survives `omit_io`. See the precise
+[supported read forms and limits](codex/README.md#skills-loaded-from-files).
 
 The command route is read from the transcript, which is the only place it is recorded:
 Claude Code writes a `<command-name>` tag into the turn's user entry, and a skill load

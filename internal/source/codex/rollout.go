@@ -178,11 +178,12 @@ type Rollout struct {
 
 // SkillUse is the skill a turn used, and who chose it.
 //
-// Codex does not call a skill as a tool the way Claude Code does. It loads one
+// Codex's native skill route does not call a tool the way Claude Code does. It loads one
 // by INJECTING it into the conversation — "progressive disclosure": the model
 // sees every skill's name and description, and the full SKILL.md arrives only
 // once it picks one. So there is no PostToolUse to enrich, and the only record
-// that a skill was used at all is in the rollout.
+// of that native load is in the rollout. Ordinary file reads are attributed
+// separately on their existing tool spans (see skill_file.go).
 type SkillUse struct {
 	Name string
 	// Source is skillSourceCommand when the person named the skill themselves,

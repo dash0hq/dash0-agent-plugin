@@ -5,7 +5,7 @@
     "": {
       "name": "dash0-amp-plugin",
       "devDependencies": {
-        "@ampcode/plugin": "0.0.0-20260908001747-gc3e098d",
+        "@ampcode/plugin": "0.0.0-20261020212114-g2a60ebc",
         "@types/bun": "1.3.10",
         "prettier": "3.6.2",
         "typescript": "5.9.3",
@@ -13,7 +13,7 @@
     },
   },
   "packages": {
-    "@ampcode/plugin": ["@ampcode/plugin@0.0.0-20260908001747-gc3e098d", "", {}, "sha512-8BhBUXDrOFKQLohxXE8cU8Y05TSvB/DI1JffATy3Bn2+qibuY+CNrebPM5VSAw1Naa48n1OoNkWxcKo4NVXsRQ=="],
+    "@ampcode/plugin": ["@ampcode/plugin@0.0.0-20261020212114-g2a60ebc", "", {}, "sha512-P8jv9/+nAXKrt0PUq+VQjsQsmLl7w+ex7HJvHsGLa9JEhxi1U0swi5Olifx2ijKa4vTxl+WPH7iJnjX6l9hYBA=="],
 
     "@types/bun": ["@types/bun@1.3.10", "", { "dependencies": { "bun-types": "1.3.10" } }, "sha512-0+rlrUrOrTSskibryHbvQkDOWRJwJZqZlxrUs1u4oOoTln8+WIXBPmAuCF35SWB2z4Zl3E84Nl/D0P7803nigQ=="],
 

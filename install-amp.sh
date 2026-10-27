@@ -284,8 +284,14 @@ DASH0_AGENT_NAME="amp"
 # blank the token the other projects are exporting with.
 FRONTMATTER=""; BODY_START=0; EXTRA_CONFIG=""
 if [ -f "$CONFIG_PATH" ]; then
-  FRONTMATTER=$(awk 'NR == 1 { sub(/^\357\273\277/, "") } /^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) exit; next } markers == 1 { sub(/\r$/, ""); print }' "$CONFIG_PATH")
-  BODY_START=$(awk 'NR == 1 { sub(/^\357\273\277/, "") } /^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) { print NR + 1; exit } } END { if (markers < 2) print (markers == 0 ? 1 : 0) }' "$CONFIG_PATH")
+  # Octal escapes are defined for printf but not inside an ERE, so the BOM is
+  # built here and matched literally: as a regex, \357\273\277 strips the BOM
+  # under GNU awk and silently does not under the awk macOS ships, which left
+  # the body parsed as frontmatter and the token read from prose. length(bom)
+  # rather than 3, because a UTF-8 locale makes substr count characters.
+  BOM=$(printf '\357\273\277')
+  FRONTMATTER=$(awk -v bom="$BOM" 'NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) } /^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) exit; next } markers == 1 { sub(/\r$/, ""); print }' "$CONFIG_PATH")
+  BODY_START=$(awk -v bom="$BOM" 'NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) } /^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) { print NR + 1; exit } } END { if (markers < 2) print (markers == 0 ? 1 : 0) }' "$CONFIG_PATH")
   # Quotes are optional: this installer writes them, a hand-edit often does
   # not, and the key is stripped from EXTRA_CONFIG either way — so reading only
   # the quoted form would drop an unquoted token instead of preserving it.

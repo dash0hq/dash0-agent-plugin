@@ -436,3 +436,81 @@ test.skipIf(process.platform === "win32")(
     }
   },
 );
+
+test.skipIf(process.platform === "win32")(
+  "a per-platform helper is preferred over the plain name",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-amp-arch-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    copyFileSync(
+      fileURLToPath(new URL("./index.ts", import.meta.url)),
+      join(dir, "index.ts"),
+    );
+    const arch = process.arch === "x64" ? "amd64" : "arm64";
+    const chosen = join(dir, "chosen");
+    // Both present: a plugin repository ships every platform's helper, and the
+    // plain name is what the installer writes. Only one may run.
+    writeFileSync(
+      join(dir, `amp-on-event-${process.platform}-${arch}`),
+      `#!/bin/sh\ncat > /dev/null\ntouch ${chosen}\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(dir, "amp-on-event"),
+      `#!/bin/sh\ncat > /dev/null\ntouch ${join(dir, "wrong")}\n`,
+      { mode: 0o755 },
+    );
+
+    const savedEnvironment = { ...process.env };
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("AMP_PLUGIN_OPTION_") || key.startsWith("DASH0_")) {
+          delete process.env[key];
+        }
+      }
+      const handlers = new Map<
+        keyof PluginEventMap,
+        Handler<keyof PluginEventMap>
+      >();
+      const plugin = (await import(pathToFileURL(join(dir, "index.ts")).href))
+        .default;
+      plugin({
+        on: (
+          name: keyof PluginEventMap,
+          handler: Handler<keyof PluginEventMap>,
+        ) => {
+          handlers.set(name, handler);
+          return { dispose() {} };
+        },
+        system: {
+          executor: { kind: "local" },
+          workspaceRoot: pathToFileURL(dir),
+        },
+        helpers: { filePathFromURI: (uri: URL) => fileURLToPath(uri) },
+        logger: { log: () => {} },
+      } as unknown as PluginAPI);
+
+      const thread = { id: "T-arch" } as const;
+      handlers.get("agent.start")!({
+        thread,
+        id: "M-a",
+        message: "the ask",
+      } as PluginEventMap["agent.start"]);
+      await handlers.get("agent.end")!({
+        thread,
+        id: "M-a",
+        status: "done",
+        message: "the answer",
+        messages: [],
+      } as PluginEventMap["agent.end"]);
+
+      for (let i = 0; i < 100 && !existsSync(chosen); i++) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(existsSync(chosen)).toBe(true);
+      expect(existsSync(join(dir, "wrong"))).toBe(false);
+    } finally {
+      process.env = savedEnvironment;
+    }
+  },
+);

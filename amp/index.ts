@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawn } from "node:child_process";
-import { chmodSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type {
   PluginAPI,
@@ -293,12 +293,19 @@ export function register(amp: PluginAPI, send: (turn: Turn) => Promise<void>) {
 }
 
 export default function (amp: PluginAPI) {
-  const binary = fileURLToPath(
-    new URL(
-      process.platform === "win32" ? "./amp-on-event.exe" : "./amp-on-event",
-      import.meta.url,
-    ),
-  );
+  const exe = process.platform === "win32" ? ".exe" : "";
+  const beside = (name: string) =>
+    fileURLToPath(new URL(name, import.meta.url));
+  // One plugin directory serves every platform its members run, so a plugin
+  // repository cannot name the helper by the single plain name the installer
+  // writes. Same scheme as the release assets, so one build feeds both routes;
+  // the plain name stays the fallback and keeps the installer route unchanged.
+  const os = process.platform === "win32" ? "windows" : process.platform;
+  const arch = process.arch === "x64" ? "amd64" : "arm64";
+  const perPlatform = beside(`./amp-on-event-${os}-${arch}${exe}`);
+  const binary = existsSync(perPlatform)
+    ? perPlatform
+    : beside(`./amp-on-event${exe}`);
   // Amp syncs a personal or workspace plugin repository to disk as mode 0644,
   // dropping the exec bit git recorded, so every spawn there fails with EACCES
   // and the bridge silently exports nothing. A no-op for an installer-placed

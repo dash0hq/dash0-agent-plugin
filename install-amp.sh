@@ -187,8 +187,10 @@ if [ -n "$SOURCE_DIR" ]; then
 else
   BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
   RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${VERSION}"
-  # Published per platform, installed under the plain name: amp/index.ts spawns
-  # exactly ./amp-on-event next to itself.
+  # Published per platform, installed under the plain name: one executor needs
+  # one helper, and amp/index.ts falls back to ./amp-on-event when no
+  # per-platform sibling is there. A plugin repository ships the suffixed names
+  # instead, because one directory serves every platform its members run.
   #
   # Built from ${AGENT} rather than written out, so that
   # scripts/verify-release-assets.sh reads the same asset names from this file

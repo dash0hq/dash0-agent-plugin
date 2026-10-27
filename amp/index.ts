@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawn } from "node:child_process";
+import { chmodSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type {
   PluginAPI,
@@ -298,6 +299,15 @@ export default function (amp: PluginAPI) {
       import.meta.url,
     ),
   );
+  // Amp syncs a personal or workspace plugin repository to disk as mode 0644,
+  // dropping the exec bit git recorded, so every spawn there fails with EACCES
+  // and the bridge silently exports nothing. A no-op for an installer-placed
+  // helper, which is already 0755.
+  try {
+    chmodSync(binary, 0o755);
+  } catch {
+    // A read-only or absent install: spawn reports the real problem below.
+  }
   const cwd = amp.system.workspaceRoot
     ? amp.helpers.filePathFromURI(amp.system.workspaceRoot)
     : undefined;

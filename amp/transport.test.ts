@@ -5,6 +5,7 @@ import { expect, onTestFinished, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -359,6 +360,77 @@ test.skipIf(process.platform === "win32")(
 
       // Well inside the 2000 ms backstop, and nowhere near the helper's life.
       expect(waited).toBeLessThan(1000);
+    } finally {
+      process.env = savedEnvironment;
+    }
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "a helper arriving without the exec bit is still spawned",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-amp-mode-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    copyFileSync(
+      fileURLToPath(new URL("./index.ts", import.meta.url)),
+      join(dir, "index.ts"),
+    );
+    // 0644 is what Amp's plugin sync writes, whatever mode git recorded.
+    const helper = join(dir, "amp-on-event");
+    const ran = join(dir, "ran");
+    writeFileSync(helper, `#!/bin/sh\ncat > /dev/null\ntouch ${ran}\n`, {
+      mode: 0o644,
+    });
+
+    const savedEnvironment = { ...process.env };
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("AMP_PLUGIN_OPTION_") || key.startsWith("DASH0_")) {
+          delete process.env[key];
+        }
+      }
+      const handlers = new Map<
+        keyof PluginEventMap,
+        Handler<keyof PluginEventMap>
+      >();
+      const plugin = (await import(pathToFileURL(join(dir, "index.ts")).href))
+        .default;
+      plugin({
+        on: (
+          name: keyof PluginEventMap,
+          handler: Handler<keyof PluginEventMap>,
+        ) => {
+          handlers.set(name, handler);
+          return { dispose() {} };
+        },
+        system: {
+          executor: { kind: "local" },
+          workspaceRoot: pathToFileURL(dir),
+        },
+        helpers: { filePathFromURI: (uri: URL) => fileURLToPath(uri) },
+        logger: { log: () => {} },
+      } as unknown as PluginAPI);
+
+      const thread = { id: "T-mode" } as const;
+      handlers.get("agent.start")!({
+        thread,
+        id: "M-a",
+        message: "the ask",
+      } as PluginEventMap["agent.start"]);
+      await handlers.get("agent.end")!({
+        thread,
+        id: "M-a",
+        status: "done",
+        message: "the answer",
+        messages: [],
+      } as PluginEventMap["agent.end"]);
+
+      // The helper is detached, so agent.end resolves on the stdin flush
+      // rather than on exit: wait for the side effect it leaves behind.
+      for (let i = 0; i < 100 && !existsSync(ran); i++) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(existsSync(ran)).toBe(true);
     } finally {
       process.env = savedEnvironment;
     }

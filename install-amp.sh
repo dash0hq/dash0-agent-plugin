@@ -23,6 +23,12 @@
 #   --dataset NAME   Dash0 dataset (defaults to "default")
 #   --team NAME      Team name
 #   --project        Install into ./.amp/plugins/dash0 instead of the user directory
+#   --plugin-repo DIR  Install into DIR/dash0 as an Amp plugin repository: one
+#                      helper per platform under its own name, and no credential
+#                      file. Commit and push DIR and Amp syncs it to every
+#                      executor, Orbs included.
+#   --platforms LIST   Comma-separated os-arch list for --plugin-repo
+#                      (default: this machine plus linux-amd64, for Orbs).
 #
 # Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
 #           DASH0_VERSION (pins a specific release),
@@ -56,14 +62,19 @@ DASH0_AUTH_TOKEN="${DASH0_AUTH_TOKEN:-}"
 DASH0_DATASET="${DASH0_DATASET:-}"
 DASH0_TEAM_NAME="${DASH0_TEAM_NAME:-}"
 PROJECT_SCOPE=0
+PLUGIN_REPO=""
+PLATFORMS=""
+TOKEN_FLAG=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --endpoint) [ $# -ge 2 ] || { printf "✗ --endpoint requires a value\n" >&2; exit 1; }; DASH0_OTLP_URL="$2"; shift 2 ;;
-    --token)    [ $# -ge 2 ] || { printf "✗ --token requires a value\n" >&2; exit 1; }; DASH0_AUTH_TOKEN="$2"; shift 2 ;;
+    --token)    [ $# -ge 2 ] || { printf "✗ --token requires a value\n" >&2; exit 1; }; DASH0_AUTH_TOKEN="$2"; TOKEN_FLAG=1; shift 2 ;;
     --dataset)  [ $# -ge 2 ] || { printf "✗ --dataset requires a value\n" >&2; exit 1; }; DASH0_DATASET="$2"; shift 2 ;;
     --team)     [ $# -ge 2 ] || { printf "✗ --team requires a value\n" >&2; exit 1; }; DASH0_TEAM_NAME="$2"; shift 2 ;;
     --project)  PROJECT_SCOPE=1; shift ;;
+    --plugin-repo) [ $# -ge 2 ] || { printf "✗ --plugin-repo requires a directory\n" >&2; exit 1; }; PLUGIN_REPO="$2"; shift 2 ;;
+    --platforms)   [ $# -ge 2 ] || { printf "✗ --platforms requires a value\n" >&2; exit 1; }; PLATFORMS="$2"; shift 2 ;;
     -h|--help)
       cat <<'EOF'
 Usage: install-amp.sh [--endpoint URL] [--token TOKEN] [--dataset NAME] [--team NAME] [--project]
@@ -78,6 +89,11 @@ Flags:
   --dataset NAME   Dash0 dataset (defaults to "default")
   --team NAME      Team name
   --project        Install into ./.amp/plugins/dash0 (this workspace only)
+  --plugin-repo DIR  Install into DIR/dash0 as an Amp plugin repository: one
+                     helper per platform, no credential file. Commit and push
+                     DIR and Amp syncs it to every executor, Orbs included.
+  --platforms LIST   os-arch list for --plugin-repo, comma separated
+                     (default: this machine plus linux-amd64, for Orbs)
 
 Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
           DASH0_VERSION (pins a specific release),
@@ -102,6 +118,17 @@ die()   { printf "${C_R}✗${C_N} %s\n" "$1" >&2; exit 1; }
 printf '%sDash0 → Amp telemetry installer%s\n\n' "$C_B" "$C_N"
 
 SOURCE_DIR="${DASH0_SOURCE_DIR:-}"
+
+if [ -n "$PLUGIN_REPO" ]; then
+  [ "$PROJECT_SCOPE" -eq 0 ] || die "--plugin-repo and --project are different destinations; pick one"
+  [ -d "$PLUGIN_REPO" ] || die "no such directory: $PLUGIN_REPO (run 'amp clone user-plugins' first)"
+  # A plugin repository is shared and pushed, so a token must never land in it.
+  # Refusing the flag rather than ignoring it: someone who passed --token and
+  # saw a success line would reasonably believe the credential was stored.
+  [ "$TOKEN_FLAG" -eq 0 ] || die "--token cannot be used with --plugin-repo; the repository is shared, so credentials go in AMP_PLUGIN_OPTION_* instead"
+elif [ -n "$PLATFORMS" ]; then
+  die "--platforms only applies to --plugin-repo; one machine runs one platform"
+fi
 
 # 1. Platform detection.
 AGENT="amp"
@@ -155,7 +182,34 @@ fi
 
 # 4. Paths. Amp reads plugins from ~/.config/amp/plugins/ on every platform, and
 #    from <workspace>/.amp/plugins/ for a single project.
-if [ "$PROJECT_SCOPE" -eq 1 ]; then
+#    A plugin repository is a third destination: a Git checkout Amp syncs to
+#    every executor, so it holds one helper per platform rather than one.
+if [ -n "$PLUGIN_REPO" ]; then
+  PLUGIN_DIR="$PLUGIN_REPO/dash0"
+  # This machine so the laptop that installs is covered, plus linux-amd64 so
+  # Orbs are, which is the pair almost everyone needs and the reason the route
+  # exists. --platforms replaces the default outright.
+  if [ -z "$PLATFORMS" ]; then
+    PLATFORMS="$OS-$ARCH"
+    [ "$PLATFORMS" = "linux-amd64" ] || PLATFORMS="$PLATFORMS,linux-amd64"
+  fi
+  # Validated here rather than in the download loop, so a typo fails before the
+  # first byte and fails the same way on the source path, which downloads
+  # nothing at all.
+  PLATFORM_ASSETS=""
+  OLD_IFS="$IFS"; IFS=','
+  for platform in $PLATFORMS; do
+    IFS="$OLD_IFS"
+    case "$platform" in
+      linux-amd64|linux-arm64|darwin-amd64|darwin-arm64) suffix="" ;;
+      windows-amd64|windows-arm64) suffix=".exe" ;;
+      *) die "unsupported platform: $platform (need <linux|darwin|windows>-<amd64|arm64>)" ;;
+    esac
+    PLATFORM_ASSETS="$PLATFORM_ASSETS ${AGENT}-on-event-${platform}${suffix}"
+    IFS=','
+  done
+  IFS="$OLD_IFS"
+elif [ "$PROJECT_SCOPE" -eq 1 ]; then
   PLUGIN_DIR="$PWD/.amp/plugins/dash0"
 else
   PLUGIN_DIR="$HOME/.config/amp/plugins/dash0"
@@ -168,7 +222,8 @@ SKILL_REL="skills/dash0-configure/SKILL.md"
 SKILL_PATH="$PLUGIN_DIR/$SKILL_REL"
 CONFIG_PATH="$HOME/.amp/dash0-agent-plugin.local.md"
 
-mkdir -p "$PLUGIN_DIR" "$HOME/.amp" || die "could not create install directories"
+mkdir -p "$PLUGIN_DIR" || die "could not create $PLUGIN_DIR"
+[ -n "$PLUGIN_REPO" ] || mkdir -p "$HOME/.amp" || die "could not create $HOME/.amp"
 
 # 5. Install the helper and index.ts. Both are replaced on every run, so
 #    re-running really upgrades.
@@ -177,6 +232,10 @@ if [ -n "$SOURCE_DIR" ]; then
   [ -f "$SOURCE_DIR/amp-on-event" ] \
     || die "no amp-on-event in $SOURCE_DIR (build it: go build -o $SOURCE_DIR/amp-on-event ./cmd/amp-on-event)"
   cp "$SOURCE_DIR/index.ts" "$INDEX_PATH" || die "could not copy index.ts"
+  # A source tree holds one binary, for the machine that built it, so a plugin
+  # repository gets it under that machine's name. Cross-building the rest is
+  # the release's job, not this path's.
+  if [ -n "$PLUGIN_REPO" ]; then BIN_PATH="$PLUGIN_DIR/amp-on-event-$OS-$ARCH"; fi
   cp "$SOURCE_DIR/amp-on-event" "$BIN_PATH" || die "could not copy amp-on-event"
   chmod +x "$BIN_PATH"
   if [ -f "$SOURCE_DIR/$SKILL_REL" ]; then
@@ -198,32 +257,49 @@ else
   # release. A literal here would be invisible to that check.
   BIN_ASSET="${AGENT}-on-event-${OS}-${ARCH}"
 
-  info "downloading amp-on-event v${VERSION}..."
-  # Staged under a temp name and renamed: curl and wget both create the
-  # destination before they learn the request failed, so writing $BIN_PATH
-  # directly would truncate a helper that works.
-  BIN_TMP="$BIN_PATH.tmp.$$"
-  fetch "$BASE_URL/$BIN_ASSET" "$BIN_TMP" \
-    || { rm -f "$BIN_TMP"; die "failed to download binary: $BASE_URL/$BIN_ASSET"; }
+  # One checksums.txt for however many helpers this run installs.
   CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt") \
-    || { rm -f "$BIN_TMP"; die "failed to download $BASE_URL/checksums.txt"; }
+    || die "failed to download $BASE_URL/checksums.txt"
 
-  # Fail closed on integrity, matching the other installers: a binary that
-  # cannot be verified is deleted rather than installed. A missing entry means
-  # the release is malformed, which is not a reason to trust the download.
-  EXPECTED=$(echo "$CHECKSUMS" | grep "  ${BIN_ASSET}\$" | cut -d' ' -f1)
-  if [ -z "$EXPECTED" ]; then
-    rm -f "$BIN_TMP"
-    die "no checksum for $BIN_ASSET in v${VERSION} — refusing to install an unverified binary"
+  # install_helper <asset> <destination>. Every helper this script installs goes
+  # through here, so the plugin-repository route cannot drift away from the
+  # integrity check the single-machine route has always had.
+  install_helper() {
+    local asset="$1" dest="$2" tmp expected actual
+    info "downloading $asset v${VERSION}..."
+    # Staged under a temp name and renamed: curl and wget both create the
+    # destination before they learn the request failed, so writing the
+    # destination directly would truncate a helper that works.
+    tmp="$dest.tmp.$$"
+    fetch "$BASE_URL/$asset" "$tmp" \
+      || { rm -f "$tmp"; die "failed to download binary: $BASE_URL/$asset"; }
+    # Fail closed on integrity, matching the other installers: a binary that
+    # cannot be verified is deleted rather than installed. A missing entry means
+    # the release is malformed, which is not a reason to trust the download.
+    expected=$(echo "$CHECKSUMS" | grep "  ${asset}\$" | cut -d' ' -f1)
+    if [ -z "$expected" ]; then
+      rm -f "$tmp"
+      die "no checksum for $asset in v${VERSION} — refusing to install an unverified binary"
+    fi
+    actual=$(sha256 "$tmp")
+    if [ "$actual" != "$expected" ]; then
+      rm -f "$tmp"
+      die "checksum mismatch for $asset (expected $expected, got $actual)"
+    fi
+    chmod +x "$tmp"
+    mv -f "$tmp" "$dest" || { rm -f "$tmp"; die "could not move $tmp into place"; }
+    ok "installed helper → $dest"
+  }
+
+  if [ -n "$PLUGIN_REPO" ]; then
+    # Suffixed names here, because one directory serves every platform its
+    # members run and index.ts resolves amp-on-event-<os>-<arch> at load.
+    for asset in $PLATFORM_ASSETS; do
+      install_helper "$asset" "$PLUGIN_DIR/$asset"
+    done
+  else
+    install_helper "$BIN_ASSET" "$BIN_PATH"
   fi
-  ACTUAL=$(sha256 "$BIN_TMP")
-  if [ "$ACTUAL" != "$EXPECTED" ]; then
-    rm -f "$BIN_TMP"
-    die "checksum mismatch for $BIN_ASSET (expected $EXPECTED, got $ACTUAL)"
-  fi
-  chmod +x "$BIN_TMP"
-  mv -f "$BIN_TMP" "$BIN_PATH" || { rm -f "$BIN_TMP"; die "could not move $BIN_TMP into place"; }
-  ok "installed helper → $BIN_PATH"
 
   # index.ts comes from the tagged ref rather than the release: it is source, not
   # a build artifact, and the tag carries the exact copy the helper was built
@@ -245,6 +321,31 @@ else
     rm -f "$SKILL_TMP"
     info "no dash0-configure skill in v${VERSION}, continuing"
   fi
+fi
+
+# 5b. A plugin repository stops here: no credential file, because the
+#     repository is shared and pushed. Credentials go in Amp's environment
+#     variables instead, which is also what reaches an Orb.
+if [ -n "$PLUGIN_REPO" ]; then
+  # Amp drops an oversized plugin directory silently — it stops appearing in
+  # `amp plugins list` with no error anywhere — so an install that would cause
+  # that says so now rather than leaving the user to find it in an Orb.
+  SIZE_KB=$(du -sk "$PLUGIN_DIR" 2>/dev/null | cut -f1)
+  if [ -n "$SIZE_KB" ] && [ "$SIZE_KB" -gt 14336 ]; then
+    warn "$PLUGIN_DIR is $((SIZE_KB / 1024)) MB. Amp silently stops loading a plugin"
+    warn "directory somewhere above ~14 MB. Install fewer platforms with --platforms."
+  fi
+  printf '\n%sNext steps%s\n' "$C_B" "$C_N"
+  printf "  1. Commit and push: git -C %s add dash0 && git -C %s commit -m 'Add the Dash0 plugin' && git -C %s push\n" \
+    "$PLUGIN_REPO" "$PLUGIN_REPO" "$PLUGIN_REPO"
+  printf "  2. Set credentials in Amp's environment variables — /settings/environment-variables,\n"
+  printf "     or /workspace/environment-variables for everyone:\n"
+  printf "       AMP_PLUGIN_OPTION_OTLP_URL, AMP_PLUGIN_OPTION_AUTH_TOKEN,\n"
+  printf "       AMP_PLUGIN_OPTION_DATASET, AMP_PLUGIN_OPTION_TEAM_NAME\n"
+  printf "  3. Reload plugins from Amp's command palette. 'amp plugins list' should show dash0.\n"
+  printf "\nNo credential file was written: this directory is shared and pushed.\n"
+  printf "Re-run this command to upgrade. To remove it: git -C %s rm -r dash0\n" "$PLUGIN_REPO"
+  exit 0
 fi
 
 # 6. Collect configuration (env var > interactive prompt > existing default).

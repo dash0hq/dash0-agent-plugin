@@ -151,6 +151,56 @@ WORKSPACE=$(mktemp -d)
   || { echo "ERROR: --project did not install into $WORKSPACE/.amp/plugins/dash0"; exit 1; }
 echo "PASS: --project installed into the workspace"
 
+echo "== --plugin-repo lays out a plugin repository and writes no credentials =="
+# The route Amp syncs to every executor. Two things make it different from the
+# two above and are what this pins: the helper keeps its -<os>-<arch> name, so
+# one directory can serve a macOS laptop and a Linux Orb, and no token is
+# written, because the directory is committed and pushed.
+PLUGIN_REPO_DIR=$(mktemp -d)
+# Moved aside rather than compared afterwards: the credentials in this
+# contract's environment are the ones already on disk, so a run that wrongly
+# fell through to writing the config would rewrite it byte-identically and a
+# comparison would not notice. Absence is the assertion that bites.
+CONFIG_ASIDE=$(mktemp)
+mv "$HOME/.amp/dash0-agent-plugin.local.md" "$CONFIG_ASIDE"
+bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" < /dev/null
+REPO_PLUGIN="$PLUGIN_REPO_DIR/dash0"
+HOST="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+fail=0
+[ -f "$REPO_PLUGIN/index.ts" ] || { echo "ERROR: no index.ts in $REPO_PLUGIN"; fail=1; }
+[ -x "$REPO_PLUGIN/amp-on-event-$HOST" ] \
+  || { echo "ERROR: no executable amp-on-event-$HOST in $REPO_PLUGIN"; fail=1; }
+# The plain name is what the single-machine install writes. Finding it here
+# would mean the bridge picks it up on a platform it was not built for.
+[ ! -e "$REPO_PLUGIN/amp-on-event" ] \
+  || { echo "ERROR: --plugin-repo wrote the unsuffixed amp-on-event"; fail=1; }
+[ -f "$REPO_PLUGIN/skills/dash0-configure/SKILL.md" ] \
+  || { echo "ERROR: no skill in $REPO_PLUGIN"; fail=1; }
+# Nothing credential-shaped anywhere in the tree that gets pushed.
+! grep -rqF "amp-contract-token" "$PLUGIN_REPO_DIR" \
+  || { echo "ERROR: --plugin-repo wrote a token into the repository"; fail=1; }
+[ ! -e "$PLUGIN_REPO_DIR/dash0-agent-plugin.local.md" ] \
+  || { echo "ERROR: --plugin-repo wrote a config file into the repository"; fail=1; }
+[ ! -e "$HOME/.amp/dash0-agent-plugin.local.md" ] \
+  || { echo "ERROR: --plugin-repo wrote the machine-wide config file"; fail=1; }
+mv "$CONFIG_ASIDE" "$HOME/.amp/dash0-agent-plugin.local.md"
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: --plugin-repo laid out a per-platform plugin repository with no credentials"
+
+echo "== --plugin-repo refuses the flags that would leak a token or pick two destinations =="
+for bad in --project "--token:secret"; do
+  case "$bad" in
+    --project) set -- --plugin-repo "$PLUGIN_REPO_DIR" --project ;;
+    *)         set -- --plugin-repo "$PLUGIN_REPO_DIR" --token secret ;;
+  esac
+  if bash "$REPO/install-amp.sh" "$@" < /dev/null >/dev/null 2>&1; then
+    echo "ERROR: install-amp.sh accepted --plugin-repo with $bad"; exit 1
+  fi
+done
+bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" --platforms sparc-v9 < /dev/null >/dev/null 2>&1 \
+  && { echo "ERROR: install-amp.sh accepted an unsupported platform"; exit 1; }
+echo "PASS: --plugin-repo rejected --project, --token and an unknown platform"
+
 echo "== --project uninstall leaves the machine-wide config alone =="
 # Before the user-level uninstall, which removes that config itself.
 ( cd "$WORKSPACE" && bash "$REPO/uninstall-amp.sh" --project --yes )

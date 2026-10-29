@@ -24,42 +24,42 @@ either and it is there on your laptop and in every Orb.
 
 ```sh
 amp clone user-plugins && cd user-plugins   # or: amp clone workspace-plugins
-
-# One tag for both, so the bridge and the helper it spawns are the pair that
-# was built and tested together. Set it by hand to pin a version.
-tag=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-src=https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/$tag/amp
-rel=https://github.com/dash0hq/dash0-agent-plugin/releases/download/$tag
-
-mkdir -p dash0/skills/dash0-configure
-curl -fsSLo dash0/index.ts "$src/index.ts"
-curl -fsSLo dash0/skills/dash0-configure/SKILL.md "$src/skills/dash0-configure/SKILL.md"
-for platform in linux-amd64 darwin-arm64; do
-  curl -fsSLo "dash0/amp-on-event-$platform" "$rel/amp-on-event-$platform"
-done
-chmod +x dash0/amp-on-event-*
-
+curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-amp.sh \
+  | bash -s -- --plugin-repo .
 git add dash0 && git commit -m "Add the Dash0 plugin" && git push
 ```
 
 Reload plugins from Amp's command palette, and `amp plugins list` should show
 `dash0`.
 
-List the platforms your executors actually run. Orbs are `linux-amd64`; add
-`darwin-arm64` for Apple Silicon laptops, `darwin-amd64` for Intel ones,
-`linux-arm64`, or `amp-on-event-windows-amd64.exe` / `-arm64.exe` on Windows —
-`index.ts` picks `amp-on-event-<os>-<arch>` at load, so one directory serves all
-of them at once. **Do not add all six.** Amp silently drops a plugin directory
-that grows too large — somewhere above 13 MB, which is two helpers — and it
-disappears from `amp plugins list` with no error.
+That installs a helper for this machine and one for `linux-amd64`, which is
+what an Orb runs — the pair almost everyone needs. `index.ts` picks
+`amp-on-event-<os>-<arch>` at load, so one directory serves every platform in
+the list at once. Use `--platforms` to choose your own:
 
-Credentials do not go in this repository. It is a Git repository your whole
-workspace can read, so the token belongs in the environment instead — see
-[Configure on the executor](#configure-on-the-executor), and
-[Orbs](#orbs) for where an Orb takes it from.
+```sh
+... | bash -s -- --plugin-repo . --platforms linux-amd64,darwin-arm64,windows-amd64
+```
 
-To update, re-run the block and push — it overwrites `index.ts`, the skill and
-every helper from one newer tag. To remove it, `git rm -r dash0` and push.
+Valid entries are `linux`, `darwin` and `windows` crossed with `amd64` and
+`arm64`. **Do not ask for all six.** Amp silently drops a plugin directory that
+grows too large — somewhere above 14 MB, which is two helpers — and it
+disappears from `amp plugins list` with no error. The installer warns when the
+directory it just wrote is close to that.
+
+It verifies every helper against the release checksums, pairs `index.ts` with
+the same release tag, and writes **no credential file**: this directory is
+committed and pushed, so a token must not be in it. `--token` is refused rather
+than ignored. Credentials go in the environment instead — see
+[Orbs](#orbs).
+
+To upgrade, re-run the same command and push. To remove it, `git rm -r dash0`
+and push.
+
+`--plugin-repo` is on `install-amp.sh` only; `install-amp.ps1` has no
+equivalent yet, so fill the repository from Git Bash or WSL. Which machine
+fills it does not matter — the helpers it commits are chosen by `--platforms`,
+not by the host.
 
 ### Installer
 
@@ -115,8 +115,8 @@ that cannot run. Until then, use the from-source path below.
 An Orb is a fresh executor every time: nothing from a laptop is copied into it,
 and anything installed by hand inside one dies with it. The
 [plugin repository](#plugin-repository) solves this — Amp syncs it into every
-Orb for you, so make sure `linux-amd64` is one of the helpers you committed and
-there is nothing else to install.
+Orb for you, and its default platform list already includes the `linux-amd64`
+helper an Orb runs, so there is nothing to install inside one.
 
 What an Orb does not get from that repository is credentials. Set these in
 Amp's environment variables — **Settings → Environment Variables**

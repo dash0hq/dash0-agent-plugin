@@ -34,7 +34,7 @@ Ask whether to write user-level (`~/.amp/dash0-agent-plugin.local.md`, applies t
 > [!WARNING]
 > A project-level file takes over the auth token for every session in that workspace. If that token is wrong or scoped to a different organization, exports fail as a silent 401. Prefer user-level unless the user needs a different dataset or team for one project. If you do write a project-level file, check that `.amp/dash0-agent-plugin.local.md` is git-ignored and offer to add it to `.gitignore` if not — it holds the token in cleartext inside a working tree.
 
-An Orb is a fresh executor with none of this on it. Configure Orbs through the project's **Secrets & Env Vars**, not by writing a file inside one — see `### Orbs` in the plugin's README.
+An Orb is a fresh executor with none of this on it. Configure Orbs through Amp's environment variables (`/settings/environment-variables`, or `/workspace/environment-variables` for everyone), setting `AMP_PLUGIN_OPTION_OTLP_URL`, `AMP_PLUGIN_OPTION_AUTH_TOKEN`, `AMP_PLUGIN_OPTION_DATASET` and `AMP_PLUGIN_OPTION_TEAM_NAME` — not by writing a file inside one — see `### Orbs` in the plugin's README.
 
 ## Team-only recovery
 

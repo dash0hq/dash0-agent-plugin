@@ -16,7 +16,7 @@ Check out our documentation for setting up and configuring the Dash0 Agent Plugi
 - **GitHub Copilot CLI** — installation, configuration, and usage in [`.github/plugin/README.md`](./.github/plugin/README.md).
 - **OpenCode V2** — installation, configuration, and usage in [`opencode-v2/README.md`](./opencode-v2/README.md).
 - **GitHub Copilot app** — installation, configuration, and usage in [`copilot-app/README.md`](./copilot-app/README.md).
-- **Amp / ampcode CLI and Orbs** — native plugin, scripted installation (`install-amp.sh`, `install-amp.ps1`), and per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is on by default, is partial, and uses an unstable Amp export schema.
+- **Amp / ampcode CLI and Orbs** — native plugin, installed through an Amp plugin repository (which reaches Orbs too) or scripted onto one machine (`install-amp.sh`, `install-amp.ps1`), and per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is on by default, is partial, and uses an unstable Amp export schema.
 
 All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. The shell-hook integrations use bootstrap scripts; Amp instead loads `amp/index.ts` as a native plugin and invokes its helper directly. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other runtimes use a PowerShell bootstrap.
 

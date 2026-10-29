@@ -6,6 +6,60 @@ whether that is a local CLI or an Orb. It does not wrap the `amp` command.
 
 ## Install
 
+Pick one:
+
+- **[Plugin repository](#plugin-repository)** — add it once to your Amp account
+  or workspace and every executor you touch loads it, Orbs included. Nothing to
+  install per machine, nothing to run inside an Orb.
+- **[Installer](#installer)** — one command on one machine, which also writes
+  the credential file for you. Best when you only run Amp on your own computer.
+
+Both load the same `index.ts`; the difference is who has to install it.
+
+### Plugin repository
+
+Amp keeps two Git repositories of plugins and syncs them to every executor you
+run: a personal one, and one shared with your workspace. Put the plugin in
+either and it is there on your laptop and in every Orb.
+
+```sh
+amp clone user-plugins && cd user-plugins   # or: amp clone workspace-plugins
+
+src=https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/amp
+rel=https://github.com/dash0hq/dash0-agent-plugin/releases/latest/download
+
+mkdir -p dash0/skills/dash0-configure
+curl -fsSLo dash0/index.ts "$src/index.ts"
+curl -fsSLo dash0/skills/dash0-configure/SKILL.md "$src/skills/dash0-configure/SKILL.md"
+for platform in linux-amd64 darwin-arm64; do
+  curl -fsSLo "dash0/amp-on-event-$platform" "$rel/amp-on-event-$platform"
+done
+chmod +x dash0/amp-on-event-*
+
+git add dash0 && git commit -m "Add the Dash0 plugin" && git push
+```
+
+Reload plugins from Amp's command palette, and `amp plugins list` should show
+`dash0`.
+
+List the platforms your executors actually run. Orbs are `linux-amd64`; add
+`darwin-arm64` for Apple Silicon laptops, `darwin-amd64` for Intel ones,
+`linux-arm64`, or `amp-on-event-windows-amd64.exe` / `-arm64.exe` on Windows —
+`index.ts` picks `amp-on-event-<os>-<arch>` at load, so one directory serves all
+of them at once. **Do not add all six.** Amp silently drops a plugin directory
+that grows too large — somewhere above 13 MB, which is two helpers — and it
+disappears from `amp plugins list` with no error.
+
+Credentials do not go in this repository. It is a Git repository your whole
+workspace can read, so the token belongs in the environment instead — see
+[Configure on the executor](#configure-on-the-executor), and
+[Orbs](#orbs) for where an Orb takes it from.
+
+To update, re-run the two `curl` commands and push. To remove it, `git rm -r
+dash0` and push.
+
+### Installer
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-amp.sh | bash
 ```
@@ -18,10 +72,10 @@ irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-am
 
 The installer downloads the helper for this platform, verifies it against the
 release checksums, and installs it as `amp-on-event` (`amp-on-event.exe` on
-Windows) next to `index.ts` in `~/.config/amp/plugins/dash0/`. The bridge spawns
-the helper by that exact name, so the release asset
-`amp-on-event-<os>-<arch>` must be renamed on the way in — which is what the
-installer is for. It then prompts for the OTLP endpoint, token, dataset, and
+Windows) next to `index.ts` in `~/.config/amp/plugins/dash0/`. One machine runs
+one platform, so it renames the release asset `amp-on-event-<os>-<arch>` to the
+plain name the bridge falls back to, and the directory stays one helper
+small. It then prompts for the OTLP endpoint, token, dataset, and
 team, and writes them to `~/.amp/dash0-agent-plugin.local.md` (mode 600). Pass
 `--endpoint`, `--token`, `--dataset`, and `--team` to skip the prompts, or set
 `DASH0_OTLP_URL` / `DASH0_AUTH_TOKEN` / `DASH0_DATASET` / `DASH0_TEAM_NAME`.
@@ -56,31 +110,34 @@ that cannot run. Until then, use the from-source path below.
 ### Orbs
 
 An Orb is a fresh executor every time: nothing from a laptop is copied into it,
-and anything installed by hand inside one dies with it. So an Orb needs its own
-installation. There are two routes, and they are for different situations.
+and anything installed by hand inside one dies with it. The
+[plugin repository](#plugin-repository) solves this — Amp syncs it into every
+Orb for you, so make sure `linux-amd64` is one of the helpers you committed and
+there is nothing else to install.
 
-**Run the Linux installer from the project's setup script.** This is the
-recommended route. Give it `DASH0_OTLP_URL`, `DASH0_AUTH_TOKEN`,
-`DASH0_DATASET` and `DASH0_TEAM_NAME` in the environment so it prompts for
-nothing, with the token delivered through the project's **Secrets & Env Vars**
-rather than committed. Pin the release with `DASH0_VERSION` to keep every Orb
-on one version. Do not commit the helper binary into `.amp/plugins/`. This is
-how the plugin was dogfooded and how QA installs into an Orb.
+What an Orb does not get from that repository is credentials. Set these in
+Amp's environment variables — **Settings → Environment Variables**
+(`/settings/environment-variables`) for your own Orbs, or the workspace's
+(`/workspace/environment-variables`) for everyone's:
 
-**A workspace plugin** added once in Amp's settings loads wherever that
-workspace's members run Amp, which is fewer moving parts — but it carries one
-caveat you have to plan around. The bridge spawns `./amp-on-event` (or
-`./amp-on-event.exe`) next to `index.ts`, under that one name, so a plugin
-directory holds the helper for exactly one OS and architecture. A workspace
-whose members are on macOS while its Orbs are Linux cannot be served by a
-single directory: one side logs `dash0: telemetry unavailable`. Use this route
-when every executor that loads the plugin is the same platform, or ship a
-directory per platform. We have not run this route in an Orb — the setup-script
-route is the one with live evidence behind it.
+```sh
+AMP_PLUGIN_OPTION_OTLP_URL=https://ingress.YOUR_REGION.aws.dash0.com
+AMP_PLUGIN_OPTION_AUTH_TOKEN=YOUR_DASH0_TOKEN
+AMP_PLUGIN_OPTION_DATASET=default
+AMP_PLUGIN_OPTION_TEAM_NAME=YOUR_TEAM
+```
 
-The two plugin directories are a scope choice: `~/.config/amp/plugins/dash0/`
-(the default) covers every project on that executor, `--project` writes
-`.amp/plugins/dash0/` instead and covers one checkout. Either works in an Orb.
+A personal value wins over a project one, which wins over the workspace's. The
+token must use the `AMP_PLUGIN_OPTION_` form: there is deliberately no
+`DASH0_AUTH_TOKEN` fallback, because `DASH0_*` is inherited by every tool
+subprocess Amp spawns. The other three accept `DASH0_OTLP_URL` and friends.
+
+**If you cannot use the plugin repository** — an Orb for a workspace you do not
+administer, say — run the Linux installer from the project's setup script with
+`DASH0_OTLP_URL`, `DASH0_AUTH_TOKEN`, `DASH0_DATASET` and `DASH0_TEAM_NAME`
+already in the environment so it prompts for nothing, and pin the release with
+`DASH0_VERSION` so every Orb is on one version. It costs a download per Orb
+start. Do not commit the helper binary into `.amp/plugins/` to avoid that.
 
 Orbs are where this was dogfooded. The plugin ran in them for weeks before
 release, and a live Linux Orb CLI run is the measurement behind
@@ -120,8 +177,8 @@ Execute mode must wait for plugins to load:
 amp --plugin-ready-timeout 30 -x 'Your task'
 ```
 
-For Orb execute mode, install into the Orb first — see [Orbs](#orbs), since
-nothing from a laptop reaches one — then use
+For Orb execute mode, make sure the Orb has the plugin and its credentials —
+see [Orbs](#orbs), since nothing from a laptop reaches one — then use
 `amp --plugin-ready-timeout 30 -ox 'Your task'`. The stream-json wrapper is not the
 telemetry source. Verify hook delivery for the Amp version you deploy.
 

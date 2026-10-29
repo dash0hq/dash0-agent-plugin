@@ -25,8 +25,11 @@ either and it is there on your laptop and in every Orb.
 ```sh
 amp clone user-plugins && cd user-plugins   # or: amp clone workspace-plugins
 
-src=https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/amp
-rel=https://github.com/dash0hq/dash0-agent-plugin/releases/latest/download
+# One tag for both, so the bridge and the helper it spawns are the pair that
+# was built and tested together. Set it by hand to pin a version.
+tag=$(curl -fsSL https://api.github.com/repos/dash0hq/dash0-agent-plugin/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+src=https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/$tag/amp
+rel=https://github.com/dash0hq/dash0-agent-plugin/releases/download/$tag
 
 mkdir -p dash0/skills/dash0-configure
 curl -fsSLo dash0/index.ts "$src/index.ts"
@@ -55,8 +58,8 @@ workspace can read, so the token belongs in the environment instead — see
 [Configure on the executor](#configure-on-the-executor), and
 [Orbs](#orbs) for where an Orb takes it from.
 
-To update, re-run the two `curl` commands and push. To remove it, `git rm -r
-dash0` and push.
+To update, re-run the block and push — it overwrites `index.ts`, the skill and
+every helper from one newer tag. To remove it, `git rm -r dash0` and push.
 
 ### Installer
 

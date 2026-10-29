@@ -318,6 +318,11 @@ if ($SourceDir) {
 
 function Read-Value {
   param([string] $Current, [string] $Label, [string] $Default = '')
+  # Before the early return, so -Dataset/-Team and their environment variables
+  # clear the key as the prompt does. install-amp.sh checks after collecting a
+  # value for exactly this reason; returning here wrote a literal "-" instead,
+  # which reaches Dash0 as a dataset header and a team name.
+  if ($Current -eq '-') { return '' }
   if ($Current) { return $Current }
   if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { return $Default }
   if ($Default) {

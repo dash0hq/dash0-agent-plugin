@@ -20,6 +20,13 @@ type Tool = {
   start: string;
   end: string;
   status: PluginEventMap["tool.result"]["status"];
+  /**
+   * Absolute directory this call worked in, when its input names one. Outside
+   * the content budget on purpose: it is the only evidence of which repository
+   * and branch the turn touched, and deriving it from `input` would make the
+   * branch depend on how much text the rest of the turn had already spent.
+   */
+  dir?: string;
   input?: string;
   output?: string;
 };
@@ -40,7 +47,9 @@ type Active = {
   turn: Omit<Turn, "end" | "status">;
   calls: Map<
     string,
-    Pick<Tool, "id" | "name" | "start" | "input"> & { finished?: boolean }
+    Pick<Tool, "id" | "name" | "start" | "input" | "dir"> & {
+      finished?: boolean;
+    }
   >;
   /** Content bytes already attached to this turn, before JSON escaping. */
   content: number;
@@ -161,6 +170,50 @@ function asText(value: unknown): string {
   }
 }
 
+/** The first `*** Update File: /abs/path` line of an apply_patch payload. */
+const patchPath = /^\*\*\* (?:Update|Add|Delete) File: (.+)$/m;
+
+/**
+ * The absolute directory a tool call worked in, or undefined.
+ *
+ * Amp reports no working directory on any event — the whole plugin API has no
+ * such field — so the tool's own arguments are the only evidence of where the
+ * turn touched disk, and the helper is spawned in the folder the user opened,
+ * which need not be either. Only absolute paths are read: a relative one would
+ * have to be joined against a base we would be guessing at.
+ */
+export function toolDir(tool: string, input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null) return undefined;
+  const args = input as Record<string, unknown>;
+  let path: unknown;
+  switch (tool) {
+    // Set on every shell_command, defaulting to the workspace root, so this is
+    // a directory already and must not have its last segment stripped.
+    case "shell_command":
+      path = args.workdir;
+      return typeof path === "string" && path.startsWith("/")
+        ? path
+        : undefined;
+    case "edit_file":
+    case "create_file":
+    case "view_media":
+      path = args.path;
+      break;
+    case "apply_patch":
+      path =
+        typeof args.patchText === "string"
+          ? patchPath.exec(args.patchText)?.[1]
+          : undefined;
+      break;
+    default:
+      return undefined;
+  }
+  if (typeof path !== "string" || !path.startsWith("/")) return undefined;
+  const cut = path.lastIndexOf("/");
+  // "/file" has its only separator at 0; the directory is the root, not "".
+  return cut <= 0 ? "/" : path.slice(0, cut);
+}
+
 export function register(amp: PluginAPI, send: (turn: Turn) => Promise<void>) {
   const active = new Map<string, Active>();
   let sending = 0;
@@ -205,6 +258,7 @@ export function register(amp: PluginAPI, send: (turn: Turn) => Promise<void>) {
           id: event.toolUseID,
           name: event.tool,
           start: new Date().toISOString(),
+          dir: toolDir(event.tool, event.input),
           input: take(state, () => asText(event.input)),
         });
     }
@@ -227,6 +281,7 @@ export function register(amp: PluginAPI, send: (turn: Turn) => Promise<void>) {
         start: call.start,
         end: new Date().toISOString(),
         status: event.status,
+        dir: call.dir,
         input: call.input,
         output: take(state, () => asText(event.output) || asText(event.error)),
       });

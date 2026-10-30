@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-import { expect, onTestFinished, test } from "bun:test";
+import { describe, expect, onTestFinished, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
@@ -514,3 +514,44 @@ test.skipIf(process.platform === "win32")(
     }
   },
 );
+
+import { toolDir } from "./index";
+
+describe("toolDir", () => {
+  test("reads the directory each file-touching tool names", () => {
+    expect(toolDir("shell_command", { workdir: "/repo/sub" })).toBe(
+      "/repo/sub",
+    );
+    expect(toolDir("edit_file", { path: "/repo/sub/a.ts" })).toBe("/repo/sub");
+    expect(toolDir("create_file", { path: "/repo/sub/a.ts" })).toBe(
+      "/repo/sub",
+    );
+    expect(toolDir("view_media", { path: "/repo/sub/a.png" })).toBe(
+      "/repo/sub",
+    );
+    expect(
+      toolDir("apply_patch", {
+        patchText:
+          "*** Begin Patch\n*** Update File: /repo/sub/a.ts\n@@\n-a\n+b\n",
+      }),
+    ).toBe("/repo/sub");
+    // A workdir is already a directory, so its last segment stays on.
+    expect(toolDir("shell_command", { workdir: "/repo" })).toBe("/repo");
+  });
+
+  test("ignores what it cannot place in a repository", () => {
+    // Relative would have to be joined against a base we would be guessing at,
+    // and guessing is what reports the wrong branch in the first place.
+    expect(toolDir("edit_file", { path: "src/a.ts" })).toBeUndefined();
+    expect(toolDir("edit_file", {})).toBeUndefined();
+    expect(toolDir("edit_file", { path: 7 })).toBeUndefined();
+    expect(toolDir("shell_command", { workdir: "sub" })).toBeUndefined();
+    expect(
+      toolDir("apply_patch", { patchText: "no file header" }),
+    ).toBeUndefined();
+    expect(toolDir("web_search", { objective: "/repo" })).toBeUndefined();
+    expect(toolDir("edit_file", null)).toBeUndefined();
+    // A file at the filesystem root still has a directory.
+    expect(toolDir("edit_file", { path: "/a.ts" })).toBe("/");
+  });
+});

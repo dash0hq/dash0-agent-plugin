@@ -4,7 +4,6 @@
 package vcs
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -198,60 +197,43 @@ func TestDetectOutsideRepository(t *testing.T) {
 	assert.Nil(t, Detect(), "expected nil outside a git working tree")
 }
 
-// newRepoWithWorktree builds a repository on main with a linked worktree on
-// feat/x, and returns both paths. A linked worktree is the case that motivated
-// DetectAt: its .git is a file pointing into the parent's .git/worktrees, and
-// its HEAD is a different branch from the checkout that owns the objects.
-func newRepoWithWorktree(t *testing.T) (main, worktree string) {
-	t.Helper()
-	main = t.TempDir()
-	run := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		// A developer's init.defaultBranch, user identity or commit signing
-		// would otherwise decide what this test observes.
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
-			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
-		require.NoError(t, cmd.Run(), "git %v", args)
-	}
-	run(main, "init", "--initial-branch=main", ".")
-	run(main, "remote", "add", "origin", "https://github.com/dash0hq/detectat-fixture")
-	require.NoError(t, os.WriteFile(filepath.Join(main, "a.txt"), []byte("a"), 0o644))
-	run(main, "add", "a.txt")
-	run(main, "commit", "-m", "first")
-	worktree = filepath.Join(t.TempDir(), "wt")
-	run(main, "worktree", "add", "-b", "feat/x", worktree)
-	return main, worktree
-}
-
-func TestDetectAtReadsTheNamedDirectory(t *testing.T) {
-	main, worktree := newRepoWithWorktree(t)
-
-	// Deliberately somewhere else entirely, which is the situation this
-	// exists for: the process's directory must not decide the answer.
+// TestDetectAtLinkedWorktree pins what PR attribution depends on: a linked
+// worktree reports its own branch, not the main checkout's.
+func TestDetectAtLinkedWorktree(t *testing.T) {
+	main, worktree := repoWithWorktree(t, "feat/x")
 	t.Chdir(t.TempDir())
-	require.Nil(t, Detect(), "precondition: the current directory is not a repository")
 
-	inWorktree := DetectAt(worktree)
-	require.NotNil(t, inWorktree)
-	assert.Equal(t, "feat/x", inWorktree.RefHeadName)
-	assert.Equal(t, "branch", inWorktree.RefHeadType)
-	assert.Equal(t, "https://github.com/dash0hq/detectat-fixture", inWorktree.RepositoryURLFull)
+	info := DetectAt(worktree)
+	require.NotNil(t, info)
+	assert.Equal(t, "feat/x", info.RefHeadName)
+	assert.Equal(t, "branch", info.RefHeadType)
+	assert.Equal(t, "https://github.com/acme/widgets", info.RepositoryURLFull)
 
-	inMain := DetectAt(main)
-	require.NotNil(t, inMain)
-	assert.Equal(t, "main", inMain.RefHeadName)
-	assert.Equal(t, "https://github.com/dash0hq/detectat-fixture", inMain.RepositoryURLFull)
+	info = DetectAt(main)
+	require.NotNil(t, info)
+	assert.Equal(t, "main", info.RefHeadName)
 
-	// Same objects, different checked-out ref: a test that only compared URLs
-	// would pass with the branch still read from the wrong directory.
-	assert.NotEqual(t, inMain.RefHeadName, inWorktree.RefHeadName)
+	assert.Nil(t, DetectAt(t.TempDir()), "expected nil outside a git working tree")
+	// A failed tool call can name a path that was never created, and git cannot
+	// start in a directory that does not exist.
+	assert.Nil(t, DetectAt(filepath.Join(t.TempDir(), "gone")), "expected nil for a missing directory")
 }
 
-func TestDetectAtOutsideRepositoryAndMissingDirectory(t *testing.T) {
-	assert.Nil(t, DetectAt(t.TempDir()), "expected nil outside a working tree")
-	assert.Nil(t, DetectAt(filepath.Join(t.TempDir(), "gone")), "expected nil for a missing directory")
+// repoWithWorktree creates a repository on main with one commit and a linked
+// worktree on branch, and returns both directories.
+func repoWithWorktree(t *testing.T, branch string) (main, worktree string) {
+	t.Helper()
+	root := t.TempDir()
+	main = filepath.Join(root, "main")
+	worktree = filepath.Join(root, "wt")
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", main},
+		{"-C", main, "remote", "add", "origin", "git@github.com:acme/widgets.git"},
+		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", main, "worktree", "add", "-q", "-b", branch, worktree},
+	} {
+		out, err := exec.Command("git", args...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	return main, worktree
 }

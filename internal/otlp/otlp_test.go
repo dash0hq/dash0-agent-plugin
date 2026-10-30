@@ -857,6 +857,10 @@ func TestWithVCSDirDoesNotShareTheMemoizedSlice(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { detectVCSAt = vcs.DetectAt })
+	// Pinned, not read from the host: a CI runner has no git identity and no
+	// resolvable account, so the real resolver returns nothing there and the
+	// spare-capacity arrangement this test depends on never arises.
+	pinIdentity(t, identity.Info{Name: "Guy Moses", Source: identity.SourceGit})
 	cfg := Config{OmitUserInfo: true}
 	require.Len(t, vcsSpanAttributesAt("/repo"), 6, "precondition: the memoized slice has spare capacity")
 	require.Len(t, identitySpanAttributes(cfg), 2, "precondition: identity fits in it")

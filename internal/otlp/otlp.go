@@ -144,7 +144,12 @@ func (c Config) WithVCSDir(dir string) Config {
 	if vcsAttrs == nil {
 		return c
 	}
-	attrs := append(vcsAttrs, identitySpanAttributes(c)...)
+	// Copied, never appended to: the slice is the memoized one, so appending
+	// identity would write into its spare capacity and every later span
+	// resolving the same directory would share — and overwrite — those slots.
+	attrs := make([]Attribute, 0, len(vcsAttrs)+4)
+	attrs = append(attrs, vcsAttrs...)
+	attrs = append(attrs, identitySpanAttributes(c)...)
 	c.spanContext = &attrs
 	return c
 }

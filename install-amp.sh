@@ -22,8 +22,8 @@
 #   --token TOKEN    Dash0 auth token
 #   --dataset NAME   Dash0 dataset (defaults to "default")
 #   --team NAME      Team name
-#   --project        Install into ./.amp/plugins/dash0 instead of the user directory
-#   --plugin-repo DIR  Install into DIR/dash0 as an Amp plugin repository: one
+#   --project        Install into ./.amp/plugins/dash0-agent-plugin instead of the user directory
+#   --plugin-repo DIR  Install into DIR/dash0-agent-plugin as an Amp plugin repository: one
 #                      helper per platform under its own name, and no credential
 #                      file. Commit and push DIR and Amp syncs it to every
 #                      executor, Orbs included.
@@ -36,8 +36,8 @@
 #           see below).
 #
 # What this installs:
-#   ~/.config/amp/plugins/dash0/index.ts        The plugin Amp loads (Bun runs it).
-#   ~/.config/amp/plugins/dash0/amp-on-event    The helper index.ts spawns. Amp's
+#   ~/.config/amp/plugins/dash0-agent-plugin/index.ts        The plugin Amp loads (Bun runs it).
+#   ~/.config/amp/plugins/dash0-agent-plugin/amp-on-event    The helper index.ts spawns. Amp's
 #       bridge resolves it by that exact name next to index.ts, so the release
 #       asset amp-on-event-<os>-<arch> is installed under the unsuffixed name.
 #   ~/.amp/dash0-agent-plugin.local.md
@@ -88,8 +88,8 @@ Flags:
   --token TOKEN    Dash0 auth token
   --dataset NAME   Dash0 dataset (defaults to "default")
   --team NAME      Team name
-  --project        Install into ./.amp/plugins/dash0 (this workspace only)
-  --plugin-repo DIR  Install into DIR/dash0 as an Amp plugin repository: one
+  --project        Install into ./.amp/plugins/dash0-agent-plugin (this workspace only)
+  --plugin-repo DIR  Install into DIR/dash0-agent-plugin as an Amp plugin repository: one
                      helper per platform, no credential file. Commit and push
                      DIR and Amp syncs it to every executor, Orbs included.
   --platforms LIST   os-arch list for --plugin-repo, comma separated
@@ -185,7 +185,7 @@ fi
 #    A plugin repository is a third destination: a Git checkout Amp syncs to
 #    every executor, so it holds one helper per platform rather than one.
 if [ -n "$PLUGIN_REPO" ]; then
-  PLUGIN_DIR="$PLUGIN_REPO/dash0"
+  PLUGIN_DIR="$PLUGIN_REPO/dash0-agent-plugin"
   # This machine so the laptop that installs is covered, plus linux-amd64 so
   # Orbs are, which is the pair almost everyone needs and the reason the route
   # exists. --platforms replaces the default outright.
@@ -210,9 +210,9 @@ if [ -n "$PLUGIN_REPO" ]; then
   done
   IFS="$OLD_IFS"
 elif [ "$PROJECT_SCOPE" -eq 1 ]; then
-  PLUGIN_DIR="$PWD/.amp/plugins/dash0"
+  PLUGIN_DIR="$PWD/.amp/plugins/dash0-agent-plugin"
 else
-  PLUGIN_DIR="$HOME/.config/amp/plugins/dash0"
+  PLUGIN_DIR="$HOME/.config/amp/plugins/dash0-agent-plugin"
 fi
 BIN_PATH="$PLUGIN_DIR/amp-on-event"
 INDEX_PATH="$PLUGIN_DIR/index.ts"
@@ -221,6 +221,15 @@ INDEX_PATH="$PLUGIN_DIR/index.ts"
 SKILL_REL="skills/dash0-configure/SKILL.md"
 SKILL_PATH="$PLUGIN_DIR/$SKILL_REL"
 CONFIG_PATH="$HOME/.amp/dash0-agent-plugin.local.md"
+
+# Installs before the rename sat in a sibling "dash0". Amp loads every plugin
+# directory it finds, so leaving it would register the bridge twice and export
+# every turn twice. Only a directory carrying our own two files is removed.
+STALE_DIR="$(dirname "$PLUGIN_DIR")/dash0"
+if [ -f "$STALE_DIR/index.ts" ] && ls "$STALE_DIR"/amp-on-event* >/dev/null 2>&1; then
+  rm -rf "$STALE_DIR" || die "could not remove the previous install at $STALE_DIR"
+  ok "removed the previous install at $STALE_DIR"
+fi
 
 mkdir -p "$PLUGIN_DIR" || die "could not create $PLUGIN_DIR"
 [ -n "$PLUGIN_REPO" ] || mkdir -p "$HOME/.amp" || die "could not create $HOME/.amp"
@@ -342,9 +351,9 @@ if [ -n "$PLUGIN_REPO" ]; then
   printf "     or /workspace/environment-variables for everyone:\n"
   printf "       AMP_PLUGIN_OPTION_OTLP_URL, AMP_PLUGIN_OPTION_AUTH_TOKEN,\n"
   printf "       AMP_PLUGIN_OPTION_DATASET, AMP_PLUGIN_OPTION_TEAM_NAME\n"
-  printf "  3. Reload plugins from Amp's command palette. 'amp plugins list' should show dash0.\n"
+  printf "  3. Reload plugins from Amp's command palette. 'amp plugins list' should show dash0-agent-plugin.\n"
   printf "\nNo credential file was written: this directory is shared and pushed.\n"
-  printf "Re-run this command to upgrade. To remove it: git -C %s rm -r dash0\n" "$PLUGIN_REPO"
+  printf "Re-run this command to upgrade. To remove it: git -C %s rm -r dash0-agent-plugin\n" "$PLUGIN_REPO"
   exit 0
 fi
 

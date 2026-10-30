@@ -335,7 +335,12 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 | `user.email` | git email                                                                      | From git, never inferred; Cursor also sends its signed-in account email. Omitted when `omit_user_info`. |
 | `dash0.gen_ai.user.identity.source` | `git` or `os`                                                                  | Which source `user.name` came from. Emitted whenever a name is. |
 
-The `dash0.gen_ai.vcs.*` keys are only present inside a git repository. The identity keys
+The `dash0.gen_ai.vcs.*` keys are only present inside a git repository. They describe the
+event's working directory, except on a tool span whose input names a file (`file_path` or
+`notebook_path`) inside a git working tree: that span describes the file's working tree,
+which can be a linked worktree on another branch. That applies only when the file's repository
+has the same remote as the working directory's, or the working directory is in none, so a
+file read in an unrelated repository never exports that repository. The identity keys
 (`user.*`, `dash0.gen_ai.user.identity.source`) are independent of it — they are emitted
 outside a working tree too, since the user is still the user. Any individual key is
 omitted when its value is empty.

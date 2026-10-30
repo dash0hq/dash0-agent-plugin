@@ -1287,6 +1287,20 @@ func TestEditToolSpanCarriesBranchOfEditedFile(t *testing.T) {
 	// A file outside any working tree falls back to the cwd's.
 	outside := `"tool_input":{"file_path":` + strconv.Quote(filepath.Join(t.TempDir(), "c.txt")) + `,"content":"x"}`
 	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Write","tool_use_id":"tu3",`+outside+`,"tool_response":"ok"}`)
+	// A notebook in the worktree names the worktree too.
+	notebook := `"tool_input":{"notebook_path":` + strconv.Quote(filepath.Join(worktree, "n.ipynb")) + `,"new_source":"x"}`
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"NotebookEdit","tool_use_id":"tu4",`+notebook+`,"tool_response":"ok"}`)
+	// A file in an unrelated repository must not export that repository.
+	other := filepath.Join(t.TempDir(), "other")
+	out, err := exec.Command("git", "init", "-q", "-b", "secret", other).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	out, err = exec.Command("git", "-C", other, "remote", "add", "origin", "https://github.com/client/private.git").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	unrelated := `"tool_input":{"file_path":` + strconv.Quote(filepath.Join(other, "notes.md")) + `}`
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Grep","tool_use_id":"tu5",`+unrelated+`,"tool_response":"ok"}`)
+	// With a cwd outside any repository, the edited worktree is the work itself.
+	nowhere := `"cwd":` + strconv.Quote(t.TempDir())
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+nowhere+`,"tool_name":"MultiEdit","tool_use_id":"tu6",`+input+`,"tool_response":"ok"}`)
 	feed(t, `{"hook_event_name":"Stop","session_id":"sess-edit",`+cwd+`,"model":"claude-opus-4-8"}`)
 
 	tool := findSpan(*spans, "execute_tool Edit")
@@ -1300,6 +1314,19 @@ func TestEditToolSpanCarriesBranchOfEditedFile(t *testing.T) {
 	write := findSpan(*spans, "execute_tool Write")
 	require.NotNil(t, write)
 	assertStringAttr(t, write.Attributes, "dash0.gen_ai.vcs.ref.head.name", "main")
+
+	nb := findSpan(*spans, "execute_tool NotebookEdit")
+	require.NotNil(t, nb)
+	assertStringAttr(t, nb.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
+
+	grep := findSpan(*spans, "execute_tool Grep")
+	require.NotNil(t, grep)
+	assertStringAttr(t, grep.Attributes, "dash0.gen_ai.vcs.ref.head.name", "main")
+	assertStringAttr(t, grep.Attributes, "dash0.gen_ai.vcs.repository.url.full", "https://github.com/acme/widgets")
+
+	multi := findSpan(*spans, "execute_tool MultiEdit")
+	require.NotNil(t, multi)
+	assertStringAttr(t, multi.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
 
 	chat := findSpan(*spans, "chat")
 	require.NotNil(t, chat)

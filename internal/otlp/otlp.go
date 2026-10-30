@@ -699,7 +699,12 @@ func vcsSpanAttributes(cfg Config) []Attribute {
 // a file (Edit, Write, Read, NotebookEdit) reports the working tree holding that
 // file, which can be a linked worktree on another branch than the CWD's: agents
 // edit worktrees by absolute path without changing directory.
-func toolVCSSpanAttributes(event map[string]any, cfg Config) []Attribute {
+//
+// The file's repository is kept only when it is the CWD's, or the CWD is in
+// none. Otherwise reading a file in an unrelated private repository would
+// export that repository's URL, which omit_io does not cover.
+func toolVCSSpanAttributes(event map[string]any) []Attribute {
+	cwdInfo := vcs.Detect()
 	input, _ := event["tool_input"].(map[string]any)
 	for _, key := range []string{"file_path", "notebook_path"} {
 		if path, _ := input[key].(string); path != "" {
@@ -712,13 +717,13 @@ func toolVCSSpanAttributes(event map[string]any, cfg Config) []Attribute {
 				}
 				dir = filepath.Dir(dir)
 			}
-			if info := vcs.DetectAt(dir); info != nil {
+			if info := vcs.DetectAt(dir); info != nil && (cwdInfo == nil || info.RepositoryURLFull == cwdInfo.RepositoryURLFull) {
 				return vcsInfoAttributes(info)
 			}
 			break
 		}
 	}
-	return vcsSpanAttributes(cfg)
+	return vcsInfoAttributes(cwdInfo)
 }
 
 func vcsInfoAttributes(info *vcs.Info) []Attribute {

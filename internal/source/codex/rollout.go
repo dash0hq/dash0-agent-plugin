@@ -174,6 +174,7 @@ type Rollout struct {
 	Usage  *Usage    // the most recent turn's token counts; nil when the file has none
 	Limits *Limits   // account allowance state; nil when the CLI predates the field
 	Skill  *SkillUse // the skill the most recent turn loaded; nil when it loaded none
+	Effort string    // the latest context's reasoning effort for this turn; empty when unreported
 }
 
 // SkillUse is the skill a turn used, and who chose it.
@@ -307,7 +308,10 @@ type rolloutLine struct {
 	Type    string `json:"type"`
 	Payload struct {
 		Type string `json:"type"`
-		Info struct {
+		// Decode optional turn_context metadata separately so an unexpected
+		// shape cannot discard a turn boundary or token_count record.
+		Effort json.RawMessage `json:"effort"`
+		Info   struct {
 			LastTokenUsage codexTokenUsage `json:"last_token_usage"`
 		} `json:"info"`
 		RateLimits *codexRateLimits `json:"rate_limits"`
@@ -407,9 +411,9 @@ func ReadTurnUsage(rolloutPath string) (*Usage, error) {
 }
 
 // ReadRollout walks a Codex rollout file once and returns both the most recent
-// turn's token usage and the account's allowance state. The two have different
-// lifetimes: usage is per-turn and resets at each user_message, while limits
-// describe the account and simply carry the last value seen.
+// turn's token usage, reasoning effort and the account's allowance state. Usage
+// and effort reset at each turn boundary; limits describe the account and
+// simply carry the last value seen.
 //
 // Returns (nil, nil) for a compressed rollout, matching ReadTurnUsage.
 func ReadRollout(rolloutPath string) (*Rollout, error) {
@@ -426,9 +430,18 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 	var turn Usage
 	var hasUsage bool
 	var limits *Limits
-	var turnSkill string
+	var turnSkill, turnEffort string
 	var turnPrompt strings.Builder
 	forEachRecord(f, func(line rolloutLine) bool {
+		if line.Type == "turn_context" {
+			// Contexts can repeat within a turn (for example after compaction).
+			// The latest complete context wins, including an absent/invalid value.
+			// Keep the exact string; effort levels are not a closed enum here.
+			turnEffort = ""
+			_ = json.Unmarshal(line.Payload.Effort, &turnEffort)
+			return true
+		}
+
 		// The conversation, for the skill a turn loaded and who asked for it.
 		if line.Type == "response_item" && line.Payload.Type == "message" && line.Payload.Role == "user" {
 			body := messageText(line.Payload.Content)
@@ -462,6 +475,7 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 			turn = Usage{}
 			hasUsage = false
 			turnSkill = ""
+			turnEffort = ""
 			turnPrompt.Reset()
 		case "token_count":
 			u := line.Payload.Info.LastTokenUsage
@@ -497,7 +511,7 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 		return true
 	})
 
-	out := &Rollout{Limits: limits}
+	out := &Rollout{Limits: limits, Effort: turnEffort}
 	if hasUsage {
 		out.Usage = &turn
 	}

@@ -25,17 +25,20 @@ type Info struct {
 //
 // User identity is deliberately not part of this: it is not repository state
 // and must be reported even outside a working tree. See internal/identity.
-func Detect() *Info { return DetectAt("") }
+func Detect() *Info {
+	return DetectAt("")
+}
 
-// DetectAt is Detect for a named directory, for an agent whose working
-// directory is not where the work happens. Amp spawns the helper in the folder
-// the user opened, which may be a non-repository parent of the checkout, or the
-// main checkout while the turn edits a linked worktree on another branch; each
-// reports the wrong branch, or none, for every span of the turn.
+// DetectAt is Detect for the git working tree containing dir, which may be a
+// linked worktree on its own branch. It exists because an agent's working
+// directory is often not where the work happens: Amp spawns the helper in the
+// folder the user opened, which may be a non-repository parent of the checkout,
+// and Claude Code edits a linked worktree by absolute path without ever
+// changing directory. Either reports the wrong branch, or none.
 //
-// An empty dir means the current one, so Detect keeps its behavior exactly.
-// A dir that does not exist, or is outside a working tree, returns nil the same
-// way an uninitialized CWD always has.
+// An empty dir means the CWD, so Detect keeps its behavior exactly. A dir that
+// does not exist, or is outside a working tree, returns nil the same way an
+// uninitialized CWD always has.
 func DetectAt(dir string) *Info {
 	if err := git(dir, "rev-parse", "--git-dir"); err != nil {
 		return nil
@@ -62,25 +65,22 @@ func DetectAt(dir string) *Info {
 	return info
 }
 
-// gitArgs prefixes -C dir, which git applies before anything else, so a
-// relative path in the remaining arguments still resolves against dir.
-func gitArgs(dir string, args []string) []string {
-	if dir == "" {
-		return args
-	}
-	return append([]string{"-C", dir}, args...)
-}
-
 func git(dir string, args ...string) error {
-	return exec.Command("git", gitArgs(dir, args)...).Run()
+	return gitCmd(dir, args).Run()
 }
 
 func gitOutput(dir string, args ...string) string {
-	out, err := exec.Command("git", gitArgs(dir, args)...).Output()
+	out, err := gitCmd(dir, args).Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func gitCmd(dir string, args []string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir // empty means the CWD
+	return cmd
 }
 
 // normalizeRemoteURL converts SSH URLs to HTTPS and reduces the remote to the

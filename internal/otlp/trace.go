@@ -192,7 +192,7 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 
 	attrs = append(attrs, Attribute{Key: "gen_ai.tool.type", Value: StringVal("function")})
 	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
-	attrs = append(attrs, contextSpanAttributes(cfg)...)
+	attrs = append(attrs, toolContextSpanAttributes(event, cfg)...)
 	attrs = append(attrs, teamSpanAttributes(cfg)...)
 
 	status := SpanStatus{Code: StatusCodeUnset, Message: ""}

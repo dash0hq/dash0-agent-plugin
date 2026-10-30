@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -595,4 +597,53 @@ func TestSpanReportsReasoningLevel(t *testing.T) {
 			"effort": map[string]any{"level": "high"},
 		}, false, Config{})
 	assertAttr(t, tool.Attributes, "gen_ai.request.reasoning.level", "high")
+}
+
+// TestToolSpanKeepsTheEditedFilesBranch pins the division of labour between the
+// two ways a tool span learns its repository. Amp resolves a batch context from
+// typed tool input the event no longer carries; every other harness has none and
+// must fall through to the file named in the event. Collapsing the two — which a
+// merge did once — silently puts the launch directory's branch on every Claude
+// tool span.
+func TestToolSpanKeepsTheEditedFilesBranch(t *testing.T) {
+	main, worktree := repoForToolSpan(t)
+	// The agent's own directory is the main checkout, as it is when a turn edits
+	// a linked worktree by absolute path without ever changing directory.
+	t.Chdir(main)
+
+	event := map[string]any{
+		"tool_name":  "Edit",
+		"tool_input": map[string]any{"file_path": filepath.Join(worktree, "a.txt")},
+	}
+	span := NewToolSpan(strings.Repeat("a", 32), strings.Repeat("b", 16), strings.Repeat("c", 16),
+		time.Unix(1, 0), time.Unix(2, 0), event, false, Config{})
+	assert.Equal(t, "feat/x", attrMap(span.Attributes)["dash0.gen_ai.vcs.ref.head.name"],
+		"the tool span took the branch of the directory it ran in, not of the file it edited")
+
+	// With a batch context the caller has already chosen the directory, so the
+	// file is not consulted and the context wins.
+	cfg := Config{}.WithSpanContext()
+	span = NewToolSpan(strings.Repeat("a", 32), strings.Repeat("b", 16), strings.Repeat("c", 16),
+		time.Unix(1, 0), time.Unix(2, 0), event, false, cfg)
+	assert.Equal(t, "main", attrMap(span.Attributes)["dash0.gen_ai.vcs.ref.head.name"],
+		"a resolved batch context was overridden by the file the tool named")
+}
+
+// repoForToolSpan builds a repository on main with a linked worktree on feat/x.
+func repoForToolSpan(t *testing.T) (main, worktree string) {
+	t.Helper()
+	root := t.TempDir()
+	main = filepath.Join(root, "main")
+	worktree = filepath.Join(root, "wt")
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", main},
+		{"-C", main, "remote", "add", "origin", "git@github.com:acme/widgets.git"},
+		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", main, "worktree", "add", "-q", "-b", "feat/x", worktree},
+	} {
+		out, err := exec.Command("git", args...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "a.txt"), []byte("a"), 0o644))
+	return main, worktree
 }

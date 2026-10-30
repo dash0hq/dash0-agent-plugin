@@ -1,0 +1,463 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# Dash0 — Amp CLI and Orb telemetry installer.
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-amp.sh | bash
+#
+# With CLI flags (pass after `bash -s --` when piping from curl):
+#   curl -fsSL .../install-amp.sh | bash -s -- \
+#     --endpoint https://ingress.<region>.aws.dash0.com \
+#     --token <auth-token> \
+#     --dataset <dataset>
+#
+# All flags are optional. Missing values are prompted for interactively, with
+# existing values as defaults. Without a terminal, existing values are kept.
+# A new install without credentials stays inactive until the file is filled in.
+#
+# Flags:
+#   --endpoint URL   Dash0 OTLP endpoint URL
+#   --token TOKEN    Dash0 auth token
+#   --dataset NAME   Dash0 dataset (defaults to "default")
+#   --team NAME      Team name
+#   --project        Install into ./.amp/plugins/dash0-agent-plugin instead of the user directory
+#   --plugin-repo DIR  Install into DIR/dash0-agent-plugin as an Amp plugin repository: one
+#                      helper per platform under its own name, and no credential
+#                      file. Commit and push DIR and Amp syncs it to every
+#                      executor, Orbs included.
+#   --platforms LIST   Comma-separated os-arch list for --plugin-repo
+#                      (default: this machine plus linux-amd64, for Orbs).
+#
+# Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
+#           DASH0_VERSION (pins a specific release),
+#           DASH0_SOURCE_DIR (install from a local checkout instead of a release;
+#           see below).
+#
+# What this installs:
+#   ~/.config/amp/plugins/dash0-agent-plugin/index.ts        The plugin Amp loads (Bun runs it).
+#   ~/.config/amp/plugins/dash0-agent-plugin/amp-on-event    The helper index.ts spawns. Amp's
+#       bridge resolves it by that exact name next to index.ts, so the release
+#       asset amp-on-event-<os>-<arch> is installed under the unsuffixed name.
+#   ~/.amp/dash0-agent-plugin.local.md
+#       YAML-frontmatter config carrying your OTLP URL + auth token (chmod 600).
+#
+# Amp loads a directory plugin: there is no shell hook and no settings file to
+# register, so unlike install-codex.sh / install-cursor.sh this writes nothing
+# outside the plugin directory and the config file. There is no connectivity
+# check either — amp-on-event only accepts a completed turn, not a probe event.
+#
+# DASH0_SOURCE_DIR=<dir> installs index.ts and the helper from <dir> instead of
+# downloading them, for developing this plugin or installing without network:
+#   go build -o amp/amp-on-event ./cmd/amp-on-event
+#   DASH0_SOURCE_DIR=amp ./install-amp.sh
+
+set -u
+
+REPO="dash0hq/dash0-agent-plugin"
+
+DASH0_OTLP_URL="${DASH0_OTLP_URL:-}"
+DASH0_AUTH_TOKEN="${DASH0_AUTH_TOKEN:-}"
+DASH0_DATASET="${DASH0_DATASET:-}"
+DASH0_TEAM_NAME="${DASH0_TEAM_NAME:-}"
+PROJECT_SCOPE=0
+PLUGIN_REPO=""
+PLATFORMS=""
+TOKEN_FLAG=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --endpoint) [ $# -ge 2 ] || { printf "✗ --endpoint requires a value\n" >&2; exit 1; }; DASH0_OTLP_URL="$2"; shift 2 ;;
+    --token)    [ $# -ge 2 ] || { printf "✗ --token requires a value\n" >&2; exit 1; }; DASH0_AUTH_TOKEN="$2"; TOKEN_FLAG=1; shift 2 ;;
+    --dataset)  [ $# -ge 2 ] || { printf "✗ --dataset requires a value\n" >&2; exit 1; }; DASH0_DATASET="$2"; shift 2 ;;
+    --team)     [ $# -ge 2 ] || { printf "✗ --team requires a value\n" >&2; exit 1; }; DASH0_TEAM_NAME="$2"; shift 2 ;;
+    --project)  PROJECT_SCOPE=1; shift ;;
+    --plugin-repo) [ $# -ge 2 ] || { printf "✗ --plugin-repo requires a directory\n" >&2; exit 1; }; PLUGIN_REPO="$2"; shift 2 ;;
+    --platforms)   [ $# -ge 2 ] || { printf "✗ --platforms requires a value\n" >&2; exit 1; }; PLATFORMS="$2"; shift 2 ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: install-amp.sh [--endpoint URL] [--token TOKEN] [--dataset NAME] [--team NAME] [--project]
+
+All flags optional; missing ones are prompted for, with existing values as defaults.
+Without a terminal, existing values are kept. Enter keeps a prompt default;
+type - at an optional dataset/team prompt to clear it.
+
+Flags:
+  --endpoint URL   Dash0 OTLP endpoint URL
+  --token TOKEN    Dash0 auth token
+  --dataset NAME   Dash0 dataset (defaults to "default")
+  --team NAME      Team name
+  --project        Install into ./.amp/plugins/dash0-agent-plugin (this workspace only)
+  --plugin-repo DIR  Install into DIR/dash0-agent-plugin as an Amp plugin repository: one
+                     helper per platform, no credential file. Commit and push
+                     DIR and Amp syncs it to every executor, Orbs included.
+  --platforms LIST   os-arch list for --plugin-repo, comma separated
+                     (default: this machine plus linux-amd64, for Orbs)
+
+Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
+          DASH0_VERSION (pins a specific release),
+          DASH0_SOURCE_DIR (install index.ts + amp-on-event from a local
+          checkout instead of a release).
+EOF
+      exit 0 ;;
+    *) printf "✗ unknown argument: %s (try --help)\n" "$1" >&2; exit 1 ;;
+  esac
+done
+
+if [ -t 1 ]; then
+  C_R=$'\033[31m'; C_G=$'\033[32m'; C_Y=$'\033[33m'; C_B=$'\033[1m'; C_N=$'\033[0m'
+else
+  C_R=""; C_G=""; C_Y=""; C_B=""; C_N=""
+fi
+info()  { printf "%s\n" "$1"; }
+ok()    { printf "${C_G}✓${C_N} %s\n" "$1"; }
+warn()  { printf "${C_Y}!${C_N} %s\n" "$1"; }
+die()   { printf "${C_R}✗${C_N} %s\n" "$1" >&2; exit 1; }
+
+printf '%sDash0 → Amp telemetry installer%s\n\n' "$C_B" "$C_N"
+
+SOURCE_DIR="${DASH0_SOURCE_DIR:-}"
+
+if [ -n "$PLUGIN_REPO" ]; then
+  [ "$PROJECT_SCOPE" -eq 0 ] || die "--plugin-repo and --project are different destinations; pick one"
+  [ -d "$PLUGIN_REPO" ] || die "no such directory: $PLUGIN_REPO (run 'amp clone user-plugins' first)"
+  # A plugin repository is shared and pushed, so a token must never land in it.
+  # Refusing the flag rather than ignoring it: someone who passed --token and
+  # saw a success line would reasonably believe the credential was stored.
+  [ "$TOKEN_FLAG" -eq 0 ] || die "--token cannot be used with --plugin-repo; the repository is shared, so credentials go in AMP_PLUGIN_OPTION_* instead"
+elif [ -n "$PLATFORMS" ]; then
+  die "--platforms only applies to --plugin-repo; one machine runs one platform"
+fi
+
+# 1. Platform detection.
+AGENT="amp"
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)  ARCH="amd64" ;;
+  aarch64) ARCH="arm64" ;;
+  arm64)   ARCH="arm64" ;;
+  *)       die "unsupported architecture: $ARCH (need amd64 or arm64)" ;;
+esac
+case "$OS" in
+  darwin|linux) : ;;
+  *) die "unsupported OS: $OS (need darwin or linux; on Windows use install-amp.ps1)" ;;
+esac
+ok "detected $OS/$ARCH"
+
+# 2. Fetch/checksum helpers. Not needed for a local install, so a source install
+#    works on a host with neither curl nor wget.
+if [ -z "$SOURCE_DIR" ]; then
+  if command -v curl >/dev/null 2>&1; then
+    fetch() { curl -fsSL -o "$2" "$1"; }
+    fetch_stdout() { curl -fsSL "$1"; }
+  elif command -v wget >/dev/null 2>&1; then
+    fetch() { wget -qO "$2" "$1"; }
+    fetch_stdout() { wget -qO- "$1"; }
+  else
+    die "neither curl nor wget found"
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256() { sha256sum "$1" | cut -d' ' -f1; }
+  elif command -v shasum >/dev/null 2>&1; then
+    sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+  else
+    # Fail closed on integrity: without a hash tool the download cannot be
+    # verified, and an unverified binary is not installed. Every supported
+    # platform ships one of these, so this is a stop rather than a fallback.
+    die "sha256sum or shasum is required to verify the download"
+  fi
+
+  # 3. Resolve VERSION.
+  VERSION="${DASH0_VERSION:-}"
+  if [ -z "$VERSION" ]; then
+    info "resolving latest release..."
+    LATEST_JSON=$(fetch_stdout "https://api.github.com/repos/${REPO}/releases/latest" || true)
+    VERSION=$(echo "$LATEST_JSON" | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+    [ -n "$VERSION" ] || die "could not resolve latest release; set DASH0_VERSION to pin a specific version"
+  fi
+  ok "using v${VERSION}"
+fi
+
+# 4. Paths. Amp reads plugins from ~/.config/amp/plugins/ on every platform, and
+#    from <workspace>/.amp/plugins/ for a single project.
+#    A plugin repository is a third destination: a Git checkout Amp syncs to
+#    every executor, so it holds one helper per platform rather than one.
+if [ -n "$PLUGIN_REPO" ]; then
+  PLUGIN_DIR="$PLUGIN_REPO/dash0-agent-plugin"
+  # This machine so the laptop that installs is covered, plus linux-amd64 so
+  # Orbs are, which is the pair almost everyone needs and the reason the route
+  # exists. --platforms replaces the default outright.
+  if [ -z "$PLATFORMS" ]; then
+    PLATFORMS="$OS-$ARCH"
+    [ "$PLATFORMS" = "linux-amd64" ] || PLATFORMS="$PLATFORMS,linux-amd64"
+  fi
+  # Validated here rather than in the download loop, so a typo fails before the
+  # first byte and fails the same way on the source path, which downloads
+  # nothing at all.
+  PLATFORM_ASSETS=""
+  OLD_IFS="$IFS"; IFS=','
+  for platform in $PLATFORMS; do
+    IFS="$OLD_IFS"
+    case "$platform" in
+      linux-amd64|linux-arm64|darwin-amd64|darwin-arm64) suffix="" ;;
+      windows-amd64|windows-arm64) suffix=".exe" ;;
+      *) die "unsupported platform: $platform (need <linux|darwin|windows>-<amd64|arm64>)" ;;
+    esac
+    PLATFORM_ASSETS="$PLATFORM_ASSETS ${AGENT}-on-event-${platform}${suffix}"
+    IFS=','
+  done
+  IFS="$OLD_IFS"
+elif [ "$PROJECT_SCOPE" -eq 1 ]; then
+  PLUGIN_DIR="$PWD/.amp/plugins/dash0-agent-plugin"
+else
+  PLUGIN_DIR="$HOME/.config/amp/plugins/dash0-agent-plugin"
+fi
+BIN_PATH="$PLUGIN_DIR/amp-on-event"
+INDEX_PATH="$PLUGIN_DIR/index.ts"
+# index.ts registers this by the same relative path, so the layout inside the
+# plugin directory has to match the layout in the repository.
+SKILL_REL="skills/dash0-configure/SKILL.md"
+SKILL_PATH="$PLUGIN_DIR/$SKILL_REL"
+CONFIG_PATH="$HOME/.amp/dash0-agent-plugin.local.md"
+
+# Installs before the rename sat in a sibling "dash0". Amp loads every plugin
+# directory it finds, so leaving it would register the bridge twice and export
+# every turn twice. Only a directory carrying our own two files is removed.
+STALE_DIR="$(dirname "$PLUGIN_DIR")/dash0"
+if [ -f "$STALE_DIR/index.ts" ] && ls "$STALE_DIR"/amp-on-event* >/dev/null 2>&1; then
+  rm -rf "$STALE_DIR" || die "could not remove the previous install at $STALE_DIR"
+  ok "removed the previous install at $STALE_DIR"
+fi
+
+mkdir -p "$PLUGIN_DIR" || die "could not create $PLUGIN_DIR"
+[ -n "$PLUGIN_REPO" ] || mkdir -p "$HOME/.amp" || die "could not create $HOME/.amp"
+
+# 5. Install the helper and index.ts. Both are replaced on every run, so
+#    re-running really upgrades.
+if [ -n "$SOURCE_DIR" ]; then
+  [ -f "$SOURCE_DIR/index.ts" ] || die "no index.ts in $SOURCE_DIR"
+  [ -f "$SOURCE_DIR/amp-on-event" ] \
+    || die "no amp-on-event in $SOURCE_DIR (build it: go build -o $SOURCE_DIR/amp-on-event ./cmd/amp-on-event)"
+  cp "$SOURCE_DIR/index.ts" "$INDEX_PATH" || die "could not copy index.ts"
+  # A source tree holds one binary, for the machine that built it, so a plugin
+  # repository gets it under that machine's name. Cross-building the rest is
+  # the release's job, not this path's.
+  if [ -n "$PLUGIN_REPO" ]; then BIN_PATH="$PLUGIN_DIR/amp-on-event-$OS-$ARCH"; fi
+  cp "$SOURCE_DIR/amp-on-event" "$BIN_PATH" || die "could not copy amp-on-event"
+  chmod +x "$BIN_PATH"
+  if [ -f "$SOURCE_DIR/$SKILL_REL" ]; then
+    mkdir -p "$(dirname "$SKILL_PATH")" || die "could not create $(dirname "$SKILL_PATH")"
+    cp "$SOURCE_DIR/$SKILL_REL" "$SKILL_PATH" || die "could not copy $SKILL_REL"
+  fi
+  ok "installed from $SOURCE_DIR → $PLUGIN_DIR"
+else
+  BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
+  RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${VERSION}"
+  # Published per platform, installed under the plain name: one executor needs
+  # one helper, and amp/index.ts falls back to ./amp-on-event when no
+  # per-platform sibling is there. A plugin repository ships the suffixed names
+  # instead, because one directory serves every platform its members run.
+  #
+  # Built from ${AGENT} rather than written out, so that
+  # scripts/verify-release-assets.sh reads the same asset names from this file
+  # that it reads from the other agents' bootstraps and probes them after a
+  # release. A literal here would be invisible to that check.
+  BIN_ASSET="${AGENT}-on-event-${OS}-${ARCH}"
+
+  # One checksums.txt for however many helpers this run installs.
+  CHECKSUMS=$(fetch_stdout "$BASE_URL/checksums.txt") \
+    || die "failed to download $BASE_URL/checksums.txt"
+
+  # install_helper <asset> <destination>. Every helper this script installs goes
+  # through here, so the plugin-repository route cannot drift away from the
+  # integrity check the single-machine route has always had.
+  install_helper() {
+    local asset="$1" dest="$2" tmp expected actual
+    info "downloading $asset v${VERSION}..."
+    # Staged under a temp name and renamed: curl and wget both create the
+    # destination before they learn the request failed, so writing the
+    # destination directly would truncate a helper that works.
+    tmp="$dest.tmp.$$"
+    fetch "$BASE_URL/$asset" "$tmp" \
+      || { rm -f "$tmp"; die "failed to download binary: $BASE_URL/$asset"; }
+    # Fail closed on integrity, matching the other installers: a binary that
+    # cannot be verified is deleted rather than installed. A missing entry means
+    # the release is malformed, which is not a reason to trust the download.
+    expected=$(echo "$CHECKSUMS" | grep "  ${asset}\$" | cut -d' ' -f1)
+    if [ -z "$expected" ]; then
+      rm -f "$tmp"
+      die "no checksum for $asset in v${VERSION} — refusing to install an unverified binary"
+    fi
+    actual=$(sha256 "$tmp")
+    if [ "$actual" != "$expected" ]; then
+      rm -f "$tmp"
+      die "checksum mismatch for $asset (expected $expected, got $actual)"
+    fi
+    chmod +x "$tmp"
+    mv -f "$tmp" "$dest" || { rm -f "$tmp"; die "could not move $tmp into place"; }
+    ok "installed helper → $dest"
+  }
+
+  if [ -n "$PLUGIN_REPO" ]; then
+    # Suffixed names here, because one directory serves every platform its
+    # members run and index.ts resolves amp-on-event-<os>-<arch> at load.
+    for asset in $PLATFORM_ASSETS; do
+      install_helper "$asset" "$PLUGIN_DIR/$asset"
+    done
+  else
+    install_helper "$BIN_ASSET" "$BIN_PATH"
+  fi
+
+  # index.ts comes from the tagged ref rather than the release: it is source, not
+  # a build artifact, and the tag carries the exact copy the helper was built
+  # with. Same mechanism install-cursor.sh uses for its plugin files.
+  info "downloading index.ts..."
+  INDEX_TMP="$INDEX_PATH.tmp.$$"
+  fetch "$RAW_BASE/amp/index.ts" "$INDEX_TMP" \
+    || { rm -f "$INDEX_TMP"; die "failed to download: $RAW_BASE/amp/index.ts"; }
+  mv -f "$INDEX_TMP" "$INDEX_PATH" || { rm -f "$INDEX_TMP"; die "could not move $INDEX_TMP into place"; }
+  ok "installed plugin → $INDEX_PATH"
+
+  # The skill is optional: index.ts guards its registration, so a release that
+  # predates it still installs a working bridge instead of failing here.
+  SKILL_TMP="$PLUGIN_DIR/skill.md.tmp.$$"
+  if fetch "$RAW_BASE/amp/$SKILL_REL" "$SKILL_TMP"; then
+    mkdir -p "$(dirname "$SKILL_PATH")" && mv -f "$SKILL_TMP" "$SKILL_PATH" \
+      && ok "installed skill → $SKILL_PATH"
+  else
+    rm -f "$SKILL_TMP"
+    info "no dash0-configure skill in v${VERSION}, continuing"
+  fi
+fi
+
+# 5b. A plugin repository stops here: no credential file, because the
+#     repository is shared and pushed. Credentials go in Amp's environment
+#     variables instead, which is also what reaches an Orb.
+if [ -n "$PLUGIN_REPO" ]; then
+  # Amp drops an oversized plugin directory silently — it stops appearing in
+  # `amp plugins list` with no error anywhere — so an install that would cause
+  # that says so now rather than leaving the user to find it in an Orb.
+  SIZE_KB=$(du -sk "$PLUGIN_DIR" 2>/dev/null | cut -f1)
+  if [ -n "$SIZE_KB" ] && [ "$SIZE_KB" -gt 14336 ]; then
+    warn "$PLUGIN_DIR is $((SIZE_KB / 1024)) MB. Amp silently stops loading a plugin"
+    warn "directory somewhere above ~14 MB. Install fewer platforms with --platforms."
+  fi
+  printf '\n%sNext steps%s\n' "$C_B" "$C_N"
+  printf "  1. Commit and push: git -C %s add dash0 && git -C %s commit -m 'Add the Dash0 plugin' && git -C %s push\n" \
+    "$PLUGIN_REPO" "$PLUGIN_REPO" "$PLUGIN_REPO"
+  printf "  2. Set credentials in Amp's environment variables — /settings/environment-variables,\n"
+  printf "     or /workspace/environment-variables for everyone:\n"
+  printf "       AMP_PLUGIN_OPTION_OTLP_URL, AMP_PLUGIN_OPTION_AUTH_TOKEN,\n"
+  printf "       AMP_PLUGIN_OPTION_DATASET, AMP_PLUGIN_OPTION_TEAM_NAME\n"
+  printf "  3. Reload plugins from Amp's command palette. 'amp plugins list' should show dash0-agent-plugin.\n"
+  printf "\nNo credential file was written: this directory is shared and pushed.\n"
+  printf "Re-run this command to upgrade. To remove it: git -C %s rm -r dash0-agent-plugin\n" "$PLUGIN_REPO"
+  exit 0
+fi
+
+# 6. Collect configuration (env var > interactive prompt > existing default).
+INTERACTIVE=0
+if ( : < /dev/tty ) 2>/dev/null; then INTERACTIVE=1; fi
+prompt_value() {
+  local var="$1" label="$2" default="${3:-}"; local val="${!var:-}"
+  if [ -z "$val" ]; then
+    if [ "$INTERACTIVE" -eq 1 ]; then
+      if [ -n "$default" ]; then printf "%s [%s]: " "$label" "$default" > /dev/tty; else printf "%s: " "$label" > /dev/tty; fi
+      IFS= read -r val < /dev/tty || val=""; val="${val:-$default}"
+    else val="$default"; fi
+  fi
+  [ "$val" = '-' ] && val=""
+  printf -v "$var" "%s" "$val"
+}
+prompt_secret() {
+  local var="$1" label="$2" default="${3:-}"; local val="${!var:-}"
+  if [ -z "$val" ]; then
+    if [ "$INTERACTIVE" -eq 1 ]; then
+      [ -n "$default" ] && label="$label [Enter to keep current]"
+      stty -echo < /dev/tty 2>/dev/null
+      printf "%s (input hidden): " "$label" > /dev/tty
+      IFS= read -r val < /dev/tty || val=""; stty echo < /dev/tty 2>/dev/null
+      printf "\n" > /dev/tty
+    fi
+    val="${val:-$default}"
+  fi
+  printf -v "$var" "%s" "$val"
+}
+
+DASH0_AGENT_NAME="amp"
+# An existing config supplies the defaults. This file is always machine-wide,
+# shared by every project and by every --project install — which is why the
+# uninstaller refuses to take it — so a re-run that answers nothing, a
+# non-interactive second workspace being the easy way to get there, must not
+# blank the token the other projects are exporting with.
+FRONTMATTER=""; BODY_START=0; EXTRA_CONFIG=""
+if [ -f "$CONFIG_PATH" ]; then
+  # Octal escapes are defined for printf but not inside an ERE, so the BOM is
+  # built here and matched literally: as a regex, \357\273\277 strips the BOM
+  # under GNU awk and silently does not under the awk macOS ships, which left
+  # the body parsed as frontmatter and the token read from prose. length(bom)
+  # rather than 3, because a UTF-8 locale makes substr count characters.
+  BOM=$(printf '\357\273\277')
+  FRONTMATTER=$(awk -v bom="$BOM" 'NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) } /^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) exit; next } markers == 1 { sub(/\r$/, ""); print }' "$CONFIG_PATH")
+  BODY_START=$(awk -v bom="$BOM" 'NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) } /^[[:space:]]*---[[:space:]]*$/ { if (++markers == 2) { print NR + 1; exit } } END { if (markers < 2) print (markers == 0 ? 1 : 0) }' "$CONFIG_PATH")
+  # Quotes are optional: this installer writes them, a hand-edit often does
+  # not, and the key is stripped from EXTRA_CONFIG either way — so reading only
+  # the quoted form would drop an unquoted token instead of preserving it.
+  # Keys this installer does not write belong to the user. Step 8 tells them to
+  # put export_usage here, so dropping it on a re-run would silently turn token
+  # accounting back on for someone who switched it off.
+  EXTRA_CONFIG=$(printf '%s\n' "$FRONTMATTER" | grep -vE '^[[:space:]]*(otlp_url:|auth_token:|dataset:|agent_name:|team_name:)' || true)
+fi
+existing() { printf '%s\n' "$FRONTMATTER" | sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" | head -1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
+DATASET_DEFAULT=$(existing dataset)
+[ ! -f "$CONFIG_PATH" ] && DATASET_DEFAULT=default
+prompt_value  DASH0_OTLP_URL    "Dash0 OTLP endpoint URL (e.g. https://ingress.<region>.aws.dash0.com)" "$(existing otlp_url)"
+prompt_secret DASH0_AUTH_TOKEN  "Dash0 auth token" "$(existing auth_token)"
+prompt_value  DASH0_DATASET     "Dash0 dataset (optional; - to clear)" "$DATASET_DEFAULT"
+prompt_value  DASH0_TEAM_NAME   "Team name (optional; - to clear)" "$(existing team_name)"
+
+if [ -z "$DASH0_OTLP_URL" ] || [ -z "$DASH0_AUTH_TOKEN" ]; then
+  warn "OTLP URL or auth token not provided. The plugin will install but stay inactive."
+  warn "Re-run with DASH0_OTLP_URL and DASH0_AUTH_TOKEN set, or edit $CONFIG_PATH later."
+fi
+
+# 7. Write the config file (chmod 600 — holds the token in cleartext).
+#    Always user scope, even with --project: a workspace-level
+#    .amp/dash0-agent-plugin.local.md is a token inside a Git working tree, and
+#    that is a decision for whoever owns the repository, not for this installer.
+CONFIG_TMP=$(mktemp "$CONFIG_PATH.XXXXXX")
+trap 'rm -f "$CONFIG_TMP"' EXIT
+{
+  echo "---"
+  echo "otlp_url: \"$DASH0_OTLP_URL\""
+  echo "auth_token: \"$DASH0_AUTH_TOKEN\""
+  [ -n "$DASH0_DATASET" ]    && echo "dataset: \"$DASH0_DATASET\""
+  [ -n "$DASH0_AGENT_NAME" ] && echo "agent_name: \"$DASH0_AGENT_NAME\""
+  [ -n "$DASH0_TEAM_NAME" ]  && echo "team_name: \"$DASH0_TEAM_NAME\""
+  [ -n "$EXTRA_CONFIG" ]     && printf '%s\n' "$EXTRA_CONFIG"
+  echo "---"
+} > "$CONFIG_TMP"
+# Append the original body directly: command substitution would lose its last
+# newlines, and reading it as configuration would promote prose into options.
+if [ "$BODY_START" -gt 0 ]; then tail -n +"$BODY_START" "$CONFIG_PATH" >> "$CONFIG_TMP"; fi
+chmod 600 "$CONFIG_TMP"
+mv -f "$CONFIG_TMP" "$CONFIG_PATH"
+ok "wrote config → $CONFIG_PATH (chmod 600)"
+
+# 8. Done.
+printf '\n%sNext steps%s\n' "$C_B" "$C_N"
+printf "  1. Reload plugins from Amp's command palette (or start a new Amp session).\n"
+printf "  2. Run a prompt. Spans should land in your Dash0 dataset with gen_ai.harness.name=amp.\n"
+printf "\nExecute mode must wait for plugins to load: amp --plugin-ready-timeout 30 -x 'Your task'\n"
+printf "An Orb needs its own installation — a local install is not copied.\n"
+# Token accounting is on with no option written to the config, so the one place a
+# user learns it is running — and how it fails — is here.
+printf '\n%sToken accounting is on%s\n' "$C_B" "$C_N"
+printf "  Each completed turn runs 'amp threads export' to read its models and token counts.\n"
+printf "  It needs working Amp authentication here, and never delays a turn: the helper is detached.\n"
+printf "  If that read fails, the turn still exports, carrying dash0.amp.usage.status=unavailable instead of tokens.\n"
+printf "  To turn it off, add 'export_usage: false' between the --- markers in %s.\n" "$CONFIG_PATH"
+printf "To reconfigure later, edit %s (a workspace .amp/dash0-agent-plugin.local.md outranks it; keep it out of Git).\n" "$CONFIG_PATH"
+printf "To uninstall: curl -fsSL https://raw.githubusercontent.com/%s/main/uninstall-amp.sh | bash\n" "$REPO"

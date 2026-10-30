@@ -2,7 +2,7 @@
 
 The plugin starts a short-lived Go binary for each coding-agent hook event.
 It keeps session state on disk and exports OTLP JSON over HTTP. It is not a
-daemon, and the six runtimes do not expose equivalent data.
+daemon, and the seven runtimes do not expose equivalent data.
 
 ## Event flow
 
@@ -32,6 +32,14 @@ runtime-specific because stdout and stderr have different meanings to each CLI.
 Copilot also exports recovered native tool and sub-agent spans from its
 entrypoint after the pipeline processes the turn. The Copilot app does the same
 with the tool and sub-agent spans it builds from the turn's session events.
+
+Amp is the exception to the flow above at both ends. There is no bootstrap and
+no hook: Amp loads `amp/index.ts` in-process and the bridge spawns
+`cmd/amp-on-event` directly, detached, with one completed-turn envelope on
+stdin. And there is no `internal/pipeline` lifecycle, because a turn arrives
+already complete — `internal/source/amp` builds the whole turn's spans in one
+call on the shared `internal/otlp` builders. Nothing is kept on disk between
+events, so the session-state contracts below do not apply to it.
 
 ## Package ownership
 
@@ -68,6 +76,7 @@ context. Follow existing callers before moving behavior between packages.
 | GitHub Copilot CLI | Hooks drive lifecycle; native OTel supplies tool and sub-agent spans | Copilot's native OTel files |
 | OpenCode V2 | Live V2 event stream, no hooks | `session.step.ended` token counts |
 | GitHub Copilot app | Session extension buffers the app's session events, one binary call per turn; no hooks | `assistant.usage` events, and for a first turn missed before the extension listened, the session's usage metrics |
+| Amp | Native in-process TypeScript plugin, one completed-turn envelope per turn; no hooks | `amp threads export`, polled by the helper after the turn |
 
 Do not infer support in one runtime from support in another. Missing measurements
 are not measured zeroes. Copilot's native OTel input cannot independently prove

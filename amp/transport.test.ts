@@ -1,0 +1,557 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, expect, onTestFinished, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type {
+  PluginAPI,
+  PluginEventMap,
+  PluginHandlerResult,
+} from "@ampcode/plugin";
+
+type OTLPValue = { stringValue?: string; intValue?: string };
+type OTLPAttribute = { key: string; value: OTLPValue };
+type OTLPSpan = {
+  name: string;
+  spanId: string;
+  parentSpanId?: string;
+  attributes?: OTLPAttribute[];
+};
+type OTLPRequest = {
+  resourceSpans: Array<{
+    scopeSpans: Array<{ spans: OTLPSpan[] }>;
+  }>;
+};
+type Handler<E extends keyof PluginEventMap> = (
+  event: PluginEventMap[E],
+) => PluginHandlerResult<E>;
+
+const attributesOf = (span: OTLPSpan): Record<string, OTLPValue> =>
+  Object.fromEntries(
+    (span.attributes ?? []).map(({ key, value }) => [key, value]),
+  );
+
+test("installed plugin exports lifecycle and per-model usage through its Go helper", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dash0-amp-"));
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  const binDir = join(dir, "bin");
+  const homeDir = join(dir, "home");
+  mkdirSync(binDir);
+  mkdirSync(homeDir);
+  const extension = process.platform === "win32" ? ".exe" : "";
+  const helper = join(dir, `amp-on-event${extension}`);
+  const ampFixture = join(binDir, `amp${extension}`);
+  const root = fileURLToPath(new URL("../", import.meta.url));
+
+  // Build before isolating HOME so Go can reuse the developer's module/build cache.
+  execFileSync("go", ["build", "-o", helper, "./cmd/amp-on-event"], {
+    cwd: root,
+  });
+  execFileSync("go", ["test", "-c", "-o", ampFixture, "./cmd/amp-on-event"], {
+    cwd: root,
+  });
+  copyFileSync(
+    fileURLToPath(new URL("./index.ts", import.meta.url)),
+    join(dir, "index.ts"),
+  );
+
+  const savedEnvironment = { ...process.env };
+  const requests: OTLPRequest[] = [];
+  const authorized: boolean[] = [];
+  const diagnostics: string[] = [];
+  const skills: string[] = [];
+  // The turn to reject is identified by a marker in its own payload rather than
+  // by a flag the test flips between turns. agent.end hands off after a grace
+  // period instead of waiting for the helper to exit, so a flag would be
+  // cleared before the helper it was meant for ever sent its request — and the
+  // rejection would land on whichever turn happened to be in flight, or on
+  // none. 401 is a client error the exporter does not retry, so exactly one
+  // request is rejected. OMIT_IO is false here, which is what puts the marker
+  // in the body.
+  const rejectMarker = "reject-this-turn";
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      expect(new URL(request.url).pathname).toBe("/v1/traces");
+      authorized.push(
+        request.headers.get("Authorization") === "Bearer controlled-test-token",
+      );
+      const body = await request.text();
+      requests.push(JSON.parse(body) as OTLPRequest);
+      if (body.includes(rejectMarker))
+        return new Response("collector rejected request", { status: 401 });
+      return new Response("{}");
+    },
+  });
+
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("AMP_PLUGIN_OPTION_") || key.startsWith("DASH0_")) {
+        delete process.env[key];
+      }
+    }
+    process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+    process.env.PATH = `${binDir}${delimiter}${savedEnvironment.PATH ?? ""}`;
+    process.env.AMP_PLUGIN_OPTION_OTLP_URL = `http://127.0.0.1:${server.port}`;
+    process.env.AMP_PLUGIN_OPTION_AUTH_TOKEN = "controlled-test-token";
+    process.env.AMP_PLUGIN_OPTION_EXPORT_USAGE = "true";
+    process.env.AMP_PLUGIN_OPTION_OMIT_IO = "false";
+    process.env.AMP_PLUGIN_OPTION_OMIT_IDENTITY_FALLBACK = "true";
+
+    const plugin = (await import(pathToFileURL(join(dir, "index.ts")).href))
+      .default;
+    const handlers = new Map<
+      keyof PluginEventMap,
+      Handler<keyof PluginEventMap>
+    >();
+    const mockAPI = {
+      on: (
+        name: keyof PluginEventMap,
+        handler: Handler<keyof PluginEventMap>,
+      ) => {
+        handlers.set(name, handler);
+        return { dispose() {} };
+      },
+      system: {
+        executor: { kind: "remote" },
+        workspaceRoot: pathToFileURL(dir),
+      },
+      helpers: { filePathFromURI: (uri: URL) => fileURLToPath(uri) },
+      logger: { log: (message: string) => diagnostics.push(message) },
+      registerSkill: async (definition: { path: string }) => {
+        skills.push(definition.path);
+        return { dispose() {} };
+      },
+    } as unknown as PluginAPI;
+    plugin(mockAPI);
+    // The path the installers must lay out next to index.ts. Asserted here
+    // rather than in index.test.ts because registration lives in the default
+    // export, which only this test exercises.
+    expect(skills).toEqual(["skills/dash0-configure"]);
+
+    const fire = <E extends keyof PluginEventMap>(
+      name: E,
+      event: PluginEventMap[E],
+    ) => handlers.get(name)!(event);
+    const thread = { id: "T-test" } as const;
+    const finish = async (
+      id: "M-a" | "M-b",
+      assistantIDs: Array<"M-a" | "M-b"> = [],
+      includeTool = false,
+      prompt = "private prompt",
+    ) => {
+      fire("agent.start", {
+        thread,
+        id,
+        message: prompt,
+      });
+      if (includeTool) {
+        fire("tool.call", {
+          thread,
+          toolUseID: "call",
+          tool: "shell_command",
+          input: { command: "private command" },
+        });
+        fire("tool.result", {
+          thread,
+          toolUseID: "call",
+          tool: "shell_command",
+          input: { command: "private command" },
+          status: "done",
+          output: "private output",
+        });
+      }
+      await fire("agent.end", {
+        thread,
+        id,
+        status: "done",
+        message: "private response",
+        messages: assistantIDs.map((messageID) => ({
+          id: messageID,
+          role: "assistant",
+          content: [{ type: "text", text: "private response" }],
+        })),
+      });
+    };
+
+    process.env.DASH0_TEST_AMP_EXPORT = "ok";
+    await finish("M-a", ["M-a", "M-b"], true);
+
+    for (const mode of ["error", "malformed"] as const) {
+      process.env.DASH0_TEST_AMP_EXPORT = mode;
+      await finish("M-a", ["M-a"]);
+    }
+    delete process.env.DASH0_TEST_AMP_EXPORT;
+    process.env.PATH = homeDir;
+    await finish("M-a", ["M-a"]);
+
+    process.env.PATH = `${binDir}${delimiter}${savedEnvironment.PATH ?? ""}`;
+    process.env.DASH0_TEST_AMP_EXPORT = "ok";
+    await finish("M-a", [], false, rejectMarker);
+    await finish("M-b");
+
+    // agent.end no longer waits for the helper to exit: it hands off after a
+    // grace period so a usage poll cannot become latency between turns. So
+    // delivery is asynchronous, and the test has to wait for it rather than
+    // assume that a returned agent.end means the spans have landed.
+    const until = async (what: string, ready: () => boolean) => {
+      for (let waited = 0; waited < 30000 && !ready(); waited += 50) {
+        await Bun.sleep(50);
+      }
+      expect(
+        ready(),
+        `timed out waiting for ${what}; requests=${requests.length} diagnostics=${JSON.stringify(diagnostics)}`,
+      ).toBe(true);
+    };
+    await until("6 exports", () => requests.length >= 6);
+    await until("the failure diagnostic", () => diagnostics.length >= 1);
+
+    expect(requests).toHaveLength(6);
+    expect(authorized).toEqual(Array(6).fill(true));
+    expect(diagnostics).toEqual(["dash0: telemetry unavailable"]);
+    // Helpers are detached and poll for different lengths of time, so the
+    // order requests arrive in is not the order the turns were fired. Pick the
+    // turn out by what it carries, not by its position.
+    const spansOf = (request: OTLPRequest) =>
+      request.resourceSpans[0].scopeSpans[0].spans;
+    const spans = spansOf(
+      requests.find((request) => spansOf(request).length > 1)!,
+    );
+    expect(spans).toHaveLength(3);
+    expect(spans[0].name).toBe("chat claude-sonnet-4-6");
+    expect(spans[2].name).toBe("chat gpt-6-astra");
+    for (const span of spans.slice(1)) {
+      expect(span.parentSpanId).toBe(spans[0].spanId);
+    }
+    const toolKeys = (spans[1].attributes ?? []).map(({ key }) => key);
+    expect(toolKeys).not.toContain("gen_ai.request.model");
+    expect(toolKeys).not.toContain("gen_ai.usage.input_tokens");
+    expect(toolKeys).not.toContain("gen_ai.usage.output_tokens");
+    const attributes = [spans[2], spans[0]].map(attributesOf);
+    expect(attributes[0]["gen_ai.request.model"].stringValue).toBe(
+      "gpt-6-astra",
+    );
+    expect(attributes[0]["gen_ai.usage.input_tokens"].intValue).toBe("41");
+    expect(attributes[0]["gen_ai.usage.output_tokens"].intValue).toBe("13");
+    expect(attributes[1]["gen_ai.request.model"].stringValue).toBe(
+      "claude-sonnet-4-6",
+    );
+    expect(attributes[1]["gen_ai.usage.input_tokens"].intValue).toBe("71");
+    expect(attributes[1]["gen_ai.usage.output_tokens"].intValue).toBe("19");
+    // Exactly one turn carried a tool and matched usage; the other five are a
+    // lone chat root each.
+    expect(
+      requests.filter((request) => spansOf(request).length > 1),
+    ).toHaveLength(1);
+    // omit_io is false here, so the turn's conversation reaches the exporter.
+    const root = attributesOf(spans[0]);
+    expect(root["gen_ai.input.messages"].stringValue).toContain(
+      "private prompt",
+    );
+    expect(root["gen_ai.output.messages"].stringValue).toContain(
+      "private response",
+    );
+    const tool = attributesOf(spans[1]);
+    expect(tool["gen_ai.tool.call.arguments"].stringValue).toContain(
+      "private command",
+    );
+    expect(tool["gen_ai.tool.call.result"].stringValue).toContain(
+      "private output",
+    );
+    expect(JSON.stringify(requests)).not.toContain("controlled-test-token");
+  } finally {
+    server.stop(true);
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnvironment)) delete process.env[key];
+    }
+    Object.assign(process.env, savedEnvironment);
+  }
+  // Two Go compilations plus the wait for the detached helpers to deliver.
+  // Locally, with a warm build cache, this is ~6 s; CI runs it before any
+  // other Go step, so the cache is cold and the compile dominates.
+}, 180000);
+
+// The guarantee the whole bridge is shaped around: Amp awaits agent.end, so
+// the turn is handed off when the envelope reaches the helper's stdin, not
+// when the helper exits. Nothing else pins it — the real helper exits in
+// milliseconds, so a regression to waiting for exit would keep every other
+// test green and show up only as a slower suite.
+//
+// Skipped on Windows, where the bridge spawns amp-on-event.exe and a shell
+// script cannot stand in for it. `make test-amp` is Linux-only anyway.
+test.skipIf(process.platform === "win32")(
+  "agent.end resolves on stdin flush, not when the helper exits",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-amp-handoff-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    copyFileSync(
+      fileURLToPath(new URL("./index.ts", import.meta.url)),
+      join(dir, "index.ts"),
+    );
+    // Reads the envelope, then outlives the turn by far more than the 2000 ms
+    // backstop — so a bridge that waited for exit, or that fell through to the
+    // timer, could not pass the assertion below.
+    const helperSleep = 8;
+    writeFileSync(
+      join(dir, "amp-on-event"),
+      `#!/bin/sh\ncat > /dev/null\nsleep ${helperSleep}\n`,
+      { mode: 0o755 },
+    );
+
+    const savedEnvironment = { ...process.env };
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("AMP_PLUGIN_OPTION_") || key.startsWith("DASH0_")) {
+          delete process.env[key];
+        }
+      }
+      // No collector and no credentials: this test is about the clock, and the
+      // helper is a stub that exports nothing either way.
+      const handlers = new Map<
+        keyof PluginEventMap,
+        Handler<keyof PluginEventMap>
+      >();
+      const plugin = (await import(pathToFileURL(join(dir, "index.ts")).href))
+        .default;
+      plugin({
+        on: (
+          name: keyof PluginEventMap,
+          handler: Handler<keyof PluginEventMap>,
+        ) => {
+          handlers.set(name, handler);
+          return { dispose() {} };
+        },
+        system: {
+          executor: { kind: "local" },
+          workspaceRoot: pathToFileURL(dir),
+        },
+        helpers: { filePathFromURI: (uri: URL) => fileURLToPath(uri) },
+        logger: { log: () => {} },
+      } as unknown as PluginAPI);
+
+      const thread = { id: "T-handoff" } as const;
+      handlers.get("agent.start")!({
+        thread,
+        id: "M-a",
+        message: "the ask",
+      } as PluginEventMap["agent.start"]);
+      const started = Date.now();
+      await handlers.get("agent.end")!({
+        thread,
+        id: "M-a",
+        status: "done",
+        message: "the answer",
+        messages: [],
+      } as PluginEventMap["agent.end"]);
+      const waited = Date.now() - started;
+
+      // Well inside the 2000 ms backstop, and nowhere near the helper's life.
+      expect(waited).toBeLessThan(1000);
+    } finally {
+      process.env = savedEnvironment;
+    }
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "a helper arriving without the exec bit is still spawned",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-amp-mode-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    copyFileSync(
+      fileURLToPath(new URL("./index.ts", import.meta.url)),
+      join(dir, "index.ts"),
+    );
+    // 0644 is what Amp's plugin sync writes, whatever mode git recorded.
+    const helper = join(dir, "amp-on-event");
+    const ran = join(dir, "ran");
+    writeFileSync(helper, `#!/bin/sh\ncat > /dev/null\ntouch ${ran}\n`, {
+      mode: 0o644,
+    });
+
+    const savedEnvironment = { ...process.env };
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("AMP_PLUGIN_OPTION_") || key.startsWith("DASH0_")) {
+          delete process.env[key];
+        }
+      }
+      const handlers = new Map<
+        keyof PluginEventMap,
+        Handler<keyof PluginEventMap>
+      >();
+      const plugin = (await import(pathToFileURL(join(dir, "index.ts")).href))
+        .default;
+      plugin({
+        on: (
+          name: keyof PluginEventMap,
+          handler: Handler<keyof PluginEventMap>,
+        ) => {
+          handlers.set(name, handler);
+          return { dispose() {} };
+        },
+        system: {
+          executor: { kind: "local" },
+          workspaceRoot: pathToFileURL(dir),
+        },
+        helpers: { filePathFromURI: (uri: URL) => fileURLToPath(uri) },
+        logger: { log: () => {} },
+      } as unknown as PluginAPI);
+
+      const thread = { id: "T-mode" } as const;
+      handlers.get("agent.start")!({
+        thread,
+        id: "M-a",
+        message: "the ask",
+      } as PluginEventMap["agent.start"]);
+      await handlers.get("agent.end")!({
+        thread,
+        id: "M-a",
+        status: "done",
+        message: "the answer",
+        messages: [],
+      } as PluginEventMap["agent.end"]);
+
+      // The helper is detached, so agent.end resolves on the stdin flush
+      // rather than on exit: wait for the side effect it leaves behind.
+      for (let i = 0; i < 100 && !existsSync(ran); i++) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(existsSync(ran)).toBe(true);
+    } finally {
+      process.env = savedEnvironment;
+    }
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "a per-platform helper is preferred over the plain name",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-amp-arch-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    copyFileSync(
+      fileURLToPath(new URL("./index.ts", import.meta.url)),
+      join(dir, "index.ts"),
+    );
+    const arch = process.arch === "x64" ? "amd64" : "arm64";
+    const chosen = join(dir, "chosen");
+    // Both present: a plugin repository ships every platform's helper, and the
+    // plain name is what the installer writes. Only one may run.
+    writeFileSync(
+      join(dir, `amp-on-event-${process.platform}-${arch}`),
+      `#!/bin/sh\ncat > /dev/null\ntouch ${chosen}\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(dir, "amp-on-event"),
+      `#!/bin/sh\ncat > /dev/null\ntouch ${join(dir, "wrong")}\n`,
+      { mode: 0o755 },
+    );
+
+    const savedEnvironment = { ...process.env };
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("AMP_PLUGIN_OPTION_") || key.startsWith("DASH0_")) {
+          delete process.env[key];
+        }
+      }
+      const handlers = new Map<
+        keyof PluginEventMap,
+        Handler<keyof PluginEventMap>
+      >();
+      const plugin = (await import(pathToFileURL(join(dir, "index.ts")).href))
+        .default;
+      plugin({
+        on: (
+          name: keyof PluginEventMap,
+          handler: Handler<keyof PluginEventMap>,
+        ) => {
+          handlers.set(name, handler);
+          return { dispose() {} };
+        },
+        system: {
+          executor: { kind: "local" },
+          workspaceRoot: pathToFileURL(dir),
+        },
+        helpers: { filePathFromURI: (uri: URL) => fileURLToPath(uri) },
+        logger: { log: () => {} },
+      } as unknown as PluginAPI);
+
+      const thread = { id: "T-arch" } as const;
+      handlers.get("agent.start")!({
+        thread,
+        id: "M-a",
+        message: "the ask",
+      } as PluginEventMap["agent.start"]);
+      await handlers.get("agent.end")!({
+        thread,
+        id: "M-a",
+        status: "done",
+        message: "the answer",
+        messages: [],
+      } as PluginEventMap["agent.end"]);
+
+      for (let i = 0; i < 100 && !existsSync(chosen); i++) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(existsSync(chosen)).toBe(true);
+      expect(existsSync(join(dir, "wrong"))).toBe(false);
+    } finally {
+      process.env = savedEnvironment;
+    }
+  },
+);
+
+import { toolDir } from "./index";
+
+describe("toolDir", () => {
+  test("reads the directory each file-touching tool names", () => {
+    expect(toolDir("shell_command", { workdir: "/repo/sub" })).toBe(
+      "/repo/sub",
+    );
+    expect(toolDir("edit_file", { path: "/repo/sub/a.ts" })).toBe("/repo/sub");
+    expect(toolDir("create_file", { path: "/repo/sub/a.ts" })).toBe(
+      "/repo/sub",
+    );
+    expect(toolDir("view_media", { path: "/repo/sub/a.png" })).toBe(
+      "/repo/sub",
+    );
+    expect(
+      toolDir("apply_patch", {
+        patchText:
+          "*** Begin Patch\n*** Update File: /repo/sub/a.ts\n@@\n-a\n+b\n",
+      }),
+    ).toBe("/repo/sub");
+    // A workdir is already a directory, so its last segment stays on.
+    expect(toolDir("shell_command", { workdir: "/repo" })).toBe("/repo");
+  });
+
+  test("ignores what it cannot place in a repository", () => {
+    // Relative would have to be joined against a base we would be guessing at,
+    // and guessing is what reports the wrong branch in the first place.
+    expect(toolDir("edit_file", { path: "src/a.ts" })).toBeUndefined();
+    expect(toolDir("edit_file", {})).toBeUndefined();
+    expect(toolDir("edit_file", { path: 7 })).toBeUndefined();
+    expect(toolDir("shell_command", { workdir: "sub" })).toBeUndefined();
+    expect(
+      toolDir("apply_patch", { patchText: "no file header" }),
+    ).toBeUndefined();
+    expect(toolDir("web_search", { objective: "/repo" })).toBeUndefined();
+    expect(toolDir("edit_file", null)).toBeUndefined();
+    // A file at the filesystem root still has a directory.
+    expect(toolDir("edit_file", { path: "/a.ts" })).toBe("/");
+  });
+});

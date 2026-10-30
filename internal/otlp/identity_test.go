@@ -164,7 +164,7 @@ func TestIdentityEmittedOutsideGitRepository(t *testing.T) {
 	t.Chdir(t.TempDir())
 	pinIdentity(t, identity.Info{Name: "Guy Moses", Source: identity.SourceGit})
 
-	require.Empty(t, vcsSpanAttributes(Config{}), "precondition: not inside a repository")
+	require.Empty(t, vcsSpanAttributesAt(""), "precondition: not inside a repository")
 
 	got := attrMap(identitySpanAttributes(Config{}))
 	assert.Equal(t, "Guy Moses", got["user.name"])

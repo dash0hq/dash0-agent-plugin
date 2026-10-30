@@ -270,7 +270,7 @@ func NewLLMSpan(traceID, spanID, parentSpanID string, startTime, endTime time.Ti
 func NewSessionSpan(traceID, spanID string, ts time.Time, event map[string]any, cfg Config) Span {
 	attrs := eventAttributes(event, cfg)
 	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
-	attrs = append(attrs, vcsSpanAttributes(cfg)...)
+	attrs = append(attrs, vcsSpanAttributesAt("")...)
 	attrs = append(attrs, identitySpanAttributes(cfg)...)
 	attrs = append(attrs, teamSpanAttributes(cfg)...)
 	tsNano := strconv.FormatInt(ts.UnixNano(), 10)

@@ -30,7 +30,15 @@ func Detect() *Info {
 }
 
 // DetectAt is Detect for the git working tree containing dir, which may be a
-// linked worktree on its own branch. An empty dir means the CWD.
+// linked worktree on its own branch. It exists because an agent's working
+// directory is often not where the work happens: Amp spawns the helper in the
+// folder the user opened, which may be a non-repository parent of the checkout,
+// and Claude Code edits a linked worktree by absolute path without ever
+// changing directory. Either reports the wrong branch, or none.
+//
+// An empty dir means the CWD, so Detect keeps its behavior exactly. A dir that
+// does not exist, or is outside a working tree, returns nil the same way an
+// uninitialized CWD always has.
 func DetectAt(dir string) *Info {
 	if err := git(dir, "rev-parse", "--git-dir"); err != nil {
 		return nil

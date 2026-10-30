@@ -40,8 +40,21 @@ type Tool struct {
 	Start  time.Time `json:"start"`
 	End    time.Time `json:"end"`
 	Status string    `json:"status"`
-	Input  string    `json:"input"`
-	Output string    `json:"output"`
+	// Dir is the absolute directory this call worked in, when its input named
+	// one. Amp exposes no working directory on any event, and the helper runs
+	// in the folder the user opened — which may be a non-repository parent, or
+	// the main checkout while the turn edits a linked worktree — so this is
+	// what keeps the repository and branch of a span honest.
+	Dir    string `json:"dir"`
+	Input  string `json:"input"`
+	Output string `json:"output"`
+}
+
+// edits reports whether a tool name is one that writes a file, so the turn's
+// repository is chosen from where it changed something rather than from
+// anywhere it happened to read or run a command.
+func edits(name string) bool {
+	return name == "edit_file" || name == "create_file" || name == "apply_patch"
 }
 
 var threadPattern = regexp.MustCompile(`^T-[A-Za-z0-9_-]{1,128}$`)
@@ -126,7 +139,23 @@ func BuildTrace(t Turn, usage []Usage, usageStatus string, cfg otlp.Config) (otl
 			root[k] = v
 		}
 	}
-	spans := []otlp.Span{otlp.NewLLMSpan(traceID, rootID, "", t.Start, t.End, root, t.Status != "done", cfg)}
+	// The turn's own repository is the one it last edited a file in, not the
+	// one the helper was spawned in. Backwards, because a turn that moves
+	// between checkouts ends in the one it was working on, and only
+	// file-editing tools count: a shell_command carries a workdir on every
+	// call, defaulting to the workspace root, so reading those would re-elect
+	// the folder this exists to stop trusting.
+	rootCfg := cfg
+	for i := len(t.Tools) - 1; i >= 0; i-- {
+		if !edits(t.Tools[i].Name) {
+			continue
+		}
+		if dir := otlp.VCSDir(t.Tools[i].Dir); dir != "" {
+			rootCfg = cfg.WithVCSDir(dir)
+			break
+		}
+	}
+	spans := []otlp.Span{otlp.NewLLMSpan(traceID, rootID, "", t.Start, t.End, root, t.Status != "done", rootCfg)}
 	seen := make(map[string]bool)
 	for _, tool := range t.Tools {
 		if tool.ID == "" || len(tool.ID) > 256 || tool.Name == "" || len(tool.Name) > 256 || seen[tool.ID] || !validStatus(tool.Status) || tool.Start.Before(t.Start) || tool.End.Before(tool.Start) || tool.End.After(t.End) {
@@ -156,7 +185,7 @@ func BuildTrace(t Turn, usage []Usage, usageStatus string, cfg otlp.Config) (otl
 		// plus the URL, commit and line-count details the other sources get.
 		pipeline.EnrichToolEvent(event)
 		spanID := otlp.SpanIDFromAgentID("tool:" + tool.ID)
-		spans = append(spans, otlp.NewToolSpan(traceID, spanID, rootID, tool.Start, tool.End, event, tool.Status != "done", cfg))
+		spans = append(spans, otlp.NewToolSpan(traceID, spanID, rootID, tool.Start, tool.End, event, tool.Status != "done", cfg.WithVCSDir(tool.Dir)))
 	}
 	for i, call := range usage {
 		event := base()
@@ -169,7 +198,11 @@ func BuildTrace(t Turn, usage []Usage, usageStatus string, cfg otlp.Config) (otl
 		// Keyed by the turn as well as the position: "usage:0" alone is the same
 		// string in every turn, so every trace reused one span ID.
 		spanID := otlp.SpanIDFromAgentID(fmt.Sprintf("usage:%s:%d", messageKey(t.ID), i))
-		spans = append(spans, otlp.NewLLMSpan(traceID, spanID, rootID, t.End, t.End, event, false, cfg))
+		// rootCfg, not cfg: these are observations of the same turn the root
+		// describes, so they belong to the repository it resolved. Left on cfg
+		// they were the only spans in the trace naming a different one, or
+		// none at all.
+		spans = append(spans, otlp.NewLLMSpan(traceID, spanID, rootID, t.End, t.End, event, false, rootCfg))
 	}
 	return otlp.ExportTracesRequest{ResourceSpans: []otlp.ResourceSpans{{
 		Resource:   otlp.Resource{Attributes: []otlp.Attribute{{Key: "service.name", Value: otlp.StringVal(cfg.AgentName)}, {Key: "service.version", Value: otlp.StringVal(version.Version)}}},

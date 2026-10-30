@@ -16,12 +16,12 @@ powershell -ExecutionPolicy Bypass -File uninstall-amp.ps1
 
 .NOTES
 What this removes:
-  %USERPROFILE%\.config\amp\plugins\dash0\
+  %USERPROFILE%\.config\amp\plugins\dash0-agent-plugin\
       The plugin directory (index.ts + helper). Only this directory; other Amp
       plugins stay.
   %USERPROFILE%\.amp\dash0-agent-plugin.local.md      credential config
 
--Project removes .\.amp\plugins\dash0 instead. A workspace
+-Project removes .\.amp\plugins\dash0-agent-plugin instead. A workspace
 .amp\dash0-agent-plugin.local.md is left alone: the installer never wrote one.
 #>
 
@@ -71,12 +71,12 @@ function Remove-InstalledPath {
 # Paths must mirror install-amp.ps1.
 $UserConfigPath = "$env:USERPROFILE\.amp\dash0-agent-plugin.local.md"
 if ($Project) {
-  $PluginDir = "$((Get-Location).Path)\.amp\plugins\dash0"
+  $PluginDir = "$((Get-Location).Path)\.amp\plugins\dash0-agent-plugin"
   # The config file is machine-wide and may hold the token for other projects,
   # so a project-scoped uninstall must not take it.
   $ConfigPath = ''
 } else {
-  $PluginDir = "$env:USERPROFILE\.config\amp\plugins\dash0"
+  $PluginDir = "$env:USERPROFILE\.config\amp\plugins\dash0-agent-plugin"
   $ConfigPath = $UserConfigPath
 }
 
@@ -107,6 +107,12 @@ if (-not $Yes) {
 }
 
 Remove-InstalledPath $PluginDir 'plugin directory'
+# Installs before the rename used a sibling "dash0", and an uninstall that left
+# it behind would keep exporting.
+$StaleDir = Join-Path (Split-Path -Parent $PluginDir) 'dash0'
+if ((Test-Path -LiteralPath "$StaleDir\index.ts") -and (Get-ChildItem -LiteralPath $StaleDir -Filter 'amp-on-event*' -ErrorAction SilentlyContinue)) {
+  Remove-InstalledPath $StaleDir 'previous plugin directory'
+}
 if ($ConfigPath) { Remove-InstalledPath $ConfigPath 'config file' }
 
 Write-Host ''

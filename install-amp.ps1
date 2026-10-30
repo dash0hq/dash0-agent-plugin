@@ -27,7 +27,7 @@ as defaults. Enter keeps the current value; - clears an optional dataset/team.
 Without a terminal, existing values are kept. A new install without credentials
 stays inactive until the config file is filled in.
 
--Project installs into .\.amp\plugins\dash0 instead of the user directory.
+-Project installs into .\.amp\plugins\dash0-agent-plugin instead of the user directory.
 
 Env vars: DASH0_OTLP_URL, DASH0_AUTH_TOKEN, DASH0_DATASET, DASH0_TEAM_NAME,
 DASH0_VERSION (pins a specific release), DASH0_SOURCE_DIR (install index.ts and
@@ -37,9 +37,9 @@ plugin or installing without network:
   $env:DASH0_SOURCE_DIR = 'amp'; .\install-amp.ps1).
 
 What this installs:
-  %USERPROFILE%\.config\amp\plugins\dash0\index.ts
+  %USERPROFILE%\.config\amp\plugins\dash0-agent-plugin\index.ts
       The plugin Amp loads (Bun runs it).
-  %USERPROFILE%\.config\amp\plugins\dash0\amp-on-event.exe
+  %USERPROFILE%\.config\amp\plugins\dash0-agent-plugin\amp-on-event.exe
       The helper index.ts spawns. Amp's bridge resolves it by that exact name
       next to index.ts, so the release asset amp-on-event-windows-<arch>.exe is
       installed under the unsuffixed name.
@@ -181,9 +181,9 @@ if (-not $SourceDir) {
 # ---------------------------------------------------------------------------
 
 if ($Project) {
-  $PluginDir = "$((Get-Location).Path)\.amp\plugins\dash0"
+  $PluginDir = "$((Get-Location).Path)\.amp\plugins\dash0-agent-plugin"
 } else {
-  $PluginDir = "$env:USERPROFILE\.config\amp\plugins\dash0"
+  $PluginDir = "$env:USERPROFILE\.config\amp\plugins\dash0-agent-plugin"
 }
 $BinPath = "$PluginDir\amp-on-event.exe"
 $IndexPath = "$PluginDir\index.ts"
@@ -193,6 +193,15 @@ $SkillDir = "$PluginDir\skills\dash0-configure"
 $SkillPath = "$SkillDir\SKILL.md"
 $AmpDir = "$env:USERPROFILE\.amp"
 $ConfigPath = "$AmpDir\dash0-agent-plugin.local.md"
+
+# Installs before the rename sat in a sibling "dash0". Amp loads every plugin
+# directory it finds, so leaving it would register the bridge twice and export
+# every turn twice. Only a directory carrying our own two files is removed.
+$StaleDir = Join-Path (Split-Path -Parent $PluginDir) 'dash0'
+if ((Test-Path -LiteralPath "$StaleDir\index.ts") -and (Get-ChildItem -LiteralPath $StaleDir -Filter 'amp-on-event*' -ErrorAction SilentlyContinue)) {
+  Remove-Item -LiteralPath $StaleDir -Recurse -Force
+  Write-Info "removed the previous install at $StaleDir"
+}
 
 foreach ($dir in @($PluginDir, $AmpDir)) {
   try {

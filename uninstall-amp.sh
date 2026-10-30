@@ -7,11 +7,11 @@
 # Usage:
 #   ./uninstall-amp.sh                        # prompts before deleting
 #   ./uninstall-amp.sh --yes                  # skips confirmation
-#   ./uninstall-amp.sh --project              # removes ./.amp/plugins/dash0
+#   ./uninstall-amp.sh --project              # removes ./.amp/plugins/dash0-agent-plugin
 #   curl -fsSL .../uninstall-amp.sh | bash -s -- --yes
 #
 # What this removes:
-#   ~/.config/amp/plugins/dash0/     the plugin directory (index.ts + helper).
+#   ~/.config/amp/plugins/dash0-agent-plugin/     the plugin directory (index.ts + helper).
 #                                    Only this directory; other Amp plugins stay.
 #   ~/.amp/dash0-agent-plugin.local.md        credential config
 #
@@ -44,7 +44,7 @@ Amp plugins are untouched.
 
 Flags:
   -y, --yes   Skip the confirmation prompt.
-  --project   Remove ./.amp/plugins/dash0 instead of the user-level plugin, and
+  --project   Remove ./.amp/plugins/dash0-agent-plugin instead of the user-level plugin, and
               leave the machine-wide config file in place.
   -h, --help  Show this help.
 EOF
@@ -54,12 +54,12 @@ EOF
 done
 
 if [ "$PROJECT_SCOPE" -eq 1 ]; then
-  PLUGIN_DIR="$PWD/.amp/plugins/dash0"
+  PLUGIN_DIR="$PWD/.amp/plugins/dash0-agent-plugin"
   # The config file is machine-wide and may hold the token for other projects,
   # so a project-scoped uninstall must not take it.
   CONFIG_PATH=""
 else
-  PLUGIN_DIR="$HOME/.config/amp/plugins/dash0"
+  PLUGIN_DIR="$HOME/.config/amp/plugins/dash0-agent-plugin"
   CONFIG_PATH="$HOME/.amp/dash0-agent-plugin.local.md"
 fi
 
@@ -95,6 +95,12 @@ remove_path() {
   fi
 }
 remove_path "$PLUGIN_DIR"  "plugin directory"
+# Installs before the rename used a sibling "dash0", and an uninstall that left
+# it behind would keep exporting.
+STALE_DIR="$(dirname "$PLUGIN_DIR")/dash0"
+if [ -f "$STALE_DIR/index.ts" ] && ls "$STALE_DIR"/amp-on-event* >/dev/null 2>&1; then
+  remove_path "$STALE_DIR" "previous plugin directory"
+fi
 if [ -n "$CONFIG_PATH" ]; then
   remove_path "$CONFIG_PATH" "config file"
 fi

@@ -37,7 +37,7 @@ unset DASH0_TEAM_NAME
 
 echo "== install-amp.sh installs index.ts + the helper under the names the bridge resolves =="
 bash "$REPO/install-amp.sh" < /dev/null
-PLUGIN_DIR="$HOME/.config/amp/plugins/dash0"
+PLUGIN_DIR="$HOME/.config/amp/plugins/dash0-agent-plugin"
 fail=0
 # amp/index.ts spawns exactly ./amp-on-event next to itself, so the asset's
 # -<os>-<arch> suffix must be gone and the file must be executable.
@@ -144,11 +144,30 @@ for token, team in (('rotated-contract-token', ''), ('', '-')):
 PY
 echo "PASS: interactive re-run rotates or keeps a hidden token and clears a team"
 
+echo "== an install removes the pre-rename dash0 directory beside it =="
+# Amp loads every plugin directory it finds. Left behind, the old name would
+# register the bridge a second time and export every turn twice, which is a
+# wrong number in Dash0 rather than a visible failure. A directory that is not
+# ours stays: only index.ts plus an amp-on-event qualifies.
+STALE="$HOME/.config/amp/plugins/dash0"
+mkdir -p "$STALE" && touch "$STALE/index.ts" "$STALE/amp-on-event"
+bash "$REPO/install-amp.sh" < /dev/null > /dev/null
+fail=0
+[ ! -e "$STALE" ] || { echo "ERROR: the pre-rename install at $STALE survived"; fail=1; }
+[ -x "$PLUGIN_DIR/amp-on-event" ] || { echo "ERROR: the new install is missing its helper"; fail=1; }
+# Somebody else's plugin that happens to be called dash0 keeps that name.
+mkdir -p "$STALE" && touch "$STALE/someone-elses-plugin.ts"
+bash "$REPO/install-amp.sh" < /dev/null > /dev/null
+[ -e "$STALE/someone-elses-plugin.ts" ] || { echo "ERROR: removed an unrelated plugin at $STALE"; fail=1; }
+rm -rf "$STALE"
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: the pre-rename directory was removed and an unrelated plugin was not"
+
 echo "== --project installs into the workspace instead of the user directory =="
 WORKSPACE=$(mktemp -d)
 ( cd "$WORKSPACE" && bash "$REPO/install-amp.sh" --project < /dev/null )
-[ -x "$WORKSPACE/.amp/plugins/dash0/amp-on-event" ] \
-  || { echo "ERROR: --project did not install into $WORKSPACE/.amp/plugins/dash0"; exit 1; }
+[ -x "$WORKSPACE/.amp/plugins/dash0-agent-plugin/amp-on-event" ] \
+  || { echo "ERROR: --project did not install into $WORKSPACE/.amp/plugins/dash0-agent-plugin"; exit 1; }
 echo "PASS: --project installed into the workspace"
 
 echo "== --plugin-repo lays out a plugin repository and writes no credentials =="
@@ -164,7 +183,7 @@ PLUGIN_REPO_DIR=$(mktemp -d)
 CONFIG_ASIDE=$(mktemp)
 mv "$HOME/.amp/dash0-agent-plugin.local.md" "$CONFIG_ASIDE"
 bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" < /dev/null
-REPO_PLUGIN="$PLUGIN_REPO_DIR/dash0"
+REPO_PLUGIN="$PLUGIN_REPO_DIR/dash0-agent-plugin"
 HOST="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
 fail=0
 [ -f "$REPO_PLUGIN/index.ts" ] || { echo "ERROR: no index.ts in $REPO_PLUGIN"; fail=1; }
@@ -204,7 +223,7 @@ echo "PASS: --plugin-repo rejected --project, --token and an unknown platform"
 echo "== --project uninstall leaves the machine-wide config alone =="
 # Before the user-level uninstall, which removes that config itself.
 ( cd "$WORKSPACE" && bash "$REPO/uninstall-amp.sh" --project --yes )
-[ ! -e "$WORKSPACE/.amp/plugins/dash0" ] || { echo "ERROR: --project uninstall left the plugin behind"; exit 1; }
+[ ! -e "$WORKSPACE/.amp/plugins/dash0-agent-plugin" ] || { echo "ERROR: --project uninstall left the plugin behind"; exit 1; }
 [ -f "$HOME/.amp/dash0-agent-plugin.local.md" ] \
   || { echo "ERROR: --project uninstall removed the machine-wide config file"; exit 1; }
 [ -x "$PLUGIN_DIR/amp-on-event" ] || { echo "ERROR: --project uninstall removed the user-level plugin"; exit 1; }

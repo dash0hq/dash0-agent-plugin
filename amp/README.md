@@ -26,11 +26,11 @@ either and it is there on your laptop and in every Orb.
 amp clone user-plugins && cd user-plugins   # or: amp clone workspace-plugins
 curl -fsSL https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-amp.sh \
   | bash -s -- --plugin-repo .
-git add dash0 && git commit -m "Add the Dash0 plugin" && git push
+git add dash0-agent-plugin && git commit -m "Add the Dash0 plugin" && git push
 ```
 
 Reload plugins from Amp's command palette, and `amp plugins list` should show
-`dash0`.
+`dash0-agent-plugin`.
 
 That installs a helper for this machine and one for `linux-amd64`, which is
 what an Orb runs — the pair almost everyone needs. `index.ts` picks
@@ -53,7 +53,7 @@ committed and pushed, so a token must not be in it. `--token` is refused rather
 than ignored. Credentials go in the environment instead — see
 [Orbs](#orbs).
 
-To upgrade, re-run the same command and push. To remove it, `git rm -r dash0`
+To upgrade, re-run the same command and push. To remove it, `git rm -r dash0-agent-plugin`
 and push.
 
 `--plugin-repo` is on `install-amp.sh` only; `install-amp.ps1` has no
@@ -75,7 +75,7 @@ irm https://raw.githubusercontent.com/dash0hq/dash0-agent-plugin/main/install-am
 
 The installer downloads the helper for this platform, verifies it against the
 release checksums, and installs it as `amp-on-event` (`amp-on-event.exe` on
-Windows) next to `index.ts` in `~/.config/amp/plugins/dash0/`. One machine runs
+Windows) next to `index.ts` in `~/.config/amp/plugins/dash0-agent-plugin/`. One machine runs
 one platform, so it renames the release asset `amp-on-event-<os>-<arch>` to the
 plain name the bridge falls back to, and the directory stays one helper
 small. It then prompts for the OTLP endpoint, token, dataset, and
@@ -94,7 +94,7 @@ appended after them.
 
 Reload plugins from Amp's command palette. Install just this plugin once per
 executor. To restrict installation to one workspace, run the installer with
-`--project` (`-Project` on Windows), which uses `.amp/plugins/dash0/` in the
+`--project` (`-Project` on Windows), which uses `.amp/plugins/dash0-agent-plugin/` in the
 current directory. The credential file stays user-level either way; a workspace
 `.amp/dash0-agent-plugin.local.md` outranks it if you add one, and must be kept
 out of Git.
@@ -151,7 +151,7 @@ working `amp` authentication on the executor; without it turns still export and
 carry `dash0.amp.usage.status=unavailable` instead of tokens.
 
 To uninstall, run `uninstall-amp.sh` (`uninstall-amp.ps1` on Windows), which
-removes only the `dash0` plugin directory and the credential file. Reload
+removes only the `dash0-agent-plugin` plugin directory and the credential file. Reload
 plugins afterwards.
 
 ### Install from source
@@ -228,7 +228,7 @@ code, signal, and elapsed time in Amp. An HTTP success is not proof of storage:
 the token must permit span ingestion into the configured dataset. Verify a
 turn with a read-capable token before relying on it.
 To uninstall, run `uninstall-amp.sh` (or `uninstall-amp.ps1`), which removes the
-`dash0` plugin directory and the user-level config file; add `--project` to
+`dash0-agent-plugin` plugin directory and the user-level config file; add `--project` to
 remove a workspace install and leave that machine-wide config alone. Reload
 plugins afterwards.
 

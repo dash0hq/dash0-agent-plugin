@@ -225,7 +225,7 @@ func repoWithWorktree(t *testing.T, branch string) (main, worktree string) {
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main", main},
 		{"-C", main, "remote", "add", "origin", "git@github.com:acme/widgets.git"},
-		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
 		{"-C", main, "worktree", "add", "-q", "-b", branch, worktree},
 	} {
 		out, err := exec.Command("git", args...).CombinedOutput()

@@ -703,7 +703,16 @@ func toolVCSSpanAttributes(event map[string]any, cfg Config) []Attribute {
 	input, _ := event["tool_input"].(map[string]any)
 	for _, key := range []string{"file_path", "notebook_path"} {
 		if path, _ := input[key].(string); path != "" {
-			if info := vcs.DetectAt(filepath.Dir(path)); info != nil {
+			// A failed call can name a directory that does not exist, which git
+			// cannot start in; ask from the nearest one that does.
+			dir := filepath.Dir(path)
+			for {
+				if _, err := os.Stat(dir); err == nil || filepath.Dir(dir) == dir {
+					break
+				}
+				dir = filepath.Dir(dir)
+			}
+			if info := vcs.DetectAt(dir); info != nil {
 				return vcsInfoAttributes(info)
 			}
 			break

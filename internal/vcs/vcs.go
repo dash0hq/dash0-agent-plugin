@@ -70,10 +70,9 @@ func gitOutput(dir string, args ...string) string {
 }
 
 func gitCmd(dir string, args []string) *exec.Cmd {
-	if dir != "" {
-		args = append([]string{"-C", dir}, args...)
-	}
-	return exec.Command("git", args...)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir // empty means the CWD
+	return cmd
 }
 
 // normalizeRemoteURL converts SSH URLs to HTTPS and reduces the remote to the

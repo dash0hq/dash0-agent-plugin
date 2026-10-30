@@ -1281,11 +1281,25 @@ func TestEditToolSpanCarriesBranchOfEditedFile(t *testing.T) {
 	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-edit",`+cwd+`,"prompt":"hi"}`)
 	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Edit","tool_use_id":"tu1",`+input+`}`)
 	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Edit","tool_use_id":"tu1",`+input+`,"tool_response":"ok"}`)
+	// A failed read under a directory that does not exist still names the worktree.
+	missing := `"tool_input":{"file_path":` + strconv.Quote(filepath.Join(worktree, "nope", "b.go")) + `}`
+	feed(t, `{"hook_event_name":"PostToolUseFailure","session_id":"sess-edit",`+cwd+`,"tool_name":"Read","tool_use_id":"tu2",`+missing+`,"error":"no such file"}`)
+	// A file outside any working tree falls back to the cwd's.
+	outside := `"tool_input":{"file_path":` + strconv.Quote(filepath.Join(t.TempDir(), "c.txt")) + `,"content":"x"}`
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Write","tool_use_id":"tu3",`+outside+`,"tool_response":"ok"}`)
 	feed(t, `{"hook_event_name":"Stop","session_id":"sess-edit",`+cwd+`,"model":"claude-opus-4-8"}`)
 
 	tool := findSpan(*spans, "execute_tool Edit")
 	require.NotNil(t, tool)
 	assertStringAttr(t, tool.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
+
+	read := findSpan(*spans, "execute_tool Read")
+	require.NotNil(t, read)
+	assertStringAttr(t, read.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
+
+	write := findSpan(*spans, "execute_tool Write")
+	require.NotNil(t, write)
+	assertStringAttr(t, write.Attributes, "dash0.gen_ai.vcs.ref.head.name", "main")
 
 	chat := findSpan(*spans, "chat")
 	require.NotNil(t, chat)
@@ -1302,7 +1316,7 @@ func repoWithWorktree(t *testing.T, branch string) (main, worktree string) {
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main", main},
 		{"-C", main, "remote", "add", "origin", "git@github.com:acme/widgets.git"},
-		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
 		{"-C", main, "worktree", "add", "-q", "-b", branch, worktree},
 	} {
 		out, err := exec.Command("git", args...).CombinedOutput()

@@ -191,7 +191,7 @@ func NewToolSpan(traceID, spanID, parentSpanID string, startTime, endTime time.T
 
 	attrs = append(attrs, Attribute{Key: "gen_ai.tool.type", Value: StringVal("function")})
 	attrs = append(attrs, genAIIdentityAttributes(event, cfg)...)
-	attrs = append(attrs, vcsSpanAttributes(cfg)...)
+	attrs = append(attrs, toolVCSSpanAttributes(event, cfg)...)
 	attrs = append(attrs, identitySpanAttributes(cfg)...)
 	attrs = append(attrs, teamSpanAttributes(cfg)...)
 

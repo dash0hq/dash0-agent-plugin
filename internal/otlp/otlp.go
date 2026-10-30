@@ -692,7 +692,27 @@ func teamSpanAttributes(cfg Config) []Attribute {
 // must run even outside a repository (Cursor spawns hooks with a CWD that isn't
 // always a working tree, and the user is still the user).
 func vcsSpanAttributes(cfg Config) []Attribute {
-	info := vcs.Detect()
+	return vcsInfoAttributes(vcs.Detect())
+}
+
+// toolVCSSpanAttributes is vcsSpanAttributes for a tool call. A tool that names
+// a file (Edit, Write, Read, NotebookEdit) reports the working tree holding that
+// file, which can be a linked worktree on another branch than the CWD's: agents
+// edit worktrees by absolute path without changing directory.
+func toolVCSSpanAttributes(event map[string]any, cfg Config) []Attribute {
+	input, _ := event["tool_input"].(map[string]any)
+	for _, key := range []string{"file_path", "notebook_path"} {
+		if path, _ := input[key].(string); path != "" {
+			if info := vcs.DetectAt(filepath.Dir(path)); info != nil {
+				return vcsInfoAttributes(info)
+			}
+			break
+		}
+	}
+	return vcsSpanAttributes(cfg)
+}
+
+func vcsInfoAttributes(info *vcs.Info) []Attribute {
 	if info == nil {
 		return nil
 	}

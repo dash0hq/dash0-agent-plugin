@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -89,6 +90,11 @@ func runWithStdin(input string) error {
 	// configuration once. Without this, a file written by an earlier test in this
 	// process would still be the answer here.
 	harness.ResetConfig()
+	// Likewise every hook process starts in the launch directory, whatever cwd
+	// the previous event moved to.
+	if wd, err := os.Getwd(); err == nil {
+		defer func() { _ = os.Chdir(wd) }()
+	}
 
 	oldStdin := os.Stdin
 	defer func() { os.Stdin = oldStdin }()
@@ -1232,4 +1238,116 @@ func TestConfigFileAloneConfiguresTheExporter(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "from-file", serviceName, "agent_name from the file names the service")
+}
+
+// Claude Code spawns the hook in its launch directory, which need not be a git
+// checkout. The spans must carry the branch of the event's cwd, while the config
+// file still resolves against the launch directory.
+func TestSpansCarryBranchOfEventCwd(t *testing.T) {
+	t.Setenv("CLAUDE_PLUGIN_DATA", t.TempDir())
+	srv, spans, _ := collectingServer(t)
+
+	launch := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(launch, ".claude"), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(launch, ".claude", "dash0-agent-plugin.local.md"),
+		[]byte("---\notlp_url: "+srv.URL+"\n---\n"), 0o600))
+	t.Chdir(launch)
+
+	_, worktree := repoWithWorktree(t, "feat/x")
+	cwd := `"cwd":` + strconv.Quote(worktree)
+
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-cwd",`+cwd+`,"prompt":"hi"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-cwd",`+cwd+`,"model":"claude-opus-4-8"}`)
+
+	chat := findSpan(*spans, "chat")
+	require.NotNil(t, chat, "config in the launch directory must still configure the exporter")
+	assertStringAttr(t, chat.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
+	assertStringAttr(t, chat.Attributes, "dash0.gen_ai.vcs.repository.url.full", "https://github.com/acme/widgets")
+}
+
+// An agent can edit a worktree by absolute path without changing directory. The
+// tool span reports the edited file's branch; the chat span keeps the cwd's.
+func TestEditToolSpanCarriesBranchOfEditedFile(t *testing.T) {
+	t.Setenv("CLAUDE_PLUGIN_DATA", t.TempDir())
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+	t.Chdir(t.TempDir())
+
+	main, worktree := repoWithWorktree(t, "feat/x")
+	cwd := `"cwd":` + strconv.Quote(main)
+	input := `"tool_input":{"file_path":` + strconv.Quote(filepath.Join(worktree, "a.go")) + `,"old_string":"a","new_string":"b"}`
+
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-edit",`+cwd+`,"prompt":"hi"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Edit","tool_use_id":"tu1",`+input+`}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Edit","tool_use_id":"tu1",`+input+`,"tool_response":"ok"}`)
+	// A failed read under a directory that does not exist still names the worktree.
+	missing := `"tool_input":{"file_path":` + strconv.Quote(filepath.Join(worktree, "nope", "b.go")) + `}`
+	feed(t, `{"hook_event_name":"PostToolUseFailure","session_id":"sess-edit",`+cwd+`,"tool_name":"Read","tool_use_id":"tu2",`+missing+`,"error":"no such file"}`)
+	// A file outside any working tree falls back to the cwd's.
+	outside := `"tool_input":{"file_path":` + strconv.Quote(filepath.Join(t.TempDir(), "c.txt")) + `,"content":"x"}`
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Write","tool_use_id":"tu3",`+outside+`,"tool_response":"ok"}`)
+	// A notebook in the worktree names the worktree too.
+	notebook := `"tool_input":{"notebook_path":` + strconv.Quote(filepath.Join(worktree, "n.ipynb")) + `,"new_source":"x"}`
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"NotebookEdit","tool_use_id":"tu4",`+notebook+`,"tool_response":"ok"}`)
+	// A file in an unrelated repository must not export that repository.
+	other := filepath.Join(t.TempDir(), "other")
+	out, err := exec.Command("git", "init", "-q", "-b", "secret", other).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	out, err = exec.Command("git", "-C", other, "remote", "add", "origin", "https://github.com/client/private.git").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	unrelated := `"tool_input":{"file_path":` + strconv.Quote(filepath.Join(other, "notes.md")) + `}`
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+cwd+`,"tool_name":"Grep","tool_use_id":"tu5",`+unrelated+`,"tool_response":"ok"}`)
+	// With a cwd outside any repository, the edited worktree is the work itself.
+	nowhere := `"cwd":` + strconv.Quote(t.TempDir())
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-edit",`+nowhere+`,"tool_name":"MultiEdit","tool_use_id":"tu6",`+input+`,"tool_response":"ok"}`)
+	feed(t, `{"hook_event_name":"Stop","session_id":"sess-edit",`+cwd+`,"model":"claude-opus-4-8"}`)
+
+	tool := findSpan(*spans, "execute_tool Edit")
+	require.NotNil(t, tool)
+	assertStringAttr(t, tool.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
+
+	read := findSpan(*spans, "execute_tool Read")
+	require.NotNil(t, read)
+	assertStringAttr(t, read.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
+
+	write := findSpan(*spans, "execute_tool Write")
+	require.NotNil(t, write)
+	assertStringAttr(t, write.Attributes, "dash0.gen_ai.vcs.ref.head.name", "main")
+
+	nb := findSpan(*spans, "execute_tool NotebookEdit")
+	require.NotNil(t, nb)
+	assertStringAttr(t, nb.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
+
+	grep := findSpan(*spans, "execute_tool Grep")
+	require.NotNil(t, grep)
+	assertStringAttr(t, grep.Attributes, "dash0.gen_ai.vcs.ref.head.name", "main")
+	assertStringAttr(t, grep.Attributes, "dash0.gen_ai.vcs.repository.url.full", "https://github.com/acme/widgets")
+
+	multi := findSpan(*spans, "execute_tool MultiEdit")
+	require.NotNil(t, multi)
+	assertStringAttr(t, multi.Attributes, "dash0.gen_ai.vcs.ref.head.name", "feat/x")
+
+	chat := findSpan(*spans, "chat")
+	require.NotNil(t, chat)
+	assertStringAttr(t, chat.Attributes, "dash0.gen_ai.vcs.ref.head.name", "main")
+}
+
+// repoWithWorktree creates a repository on main with one commit and a linked
+// worktree on branch, and returns both directories.
+func repoWithWorktree(t *testing.T, branch string) (main, worktree string) {
+	t.Helper()
+	root := t.TempDir()
+	main = filepath.Join(root, "main")
+	worktree = filepath.Join(root, "wt")
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", main},
+		{"-C", main, "remote", "add", "origin", "git@github.com:acme/widgets.git"},
+		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", main, "worktree", "add", "-q", "-b", branch, worktree},
+	} {
+		out, err := exec.Command("git", args...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	return main, worktree
 }

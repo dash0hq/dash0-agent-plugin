@@ -4,6 +4,8 @@
 package vcs
 
 import (
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -193,4 +195,41 @@ func TestDetect(t *testing.T) {
 func TestDetectOutsideRepository(t *testing.T) {
 	t.Chdir(t.TempDir())
 	assert.Nil(t, Detect(), "expected nil outside a git working tree")
+}
+
+// TestDetectAtLinkedWorktree pins what PR attribution depends on: a linked
+// worktree reports its own branch, not the main checkout's.
+func TestDetectAtLinkedWorktree(t *testing.T) {
+	main, worktree := repoWithWorktree(t, "feat/x")
+	t.Chdir(t.TempDir())
+
+	info := DetectAt(worktree)
+	require.NotNil(t, info)
+	assert.Equal(t, "feat/x", info.RefHeadName)
+	assert.Equal(t, "https://github.com/acme/widgets", info.RepositoryURLFull)
+
+	info = DetectAt(main)
+	require.NotNil(t, info)
+	assert.Equal(t, "main", info.RefHeadName)
+
+	assert.Nil(t, DetectAt(t.TempDir()), "expected nil outside a git working tree")
+}
+
+// repoWithWorktree creates a repository on main with one commit and a linked
+// worktree on branch, and returns both directories.
+func repoWithWorktree(t *testing.T, branch string) (main, worktree string) {
+	t.Helper()
+	root := t.TempDir()
+	main = filepath.Join(root, "main")
+	worktree = filepath.Join(root, "wt")
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", main},
+		{"-C", main, "remote", "add", "origin", "git@github.com:acme/widgets.git"},
+		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", main, "worktree", "add", "-q", "-b", branch, worktree},
+	} {
+		out, err := exec.Command("git", args...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	return main, worktree
 }

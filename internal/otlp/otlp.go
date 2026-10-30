@@ -692,7 +692,41 @@ func teamSpanAttributes(cfg Config) []Attribute {
 // must run even outside a repository (Cursor spawns hooks with a CWD that isn't
 // always a working tree, and the user is still the user).
 func vcsSpanAttributes(cfg Config) []Attribute {
-	info := vcs.Detect()
+	return vcsInfoAttributes(vcs.Detect())
+}
+
+// toolVCSSpanAttributes is vcsSpanAttributes for a tool call. A tool that names
+// a file (Edit, Write, Read, NotebookEdit) reports the working tree holding that
+// file, which can be a linked worktree on another branch than the CWD's: agents
+// edit worktrees by absolute path without changing directory.
+//
+// The file's repository is kept only when it is the CWD's, or the CWD is in
+// none. Otherwise reading a file in an unrelated private repository would
+// export that repository's URL, which omit_io does not cover.
+func toolVCSSpanAttributes(event map[string]any) []Attribute {
+	cwdInfo := vcs.Detect()
+	input, _ := event["tool_input"].(map[string]any)
+	for _, key := range []string{"file_path", "notebook_path"} {
+		if path, _ := input[key].(string); path != "" {
+			// A failed call can name a directory that does not exist, which git
+			// cannot start in; ask from the nearest one that does.
+			dir := filepath.Dir(path)
+			for {
+				if _, err := os.Stat(dir); err == nil || filepath.Dir(dir) == dir {
+					break
+				}
+				dir = filepath.Dir(dir)
+			}
+			if info := vcs.DetectAt(dir); info != nil && (cwdInfo == nil || info.RepositoryURLFull == cwdInfo.RepositoryURLFull) {
+				return vcsInfoAttributes(info)
+			}
+			break
+		}
+	}
+	return vcsInfoAttributes(cwdInfo)
+}
+
+func vcsInfoAttributes(info *vcs.Info) []Attribute {
 	if info == nil {
 		return nil
 	}

@@ -26,41 +26,53 @@ type Info struct {
 // User identity is deliberately not part of this: it is not repository state
 // and must be reported even outside a working tree. See internal/identity.
 func Detect() *Info {
-	if err := git("rev-parse", "--git-dir"); err != nil {
+	return DetectAt("")
+}
+
+// DetectAt is Detect for the git working tree containing dir, which may be a
+// linked worktree on its own branch. An empty dir means the CWD.
+func DetectAt(dir string) *Info {
+	if err := git(dir, "rev-parse", "--git-dir"); err != nil {
 		return nil
 	}
 
 	info := &Info{}
 
-	if remote := gitOutput("remote", "get-url", "origin"); remote != "" {
+	if remote := gitOutput(dir, "remote", "get-url", "origin"); remote != "" {
 		info.RepositoryURLFull = normalizeRemoteURL(remote)
 		info.OwnerName, info.RepositoryName = parseOwnerRepo(info.RepositoryURLFull)
 		info.ProviderName = parseProvider(info.RepositoryURLFull)
 	}
 
-	if branch := gitOutput("rev-parse", "--abbrev-ref", "HEAD"); branch != "" && branch != "HEAD" {
+	if branch := gitOutput(dir, "rev-parse", "--abbrev-ref", "HEAD"); branch != "" && branch != "HEAD" {
 		info.RefHeadName = branch
 		info.RefHeadType = "branch"
-	} else if tag := gitOutput("describe", "--tags", "--exact-match", "HEAD"); tag != "" {
+	} else if tag := gitOutput(dir, "describe", "--tags", "--exact-match", "HEAD"); tag != "" {
 		info.RefHeadName = tag
 		info.RefHeadType = "tag"
 	}
 
-	info.RefHeadRevision = gitOutput("rev-parse", "HEAD")
+	info.RefHeadRevision = gitOutput(dir, "rev-parse", "HEAD")
 
 	return info
 }
 
-func git(args ...string) error {
-	return exec.Command("git", args...).Run()
+func git(dir string, args ...string) error {
+	return gitCmd(dir, args).Run()
 }
 
-func gitOutput(args ...string) string {
-	out, err := exec.Command("git", args...).Output()
+func gitOutput(dir string, args ...string) string {
+	out, err := gitCmd(dir, args).Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func gitCmd(dir string, args []string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir // empty means the CWD
+	return cmd
 }
 
 // normalizeRemoteURL converts SSH URLs to HTTPS and reduces the remote to the

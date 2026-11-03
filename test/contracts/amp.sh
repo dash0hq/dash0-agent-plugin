@@ -212,7 +212,13 @@ echo "== a source --plugin-repo run leaves the other platforms' helpers alone ==
 # delete the linux-amd64 helper a release install put there — and with it every
 # Orb, silently, because Amp reports nothing when the helper is missing.
 # The release route's pruning is not reachable here: it needs a published tag.
-ORB_HELPER="$REPO_PLUGIN/amp-on-event-linux-amd64"
+#
+# Deliberately not linux-amd64, which is the host on CI: the install writes
+# that name itself, so planting it would survive a prune that keeps only the
+# host and the case could never fail.
+OTHER_PLATFORM=linux-amd64
+[ "$HOST" != "$OTHER_PLATFORM" ] || OTHER_PLATFORM=darwin-arm64
+ORB_HELPER="$REPO_PLUGIN/amp-on-event-$OTHER_PLATFORM"
 touch "$ORB_HELPER"
 CONFIG_ASIDE=$(mktemp)
 mv "$HOME/.amp/dash0-agent-plugin.local.md" "$CONFIG_ASIDE"
@@ -248,8 +254,10 @@ case "$OUT" in
   *) echo "ERROR: --platforms with a source tree was not refused for being unproducible"; exit 1 ;;
 esac
 # Without a source tree the list is real, and an unknown entry must not reach
-# the download loop. Checked by message too: no release is fetched here.
-OUT=$(DASH0_SOURCE_DIR='' bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" --platforms sparc-v9 < /dev/null 2>&1 || true)
+# the download loop. DASH0_VERSION pins the release so nothing calls GitHub:
+# this contract is hermetic, and resolving "latest" would make an offline run
+# die before the platform check and fail this case for the wrong reason.
+OUT=$(DASH0_SOURCE_DIR='' DASH0_VERSION=0.0.0 bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" --platforms sparc-v9 < /dev/null 2>&1 || true)
 case "$OUT" in
   *"unsupported platform"*) : ;;
   *) echo "ERROR: install-amp.sh accepted an unsupported platform"; exit 1 ;;

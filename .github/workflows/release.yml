@@ -97,7 +97,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Build every artifact without publishing
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
           # Same as the release job; see there.
@@ -113,7 +113,7 @@ jobs:
             | sort >built.txt
           diff expected.txt built.txt || { echo "::error::dist is not what .goreleaser.yaml describes"; exit 1; }
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ needs.plan.outputs.version }}
           path: |
@@ -150,7 +150,7 @@ jobs:
         id: app
         # Only when there is a bump to push. Nothing else in this job uses it.
         if: needs.plan.outputs.bump_needed == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -241,7 +241,7 @@ jobs:
         # See the job's timeout. A draft left behind by the kill is removed at
         # the end, like any other failure before Publish.
         timeout-minutes: 40
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
           # Exact, because this step holds the signing keys. Keep in step with
@@ -566,7 +566,7 @@ jobs:
         if: steps.published.outputs.yes == 'true'
         with: { ref: '${{ needs.plan.outputs.tag }}' }
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.published.outputs.yes == 'true'
         with:
           node-version: 24

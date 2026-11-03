@@ -97,7 +97,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Build every artifact without publishing
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
           # Same as the release job; see there.
@@ -241,7 +241,7 @@ jobs:
         # See the job's timeout. A draft left behind by the kill is removed at
         # the end, like any other failure before Publish.
         timeout-minutes: 40
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
           # Exact, because this step holds the signing keys. Keep in step with

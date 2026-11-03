@@ -5,7 +5,7 @@
 # Drive one real Amp session and record everything needed to verify it.
 #
 # Amp has no shell hooks. The plugin is a TypeScript bridge that Amp loads
-# in-process from ~/.config/amp/plugins/dash0/, so there is no wrapper to
+# in-process from ~/.config/amp/plugins/dash0-agent-plugin/, so there is no wrapper to
 # intercept and no hook payload on disk to record. Two consequences shape this
 # driver, and both are the reason it looks unlike the other four:
 #

@@ -16,7 +16,7 @@ covers:
 ## Given
 
 The dash0 plugin **as this machine has it installed**, at
-`~/.config/amp/plugins/dash0/`, configured for this run through
+`~/.config/amp/plugins/dash0-agent-plugin/`, configured for this run through
 `AMP_PLUGIN_OPTION_*` so it exports to `ampDataset` in `qa/config.local.json`.
 The QA recorder is installed project-scoped alongside it. See `## Runtimes` in
 [../../setup.md](../../../setup.md).

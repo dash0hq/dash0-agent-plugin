@@ -2725,7 +2725,7 @@ for t in go python3 dash0 uuidgen amp bun; do command -v "$t" >/dev/null || echo
   loss rather than as an install problem.
 - **after.** none
 - **blocking.** true
-- **pass.** A line containing `plugins/dash0/index.ts active`, and a following
+- **pass.** A line containing `plugins/dash0-agent-plugin/index.ts active`, and a following
   line naming `agent.start`, `tool.call`, `tool.result` and `agent.end`.
 - **fail.** No `dash0` line at all means the plugin is not installed for this
   user, or `XDG_CONFIG_HOME` points somewhere without it. Reinstall with the
@@ -2738,14 +2738,14 @@ for t in go python3 dash0 uuidgen amp bun; do command -v "$t" >/dev/null || echo
   is the one used here rather than moving the install aside.
 
 ```sh
-amp plugins list 2>&1 | grep -A1 'plugins/dash0/index.ts active' \
+amp plugins list 2>&1 | grep -A1 'plugins/dash0-agent-plugin/index.ts active' \
   || echo "NOT LOADED: dash0 plugin absent from amp plugins list"
 ```
 
 ### amp-installed-plugin-matches-the-tree
 
 - **proves.** The plugin this machine will run is the one in this working tree.
-  Amp loads `index.ts` from `~/.config/amp/plugins/dash0/`, and the helper next to
+  Amp loads `index.ts` from `~/.config/amp/plugins/dash0-agent-plugin/`, and the helper next to
   it is a compiled copy, so neither follows a `git checkout`. A run against a
   stale copy reports defects that were already fixed, or misses ones that were
   just introduced, and nothing in the run output says which build it used.
@@ -2757,12 +2757,19 @@ amp plugins list 2>&1 | grep -A1 'plugins/dash0/index.ts active' \
   all (see below):
 
   ```sh
-  go build -buildvcs=false -o ~/.config/amp/plugins/dash0/amp-on-event ./cmd/amp-on-event
-  cp amp/index.ts ~/.config/amp/plugins/dash0/index.ts
+  go build -buildvcs=false -o ~/.config/amp/plugins/dash0-agent-plugin/amp-on-event ./cmd/amp-on-event
+  cp amp/index.ts ~/.config/amp/plugins/dash0-agent-plugin/index.ts
   ```
 
   Then restart Amp. A running session keeps the `index.ts` it loaded, so copying
   the file is not enough on its own.
+
+  These steps write a **system** install. If the machine's real install came
+  from a plugin repository (`amp clone user-plugins`, the route `amp/README.md`
+  leads with), that copy is now shadowed — system outranks personal — and stays
+  shadowed after the run. Check `amp plugins list` for a single
+  `dash0-agent-plugin` entry afterwards, and remove the system directory when
+  the run is over if the plugin repository is what the machine normally uses.
 
   A helper installed by the plain `amp/README.md` command reports `STALE` here
   the first time even when its source is identical. Reinstall once with the
@@ -2782,7 +2789,7 @@ amp plugins list 2>&1 | grep -A1 'plugins/dash0/index.ts active' \
   binary after any history operation.
 
 ```sh
-D="$HOME/.config/amp/plugins/dash0"
+D="$HOME/.config/amp/plugins/dash0-agent-plugin"
 diff -q "$D/index.ts" amp/index.ts >/dev/null && echo "index.ts current" || echo "index.ts STALE"
 # -buildvcs=false on both sides. Without it Go stamps the commit into the
 # binary and a byte comparison reports STALE on identical source.
@@ -2961,7 +2968,7 @@ qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-usage
   symptom as a broken plugin.
 - **after.** none
 - **blocking.** true for the orb arm only. Skip it for a local `amp` run.
-- **pass.** `~/.config/amp/plugins/dash0/index.ts` and `amp-on-event` both exist
+- **pass.** `~/.config/amp/plugins/dash0-agent-plugin/index.ts` and `amp-on-event` both exist
   in the orb, and `amp-on-event --version` runs there.
 - **fail.** either file missing, or the helper does not execute — the orb's
   architecture does not match the installed asset.

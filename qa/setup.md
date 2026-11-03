@@ -15,6 +15,11 @@ config_file: qa/config.local.json
 # documented Amp limitation rather than a bug to fix. No other arm was re-run
 # that day, so it is not a full pass either. That matters more than usual: the
 # skill fix touched shared internal/pipeline code.
+# 2026-11-03 re-ran the whole amp arm — every blocking check plus all eleven
+# specs — after the plugin directory was renamed to dash0-agent-plugin. Two
+# checks were repaired that day (they assumed the old path and a system
+# install); everything passed except the one spec documented as failing. No
+# other arm was re-run, so it is not a full pass.
 last_full_pass: 2026-08-25
 ---
 
@@ -2725,21 +2730,40 @@ for t in go python3 dash0 uuidgen amp bun; do command -v "$t" >/dev/null || echo
   loss rather than as an install problem.
 - **after.** none
 - **blocking.** true
-- **pass.** A line containing `plugins/dash0-agent-plugin/index.ts active`, and a following
-  line naming `agent.start`, `tool.call`, `tool.result` and `agent.end`.
+- **pass.** A line naming `dash0-agent-plugin` as `active`, and a following line
+  naming `agent.start`, `tool.call`, `tool.result` and `agent.end`.
 - **fail.** No `dash0` line at all means the plugin is not installed for this
   user, or `XDG_CONFIG_HOME` points somewhere without it. Reinstall with the
   build-and-copy steps in `amp/README.md`. A `dash0` line with fewer than four
   events means `index.ts` loaded but did not register; check it against the tree
   with `amp-installed-plugin-matches-the-tree`.
-- **verified.** 2026-09-15, signals: pass+fail. The fail half was provoked with
-  `XDG_CONFIG_HOME=/tmp/…`, which drops `dash0` from the list and leaves the
-  workspace plugins in place. That provocation mutates nothing, which is why it
-  is the one used here rather than moving the install aside.
+- **verified.** 2026-11-03, signals: pass + cannot-tell. The `NOT LOADED` half
+  has never been observed, because every non-mutating way to hide the plugin
+  also stops `amp plugins list` working — see below — and removing the install
+  to provoke it is the mutation this check exists to avoid. Treat a pass as
+  evidence the plugin is loaded, not as evidence this check can detect absence.
+
+  Matched on the name, not on a path: `amp plugins list` prints a path only for
+  a directory install, and prints `dash0-agent-plugin (User Plugins)` for the
+  plugin-repository route that `amp/README.md` now leads with. Keying on the
+  path reported a healthy install as absent, which is what prompted this repair.
+
+  The third branch is why this is not a one-line grep. `HOME=/tmp/… amp plugins
+  list` fails with `failed to load global plugins. Unable to connect`, and a
+  bare grep turns that into `NOT LOADED` — sending someone to reinstall a plugin
+  that was never the problem. The same shape appears offline or logged out.
 
 ```sh
-amp plugins list 2>&1 | grep -A1 'plugins/dash0-agent-plugin/index.ts active' \
-  || echo "NOT LOADED: dash0 plugin absent from amp plugins list"
+OUT=$(amp plugins list 2>&1 || true)
+case "$OUT" in
+  *Error*|*"failed to load"*)
+    echo "CANNOT TELL: amp plugins list failed: $(printf '%s' "$OUT" | head -1)" ;;
+  *dash0-agent-plugin*)
+    printf '%s\n' "$OUT" | grep -A1 -E 'dash0-agent-plugin.*active' \
+      || echo "NOT LOADED: dash0-agent-plugin is listed but not active" ;;
+  *)
+    echo "NOT LOADED: dash0 plugin absent from amp plugins list" ;;
+esac
 ```
 
 ### amp-installed-plugin-matches-the-tree
@@ -2756,25 +2780,34 @@ amp plugins list 2>&1 | grep -A1 'plugins/dash0-agent-plugin/index.ts active' \
   anything, with **`-buildvcs=false`**, which is what makes this check work at
   all (see below):
 
+  Into the directory the check printed as `comparing …`, **not** a fixed path.
+  Writing to `~/.config/amp/plugins/` when the machine's install came from a
+  plugin repository creates a second copy that outranks and permanently shadows
+  the first, and the next run of this check then passes against a tree Amp is
+  not the one loading.
+
   ```sh
-  go build -buildvcs=false -o ~/.config/amp/plugins/dash0-agent-plugin/amp-on-event ./cmd/amp-on-event
-  cp amp/index.ts ~/.config/amp/plugins/dash0-agent-plugin/index.ts
+  D=<the directory the check printed>
+  go build -buildvcs=false -o "$D/amp-on-event" ./cmd/amp-on-event   # or
+  go build -buildvcs=false -o "$D/amp-on-event-$HOST" ./cmd/amp-on-event
+  cp amp/index.ts "$D/index.ts"
   ```
+
+  Use whichever of the two helper names is already in that directory: a plugin
+  repository carries the per-platform one, a directory install the plain one.
 
   Then restart Amp. A running session keeps the `index.ts` it loaded, so copying
   the file is not enough on its own.
 
-  These steps write a **system** install. If the machine's real install came
-  from a plugin repository (`amp clone user-plugins`, the route `amp/README.md`
-  leads with), that copy is now shadowed — system outranks personal — and stays
-  shadowed after the run. Check `amp plugins list` for a single
-  `dash0-agent-plugin` entry afterwards, and remove the system directory when
-  the run is over if the plugin repository is what the machine normally uses.
-
   A helper installed by the plain `amp/README.md` command reports `STALE` here
   the first time even when its source is identical. Reinstall once with the
   command above and it stays quiet after that.
-- **verified.** 2026-09-15, signals: pass+fail. The `index.ts` half had both
+- **verified.** 2026-11-03, signals: pass+fail. Both halves observed that day:
+  the resolved directory was genuinely stale and the check said so, and it
+  passed after a rebuild. The resolver replaced a hardcoded
+  `~/.config/amp/plugins/…`, which found nothing on a machine installed from a
+  plugin repository and reported a healthy install as missing.
+  2026-09-15, signals: pass+fail. The `index.ts` half had both
   halves observed that day: the installed copy was genuinely stale before a
   reinstall and the check said so. The helper half was first written as a plain
   `cmp` against a fresh build and **that version was wrong** — it reported
@@ -2789,12 +2822,40 @@ amp plugins list 2>&1 | grep -A1 'plugins/dash0-agent-plugin/index.ts active' \
   binary after any history operation.
 
 ```sh
-D="$HOME/.config/amp/plugins/dash0-agent-plugin"
-diff -q "$D/index.ts" amp/index.ts >/dev/null && echo "index.ts current" || echo "index.ts STALE"
-# -buildvcs=false on both sides. Without it Go stamps the commit into the
-# binary and a byte comparison reports STALE on identical source.
-go build -buildvcs=false -o /tmp/amp-on-event.qa ./cmd/amp-on-event \
-  && { cmp -s /tmp/amp-on-event.qa "$D/amp-on-event" && echo "helper current" || echo "helper STALE"; }
+# Amp has several plugin roots and loads only the highest-precedence copy, so
+# the directory has to be resolved rather than assumed. Two copies is reported
+# rather than silently resolved: the stale check would otherwise pass against a
+# tree Amp is not the one running.
+HOST="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+# A glob loop, not `ls -d`: an interactive shell often aliases ls to a listing
+# with a header row, and the count then says two installs where there is one.
+DIRS=""; N=0
+for d in "$PWD/.amp/plugins/dash0-agent-plugin" \
+         "$HOME/.config/amp/plugins/dash0-agent-plugin" \
+         "$HOME"/.cache/amp/repositories/*/dash0-agent-plugin; do
+  [ -d "$d" ] || continue
+  DIRS="${DIRS}${d}
+"
+  N=$((N + 1))
+done
+if [ "$N" -eq 0 ]; then
+  echo "NO INSTALL: no dash0-agent-plugin directory in any Amp plugin root"
+elif [ "$N" -gt 1 ]; then
+  echo "AMBIGUOUS: more than one install; Amp loads one and the rest are dead:"
+  printf '%s\n' "$DIRS"
+else
+  D=$(printf '%s' "$DIRS" | tr -d '\n')
+  echo "comparing $D"
+  diff -q "$D/index.ts" amp/index.ts >/dev/null && echo "index.ts current" || echo "index.ts STALE"
+  # A plugin repository holds the helper under its per-platform name, because
+  # one directory serves every executor; a directory install uses the plain one.
+  H="$D/amp-on-event"
+  [ -f "$H" ] || H="$D/amp-on-event-$HOST"
+  # -buildvcs=false on both sides. Without it Go stamps the commit into the
+  # binary and a byte comparison reports STALE on identical source.
+  go build -buildvcs=false -o /tmp/amp-on-event.qa ./cmd/amp-on-event \
+    && { cmp -s /tmp/amp-on-event.qa "$H" && echo "helper current" || echo "helper STALE"; }
+fi
 ```
 
 ### amp-no-project-config-overrides-the-install

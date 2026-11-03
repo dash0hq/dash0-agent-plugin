@@ -239,6 +239,15 @@ func TestExtractSkillName(t *testing.T) {
 		{"map with skill field", map[string]any{"skill": "keybindings-help"}, "keybindings-help"},
 		{"map without skill field", map[string]any{"args": "something"}, ""},
 		{"nil input", nil, ""},
+		// Amp's skill tool names the field "name". Measured verbatim off the
+		// wire: {"event":"tool.call","payload":{"tool":"skill",
+		// "input":{"name":"qa-echo"}}}.
+		{"amp name field string", `{"name":"qa-echo"}`, "qa-echo"},
+		{"amp name field map", map[string]any{"name": "qa-echo"}, "qa-echo"},
+		// "skill" wins, so a harness sending both keeps its old answer.
+		{"skill beats name", map[string]any{"skill": "chosen", "name": "ignored"}, "chosen"},
+		{"empty skill falls back to name", map[string]any{"skill": "", "name": "qa-echo"}, "qa-echo"},
+		{"null name string", `{"name":null}`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -334,6 +343,22 @@ func TestEnrichToolEvent_skillSource(t *testing.T) {
 		}
 		EnrichToolEvent(event)
 		assert.Equal(t, "dash0-e2e-probe", event["skill_name"])
+		assert.Equal(t, skillSourceModel, event["skill_source"])
+	})
+
+	// OpenCode V2 reaches both: it sets skill_name from the event metadata and
+	// passes the tool's arguments through. The metadata is the resolved name,
+	// so an argument that disagrees must not rename the skill — without this
+	// the "name" key ExtractSkillName learned for Amp silently renames every
+	// OpenCode V2 skill span whose arguments spell it differently.
+	t.Run("the source's name beats a disagreeing argument", func(t *testing.T) {
+		event := map[string]any{
+			"tool_name":  "skill",
+			"skill_name": "from-metadata",
+			"tool_input": map[string]any{"name": "from-args"},
+		}
+		EnrichToolEvent(event)
+		assert.Equal(t, "from-metadata", event["skill_name"])
 		assert.Equal(t, skillSourceModel, event["skill_source"])
 	})
 

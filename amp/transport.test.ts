@@ -554,4 +554,30 @@ describe("toolDir", () => {
     // A file at the filesystem root still has a directory.
     expect(toolDir("edit_file", { path: "/a.ts" })).toBe("/");
   });
+
+  // We publish a windows-amd64 helper, and Amp names files the way the host
+  // does. Read as POSIX-only, every Windows span fell back to the folder Amp
+  // was opened in — the exact misattribution this function exists to stop.
+  test("reads Windows paths too", () => {
+    expect(toolDir("edit_file", { path: "C:\\repo\\sub\\a.ts" })).toBe(
+      "C:\\repo\\sub",
+    );
+    expect(toolDir("shell_command", { workdir: "C:\\repo" })).toBe("C:\\repo");
+    expect(
+      toolDir("apply_patch", {
+        patchText: "*** Begin Patch\n*** Update File: C:\\repo\\a.ts\n",
+      }),
+    ).toBe("C:\\repo");
+    // A UNC share is absolute without a drive letter.
+    expect(toolDir("edit_file", { path: "\\\\srv\\share\\a.ts" })).toBe(
+      "\\\\srv\\share",
+    );
+    // Node and Amp both accept forward slashes on Windows.
+    expect(toolDir("edit_file", { path: "C:/repo/a.ts" })).toBe("C:/repo");
+    // A file at the drive root: "C:" alone means the drive's *current*
+    // directory, which is not where the file is.
+    expect(toolDir("edit_file", { path: "C:\\a.ts" })).toBe("C:\\");
+    // Drive-relative and bare drive letters are not absolute.
+    expect(toolDir("edit_file", { path: "C:a.ts" })).toBeUndefined();
+  });
 });

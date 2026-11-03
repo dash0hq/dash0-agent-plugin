@@ -206,6 +206,24 @@ mv "$CONFIG_ASIDE" "$HOME/.amp/dash0-agent-plugin.local.md"
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: --plugin-repo laid out a per-platform plugin repository with no credentials"
 
+echo "== a --plugin-repo re-run drops helpers it no longer installs =="
+# Amp silently stops loading a plugin directory over roughly 14 MB, and the
+# installer's warning tells the user to install fewer platforms. That advice is
+# only true if a re-run actually removes the ones it dropped.
+STALE_HELPER="$REPO_PLUGIN/amp-on-event-linux-arm64"
+touch "$STALE_HELPER"
+CONFIG_ASIDE=$(mktemp)
+mv "$HOME/.amp/dash0-agent-plugin.local.md" "$CONFIG_ASIDE"
+bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" < /dev/null > /dev/null
+mv "$CONFIG_ASIDE" "$HOME/.amp/dash0-agent-plugin.local.md"
+fail=0
+[ ! -e "$STALE_HELPER" ] || { echo "ERROR: the re-run kept $STALE_HELPER"; fail=1; }
+[ -x "$REPO_PLUGIN/amp-on-event-$HOST" ] \
+  || { echo "ERROR: the re-run removed the helper it had just installed"; fail=1; }
+[ -f "$REPO_PLUGIN/index.ts" ] || { echo "ERROR: the re-run lost index.ts"; fail=1; }
+[ "$fail" -eq 0 ] || exit 1
+echo "PASS: the re-run removed the helper it no longer installs and kept the rest"
+
 echo "== --plugin-repo refuses the flags that would leak a token or pick two destinations =="
 for bad in --project "--token:secret"; do
   case "$bad" in

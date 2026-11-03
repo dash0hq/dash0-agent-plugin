@@ -142,6 +142,16 @@ case "$ARCH" in
 esac
 case "$OS" in
   darwin|linux) : ;;
+  # Git Bash and MSYS report MINGW64_NT-10.0-x. Accepted for --plugin-repo
+  # only, which is the route the docs send a Windows user down and the one
+  # where the host never runs a helper: the directory is filled for the
+  # platforms --platforms names and pushed. Every other route installs a
+  # helper for this machine to execute, and that is install-amp.ps1's job.
+  mingw*|msys*|cygwin*)
+    [ -n "$PLUGIN_REPO" ] \
+      || die "unsupported OS: $OS (on Windows use install-amp.ps1, or --plugin-repo to fill a plugin repository from here)"
+    OS="windows"
+    ;;
   *) die "unsupported OS: $OS (need darwin or linux; on Windows use install-amp.ps1)" ;;
 esac
 ok "detected $OS/$ARCH"
@@ -244,7 +254,13 @@ if [ -n "$SOURCE_DIR" ]; then
   # A source tree holds one binary, for the machine that built it, so a plugin
   # repository gets it under that machine's name. Cross-building the rest is
   # the release's job, not this path's.
-  if [ -n "$PLUGIN_REPO" ]; then BIN_PATH="$PLUGIN_DIR/amp-on-event-$OS-$ARCH"; fi
+  # index.ts looks for the .exe on Windows, so a Git Bash source install has
+  # to write the name it will later ask for.
+  if [ -n "$PLUGIN_REPO" ]; then
+    [ "$OS" = "windows" ] && EXE=".exe" || EXE=""
+    BIN_PATH="$PLUGIN_DIR/amp-on-event-$OS-$ARCH$EXE"
+    KEEP_ASSETS="amp-on-event-$OS-$ARCH$EXE"
+  fi
   cp "$SOURCE_DIR/amp-on-event" "$BIN_PATH" || die "could not copy amp-on-event"
   chmod +x "$BIN_PATH"
   if [ -f "$SOURCE_DIR/$SKILL_REL" ]; then
@@ -306,6 +322,7 @@ else
     for asset in $PLATFORM_ASSETS; do
       install_helper "$asset" "$PLUGIN_DIR/$asset"
     done
+    KEEP_ASSETS="$PLATFORM_ASSETS"
   else
     install_helper "$BIN_ASSET" "$BIN_PATH"
   fi
@@ -336,6 +353,20 @@ fi
 #     repository is shared and pushed. Credentials go in Amp's environment
 #     variables instead, which is also what reaches an Orb.
 if [ -n "$PLUGIN_REPO" ]; then
+  # A re-run writes only the helpers this run asked for, so without this the
+  # previous run's stay. That makes the warning below unactionable: it tells
+  # the user to install fewer platforms, and doing so would not shrink the
+  # directory. Runs after the installs, so a failed download leaves the
+  # working set alone.
+  for existing in "$PLUGIN_DIR"/amp-on-event-*; do
+    [ -f "$existing" ] || continue
+    keep=0
+    for asset in $KEEP_ASSETS; do
+      [ "$(basename "$existing")" = "$asset" ] && { keep=1; break; }
+    done
+    [ "$keep" -eq 1 ] || { rm -f "$existing" && ok "removed stale helper → $existing"; }
+  done
+
   # Amp drops an oversized plugin directory silently — it stops appearing in
   # `amp plugins list` with no error anywhere — so an install that would cause
   # that says so now rather than leaving the user to find it in an Orb.

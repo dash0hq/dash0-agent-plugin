@@ -182,6 +182,15 @@ const patchPath = /^\*\*\* (?:Update|Add|Delete) File: (.+)$/m;
  * which need not be either. Only absolute paths are read: a relative one would
  * have to be joined against a base we would be guessing at.
  */
+/** A POSIX root, a Windows drive letter, or a UNC share. */
+function absolutePath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(path) ||
+    path.startsWith("\\\\")
+  );
+}
+
 export function toolDir(tool: string, input: unknown): string | undefined {
   if (typeof input !== "object" || input === null) return undefined;
   const args = input as Record<string, unknown>;
@@ -191,9 +200,7 @@ export function toolDir(tool: string, input: unknown): string | undefined {
     // a directory already and must not have its last segment stripped.
     case "shell_command":
       path = args.workdir;
-      return typeof path === "string" && path.startsWith("/")
-        ? path
-        : undefined;
+      return typeof path === "string" && absolutePath(path) ? path : undefined;
     case "edit_file":
     case "create_file":
     case "view_media":
@@ -208,10 +215,12 @@ export function toolDir(tool: string, input: unknown): string | undefined {
     default:
       return undefined;
   }
-  if (typeof path !== "string" || !path.startsWith("/")) return undefined;
-  const cut = path.lastIndexOf("/");
-  // "/file" has its only separator at 0; the directory is the root, not "".
-  return cut <= 0 ? "/" : path.slice(0, cut);
+  if (typeof path !== "string" || !absolutePath(path)) return undefined;
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const dir = path.slice(0, cut);
+  // "/file" and "C:\file" are left with nothing and with the drive-relative
+  // "C:" respectively, neither of which is the root git has to start in.
+  return /^([A-Za-z]:)?$/.test(dir) ? path.slice(0, cut + 1) : dir;
 }
 
 export function register(amp: PluginAPI, send: (turn: Turn) => Promise<void>) {

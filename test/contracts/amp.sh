@@ -206,23 +206,26 @@ mv "$CONFIG_ASIDE" "$HOME/.amp/dash0-agent-plugin.local.md"
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: --plugin-repo laid out a per-platform plugin repository with no credentials"
 
-echo "== a --plugin-repo re-run drops helpers it no longer installs =="
-# Amp silently stops loading a plugin directory over roughly 14 MB, and the
-# installer's warning tells the user to install fewer platforms. That advice is
-# only true if a re-run actually removes the ones it dropped.
-STALE_HELPER="$REPO_PLUGIN/amp-on-event-linux-arm64"
-touch "$STALE_HELPER"
+echo "== a source --plugin-repo run leaves the other platforms' helpers alone =="
+# A source tree holds one binary, for the machine that built it, so this route
+# overlays rather than installs a complete set. Pruning to what it wrote would
+# delete the linux-amd64 helper a release install put there — and with it every
+# Orb, silently, because Amp reports nothing when the helper is missing.
+# The release route's pruning is not reachable here: it needs a published tag.
+ORB_HELPER="$REPO_PLUGIN/amp-on-event-linux-amd64"
+touch "$ORB_HELPER"
 CONFIG_ASIDE=$(mktemp)
 mv "$HOME/.amp/dash0-agent-plugin.local.md" "$CONFIG_ASIDE"
 bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" < /dev/null > /dev/null
 mv "$CONFIG_ASIDE" "$HOME/.amp/dash0-agent-plugin.local.md"
 fail=0
-[ ! -e "$STALE_HELPER" ] || { echo "ERROR: the re-run kept $STALE_HELPER"; fail=1; }
+[ -e "$ORB_HELPER" ] || { echo "ERROR: the source re-run deleted $ORB_HELPER"; fail=1; }
 [ -x "$REPO_PLUGIN/amp-on-event-$HOST" ] \
-  || { echo "ERROR: the re-run removed the helper it had just installed"; fail=1; }
+  || { echo "ERROR: the re-run lost the helper it had just installed"; fail=1; }
 [ -f "$REPO_PLUGIN/index.ts" ] || { echo "ERROR: the re-run lost index.ts"; fail=1; }
+rm -f "$ORB_HELPER"
 [ "$fail" -eq 0 ] || exit 1
-echo "PASS: the re-run removed the helper it no longer installs and kept the rest"
+echo "PASS: the source re-run kept the helpers it did not write"
 
 echo "== --plugin-repo refuses the flags that would leak a token or pick two destinations =="
 for bad in --project "--token:secret"; do
@@ -234,9 +237,24 @@ for bad in --project "--token:secret"; do
     echo "ERROR: install-amp.sh accepted --plugin-repo with $bad"; exit 1
   fi
 done
-bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" --platforms sparc-v9 < /dev/null >/dev/null 2>&1 \
-  && { echo "ERROR: install-amp.sh accepted an unsupported platform"; exit 1; }
-echo "PASS: --plugin-repo rejected --project, --token and an unknown platform"
+# A source tree has one helper, so a platform list promises binaries this run
+# cannot produce. Refused rather than ignored, and the message is asserted
+# because an unsupported-platform die would also exit non-zero here.
+# Captured rather than piped: this script runs under pipefail, so a pipeline
+# whose left side dies is a failure however the grep went.
+OUT=$(bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" --platforms sparc-v9 < /dev/null 2>&1 || true)
+case "$OUT" in
+  *DASH0_SOURCE_DIR*) : ;;
+  *) echo "ERROR: --platforms with a source tree was not refused for being unproducible"; exit 1 ;;
+esac
+# Without a source tree the list is real, and an unknown entry must not reach
+# the download loop. Checked by message too: no release is fetched here.
+OUT=$(DASH0_SOURCE_DIR='' bash "$REPO/install-amp.sh" --plugin-repo "$PLUGIN_REPO_DIR" --platforms sparc-v9 < /dev/null 2>&1 || true)
+case "$OUT" in
+  *"unsupported platform"*) : ;;
+  *) echo "ERROR: install-amp.sh accepted an unsupported platform"; exit 1 ;;
+esac
+echo "PASS: --plugin-repo rejected --project, --token, a source platform list and an unknown platform"
 
 echo "== --project uninstall leaves the machine-wide config alone =="
 # Before the user-level uninstall, which removes that config itself.

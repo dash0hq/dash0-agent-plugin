@@ -15,7 +15,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $Agent = 'opencode-v2'
-$Version = '0.1.30'
+$Version = '0.1.31'
 
 # Where the downloaded binary lives, matching internal/harness and the shell.
 if ($env:OPENCODE_V2_PLUGIN_DATA) {

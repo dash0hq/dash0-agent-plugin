@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/identity"
+	"github.com/dash0hq/dash0-agent-plugin/internal/vcs"
 )
 
 func TestSendLog(t *testing.T) {
@@ -830,4 +831,47 @@ func TestOTLPDebugReportsHTTPOutcomeWithoutCredentials(t *testing.T) {
 	require.Contains(t, string(data), `"phase":"finish","status":401`)
 	require.Contains(t, string(data), `"elapsed_ms":`)
 	require.NotContains(t, string(data), "PRIVATE")
+}
+
+// WithVCSDir reads a memoized slice, so appending identity onto it directly
+// would write into that slice's spare capacity and hand every later span
+// resolving the same directory the same slots to overwrite. Harmless only for
+// as long as identity is identical on every span, which is not a property
+// anything here guarantees.
+func TestWithVCSDirDoesNotShareTheMemoizedSlice(t *testing.T) {
+	ResetVCSDirCache()
+	// Six attributes, which is what a repository on a host parseProvider does
+	// not classify produces, so the memoized slice lands at len 6 of cap 8.
+	// With OmitUserInfo the two identity attributes then fit exactly in that
+	// spare capacity, which is the case where appending onto the cached slice
+	// writes into memory a later span is also handed. Seven attributes leave
+	// one spare slot, too few to fit, and the bug hides behind a reallocation.
+	detectVCSAt = func(string) *vcs.Info {
+		return &vcs.Info{
+			RepositoryURLFull: "https://custom-git.example.com/team/x",
+			RepositoryName:    "x",
+			OwnerName:         "team",
+			RefHeadName:       "main",
+			RefHeadRevision:   "abc123",
+			RefHeadType:       "branch",
+		}
+	}
+	t.Cleanup(func() { detectVCSAt = vcs.DetectAt })
+	// Pinned, not read from the host: a CI runner has no git identity and no
+	// resolvable account, so the real resolver returns nothing there and the
+	// spare-capacity arrangement this test depends on never arises.
+	pinIdentity(t, identity.Info{Name: "Guy Moses", Source: identity.SourceGit})
+	cfg := Config{OmitUserInfo: true}
+	require.Len(t, vcsSpanAttributesAt("/repo"), 6, "precondition: the memoized slice has spare capacity")
+	require.Len(t, identitySpanAttributes(cfg), 2, "precondition: identity fits in it")
+
+	first := cfg.WithVCSDir("/repo")
+	second := cfg.WithVCSDir("/repo")
+	require.Equal(t, *first.spanContext, *second.spanContext)
+
+	// Same contents, and they must not be the same memory: one span's
+	// attributes are not another's to overwrite.
+	before := append([]Attribute(nil), *second.spanContext...)
+	(*first.spanContext)[len(*first.spanContext)-1] = strAttr("clobbered", "yes")
+	require.Equal(t, before, *second.spanContext, "writing one span's attributes changed another's")
 }

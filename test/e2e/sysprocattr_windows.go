@@ -21,3 +21,7 @@ const createNewProcessGroup = 0x00000200
 func setNewProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewProcessGroup}
 }
+
+// Windows installer tests use PowerShell -NonInteractive with redirected stdin;
+// they do not need the Unix controlling-terminal isolation.
+func detachTerminal(_ *exec.Cmd) {}

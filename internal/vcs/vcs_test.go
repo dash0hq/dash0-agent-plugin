@@ -206,6 +206,7 @@ func TestDetectAtLinkedWorktree(t *testing.T) {
 	info := DetectAt(worktree)
 	require.NotNil(t, info)
 	assert.Equal(t, "feat/x", info.RefHeadName)
+	assert.Equal(t, "branch", info.RefHeadType)
 	assert.Equal(t, "https://github.com/acme/widgets", info.RepositoryURLFull)
 
 	info = DetectAt(main)
@@ -213,6 +214,9 @@ func TestDetectAtLinkedWorktree(t *testing.T) {
 	assert.Equal(t, "main", info.RefHeadName)
 
 	assert.Nil(t, DetectAt(t.TempDir()), "expected nil outside a git working tree")
+	// A failed tool call can name a path that was never created, and git cannot
+	// start in a directory that does not exist.
+	assert.Nil(t, DetectAt(filepath.Join(t.TempDir(), "gone")), "expected nil for a missing directory")
 }
 
 // repoWithWorktree creates a repository on main with one commit and a linked

@@ -42,8 +42,15 @@ vet: ## Run go vet.
 	go vet ./...
 
 .PHONY: test
-test: test-scripts ## Run Go unit + integration tests with the race detector.
+test: test-scripts test-amp ## Run Go unit + integration tests with the race detector.
 	go test -race -coverprofile=cover.out ./...
+
+.PHONY: test-amp
+test-amp: ## Test and type-check the native Amp bridge (requires Bun).
+	bun install --cwd amp --frozen-lockfile
+	bun run --cwd amp test
+	bun run --cwd amp typecheck
+	bun run --cwd amp lint
 
 .PHONY: test-scripts
 test-scripts: ## Run the unit tests for the Python diagnostic scripts.

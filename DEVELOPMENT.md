@@ -10,6 +10,7 @@ Use the Go version declared in `go.mod`. The GitHub Actions workflows read it
 from `go.mod`. `make go-version-check` checks that the Docker test harness uses
 the same version. The Makefile uses Bash and pins
 the lint tools it installs into `bin/`. Python 3 runs the diagnostic-script tests.
+Bun is required for the Amp bridge tests, including `make test` and `make ci`.
 
 ## Coding conventions
 
@@ -47,7 +48,8 @@ Then select the checks that cover the changed contract:
 | Command | Coverage |
 | --- | --- |
 | `make build` | All ordinary Go packages compile |
-| `make test` | Python diagnostic tests and Go tests with race detection and coverage |
+| `make test` | Python diagnostic tests, Amp bridge tests (Bun required), and Go tests with race detection and coverage |
+| `make test-amp` | Amp TypeScript bridge tests and type checking; requires Bun |
 | `make lint` | Go and shell lint, Go/Docker version agreement, release-pin agreement |
 | `make ci` | The local lint and test targets above, not every hosted CI job |
 | `GOOS=windows make golangci-lint`, `GOOS=darwin make golangci-lint` | Static checks for platform-specific Go code |
@@ -60,7 +62,23 @@ runs can overwrite each other's state or use the wrong mock collector.
 
 The full E2E suite needs agent CLIs and credentials. Claude, Codex and Copilot
 live canaries fail when their credentials are missing, and live runs consume
-provider budget. Do not run them as a credential-free smoke test. `make test-e2e`
+provider budget. Do not run them as a credential-free smoke test.
+
+Amp is the exception: its live canary
+(`TestE2EAmpLiveTurnReachesTheCollector`) **skips** unless `AMP_API_KEY` is set,
+because the repository has no Amp secret yet. Adding `AMP_API_KEY` to the
+repository secrets is what turns it on, and the skip should become a failure
+in the same change — otherwise a renamed or expired secret silently turns the
+only real-Amp check back into a no-op, which is how the other canaries behave
+and why they fail loudly instead. CI passes it on Linux only, since Amp
+ships an install script rather than an npm package and has no documented
+unattended Windows install. On a machine already logged into Amp, run it with
+`DASH0_AMP_LIVE=1 go test -tags=e2e -run TestE2EAmpLiveTurn ./test/e2e/` — it
+spends Amp credits on one turn. The other Amp case,
+`TestE2EAmpHelperDeliversACompletedTurn`, needs no CLI and no credentials and
+runs on both platforms; it is what covers the Windows-only failure modes in the
+Amp path, which `make test-amp` cannot reach because it needs Bun and runs on
+Linux only. `make test-e2e`
 takes no filter, so run a deterministic case directly with
 `go test -tags=e2e -run <Name> ./test/e2e/`. The runtime developer guides document
 examples and setup. Hosted CI runs E2E on Linux and Windows and ordinary Go tests
@@ -108,7 +126,7 @@ the new one last, once the binaries are published and proven downloadable:
 
 1. Check out the commit `main` pointed at when the button was pressed.
 2. Work out the version, write it everywhere, commit and tag — **locally**.
-3. Build every binary `.goreleaser.yaml` describes — 36 today: six agents,
+3. Build every binary `.goreleaser.yaml` describes — 42 today: seven agents,
    three platforms, two architectures — and upload them to a **draft** release.
 4. Verify: checksums, `dist/` matches that list by name, the Linux binary
    actually runs, and the uploaded assets match what was built.
@@ -224,10 +242,11 @@ Two gaps, neither closed here:
   `install-cursor.ps1` and `install-codex.ps1` *do* read it, so on Windows the
   variable is honoured at install time and ignored at event time.
 - **The installers do not validate it.** `install-cursor.sh`,
-  `install-codex.sh` and both `.ps1` installers read `DASH0_VERSION` into the
-  same download URL and filesystem path with no check. The bootstrap guard is
-  the second line of defence; by the time a hook runs, the installer has already
-  written the binary.
+  `install-codex.sh`, `install-amp.sh` and all three `.ps1` installers read
+  `DASH0_VERSION` into the same download URL and filesystem path with no check.
+  The bootstrap guard is the second line of defence; by the time a hook runs,
+  the installer has already written the binary. Amp has no bootstrap and so no
+  second line at all: `install-amp.sh` is the only place its version is read.
 
 > **No dev channel yet.** Cutting a prerelease from a feature branch and gating
 > the App credential by branch are mutually exclusive without splitting the job
@@ -277,6 +296,7 @@ Building, sideloading, and running local changes is documented per runtime:
 - **OpenAI Codex** — [codex/README.md](./codex/README.md)
 - **OpenCode V2** — [opencode-v2/README.md](./opencode-v2/README.md)
 - **GitHub Copilot CLI** — [copilot/README.md](./copilot/README.md)
+- **Amp CLI and Orbs** — [amp/README.md](./amp/README.md)
 
 ## Telemetry attributes
 
@@ -284,6 +304,15 @@ Spans follow [GenAI semantic conventions](https://opentelemetry.io/docs/specs/se
 
 Identity, VCS, and team attributes go on **every** span, the rest depend on the span type.
 Values are strings unless noted as integers.
+
+Amp's turn root is a `chat` span like every other harness. When usage export is
+enabled and matched, the answering message names the root and supplies its
+tokens; earlier model calls of the same turn stay separate zero-duration `chat`
+children, because one turn can use multiple models. Amp omits unavailable
+model/provider values. Its content follows the shared `omit_io` rule below;
+thinking blocks and image payloads are always dropped in the bridge.
+See [Amp's attribute and analytics compatibility](./amp/README.md#attribute-and-analytics-compatibility)
+for the span-shape exceptions and limits of operation-based metrics.
 
 > The four content attributes `gen_ai.input.messages`, `gen_ai.output.messages`,
 > `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` are replaced with `<REDACTED>`
@@ -311,7 +340,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 
 | Key | Value |
 |---|---|
-| `service.name` | Agent name — `claude-code` / `cursor` / `codex`, or the `agent_name` override |
+| `service.name` | Agent name — `claude-code` / `cursor` / `codex` / `github-copilot-cli` / `amp`, or the `agent_name` override |
 | `service.version` | Plugin version (`dev` in source runs) |
 
 ### On every span
@@ -320,7 +349,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 |---|---|---|
 | `gen_ai.provider.name` | `anthropic`, `openai`, `gcp.gemini`, `x_ai`, `deepseek`, `mistral_ai`, `cursor` | Resolved from the model prefix; else the runtime default (Claude `anthropic`, Codex `openai`; Cursor omits it when no model). |
 | `gen_ai.agent.name` | Agent name, or the sub-agent type on `invoke_agent` spans                      | |
-| `gen_ai.harness.name` | `claude-code` / `cursor` / `codex`                                             | |
+| `gen_ai.harness.name` | `claude-code` / `cursor` / `codex` / `github-copilot-cli` / `amp`              | |
 | `dash0.team.name` | e.g. `platform`                                                                | Only when `team_name` is set. |
 | `gen_ai.conversation.id` | Session ID                                                                     | From the event's `session_id`. |
 | `process.working_directory` | e.g. `/home/me/proj`                                                           | `~`-redacted when `omit_user_info`. |
@@ -356,7 +385,7 @@ omitted when its value is empty.
 | `gen_ai.usage.input_tokens` | integer                                                              |                                |
 | `gen_ai.usage.output_tokens` | integer                                                              |                                |
 | `gen_ai.usage.cache_read.input_tokens` | integer                                                              |                                |
-| `gen_ai.usage.cache_creation.input_tokens` | integer                                                              | All four runtimes. Codex reports it as `cache_write_input_tokens`; every value observed so far is zero, but the field is on the wire and is emitted as it comes. |
+| `gen_ai.usage.cache_creation.input_tokens` | integer                                                              | All five runtimes. Codex reports it as `cache_write_input_tokens`; every value observed so far is zero, but the field is on the wire and is emitted as it comes. Amp emits the exact per-model value from its thread export when present. |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens` | integer                                                              | Claude only. |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
 | `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript), Codex (from the rollout) and Copilot, all only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
@@ -377,6 +406,12 @@ omitted when its value is empty.
 | `dash0.gen_ai.credits.available` | boolean                                                              | Codex only. CLI ≥ ~14 Jul 2026. |
 | `dash0.gen_ai.credits.unlimited` | boolean                                                              | Codex only. |
 | `dash0.gen_ai.credits.balance` | float                                                                | Codex only. Omitted when unreported. |
+| `dash0.amp.turn.id` | The Amp message ID that started the turn, prefixed `s:` for an actor ID or `n:` for a legacy numeric one | Amp only. On both `chat` and `execute_tool`. Joins a turn's spans to the thread message that began it; the thread ID is `gen_ai.conversation.id`. The prefix keeps `"2"` and `2` distinct, which Amp treats as different messages. |
+| `dash0.amp.executor.kind` | `local` \| `remote` \| `unknown` | Amp only. On both `chat` and `execute_tool`. Where the turn ran, as Amp's plugin API reports it. `remote` is not proof that an executor is an Orb. |
+| `dash0.amp.truncated` | `true` | Amp only. On the turn root, and only when the bridge dropped content or tools to stay inside its envelope budget, so an absent content field on such a turn is a deliberate omission rather than an empty one. Absent on turns that kept everything. |
+| `dash0.amp.usage.status` | `disabled` \| `unavailable` \| `unsupported` \| `invalid` \| `partial` \| `matched` | Amp only. On the turn root. Why the turn does or does not carry tokens; usage export is on by default; `export_usage: false` or `AMP_PLUGIN_OPTION_EXPORT_USAGE=false` turns it off. `partial` means the thread had not finished persisting when the poll gave up, so some of the turn's assistant messages carried no usage record yet; the turn still exports, with every record it did find as a child and an unlabelled root. |
+| `dash0.amp.usage.source` | `thread-export` | Amp only. On the turn root when usage was matched. Names where the tokens came from, since Amp's hooks carry none. |
+| `dash0.amp.timing` | `observation` | Amp only. On the per-model-call usage child spans, which exist only when a turn's usage matched. Marks the span as a zero-duration observation recorded at turn completion rather than a measurement of provider request duration, so it must not be read as latency. |
 
 #### Skill invocations come by two routes
 

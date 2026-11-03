@@ -297,3 +297,128 @@ func TestUsageSpanIDsDifferAcrossTurns(t *testing.T) {
 	// made every trace reuse one span ID.
 	require.NotEqual(t, ids[0], ids[1])
 }
+
+// gitFixture builds a repository on main with a linked worktree on feat/x.
+func gitFixture(t *testing.T) (main, worktree string) {
+	t.Helper()
+	main = t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		require.NoError(t, cmd.Run(), "git %v", args)
+	}
+	run(main, "init", "--initial-branch=main", ".")
+	run(main, "remote", "add", "origin", "https://github.com/dash0hq/amp-branch-fixture")
+	require.NoError(t, os.WriteFile(filepath.Join(main, "a.txt"), []byte("a"), 0o644))
+	run(main, "add", "a.txt")
+	run(main, "commit", "-m", "first")
+	worktree = filepath.Join(t.TempDir(), "wt")
+	run(main, "worktree", "add", "-b", "feat/x", worktree)
+	return main, worktree
+}
+
+func spanAttrs(span otlp.Span) map[string]otlp.AttrValue {
+	attrs := map[string]otlp.AttrValue{}
+	for _, attr := range span.Attributes {
+		attrs[attr.Key] = attr.Value
+	}
+	return attrs
+}
+
+// The reason this package changed: AI SDLC Insights matches a session to a PR
+// on repository URL plus head branch, so a turn whose spans name the folder
+// Amp was opened in rather than the one it edited counts the PR as unassisted.
+func TestToolPathDecidesTheBranchNotTheWorkingDirectory(t *testing.T) {
+	otlp.ResetVCSDirCache()
+	main, worktree := gitFixture(t)
+	// Amp opened on the main checkout while the turn edits the worktree, which
+	// is how every t3 session in this repository runs.
+	t.Chdir(main)
+
+	start := time.Now()
+	turn := Turn{
+		ThreadID: "T-test", ID: json.RawMessage(`1`), Start: start,
+		End: start.Add(2 * time.Second), Status: "done", Executor: "local",
+		Tools: []Tool{
+			// Edit a file in the worktree, then run something. Amp puts a
+			// workdir on every shell_command, defaulting to the opened folder,
+			// so the later call is the one that would quietly win back the
+			// wrong branch if non-editing tools were allowed to elect it.
+			{ID: "edit", Name: "edit_file", Dir: worktree, Start: start, End: start.Add(time.Second), Status: "done"},
+			{ID: "sh", Name: "shell_command", Dir: main, Start: start.Add(time.Second), End: start.Add(2 * time.Second), Status: "done"},
+		},
+	}
+	req, err := BuildTrace(turn, nil, "disabled", otlp.Config{AgentName: "amp", OmitIO: true, OmitUserInfo: true, OmitIdentityFallback: true})
+	require.NoError(t, err)
+	spans := req.ResourceSpans[0].ScopeSpans[0].Spans
+	require.Len(t, spans, 3)
+
+	root, edit, shell := spanAttrs(spans[0]), spanAttrs(spans[1]), spanAttrs(spans[2])
+	wantURL := otlp.StringVal("https://github.com/dash0hq/amp-branch-fixture")
+
+	require.Equal(t, otlp.StringVal("feat/x"), root["dash0.gen_ai.vcs.ref.head.name"], "the chat span takes the branch of the file it edited")
+	require.Equal(t, wantURL, root["dash0.gen_ai.vcs.repository.url.full"])
+	require.Equal(t, otlp.StringVal("feat/x"), edit["dash0.gen_ai.vcs.ref.head.name"], "the editing tool span reports its own branch")
+	require.Equal(t, wantURL, edit["dash0.gen_ai.vcs.repository.url.full"])
+	// Each tool span reports where it actually ran, so a turn that spans two
+	// checkouts is not flattened onto one of them.
+	require.Equal(t, otlp.StringVal("main"), shell["dash0.gen_ai.vcs.ref.head.name"])
+}
+
+// A usage child observes the same turn as the root, so it has to name the same
+// repository. A live run caught these still reporting the spawn directory,
+// which on a non-repository parent meant no VCS attributes at all.
+func TestUsageSpansShareTheTurnsRepository(t *testing.T) {
+	otlp.ResetVCSDirCache()
+	main, worktree := gitFixture(t)
+	t.Chdir(main)
+
+	start := time.Now()
+	turn := Turn{
+		ThreadID: "T-test", ID: json.RawMessage(`1`), Start: start,
+		End: start.Add(time.Second), Status: "done", Executor: "local",
+		Tools: []Tool{{ID: "edit", Name: "edit_file", Dir: worktree, Start: start, End: start.Add(time.Second), Status: "done"}},
+	}
+	// Two records, so one names the root and the other stays a child span.
+	usage := []Usage{{Model: "gpt-6-astra"}, {Model: "claude-sonnet-4-6"}}
+	req, err := BuildTrace(turn, usage, "matched", otlp.Config{AgentName: "amp", OmitIO: true, OmitUserInfo: true, OmitIdentityFallback: true})
+	require.NoError(t, err)
+
+	spans := req.ResourceSpans[0].ScopeSpans[0].Spans
+	require.Len(t, spans, 3)
+	for _, span := range spans {
+		require.Equal(t, otlp.StringVal("feat/x"), spanAttrs(span)["dash0.gen_ai.vcs.ref.head.name"], "span %q", span.Name)
+	}
+}
+
+// A turn that edits nothing, or edits outside a repository, must keep the
+// behaviour it had before: the folder the helper was spawned in.
+func TestBranchFallsBackToTheWorkingDirectory(t *testing.T) {
+	otlp.ResetVCSDirCache()
+	main, _ := gitFixture(t)
+	t.Chdir(main)
+	outside := t.TempDir()
+
+	start := time.Now()
+	for _, tc := range []struct {
+		name  string
+		tools []Tool
+	}{
+		{"no tools at all", nil},
+		{"an edit outside any repository", []Tool{{ID: "e", Name: "edit_file", Dir: outside, Start: start, End: start.Add(time.Second), Status: "done"}}},
+		{"an edit with no directory", []Tool{{ID: "e", Name: "edit_file", Start: start, End: start.Add(time.Second), Status: "done"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			turn := Turn{ThreadID: "T-test", ID: json.RawMessage(`1`), Start: start, End: start.Add(2 * time.Second), Status: "done", Executor: "local", Tools: tc.tools}
+			req, err := BuildTrace(turn, nil, "disabled", otlp.Config{AgentName: "amp", OmitIO: true, OmitUserInfo: true, OmitIdentityFallback: true})
+			require.NoError(t, err)
+			root := spanAttrs(req.ResourceSpans[0].ScopeSpans[0].Spans[0])
+			require.Equal(t, otlp.StringVal("main"), root["dash0.gen_ai.vcs.ref.head.name"])
+		})
+	}
+}

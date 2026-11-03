@@ -1,6 +1,6 @@
 # Repository guidance
 
-This repository exports coding-agent activity as OpenTelemetry. It ships six
+This repository exports coding-agent activity as OpenTelemetry. It ships seven
 runtime integrations backed by shared Go code. Read [ARCHITECTURE.md](ARCHITECTURE.md)
 before changing package ownership or event processing, and
 [DEVELOPMENT.md](DEVELOPMENT.md) for coding conventions and verification commands.
@@ -9,7 +9,8 @@ before changing package ownership or event processing, and
 
 - Read the developer README for the affected runtime: [Claude](claude/README.md),
   [Cursor](cursor/README.md), [Codex](codex/README.md), [Copilot](copilot/README.md),
-  [OpenCode V2](opencode-v2/README.md), or [Copilot app](copilot-app/README.md).
+  [OpenCode V2](opencode-v2/README.md), [Copilot app](copilot-app/README.md), or
+  [Amp](amp/README.md).
 - Keep runtime payload translation in `internal/source/<runtime>/`, hook I/O and
   runtime orchestration in `cmd/<runtime>-on-event/`, and shared lifecycle behavior
   in `internal/pipeline/`. The architecture document describes the existing exceptions.

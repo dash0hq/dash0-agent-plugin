@@ -35,13 +35,17 @@ die() { echo "::error::$1" >&2; exit 1; }
 BASE="https://github.com/${GITHUB_REPOSITORY:-dash0hq/dash0-agent-plugin}/releases/download/v${VERSION}"
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64
            windows-amd64 windows-arm64)
+# install-amp.sh rather than a bootstrap: Amp loads a native plugin and has no
+# wrapper script, so the installer is the thing that names the release assets.
+# It is parsed the same way, which is why it builds its asset name from AGENT.
 BOOTSTRAPS=(claude/claude-on-event.sh cursor/cursor-on-event.sh
             codex/codex-on-event.sh copilot/copilot-on-event.sh
-            opencode-v2/opencode-v2-on-event.sh copilot-app/copilot-app-on-event.sh)
+            opencode-v2/opencode-v2-on-event.sh copilot-app/copilot-app-on-event.sh
+            install-amp.sh)
 # The Windows bootstraps ask for windows assets only, and always with .exe.
 PS_BOOTSTRAPS=(cursor/cursor-on-event.ps1 codex/codex-on-event.ps1
                copilot/copilot-on-event.ps1 opencode-v2/opencode-v2-on-event.ps1
-               copilot-app/copilot-app-on-event.ps1)
+               copilot-app/copilot-app-on-event.ps1 install-amp.ps1)
 
 # 403 is retried alongside 429 and 5xx: it is what github.com answers for
 # anonymous rate limiting, and this script makes about thirty unauthenticated
@@ -142,7 +146,7 @@ fi
 # other's, with a warning to remove the stale entry. Failing instead would turn
 # every PR red between a release and that one-line cleanup. Never skipped under
 # --strict.
-UNRELEASED_AGENTS=(opencode-v2 copilot-app)
+UNRELEASED_AGENTS=(amp)
 fail=0
 predates() { # <agent> <candidate names…>
   local agent="$1" name listed

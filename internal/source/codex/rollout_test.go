@@ -467,6 +467,80 @@ func TestReadRolloutParsesCredits(t *testing.T) {
 	}
 }
 
+// A balance type mismatch used to discard the entire token_count record. An
+// optional account field must not suppress measured usage or other rate limits.
+func TestCreditBalancePreservesTokenUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name, balance string
+		want          *float64
+	}{
+		{"number", `12.5`, floatPtr(12.5)},
+		{"numeric string", `"12.5000000000"`, floatPtr(12.5)},
+		{"number zero", `0`, floatPtr(0)},
+		{"string zero", `"0.0000000000"`, floatPtr(0)},
+		{"absent", ``, nil},
+		{"null", `null`, nil},
+		{"empty string", `""`, nil},
+		{"invalid string", `"unknown"`, nil},
+		{"nonfinite string", `"NaN"`, nil},
+		{"infinite string", `"Infinity"`, nil},
+		{"overflow number", `1e400`, nil},
+		{"overflow string", `"1e400"`, nil},
+		{"boolean", `true`, nil},
+		{"object", `{}`, nil},
+		{"array", `[]`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			balance := ""
+			if tc.balance != "" {
+				balance = `,"balance":` + tc.balance
+			}
+			path := filepath.Join(t.TempDir(), "rollout.jsonl")
+			content := `{"type":"event_msg","payload":{"type":"token_count",` +
+				`"info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":60,"cache_write_input_tokens":5,"output_tokens":7,"reasoning_output_tokens":3}},` +
+				`"rate_limits":{"plan_type":"pro","primary":{"used_percent":10,"window_minutes":300,"resets_at":123},` +
+				`"credits":{"has_credits":true,"unlimited":false` + balance + `}}}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+			r, err := ReadRollout(path)
+			require.NoError(t, err)
+			require.NotNil(t, r.Usage, "credit metadata must not discard measured tokens")
+			assert.Equal(t, &Usage{
+				InputTokens:              100,
+				CacheReadInputTokens:     60,
+				CacheCreationInputTokens: 5,
+				OutputTokens:             7,
+				ReasoningOutputTokens:    3,
+			}, r.Usage)
+			require.NotNil(t, r.Limits)
+			require.NotNil(t, r.Limits.Credits)
+			assert.Equal(t, tc.want, r.Limits.Credits.Balance)
+
+			out := Normalize(map[string]any{
+				"hook_event_name": "Stop",
+				"session_id":      "credit-balance-test",
+				"transcript_path": path,
+			}, t.TempDir(), time.Unix(123, 0).UTC())
+			require.NotNil(t, out)
+			assert.Equal(t, int64(100), out["gen_ai.usage.input_tokens"])
+			assert.Equal(t, int64(60), out["gen_ai.usage.cache_read.input_tokens"])
+			assert.Equal(t, int64(5), out["gen_ai.usage.cache_creation.input_tokens"])
+			assert.Equal(t, int64(7), out["gen_ai.usage.output_tokens"])
+			assert.Equal(t, int64(3), out["gen_ai.usage.reasoning.output_tokens"])
+			assert.Equal(t, "subscription", out["dash0.gen_ai.billing_mode"])
+			assert.Equal(t, "pro", out["dash0.gen_ai.plan_type"])
+			assert.Equal(t, 10.0, out["dash0.gen_ai.rate_limit.primary.used_percent"])
+			assert.Equal(t, true, out["dash0.gen_ai.credits.available"])
+			assert.Equal(t, false, out["dash0.gen_ai.credits.unlimited"])
+			if tc.want == nil {
+				assert.NotContains(t, out, "dash0.gen_ai.credits.balance")
+			} else {
+				assert.Equal(t, *tc.want, out["dash0.gen_ai.credits.balance"])
+			}
+		})
+	}
+}
+
 // rate_limit_reached_type is null until a limit is actually hit, at which point
 // it names which window blocked. Never observed populated in captured sessions,
 // so the non-null shape here is the documented field, not a verified sample.

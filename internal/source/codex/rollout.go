@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -336,9 +337,11 @@ type codexRateLimits struct {
 	Secondary   *codexWindow `json:"secondary"`
 	ReachedType string       `json:"rate_limit_reached_type"`
 	Credits     *struct {
-		HasCredits bool     `json:"has_credits"`
-		Unlimited  bool     `json:"unlimited"`
-		Balance    *float64 `json:"balance"`
+		HasCredits bool `json:"has_credits"`
+		Unlimited  bool `json:"unlimited"`
+		// Codex can report a decimal string. Decode this optional field
+		// separately so an unsupported balance cannot discard token usage.
+		Balance json.RawMessage `json:"balance"`
 	} `json:"credits"`
 }
 
@@ -348,6 +351,20 @@ type codexWindow struct {
 	UsedPercent   float64 `json:"used_percent"`
 	WindowMinutes int64   `json:"window_minutes"`
 	ResetsAt      int64   `json:"resets_at"`
+}
+
+// creditBalance accepts JSON numbers and numeric strings. Missing, null or
+// unrecognized values stay absent rather than becoming a measured zero.
+func creditBalance(raw json.RawMessage) *float64 {
+	var number json.Number
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &number) != nil {
+		return nil
+	}
+	value, err := number.Float64()
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	return &value
 }
 
 // newWindow converts a wire window, preserving absence: a null slot stays nil
@@ -488,7 +505,7 @@ func ReadRollout(rolloutPath string) (*Rollout, error) {
 					l.Credits = &Credits{
 						HasCredits: c.HasCredits,
 						Unlimited:  c.Unlimited,
-						Balance:    c.Balance,
+						Balance:    creditBalance(c.Balance),
 					}
 				}
 				limits = &l

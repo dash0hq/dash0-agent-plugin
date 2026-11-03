@@ -64,6 +64,9 @@ DASH0_TEAM_NAME="${DASH0_TEAM_NAME:-}"
 PROJECT_SCOPE=0
 PLUGIN_REPO=""
 PLATFORMS=""
+# The helpers this run is responsible for. Empty means it is not responsible
+# for any, and the prune in 5b stays off. set -u makes the distinction load-bearing.
+KEEP_ASSETS=""
 TOKEN_FLAG=0
 
 while [ $# -gt 0 ]; do
@@ -126,6 +129,10 @@ if [ -n "$PLUGIN_REPO" ]; then
   # Refusing the flag rather than ignoring it: someone who passed --token and
   # saw a success line would reasonably believe the credential was stored.
   [ "$TOKEN_FLAG" -eq 0 ] || die "--token cannot be used with --plugin-repo; the repository is shared, so credentials go in AMP_PLUGIN_OPTION_* instead"
+  # A source tree holds one binary. Accepting a platform list here would say
+  # the run installs helpers it has no way to produce.
+  [ -z "$SOURCE_DIR" ] || [ -z "$PLATFORMS" ] \
+    || die "--platforms cannot be used with DASH0_SOURCE_DIR; a source tree has one helper, for the machine that built it"
 elif [ -n "$PLATFORMS" ]; then
   die "--platforms only applies to --plugin-repo; one machine runs one platform"
 fi
@@ -259,7 +266,10 @@ if [ -n "$SOURCE_DIR" ]; then
   if [ -n "$PLUGIN_REPO" ]; then
     [ "$OS" = "windows" ] && EXE=".exe" || EXE=""
     BIN_PATH="$PLUGIN_DIR/amp-on-event-$OS-$ARCH$EXE"
-    KEEP_ASSETS="amp-on-event-$OS-$ARCH$EXE"
+    # KEEP_ASSETS stays unset, which switches the prune below off: this path
+    # overlays one helper onto whatever is there and has no opinion about the
+    # others. Pruning to the single binary it wrote would delete the
+    # linux-amd64 helper a release install put there, and with it the Orbs.
   fi
   cp "$SOURCE_DIR/amp-on-event" "$BIN_PATH" || die "could not copy amp-on-event"
   chmod +x "$BIN_PATH"
@@ -358,14 +368,18 @@ if [ -n "$PLUGIN_REPO" ]; then
   # the user to install fewer platforms, and doing so would not shrink the
   # directory. Runs after the installs, so a failed download leaves the
   # working set alone.
-  for existing in "$PLUGIN_DIR"/amp-on-event-*; do
-    [ -f "$existing" ] || continue
-    keep=0
-    for asset in $KEEP_ASSETS; do
-      [ "$(basename "$existing")" = "$asset" ] && { keep=1; break; }
+  # Empty for a source install, which overlays one helper and must not judge
+  # the rest.
+  if [ -n "$KEEP_ASSETS" ]; then
+    for existing in "$PLUGIN_DIR"/amp-on-event-*; do
+      [ -f "$existing" ] || continue
+      keep=0
+      for asset in $KEEP_ASSETS; do
+        [ "$(basename "$existing")" = "$asset" ] && { keep=1; break; }
+      done
+      [ "$keep" -eq 1 ] || { rm -f "$existing" && ok "removed stale helper → $existing"; }
     done
-    [ "$keep" -eq 1 ] || { rm -f "$existing" && ok "removed stale helper → $existing"; }
-  done
+  fi
 
   # Amp drops an oversized plugin directory silently — it stops appearing in
   # `amp plugins list` with no error anywhere — so an install that would cause

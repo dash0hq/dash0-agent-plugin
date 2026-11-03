@@ -390,7 +390,7 @@ if [ -n "$PLUGIN_REPO" ]; then
     warn "directory somewhere above ~14 MB. Install fewer platforms with --platforms."
   fi
   printf '\n%sNext steps%s\n' "$C_B" "$C_N"
-  printf "  1. Commit and push: git -C %s add dash0 && git -C %s commit -m 'Add the Dash0 plugin' && git -C %s push\n" \
+  printf "  1. Commit and push: git -C %s add dash0-agent-plugin && git -C %s commit -m 'Add the Dash0 plugin' && git -C %s push\n" \
     "$PLUGIN_REPO" "$PLUGIN_REPO" "$PLUGIN_REPO"
   printf "  2. Set credentials in Amp's environment variables — /settings/environment-variables,\n"
   printf "     or /workspace/environment-variables for everyone:\n"

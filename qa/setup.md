@@ -2737,11 +2737,12 @@ for t in go python3 dash0 uuidgen amp bun; do command -v "$t" >/dev/null || echo
   build-and-copy steps in `amp/README.md`. A `dash0` line with fewer than four
   events means `index.ts` loaded but did not register; check it against the tree
   with `amp-installed-plugin-matches-the-tree`.
-- **verified.** 2026-11-03, signals: pass + cannot-tell. The `NOT LOADED` half
-  has never been observed, because every non-mutating way to hide the plugin
-  also stops `amp plugins list` working — see below — and removing the install
-  to provoke it is the mutation this check exists to avoid. Treat a pass as
-  evidence the plugin is loaded, not as evidence this check can detect absence.
+- **verified.** 2026-11-03, signals: pass + not-loaded + cannot-tell. All three
+  branches were observed, the two failing ones by feeding the `case` a captured
+  line rather than by hiding the real install: every non-mutating way to do
+  that also stops `amp plugins list` working, and removing the install is the
+  mutation this check exists to avoid. So absence is proven against Amp's
+  output *format*, not against a genuinely absent plugin.
 
   Matched on the name, not on a path: `amp plugins list` prints a path only for
   a directory install, and prints `dash0-agent-plugin (User Plugins)` for the
@@ -2753,13 +2754,20 @@ for t in go python3 dash0 uuidgen amp bun; do command -v "$t" >/dev/null || echo
   bare grep turns that into `NOT LOADED` — sending someone to reinstall a plugin
   that was never the problem. The same shape appears offline or logged out.
 
+  The `\b` anchors are load-bearing: `inactive` ends in `active`, so a loose
+  `.*active` reports a disabled plugin as loaded, and the session that follows
+  exports nothing while this check says the install is fine. `inactive` is a
+  real string in the `amp` binary, not a hypothetical one.
+
 ```sh
 OUT=$(amp plugins list 2>&1 || true)
 case "$OUT" in
   *Error*|*"failed to load"*)
     echo "CANNOT TELL: amp plugins list failed: $(printf '%s' "$OUT" | head -1)" ;;
   *dash0-agent-plugin*)
-    printf '%s\n' "$OUT" | grep -A1 -E 'dash0-agent-plugin.*active' \
+    # \bactive\b, not .*active: "inactive" ends in "active", so the loose
+    # pattern passes a disabled plugin and the session then exports nothing.
+    printf '%s\n' "$OUT" | grep -A1 -E 'dash0-agent-plugin.*\bactive\b' \
       || echo "NOT LOADED: dash0-agent-plugin is listed but not active" ;;
   *)
     echo "NOT LOADED: dash0 plugin absent from amp plugins list" ;;

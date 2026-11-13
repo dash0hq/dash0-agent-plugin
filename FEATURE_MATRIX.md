@@ -235,6 +235,7 @@ Amp does. See [the Pi developer guide](pi/README.md).
 | Tools | `tool_execution_start` / `_end`, so blocked, unknown and invalid calls also get a span. Nested calls, for example from `codemode`, are children of the calling tool |
 | Aborted turns | `agent_settled.aborted`; root status `Error` with `Pi turn aborted` |
 | Forks | `dash0.pi.session.parent.id` from the session header. Sub-agents that run as separate `pi` processes are not linked |
+| Sub-agents (pi-subagents) | Foreground: `invoke_agent <agent>` under `execute_tool subagent`, with one aggregate `chat` span that carries the child's total tokens from the tool result. Background: a separate session linked by `dash0.pi.session.parent.id`, not in the parent trace |
 | Content | Prompt, last answer, tool arguments and results under the shared `omit_io` rule; thinking and image blocks dropped in the extension |
 | Failures | Detached helper; a turn never waits for export. One `dash0: telemetry unavailable` notice per session |
 | Installation | From source: build `pi/pi-on-event`, then `pi -e pi/index.ts`, `pi install <path>`, or a `settings.json` `extensions` entry. Releases build `pi-on-event-<os>-<arch>`; no installer or Pi package yet |

@@ -51,6 +51,7 @@ async function load(dir: string) {
     sessionManager: {
       getSessionId: () => "019a-transport",
       getHeader: () => ({}),
+      getSessionFile: () => undefined,
     },
     modelRegistry: {
       isUsingOAuth: (m: { provider: string }) => m.provider === "claude-code",

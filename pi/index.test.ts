@@ -3,7 +3,13 @@
 
 import { expect, test } from "bun:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { billingMode, register, sessionIDFromPath, type Turn } from "./index";
+import {
+  billingMode,
+  register,
+  sessionIDFromPath,
+  subagentsOf,
+  type Turn,
+} from "./index";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -18,6 +24,7 @@ function setup(session = "019a-session", parentSession?: string) {
     sessionManager: {
       getSessionId: () => session,
       getHeader: () => ({ parentSession }),
+      getSessionFile: () => `/sessions/${session}.jsonl`,
     },
     modelRegistry: registry({ "claude-code": [true, true] }),
   };
@@ -357,4 +364,131 @@ test("malformed events are ignored, never thrown", () => {
     fire("agent_settled", { aborted: false });
   }).not.toThrow();
   expect(sent).toHaveLength(0);
+});
+
+/** A foreground pi-subagents result, as 0.88.0 shapes it. */
+const subagentResult = (rows: unknown[]) => ({
+  content: [{ type: "text", text: "done" }],
+  details: { mode: "single", results: rows },
+});
+const childRow = (extra: Record<string, unknown> = {}) => ({
+  agent: "delegate",
+  exitCode: 0,
+  model: "claude-code/claude-haiku-4-5",
+  sessionFile: "/sessions/parent/run-0/session.jsonl",
+  usage: {
+    input: 4,
+    output: 460,
+    cacheRead: 5145,
+    cacheWrite: 5211,
+    cost: 0.013,
+    turns: 2,
+  },
+  ...extra,
+});
+
+test("a foreground subagent call carries its children's totals", () => {
+  const { sent, fire } = setup();
+  fire("before_agent_start", { messageType: "user", prompt: "delegate" });
+  fire("tool_execution_start", { toolCallId: "c1", toolName: "subagent" });
+  fire("tool_execution_end", {
+    toolCallId: "c1",
+    toolName: "subagent",
+    isError: false,
+    result: subagentResult([
+      childRow(),
+      childRow({ agent: "scout", exitCode: 1, model: "openai-codex/gpt-5.5" }),
+    ]),
+  });
+  fire("agent_settled", { aborted: false });
+  expect(sent[0].tools[0].subagents).toEqual([
+    {
+      agent: "delegate",
+      model: "claude-code/claude-haiku-4-5",
+      usage: { input: 4, output: 460, cache_read: 5145, cache_write: 5211 },
+      turns: 2,
+      billing_mode: "subscription",
+      failed: false,
+    },
+    {
+      agent: "scout",
+      model: "openai-codex/gpt-5.5",
+      usage: { input: 4, output: 460, cache_read: 5145, cache_write: 5211 },
+      turns: 2,
+      billing_mode: "unknown",
+      failed: true,
+    },
+  ]);
+});
+
+test("a background launch and other tools have no children", () => {
+  const { sent, fire } = setup();
+  fire("before_agent_start", { messageType: "user", prompt: "x" });
+  fire("tool_execution_start", { toolCallId: "c1", toolName: "subagent" });
+  fire("tool_execution_end", {
+    toolCallId: "c1",
+    toolName: "subagent",
+    result: { details: { mode: "single", results: [], asyncId: "run-1" } },
+  });
+  fire("tool_execution_start", { toolCallId: "c2", toolName: "bash" });
+  fire("tool_execution_end", {
+    toolCallId: "c2",
+    toolName: "bash",
+    result: subagentResult([childRow()]),
+  });
+  fire("agent_settled", { aborted: false });
+  expect(sent[0].tools.map((t) => t.subagents)).toEqual([undefined, undefined]);
+});
+
+test("malformed subagent results give no children, never throw", () => {
+  const ctx = { modelRegistry: undefined } as unknown as Parameters<
+    typeof subagentsOf
+  >[0];
+  for (const details of [
+    undefined,
+    null,
+    "x",
+    { results: "x" },
+    { results: [null, 1, { agent: "" }, { agent: 5 }] },
+  ])
+    expect(subagentsOf(ctx, details)).toBeUndefined();
+  expect(
+    subagentsOf(ctx, { results: [{ agent: "a", usage: { input: -1 } }] }),
+  ).toEqual([
+    {
+      agent: "a",
+      model: undefined,
+      usage: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      turns: 0,
+      billing_mode: undefined,
+      failed: true,
+    },
+  ]);
+});
+
+// With pi-subagents' defaultSubagentOnlyExtensions, this extension also loads
+// into a foreground child, in the same process. The child then exports its
+// own session, and the parent must not count the same tokens again.
+test("a child that exported itself keeps its agent but not its tokens", () => {
+  const child = setup("019a-child");
+  child.fire("session_start", { reason: "startup" });
+  const parent = setup();
+  parent.fire("before_agent_start", { messageType: "user", prompt: "x" });
+  parent.fire("tool_execution_start", {
+    toolCallId: "c1",
+    toolName: "subagent",
+  });
+  parent.fire("tool_execution_end", {
+    toolCallId: "c1",
+    toolName: "subagent",
+    result: subagentResult([
+      childRow({ sessionFile: "/sessions/019a-child.jsonl" }),
+      childRow(),
+    ]),
+  });
+  parent.fire("agent_settled", { aborted: false });
+  const [own, other] = parent.sent[0].tools[0].subagents ?? [];
+  expect(own.agent).toBe("delegate");
+  expect(own.model).toBeUndefined();
+  expect(other.model).toBe("claude-code/claude-haiku-4-5");
 });

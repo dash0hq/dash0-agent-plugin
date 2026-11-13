@@ -423,6 +423,8 @@ omitted when its value is empty.
 | `dash0.pi.provider` | Pi provider ID, for example `claude-code` or `openai-codex` | Pi only. On `chat` spans. The ID that Pi used for the call, before the mapping to `gen_ai.provider.name`. |
 | `dash0.pi.session.parent.id` | Pi session ID | Pi only. On every span of a session that Pi forked or cloned from another session. |
 | `dash0.gen_ai.billing_mode` on Pi | `subscription` \| `unknown` | Pi sets it on every `chat` span that carries tokens. `subscription` when Pi used a subscription login, for example Claude Pro/Max through `claude-code`. Pi never reports `api`. |
+| `dash0.pi.subagent.timing` | `aggregate` | Pi only. On the `chat` span under the `invoke_agent` span of a foreground pi-subagents child. The span carries the child's total tokens, and its time range is the whole child run, not one model call. Do not read it as latency. |
+| `dash0.pi.subagent.turns` | integer | Pi only. On the same span: the number of model calls in the totals. |
 | `dash0.pi.truncated` | `true` | Pi only. On the turn root, and only when the extension dropped content to stay inside its envelope budget. |
 | `dash0.amp.timing` | `observation` | Amp only. On the per-model-call usage child spans, which exist only when a turn's usage matched. Marks the span as a zero-duration observation recorded at turn completion rather than a measurement of provider request duration, so it must not be read as latency. |
 

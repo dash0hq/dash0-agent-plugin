@@ -124,10 +124,45 @@ Claude Code plugin can also report the same model calls under
 `gen_ai.harness.name=claude-code`. Check for this before you change the
 provider's flags.
 
+## Sub-agents
+
+Pi has no built-in sub-agent. The [pi-subagents](https://github.com/nicobailon/pi-subagents)
+extension adds a `subagent` tool. Its children run in one of two ways, and
+each reaches Dash0 differently. Measured with pi-subagents 0.88.0:
+
+| Child                      | Where it runs                                                                                                             | What Dash0 shows                                                                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Foreground (the default)   | A session inside the parent's Pi process. It loads none of the parent's extensions, so this extension does not run in it. | Under the parent's `execute_tool subagent` span: one `invoke_agent <agent>` span per child, and under it one `chat <model>` span with the child's total tokens. |
+| Background (`async: true`) | A session in a detached runner process. It loads the parent's extensions.                                                 | A separate session with its own traces. `dash0.pi.session.parent.id` names the parent session.                                                                  |
+
+The foreground totals come from the `subagent` tool result. The `chat` span
+under `invoke_agent` thus adds all model calls of the child, and its time
+range is the whole child run. `dash0.pi.subagent.timing=aggregate` marks it,
+and `dash0.pi.subagent.turns` gives the number of calls. The span is a
+`chat` span because Dash0's token and cost metrics read only `chat` spans.
+
+For per-call detail of a foreground child, load this extension into
+children too, with the pi-subagents setting in Pi's `settings.json`:
+
+```json
+{
+  "subagents": {
+    "defaultSubagentOnlyExtensions": ["/path/to/dash0-agent-plugin/pi"]
+  }
+}
+```
+
+The child then exports its own session, as a background child does. The
+parent still sends the `invoke_agent` span, but without a model or tokens, so
+the child's tokens are counted one time.
+
 ## Limits
 
-- Pi sessions only. Sub-agents that run as separate `pi` processes, as in
-  Pi's `subagent` example, are separate sessions with no link to the parent.
+- Sub-agents that run as separate `pi` processes, as in Pi's `subagent`
+  example, are separate sessions with no link to the parent.
+- A background pi-subagents child is not inside the parent's trace. The
+  `subagent` call returns before the child starts work, and pi-subagents does
+  not give the child the parent's tool call.
 - A model call's timing comes from Pi's own `timestamp` and `durationMs`.
   The extension measures tool timing from `tool_execution_start` to
   `tool_execution_end`. This includes time in other extensions' `tool_call`

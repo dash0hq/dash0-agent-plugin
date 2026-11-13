@@ -43,6 +43,18 @@ type Tool = {
   output?: string;
   /** The skill whose SKILL.md this call read. */
   skill?: string;
+  /** The children that a foreground pi-subagents call ran. */
+  subagents?: Subagent[];
+};
+/** One foreground pi-subagents child, from the subagent tool result. */
+type Subagent = {
+  agent: string;
+  /** "<provider>/<model>", as pi-subagents reports it. */
+  model?: string;
+  usage: Usage;
+  turns: number;
+  billing_mode?: "subscription" | "unknown";
+  failed: boolean;
 };
 /** The envelope that cmd/pi-on-event reads. internal/source/pi defines it. */
 export type Turn = {
@@ -80,6 +92,19 @@ const maxItems = 512;
 const maxField = 16 * 1024;
 const maxContent = 256 * 1024;
 const maxEnvelope = 768 * 1024;
+
+/** Children kept per subagent call, as the helper accepts. */
+const maxSubagents = 64;
+
+/**
+ * Session files that an instance of this extension exports. A foreground
+ * child that loads this extension, for example through pi-subagents'
+ * `defaultSubagentOnlyExtensions`, runs in the parent's process but with its
+ * own copy of this module, so only a global is shared with the parent.
+ */
+const exportedSessions = ((globalThis as Record<symbol, unknown>)[
+  Symbol.for("dash0.pi.exported-sessions")
+] ??= new Set<string>()) as Set<string>;
 
 /** Detached helpers alive at once. Stops a runaway, not ordinary overlap. */
 const maxHelpers = 16;
@@ -193,6 +218,50 @@ export function billingMode(
  * agent_end: Pi can retry, compact and retry, or run queued follow-ups after
  * agent_end, and all of that is still the same user turn.
  */
+/**
+ * The foreground children in a pi-subagents `subagent` tool result. This is
+ * the result shape of the pi-subagents extension, not a Pi API, so anything
+ * unexpected gives no children. A background launch has no result rows: its
+ * child is a separate session that this extension exports by itself.
+ *
+ * A child that exported its own session keeps its agent but loses its model
+ * and tokens here, so they are not counted twice.
+ */
+export function subagentsOf(
+  ctx: ExtensionContext,
+  details: unknown,
+): Subagent[] | undefined {
+  const rows = (details as { results?: unknown } | undefined)?.results;
+  if (!Array.isArray(rows)) return undefined;
+  const out: Subagent[] = [];
+  for (const row of rows.slice(0, maxSubagents)) {
+    if (typeof row !== "object" || row === null) continue;
+    const r = row as Record<string, unknown>;
+    if (!validString(r.agent)) continue;
+    const usage = (r.usage ?? {}) as Record<string, unknown>;
+    // Each child file is looked up once, so the set does not grow with them.
+    const exported =
+      typeof r.sessionFile === "string" &&
+      exportedSessions.delete(r.sessionFile);
+    const model = !exported && validString(r.model) ? r.model : undefined;
+    const provider = model?.split("/")[0];
+    out.push({
+      agent: r.agent,
+      model,
+      usage: {
+        input: count(usage.input),
+        output: count(usage.output),
+        cache_read: count(usage.cacheRead),
+        cache_write: count(usage.cacheWrite),
+      },
+      turns: count(usage.turns),
+      billing_mode: provider ? billingMode(ctx, provider) : undefined,
+      failed: r.exitCode !== 0 || typeof r.error === "string",
+    });
+  }
+  return out.length ? out : undefined;
+}
+
 /** The skill that a /skill:name command expanded into, as Pi writes it. */
 const skillBlock = /^<skill name="([^"]{1,128})" location="/;
 
@@ -342,7 +411,12 @@ export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
     });
   });
 
-  pi.on("tool_execution_end", (event) => {
+  pi.on("session_start", (_event, ctx) => {
+    const file = ctx.sessionManager.getSessionFile();
+    if (typeof file === "string") exportedSessions.add(file);
+  });
+
+  pi.on("tool_execution_end", (event, ctx) => {
     const active = state;
     const call = active?.running.get(event.toolCallId);
     if (!active || !call || call.name !== event.toolName) return;
@@ -352,6 +426,10 @@ export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
       end: new Date().toISOString(),
       error: event.isError === true,
       output: take(active, () => asText(event.result?.content)),
+      subagents:
+        event.toolName === "subagent"
+          ? subagentsOf(ctx, event.result?.details)
+          : undefined,
     });
   });
 

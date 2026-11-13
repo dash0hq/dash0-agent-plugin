@@ -459,6 +459,17 @@ const (
 // URLs, line counts, bash command family, skill name, MCP server) and normalizes
 // the MCP tool name in place. Tool-name matching is case-insensitive so every
 // runtime shares one rule set (Claude emits "Bash"/"Skill", Copilot "bash"/"skill").
+// ToolInput gives tool arguments that a bridge sent as text the shape that
+// hooks deliver on the other runtimes: a JSON object becomes a map, so the
+// shared extractors can read it. Any other text stays as it is.
+func ToolInput(text string) any {
+	var args map[string]any
+	if json.Unmarshal([]byte(text), &args) == nil && args != nil {
+		return args
+	}
+	return text
+}
+
 func EnrichToolEvent(event map[string]any) {
 	resp := event["tool_response"]
 	if prURL := ExtractPRURL(resp); prURL != "" {

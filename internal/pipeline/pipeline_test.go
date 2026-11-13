@@ -1899,3 +1899,10 @@ func TestIsSafeSessionID(t *testing.T) {
 		assert.False(t, IsSafeSessionID(bad), "%q must not reach filepath.Join", bad)
 	}
 }
+
+func TestToolInputDecodesOnlyJSONObjects(t *testing.T) {
+	assert.Equal(t, map[string]any{"command": "ls"}, ToolInput(`{"command":"ls"}`))
+	for _, text := range []string{`ls -la`, `["a"]`, `"quoted"`, `null`, `{`} {
+		assert.Equal(t, text, ToolInput(text), text)
+	}
+}

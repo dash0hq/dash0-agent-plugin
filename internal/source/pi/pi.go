@@ -6,7 +6,6 @@
 package pi
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
-	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
 
 // MaxEnvelopeBytes is the largest envelope the helper accepts. The bridge
@@ -390,14 +388,7 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 			toolCfg = withProvider(cfg, c.Provider)
 		}
 		if tool.Input != "" {
-			// Decoded so the shared extractors see the map shape that hooks
-			// deliver on the other runtimes.
-			var args map[string]any
-			if json.Unmarshal([]byte(tool.Input), &args) == nil && args != nil {
-				event["tool_input"] = args
-			} else {
-				event["tool_input"] = tool.Input
-			}
+			event["tool_input"] = pipeline.ToolInput(tool.Input)
 		}
 		if tool.Output != "" {
 			event["tool_response"] = tool.Output
@@ -421,10 +412,7 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		}
 	}
 
-	return otlp.ExportTracesRequest{ResourceSpans: []otlp.ResourceSpans{{
-		Resource:   otlp.Resource{Attributes: []otlp.Attribute{{Key: "service.name", Value: otlp.StringVal(cfg.AgentName)}, {Key: "service.version", Value: otlp.StringVal(version.Version)}}},
-		ScopeSpans: []otlp.ScopeSpans{{Scope: otlp.Scope{Name: "dash0-agent-plugin", Version: version.Version}, Spans: spans}},
-	}}}, nil
+	return otlp.NewTracesRequest(cfg, spans...), nil
 }
 
 // toolUsageSpan builds a chat span under a tool's span for the model usage

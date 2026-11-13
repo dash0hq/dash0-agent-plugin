@@ -117,31 +117,7 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 		return nil
 	}
 
-	serviceName := "claude-code"
-	if cfg.AgentName != "" {
-		serviceName = cfg.AgentName
-	}
-	resourceAttrs := []Attribute{
-		{Key: "service.name", Value: StringVal(serviceName)},
-		{Key: "service.version", Value: StringVal(version.Version)},
-	}
-
-	req := ExportTracesRequest{
-		ResourceSpans: []ResourceSpans{{
-			Resource: Resource{
-				Attributes: resourceAttrs,
-			},
-			ScopeSpans: []ScopeSpans{{
-				Scope: Scope{
-					Name:    "dash0-agent-plugin",
-					Version: version.Version,
-				},
-				Spans: []Span{span},
-			}},
-		}},
-	}
-
-	payload, err := json.Marshal(req)
+	payload, err := json.Marshal(NewTracesRequest(cfg, span))
 	if err != nil {
 		return fmt.Errorf("marshalling OTLP traces request: %w", err)
 	}
@@ -155,6 +131,27 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 	}
 
 	return sendOTLP(cfg, "/v1/traces", payload)
+}
+
+// NewTracesRequest wraps spans in the plugin's one resource and scope. The
+// service name is cfg.AgentName, or "claude-code" when it is empty.
+func NewTracesRequest(cfg Config, spans ...Span) ExportTracesRequest {
+	serviceName := "claude-code"
+	if cfg.AgentName != "" {
+		serviceName = cfg.AgentName
+	}
+	return ExportTracesRequest{
+		ResourceSpans: []ResourceSpans{{
+			Resource: Resource{Attributes: []Attribute{
+				{Key: "service.name", Value: StringVal(serviceName)},
+				{Key: "service.version", Value: StringVal(version.Version)},
+			}},
+			ScopeSpans: []ScopeSpans{{
+				Scope: Scope{Name: "dash0-agent-plugin", Version: version.Version},
+				Spans: spans,
+			}},
+		}},
+	}
 }
 
 // SendTracesRequest sends a pre-built OTLP traces request to the configured

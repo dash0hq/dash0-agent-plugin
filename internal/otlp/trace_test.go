@@ -647,3 +647,20 @@ func repoForToolSpan(t *testing.T) (main, worktree string) {
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "a.txt"), []byte("a"), 0o644))
 	return main, worktree
 }
+
+// Every export path shares one resource and scope, so the service name a
+// dashboard groups by cannot differ between runtimes that build requests.
+func TestNewTracesRequestWrapsSpansInThePluginResource(t *testing.T) {
+	spans := []Span{{Name: "a"}, {Name: "b"}}
+	req := NewTracesRequest(Config{AgentName: "pi"}, spans...)
+	require.Len(t, req.ResourceSpans, 1)
+	rs := req.ResourceSpans[0]
+	assert.Equal(t, "service.name", rs.Resource.Attributes[0].Key)
+	assert.Equal(t, "pi", *rs.Resource.Attributes[0].Value.StringValue)
+	assert.Equal(t, "service.version", rs.Resource.Attributes[1].Key)
+	assert.Equal(t, "dash0-agent-plugin", rs.ScopeSpans[0].Scope.Name)
+	assert.Equal(t, spans, rs.ScopeSpans[0].Spans)
+
+	unnamed := NewTracesRequest(Config{}, Span{})
+	assert.Equal(t, "claude-code", *unnamed.ResourceSpans[0].Resource.Attributes[0].Value.StringValue)
+}

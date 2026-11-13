@@ -86,19 +86,51 @@ const maxHelpers = 16;
 // after the handoff, the helper's. transport.test.ts asserts it verbatim.
 const unavailable = "dash0: telemetry unavailable";
 
+// BEGIN content helpers, kept identical in amp/index.ts and pi/index.ts.
+// Amp's installers fetch index.ts as one file, so the two cannot import a
+// shared module. test/consistency/bridge_test.go fails when they differ.
+
 /** Truncate to a byte budget without leaving a split UTF-8 sequence behind. */
 function clip(value: string, max: number): string {
-  // byteLength measures without copying, and take() re-measures the result, so
-  // the common case never allocates a Buffer for the whole field.
+  // byteLength measures without copying, so the common case never allocates
+  // a Buffer for the whole field.
   if (Buffer.byteLength(value, "utf8") <= max) return value;
-  // slice first: every UTF-16 unit encodes to at least one byte, so the first
+  // Slice first: every UTF-16 unit encodes to at least one byte, so the first
   // `max` units always cover the first `max` bytes. Encoding the whole value
   // would copy a multi-megabyte tool output to keep 16 KiB of it.
   return Buffer.from(value.slice(0, max), "utf8")
     .subarray(0, max)
     .toString("utf8")
-    .replace(/�+$/, "");
+    .replace(/\uFFFD+$/, "");
 }
+
+const isTextBlock = (b: unknown): b is { type: "text"; text: string } =>
+  typeof b === "object" &&
+  b !== null &&
+  (b as { type?: unknown }).type === "text" &&
+  typeof (b as { text?: unknown }).text === "string";
+
+/**
+ * Render a tool payload or message content as text, never throwing on odd
+ * values. Any array keeps only its text blocks, even when it mixes an image
+ * block with an unknown element, so inline image data and image URLs never
+ * enter telemetry, even with I/O capture on.
+ */
+function asText(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value))
+    return value
+      .filter(isTextBlock)
+      .map((block) => block.text)
+      .join("\n");
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+// END content helpers
 
 /** Text of a message's text blocks, joined; thinking and tool blocks are skipped. */
 function messageText(message: { content?: unknown }): string {
@@ -138,36 +170,6 @@ function take(state: Active, render: () => string): string | undefined {
   }
   state.content += size;
   return text;
-}
-
-const isBlock = (b: unknown): b is { type: string } =>
-  typeof b === "object" &&
-  b !== null &&
-  typeof (b as { type?: unknown }).type === "string";
-const isTextBlock = (b: unknown): b is { type: "text"; text: string } =>
-  isBlock(b) &&
-  b.type === "text" &&
-  typeof (b as { text?: unknown }).text === "string";
-
-/**
- * Render an arbitrary tool payload as text, never throwing on odd values. Any
- * array keeps only its text blocks — mixing an image block with an unknown
- * element must not fall through to JSON.stringify — so inline image payloads
- * and image URLs never enter telemetry even when I/O capture is on.
- */
-function asText(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value))
-    return value
-      .filter(isTextBlock)
-      .map((block) => block.text)
-      .join("\n");
-  try {
-    return JSON.stringify(value) ?? "";
-  } catch {
-    return "";
-  }
 }
 
 /** The first `*** Update File: /abs/path` line of an apply_patch payload. */

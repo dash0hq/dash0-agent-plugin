@@ -144,3 +144,24 @@ func TestHelperRejectsBadEnvelopes(t *testing.T) {
 		})
 	}
 }
+
+// The extension names the child fields in snake case, as the rest of the
+// envelope does. A renamed field would export an agent without its tokens.
+func TestHelperExportsAForegroundSubagent(t *testing.T) {
+	got, url := setup(t)
+	t.Setenv("PI_PLUGIN_OPTION_OTLP_URL", url)
+	t.Setenv("PI_PLUGIN_OPTION_AUTH_TOKEN", "test-token")
+	t.Setenv("PI_PLUGIN_OPTION_OMIT_IDENTITY_FALLBACK", "true")
+	input := `{"session_id":"019a-test","start":"2026-11-13T12:00:00Z","end":"2026-11-13T12:00:10Z","status":"done",` +
+		`"tools":[{"id":"call_1","name":"subagent","start":"2026-11-13T12:00:02Z","end":"2026-11-13T12:00:08Z","error":false,` +
+		`"subagents":[{"agent":"delegate","model":"claude-code/claude-haiku-4-5","turns":2,"billing_mode":"subscription",` +
+		`"usage":{"input":4,"output":460,"cache_read":5145,"cache_write":5211}}]}]}`
+	require.NoError(t, run(strings.NewReader(input)))
+	data := <-got
+	spans := spansOf(t, data)
+	require.Len(t, spans, 4)
+	require.Equal(t, "invoke_agent delegate", spans[2].Name)
+	require.Equal(t, "chat claude-haiku-4-5", spans[3].Name)
+	require.Contains(t, string(data), `"gen_ai.usage.input_tokens","value":{"intValue":"10360"}`)
+	require.Contains(t, string(data), `"dash0.pi.subagent.turns","value":{"intValue":"2"}`)
+}

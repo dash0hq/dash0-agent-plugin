@@ -95,6 +95,9 @@ type Tool struct {
 	// Skill names the skill whose SKILL.md this call read. Pi has no skill
 	// tool: the model loads a skill by reading its file.
 	Skill string `json:"skill"`
+	// Subagents are the children that a foreground pi-subagents `subagent`
+	// call ran in the Pi process. A background child is a session of its own.
+	Subagents []Subagent `json:"subagents"`
 }
 
 // Pi's own session ID rule (assertValidSessionId), with a length bound.
@@ -122,11 +125,7 @@ func (t Turn) Validate() error {
 		return fmt.Errorf("invalid Pi skill")
 	}
 	for _, c := range t.Calls {
-		u := c.Usage
-		if !namePattern.MatchString(c.Provider) || !namePattern.MatchString(c.Model) || c.End.Before(c.Start) ||
-			u.Input < 0 || u.Output < 0 || u.CacheRead < 0 || u.CacheWrite < 0 ||
-			(u.CacheWrite1h != nil && (*u.CacheWrite1h < 0 || *u.CacheWrite1h > u.CacheWrite)) ||
-			(u.Reasoning != nil && (*u.Reasoning < 0 || *u.Reasoning > u.Output)) {
+		if !namePattern.MatchString(c.Provider) || !namePattern.MatchString(c.Model) || c.End.Before(c.Start) || !validUsage(c.Usage) {
 			return fmt.Errorf("invalid Pi model call")
 		}
 		if c.BillingMode != "" && c.BillingMode != "subscription" && c.BillingMode != "unknown" {
@@ -317,6 +316,7 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 			parent = toolSpanID(tool.ParentID)
 		}
 		spans = append(spans, otlp.NewToolSpan(traceID, toolSpanID(tool.ID), parent, tool.Start, tool.End, event, tool.Error, toolCfg))
+		spans = append(spans, subagentSpans(traceID, toolSpanID(tool.ID), tool, cfg, base)...)
 	}
 
 	return otlp.ExportTracesRequest{ResourceSpans: []otlp.ResourceSpans{{

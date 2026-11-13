@@ -401,6 +401,9 @@ func TestConfigDirIsSetForEveryAgent(t *testing.T) {
 	assert.Equal(t, ".opencode-v2", OpenCodeV2.ConfigDir)
 	assert.Equal(t, "OPENCODE_V2", OpenCodeV2.EnvPrefix)
 	assert.Equal(t, "opencode-v2", OpenCodeV2.HarnessName())
+	assert.Equal(t, ".pi", Pi.ConfigDir)
+	assert.Equal(t, "PI", Pi.EnvPrefix)
+	assert.Equal(t, "pi", Pi.HarnessName())
 }
 
 func TestPluginOptionFallsBackToTheConfigFile(t *testing.T) {
@@ -539,12 +542,12 @@ func TestEnabled(t *testing.T) {
 }
 
 func TestEveryAgentReadsItsOwnConfigDir(t *testing.T) {
-	for _, h := range []Harness{Claude, Cursor, Codex, Copilot, OpenCodeV2} {
+	for _, h := range []Harness{Claude, Cursor, Codex, Copilot, OpenCodeV2, Amp, Pi} {
 		t.Run(h.Name, func(t *testing.T) {
 			chdirTo(t, writeConfig(t, t.TempDir(), h, "---\ndataset: mine\n---\n"))
 			assert.Equal(t, "mine", h.PluginOption("DATASET"))
 
-			for _, other := range []Harness{Claude, Cursor, Codex, Copilot, OpenCodeV2} {
+			for _, other := range []Harness{Claude, Cursor, Codex, Copilot, OpenCodeV2, Amp, Pi} {
 				if other.ConfigDir == h.ConfigDir {
 					continue
 				}

@@ -1,0 +1,265 @@
+// SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+package pi
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
+)
+
+var start = time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+
+func at(s int) time.Time { return start.Add(time.Duration(s) * time.Second) }
+func ptr[T any](v T) *T  { return &v }
+
+func cfg(omitIO bool) otlp.Config {
+	return otlp.Config{AgentName: "pi", HarnessName: "pi", OmitIO: omitIO, OmitUserInfo: true, OmitIdentityFallback: true}
+}
+
+func attrs(span otlp.Span) map[string]string {
+	out := map[string]string{}
+	for _, a := range span.Attributes {
+		switch {
+		case a.Value.StringValue != nil:
+			out[a.Key] = *a.Value.StringValue
+		case a.Value.IntValue != nil:
+			out[a.Key] = *a.Value.IntValue
+		}
+	}
+	return out
+}
+
+func build(t *testing.T, turn Turn, omitIO bool) []otlp.Span {
+	t.Helper()
+	req, err := BuildTrace(turn, cfg(omitIO))
+	require.NoError(t, err)
+	return req.ResourceSpans[0].ScopeSpans[0].Spans
+}
+
+// One session can switch providers between model calls, so every call names
+// its own provider and model, and no span takes them from the session.
+func TestEveryModelCallCarriesItsOwnProviderAndTokens(t *testing.T) {
+	turn := Turn{
+		SessionID: "019a-session", Start: at(0), End: at(10), Status: "done",
+		Calls: []Call{
+			{Provider: "openai", Model: "gpt-5.5", Start: at(1), End: at(2), StopReason: "toolUse",
+				Usage: Usage{Input: 100, Output: 20, CacheRead: 30, Reasoning: ptr[int64](5)}},
+			{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(4), End: at(9), StopReason: "stop", ThinkingLevel: "high",
+				Usage: Usage{Input: 2, Output: 40, CacheRead: 300, CacheWrite: 50, CacheWrite1h: ptr[int64](50)}},
+		},
+		Tools: []Tool{{ID: "call_1", Name: "bash", Start: at(2), End: at(3), Call: ptr(0), Input: `{"command":"git status"}`}},
+	}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 3)
+
+	root, earlier, tool := spans[0], spans[1], spans[2]
+	require.Equal(t, "chat claude-sonnet-5", root.Name)
+	require.Empty(t, root.ParentSpanID)
+	require.Equal(t, "chat gpt-5.5", earlier.Name)
+	require.Equal(t, "execute_tool bash", tool.Name)
+	for _, child := range spans[1:] {
+		require.Equal(t, root.TraceID, child.TraceID)
+		require.Equal(t, root.SpanID, child.ParentSpanID)
+	}
+
+	r := attrs(root)
+	require.Equal(t, "anthropic", r["gen_ai.provider.name"])
+	require.Equal(t, "anthropic", r["dash0.pi.provider"])
+	require.Equal(t, "pi", r["gen_ai.harness.name"])
+	require.Equal(t, "019a-session", r["gen_ai.conversation.id"])
+	require.Equal(t, "high", r["gen_ai.request.reasoning.level"])
+	// Inclusive of cache, as the conventions and Dash0's cost processor expect.
+	require.Equal(t, "352", r["gen_ai.usage.input_tokens"])
+	require.Equal(t, "40", r["gen_ai.usage.output_tokens"])
+	require.Equal(t, "300", r["gen_ai.usage.cache_read.input_tokens"])
+	require.Equal(t, "50", r["gen_ai.usage.cache_creation.input_tokens"])
+	require.Equal(t, "50", r["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"])
+	require.Equal(t, start.UnixNano(), mustNano(t, root.StartTimeUnixNano))
+
+	e := attrs(earlier)
+	require.Equal(t, "openai", e["gen_ai.provider.name"])
+	require.Equal(t, "gpt-5.5", e["gen_ai.request.model"])
+	require.Equal(t, "130", e["gen_ai.usage.input_tokens"])
+	require.Equal(t, "5", e["gen_ai.usage.reasoning.output_tokens"])
+	require.Equal(t, at(1).UnixNano(), mustNano(t, earlier.StartTimeUnixNano))
+	require.Equal(t, at(2).UnixNano(), mustNano(t, earlier.EndTimeUnixNano))
+
+	// The tool names the model and provider of the call that requested it,
+	// and carries no tokens of its own.
+	tl := attrs(tool)
+	require.Equal(t, "openai", tl["gen_ai.provider.name"])
+	require.Equal(t, "gpt-5.5", tl["gen_ai.request.model"])
+	require.Equal(t, "git", tl["dash0.gen_ai.tool.bash.command_family"])
+	require.Equal(t, "<REDACTED>", tl["gen_ai.tool.call.arguments"])
+	for k := range tl {
+		require.NotContains(t, k, "gen_ai.usage.")
+	}
+}
+
+// Claude Code reached through Pi's claude-code provider is Anthropic for
+// pricing, and Pi has already made the input count cache-exclusive.
+func TestClaudeCodeProviderIsAnthropic(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(2), Status: "done",
+		Calls: []Call{{Provider: "claude-code", Model: "claude-opus-5-5", Start: at(0), End: at(2), StopReason: "stop",
+			Usage: Usage{Input: 2, Output: 97, CacheWrite: 18689}}}}
+	r := attrs(build(t, turn, true)[0])
+	require.Equal(t, "anthropic", r["gen_ai.provider.name"])
+	require.Equal(t, "claude-code", r["dash0.pi.provider"])
+	require.Equal(t, "18691", r["gen_ai.usage.input_tokens"])
+}
+
+// The mode says what a cost figure means, so it sits only beside tokens.
+func TestBillingModeIsPerCallAndOnlyBesideTokens(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done",
+		Calls: []Call{
+			{Provider: "openai", Model: "gpt-5.5", Start: at(0), End: at(1), StopReason: "toolUse", BillingMode: "unknown", Usage: Usage{Input: 1, Output: 1}},
+			{Provider: "openai", Model: "gpt-5.5", Start: at(1), End: at(2), StopReason: "aborted", BillingMode: "subscription"},
+			{Provider: "claude-code", Model: "claude-sonnet-5", Start: at(2), End: at(9), StopReason: "stop", BillingMode: "subscription", Usage: Usage{Input: 1, Output: 1}},
+		}}
+	spans := build(t, turn, true)
+	require.Equal(t, "subscription", attrs(spans[0])["dash0.gen_ai.billing_mode"])
+	require.Equal(t, "unknown", attrs(spans[1])["dash0.gen_ai.billing_mode"])
+	require.NotContains(t, attrs(spans[2]), "dash0.gen_ai.billing_mode")
+
+	bad := turn
+	bad.Calls = []Call{{Provider: "p", Model: "m", BillingMode: "api"}}
+	require.Error(t, bad.Validate())
+}
+
+func TestUnknownProviderIsExportedAsItIs(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(2), Status: "done",
+		Calls: []Call{{Provider: "my-proxy", Model: "local-llama", Start: at(0), End: at(2), StopReason: "stop", Usage: Usage{Input: 1, Output: 1}}}}
+	require.Equal(t, "my-proxy", attrs(build(t, turn, true)[0])["gen_ai.provider.name"])
+}
+
+func TestAbortedTurnIsAnErrorAndKeepsItsTools(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(5), Status: "aborted",
+		Calls: []Call{{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(0), End: at(4), StopReason: "aborted"}},
+		Tools: []Tool{{ID: "t1", Name: "bash", Start: at(1), End: at(4), Error: true, Call: ptr(0)}}}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 2)
+	require.Equal(t, otlp.StatusCodeError, spans[0].Status.Code)
+	require.Equal(t, "Pi turn aborted", spans[0].Status.Message)
+	require.Equal(t, otlp.StatusCodeError, spans[1].Status.Code)
+	// An aborted call reported no usage; zeros would read as a measurement.
+	for k := range attrs(spans[0]) {
+		require.NotContains(t, k, "gen_ai.usage.")
+	}
+}
+
+func TestTurnWithoutModelCallHasAnUnnamedChatRoot(t *testing.T) {
+	spans := build(t, Turn{SessionID: "s1", Start: at(0), End: at(1), Status: "aborted"}, true)
+	require.Len(t, spans, 1)
+	require.Equal(t, "chat", spans[0].Name)
+	require.NotContains(t, attrs(spans[0]), "gen_ai.provider.name")
+}
+
+func TestNestedToolParentsToTheToolThatCalledIt(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done",
+		Calls: []Call{{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(0), End: at(1), StopReason: "toolUse"}},
+		Tools: []Tool{
+			// Pi emits tool_execution_end in completion order, so the child
+			// arrives first.
+			{ID: "code/1", ParentID: "code", Name: "read", Start: at(2), End: at(3), Call: ptr(0)},
+			{ID: "code", Name: "codemode", Start: at(1), End: at(4), Call: ptr(0)},
+			{ID: "orphan", ParentID: "missing", Name: "read", Start: at(2), End: at(3)},
+		}}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 4)
+	byName := map[string]otlp.Span{}
+	for _, s := range spans[1:] {
+		byName[attrs(s)["gen_ai.tool.call.id"]] = s
+	}
+	require.Equal(t, byName["code"].SpanID, byName["code/1"].ParentSpanID)
+	require.Equal(t, spans[0].SpanID, byName["code"].ParentSpanID)
+	require.Equal(t, spans[0].SpanID, byName["orphan"].ParentSpanID)
+}
+
+func TestContentFollowsOmitIO(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(2), Status: "done",
+		Prompt: "SECRET-PROMPT", Response: "SECRET-ANSWER",
+		Calls: []Call{{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(0), End: at(2), StopReason: "stop"}},
+		Tools: []Tool{{ID: "t1", Name: "read", Start: at(0), End: at(1), Input: `{"path":"/x"}`, Output: "SECRET-FILE"}}}
+	redacted, err := BuildTrace(turn, cfg(true))
+	require.NoError(t, err)
+	encoded, _ := json.Marshal(redacted)
+	for _, secret := range []string{"SECRET-PROMPT", "SECRET-ANSWER", "SECRET-FILE"} {
+		require.NotContains(t, string(encoded), secret)
+	}
+	require.Contains(t, string(encoded), "gen_ai.input.messages")
+
+	spans := build(t, turn, false)
+	require.Contains(t, attrs(spans[0])["gen_ai.input.messages"], "SECRET-PROMPT")
+	require.Contains(t, attrs(spans[0])["gen_ai.output.messages"], "SECRET-ANSWER")
+	require.Equal(t, "SECRET-FILE", attrs(spans[1])["gen_ai.tool.call.result"])
+}
+
+func TestForkedSessionNamesItsParent(t *testing.T) {
+	turn := Turn{SessionID: "child", ParentSessionID: "parent", Start: at(0), End: at(1), Status: "done", Truncated: true}
+	r := attrs(build(t, turn, true)[0])
+	require.Equal(t, "parent", r["dash0.pi.session.parent.id"])
+	require.Equal(t, "true", r["dash0.pi.truncated"])
+	require.NotContains(t, attrs(build(t, Turn{SessionID: "s", Start: at(0), End: at(1), Status: "done"}, true)[0]), "dash0.pi.truncated")
+}
+
+func TestTraceIDsAreFreshPerTurn(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(1), Status: "done",
+		Tools: []Tool{{ID: "t1", Name: "read", Start: at(0), End: at(1)}}}
+	a, b := build(t, turn, true), build(t, turn, true)
+	require.NotEqual(t, a[0].TraceID, b[0].TraceID)
+	require.NotEqual(t, a[1].SpanID, b[1].SpanID, "tool IDs repeat across turns, span IDs must not")
+}
+
+func TestValidateRejectsAmbiguousTurns(t *testing.T) {
+	ok := Turn{SessionID: "s1", Start: at(0), End: at(1), Status: "done"}
+	require.NoError(t, ok.Validate())
+	for name, mutate := range map[string]func(*Turn){
+		"path in session":  func(t *Turn) { t.SessionID = "../etc" },
+		"empty session":    func(t *Turn) { t.SessionID = "" },
+		"bad parent":       func(t *Turn) { t.ParentSessionID = "a/b" },
+		"end before start": func(t *Turn) { t.End = at(-1) },
+		"zero start":       func(t *Turn) { t.Start = time.Time{} },
+		"unknown status":   func(t *Turn) { t.Status = "cancelled" },
+		"negative tokens":  func(t *Turn) { t.Calls = []Call{{Provider: "p", Model: "m", Usage: Usage{Input: -1}}} },
+		"empty model":      func(t *Turn) { t.Calls = []Call{{Provider: "p"}} },
+		"1h over total": func(t *Turn) {
+			t.Calls = []Call{{Provider: "p", Model: "m", Usage: Usage{CacheWrite1h: ptr[int64](1)}}}
+		},
+		"reasoning over out":  func(t *Turn) { t.Calls = []Call{{Provider: "p", Model: "m", Usage: Usage{Reasoning: ptr[int64](1)}}} },
+		"call ends too early": func(t *Turn) { t.Calls = []Call{{Provider: "p", Model: "m", Start: at(1), End: at(0)}} },
+		"too many tools":      func(t *Turn) { t.Tools = make([]Tool, maxItems+1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			turn := ok
+			mutate(&turn)
+			require.Error(t, turn.Validate())
+		})
+	}
+}
+
+func TestInvalidToolsAreSkippedNotFatal(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done",
+		Tools: []Tool{
+			{ID: "dup", Name: "read", Start: at(1), End: at(2)},
+			{ID: "dup", Name: "read", Start: at(1), End: at(2)},
+			{ID: "", Name: "read", Start: at(1), End: at(2)},
+			{ID: "back", Name: "read", Start: at(2), End: at(1)},
+			{ID: "bad-call", Name: "read", Start: at(1), End: at(2), Call: ptr(7)},
+		}}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 3)
+	require.NotContains(t, attrs(spans[2]), "gen_ai.request.model")
+}
+
+func mustNano(t *testing.T, s string) int64 {
+	t.Helper()
+	var n int64
+	require.NoError(t, json.Unmarshal([]byte(s), &n))
+	return n
+}

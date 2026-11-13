@@ -310,6 +310,16 @@ jobs:
             <<<'{"thread_id":"T-release-verify","id":1,"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:01Z","status":"done","executor":"local","tools":[],"assistant_ids":[]}' \
             || true
           grep -q T-release-verify "$amp_data/debug.log"
+          # Pi, the same way and for the same reason as Amp.
+          pi_data=$(mktemp -d)
+          PI_PLUGIN_OPTION_OTLP_URL=http://127.0.0.1:1 \
+          PI_PLUGIN_OPTION_AUTH_TOKEN=release-verify \
+          PI_PLUGIN_OPTION_DEBUG=true \
+          PI_PLUGIN_OPTION_DEBUG_FILE=$pi_data/debug.log \
+            dist/pi-on-event-linux-amd64 \
+            <<<'{"session_id":"pi-release-verify","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:01Z","status":"done","calls":[],"tools":[]}' \
+            || true
+          grep -q pi-release-verify "$pi_data/debug.log"
 
       - name: The draft carries exactly what was built
         run: |

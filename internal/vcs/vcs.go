@@ -115,13 +115,26 @@ func normalizeRemoteURL(remote string) string {
 	// https://oauth2:ghp_TOKEN@github.com/owner/repo?private_token=abc →
 	// https://github.com/owner/repo. Only rewrite when there is something to
 	// remove, so every other remote keeps the exact spelling git reports.
-	if u, err := url.Parse(remote); err == nil &&
-		(u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "") {
-		u.User = nil
-		u.RawQuery = ""
-		u.ForceQuery = false
-		u.Fragment = ""
-		remote = u.String()
+	//
+	// ssh://git@github.com/owner/repo → https://github.com/owner/repo, the same
+	// value the scp form gives. Without it one repository has two URLs, and
+	// git produces this form unasked: `url."ssh://git@github.com/".insteadOf
+	// https://github.com/` rewrites what `git remote get-url` returns. The SSH
+	// port comes off with the scheme, because it is not the https port.
+	if u, err := url.Parse(remote); err == nil {
+		ssh := isSSHScheme(u.Scheme)
+		if ssh || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			u.User = nil
+			u.RawQuery = ""
+			u.ForceQuery = false
+			u.Fragment = ""
+			if ssh {
+				u.Scheme = "https"
+				u.Host = u.Hostname()
+				u.Path = strings.TrimSuffix(u.Path, "/")
+			}
+			remote = u.String()
+		}
 	}
 
 	// After the scrub, not before it: repo.git?private_token=abc does not end in
@@ -134,6 +147,12 @@ func normalizeRemoteURL(remote string) string {
 		return ""
 	}
 	return remote
+}
+
+// isSSHScheme reports whether a URL scheme is one of the spellings git
+// accepts for SSH. url.Parse has already lower-cased it.
+func isSSHScheme(scheme string) bool {
+	return scheme == "ssh" || scheme == "git+ssh" || scheme == "ssh+git"
 }
 
 // mayCarryCredential reports whether remote could still hold a secret: a "user@"

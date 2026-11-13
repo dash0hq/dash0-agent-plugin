@@ -10,7 +10,8 @@ Use the Go version declared in `go.mod`. The GitHub Actions workflows read it
 from `go.mod`. `make go-version-check` checks that the Docker test harness uses
 the same version. The Makefile uses Bash and pins
 the lint tools it installs into `bin/`. Python 3 runs the diagnostic-script tests.
-Bun is required for the Amp bridge tests, including `make test` and `make ci`.
+Bun is required for the Amp bridge and Pi extension tests, including `make test`
+and `make ci`.
 
 ## Coding conventions
 
@@ -48,8 +49,9 @@ Then select the checks that cover the changed contract:
 | Command | Coverage |
 | --- | --- |
 | `make build` | All ordinary Go packages compile |
-| `make test` | Python diagnostic tests, Amp bridge tests (Bun required), and Go tests with race detection and coverage |
+| `make test` | Python diagnostic tests, Amp bridge and Pi extension tests (Bun required), and Go tests with race detection and coverage |
 | `make test-amp` | Amp TypeScript bridge tests and type checking; requires Bun |
+| `make test-pi` | Pi TypeScript extension tests, type checking and formatting; requires Bun |
 | `make lint` | Go and shell lint, Go/Docker version agreement, release-pin agreement |
 | `make ci` | The local lint and test targets above, not every hosted CI job |
 | `GOOS=windows make golangci-lint`, `GOOS=darwin make golangci-lint` | Static checks for platform-specific Go code |
@@ -297,6 +299,7 @@ Building, sideloading, and running local changes is documented per runtime:
 - **OpenCode V2** — [opencode-v2/README.md](./opencode-v2/README.md)
 - **GitHub Copilot CLI** — [copilot/README.md](./copilot/README.md)
 - **Amp CLI and Orbs** — [amp/README.md](./amp/README.md)
+- **Pi** - [pi/README.md](./pi/README.md)
 
 ## Telemetry attributes
 
@@ -313,6 +316,12 @@ model/provider values. Its content follows the shared `omit_io` rule below;
 thinking blocks and image payloads are always dropped in the bridge.
 See [Amp's attribute and analytics compatibility](./amp/README.md#attribute-and-analytics-compatibility)
 for the span-shape exceptions and limits of operation-based metrics.
+
+Pi uses the same root shape. The last model call names the turn's `chat` root
+and supplies its tokens. Each earlier model call is a timed `chat` child with
+its own model, provider and tokens. One Pi session can change providers between
+calls, so `gen_ai.provider.name` comes from each call. See
+[Pi's telemetry](./pi/README.md#telemetry).
 
 > The four content attributes `gen_ai.input.messages`, `gen_ai.output.messages`,
 > `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` are replaced with `<REDACTED>`
@@ -340,7 +349,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 
 | Key | Value |
 |---|---|
-| `service.name` | Agent name — `claude-code` / `cursor` / `codex` / `github-copilot-cli` / `amp`, or the `agent_name` override |
+| `service.name` | Agent name: `claude-code` / `cursor` / `codex` / `github-copilot-cli` / `amp` / `pi`, or the `agent_name` override |
 | `service.version` | Plugin version (`dev` in source runs) |
 
 ### On every span
@@ -349,7 +358,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 |---|---|---|
 | `gen_ai.provider.name` | `anthropic`, `openai`, `gcp.gemini`, `x_ai`, `deepseek`, `mistral_ai`, `cursor` | Resolved from the model prefix; else the runtime default (Claude `anthropic`, Codex `openai`; Cursor omits it when no model). |
 | `gen_ai.agent.name` | Agent name, or the sub-agent type on `invoke_agent` spans                      | |
-| `gen_ai.harness.name` | `claude-code` / `cursor` / `codex` / `github-copilot-cli` / `amp`              | |
+| `gen_ai.harness.name` | `claude-code` / `cursor` / `codex` / `github-copilot-cli` / `amp` / `pi`       | |
 | `dash0.team.name` | e.g. `platform`                                                                | Only when `team_name` is set. |
 | `gen_ai.conversation.id` | Session ID                                                                     | From the event's `session_id`. |
 | `process.working_directory` | e.g. `/home/me/proj`                                                           | `~`-redacted when `omit_user_info`. |
@@ -411,6 +420,10 @@ omitted when its value is empty.
 | `dash0.amp.truncated` | `true` | Amp only. On the turn root, and only when the bridge dropped content or tools to stay inside its envelope budget, so an absent content field on such a turn is a deliberate omission rather than an empty one. Absent on turns that kept everything. |
 | `dash0.amp.usage.status` | `disabled` \| `unavailable` \| `unsupported` \| `invalid` \| `partial` \| `matched` | Amp only. On the turn root. Why the turn does or does not carry tokens; usage export is on by default; `export_usage: false` or `AMP_PLUGIN_OPTION_EXPORT_USAGE=false` turns it off. `partial` means the thread had not finished persisting when the poll gave up, so some of the turn's assistant messages carried no usage record yet; the turn still exports, with every record it did find as a child and an unlabelled root. |
 | `dash0.amp.usage.source` | `thread-export` | Amp only. On the turn root when usage was matched. Names where the tokens came from, since Amp's hooks carry none. |
+| `dash0.pi.provider` | Pi provider ID, for example `claude-code` or `openai-codex` | Pi only. On `chat` spans. The ID that Pi used for the call, before the mapping to `gen_ai.provider.name`. |
+| `dash0.pi.session.parent.id` | Pi session ID | Pi only. On every span of a session that Pi forked or cloned from another session. |
+| `dash0.gen_ai.billing_mode` on Pi | `subscription` \| `unknown` | Pi sets it on every `chat` span that carries tokens. `subscription` when Pi used a subscription login, for example Claude Pro/Max through `claude-code`. Pi never reports `api`. |
+| `dash0.pi.truncated` | `true` | Pi only. On the turn root, and only when the extension dropped content to stay inside its envelope budget. |
 | `dash0.amp.timing` | `observation` | Amp only. On the per-model-call usage child spans, which exist only when a turn's usage matched. Marks the span as a zero-duration observation recorded at turn completion rather than a measurement of provider request duration, so it must not be read as latency. |
 
 #### Skill invocations come by two routes

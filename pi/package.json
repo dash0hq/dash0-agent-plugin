@@ -1,0 +1,21 @@
+{
+  "name": "dash0-pi-extension",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "prettier --check ."
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@types/bun": "1.3.10",
+    "typescript": "5.9.3",
+    "prettier": "3.6.2"
+  }
+}

@@ -42,7 +42,7 @@ vet: ## Run go vet.
 	go vet ./...
 
 .PHONY: test
-test: test-scripts test-amp ## Run Go unit + integration tests with the race detector.
+test: test-scripts test-amp test-pi ## Run Go unit + integration tests with the race detector.
 	go test -race -coverprofile=cover.out ./...
 
 .PHONY: test-amp
@@ -51,6 +51,13 @@ test-amp: ## Test and type-check the native Amp bridge (requires Bun).
 	bun run --cwd amp test
 	bun run --cwd amp typecheck
 	bun run --cwd amp lint
+
+.PHONY: test-pi
+test-pi: ## Test and type-check the Pi extension (requires Bun).
+	bun install --cwd pi --frozen-lockfile
+	bun run --cwd pi test
+	bun run --cwd pi typecheck
+	bun run --cwd pi lint
 
 .PHONY: test-scripts
 test-scripts: ## Run the unit tests for the Python diagnostic scripts.
@@ -126,7 +133,7 @@ shellcheck-install: $(LOCALBIN)
 
 .PHONY: shellcheck-lint
 shellcheck-lint: shellcheck-install ## Lint all shell scripts with shellcheck.
-	find . -name '*.sh' -not -path './bin/*' -print0 | xargs -0 $(SHELLCHECK) -x
+	find . -name '*.sh' -not -path './bin/*' -not -path '*/node_modules/*' -print0 | xargs -0 $(SHELLCHECK) -x
 
 .PHONY: lint
 lint: go-version-check version-check golangci-lint shellcheck-lint ## Run all static analysis (Go, shell, version sync).

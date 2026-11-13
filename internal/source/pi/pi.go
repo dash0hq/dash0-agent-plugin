@@ -128,7 +128,7 @@ func (t Turn) Validate() error {
 		if !namePattern.MatchString(c.Provider) || !namePattern.MatchString(c.Model) || c.End.Before(c.Start) || !validUsage(c.Usage) {
 			return fmt.Errorf("invalid Pi model call")
 		}
-		if c.BillingMode != "" && c.BillingMode != "subscription" && c.BillingMode != "unknown" {
+		if !validBillingMode(c.BillingMode) {
 			return fmt.Errorf("invalid Pi billing mode")
 		}
 		if c.ResponseModel != "" && !namePattern.MatchString(c.ResponseModel) {

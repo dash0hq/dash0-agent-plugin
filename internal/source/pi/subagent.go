@@ -43,11 +43,13 @@ func splitModel(s string) (provider, model string) {
 
 func (s Subagent) valid() bool {
 	provider, model := splitModel(s.Model)
-	return skillPattern.MatchString(s.Agent) && s.Turns >= 0 &&
+	return namePattern.MatchString(s.Agent) && s.Turns >= 0 &&
 		(s.Model == "" || (namePattern.MatchString(provider) && namePattern.MatchString(model))) &&
-		(s.BillingMode == "" || s.BillingMode == "subscription" || s.BillingMode == "unknown") &&
+		validBillingMode(s.BillingMode) &&
 		validUsage(s.Usage)
 }
+
+func validBillingMode(m string) bool { return m == "" || m == "subscription" || m == "unknown" }
 
 func validUsage(u Usage) bool {
 	return u.Input >= 0 && u.Output >= 0 && u.CacheRead >= 0 && u.CacheWrite >= 0 &&
@@ -68,10 +70,12 @@ func subagentSpans(traceID, toolSpanID string, tool Tool, cfg otlp.Config, base 
 		if n >= maxSubagents {
 			break
 		}
+		// As with a bad tool, a bad child loses its own spans, not the turn.
 		if !sub.valid() {
 			continue
 		}
-		agentID := otlp.SpanIDFromAgentID(fmt.Sprintf("agent:%s:%s:%d", traceID, tool.ID, n))
+		key := fmt.Sprintf("agent:%s:%s:%d", traceID, tool.ID, n)
+		agentID := otlp.SpanIDFromAgentID(key)
 		provider, model := splitModel(sub.Model)
 		agentCfg := cfg
 		if provider != "" {
@@ -99,7 +103,7 @@ func subagentSpans(traceID, toolSpanID string, tool Tool, cfg otlp.Config, base 
 		callAttributes(usage, Call{Provider: provider, Model: model, BillingMode: sub.BillingMode, Usage: sub.Usage})
 		usage["dash0.pi.subagent.timing"] = "aggregate"
 		usage["dash0.pi.subagent.turns"] = sub.Turns
-		spans = append(spans, otlp.NewLLMSpan(traceID, otlp.SpanIDFromAgentID(fmt.Sprintf("agent:%s:%s:%d:usage", traceID, tool.ID, n)), agentID, tool.Start, tool.End, usage, false, usageCfg))
+		spans = append(spans, otlp.NewLLMSpan(traceID, otlp.SpanIDFromAgentID(key+":usage"), agentID, tool.Start, tool.End, usage, false, usageCfg))
 	}
 	return spans
 }

@@ -91,20 +91,26 @@ func TestChildWithoutAModelHasNoUsageSpan(t *testing.T) {
 }
 
 // The child data comes from another extension's tool result, so a bad child
-// loses its own spans, not the turn.
+// loses its own spans, as a bad tool does, not the turn.
 func TestInvalidChildIsSkippedNotFatal(t *testing.T) {
 	for name, sub := range map[string]Subagent{
-		"bad agent":       {Agent: "../x", Model: "p/m"},
+		"bad agent":       {Agent: "a b", Model: "p/m"},
 		"bad model":       {Agent: "a", Model: "p/m m"},
 		"negative tokens": {Agent: "a", Model: "p/m", Usage: Usage{Input: -1}},
 		"negative turns":  {Agent: "a", Model: "p/m", Turns: -1},
 		"bad billing":     {Agent: "a", Model: "p/m", BillingMode: "api"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			spans := build(t, subagentTurn(sub), true)
-			require.Len(t, spans, 2)
+			require.Len(t, build(t, subagentTurn(sub), true), 2)
 		})
 	}
+}
+
+// pi-subagents names a package or nested agent with a scope, for example
+// "team/reviewer". The agent name is free text to it.
+func TestScopedAgentNameIsKept(t *testing.T) {
+	spans := build(t, subagentTurn(Subagent{Agent: "team/reviewer", Model: "p/m", Usage: Usage{Input: 1}}), true)
+	require.Equal(t, "invoke_agent team/reviewer", spans[2].Name)
 }
 
 func TestSplitModelKeepsSlashesInTheModel(t *testing.T) {

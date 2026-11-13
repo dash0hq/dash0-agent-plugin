@@ -15,9 +15,9 @@ the project moves.
 
 One writer per directory, so a hand edit in the wrong place gets overwritten or quietly ignored.
 
-## Seven runtimes
+## Eight runtimes
 
-Specs target Claude Code, Codex, GitHub Copilot CLI, Cursor, OpenCode, Amp or the GitHub Copilot app,
+Specs target Claude Code, Codex, GitHub Copilot CLI, Cursor, OpenCode, Amp, Pi or the GitHub Copilot app,
 and say which in their `runtime:` frontmatter. Each has its own driver, its own second channel, and its
 own limits on what a run can prove. `## Runtimes` in [setup.md](setup.md) is the table; read it
 before running or writing anything, and never carry a result from one runtime over to another. The
@@ -54,6 +54,13 @@ every verification tool must be pointed at it — `qa-attrs.py` needs `--dataset
 explicitly, and its default reports a clean pass over zero spans. Amp exposes no subagent spawn tool.
 The helper is **detached**: it polls for up to twenty seconds and a turn's spans can arrive after
 `amp` has exited, so amp runs settle for 30 s, not 10 s. Read [specs/amp](specs/amp/README.md).
+
+**Pi.** It has no hooks: the plugin is an extension Pi loads in-process. Unlike every other
+arm, a run tests **this working tree**, not an install: the driver loads `pi/index.ts` with
+`--no-extensions -e`, next to a helper it builds into the run. Its second channel is Pi's own
+`--mode json` stream, which carries per-call usage, so token totals are an exact check. Pi
+writes to its own dataset (`piDataset`), and `qa-attrs.py` needs `--dataset <piDataset>`.
+Read [specs/pi](specs/pi/README.md).
 
 ## Findings
 

@@ -521,9 +521,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     cwd = ctx.cwd;
     warn = () => {
-      if (warned || !ctx.hasUI) return;
+      if (warned) return;
       warned = true;
-      ctx.ui.notify("dash0: telemetry unavailable", "warning");
+      // An export can fail after Pi has ended this session, and Pi then
+      // throws on any use of its context. The throw would happen in a
+      // child-process callback, which ends the Pi process.
+      try {
+        if (ctx.hasUI) ctx.ui.notify("dash0: telemetry unavailable", "warning");
+      } catch {
+        // The session is gone, and so is the place to show the notice.
+      }
     };
   });
 

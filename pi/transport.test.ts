@@ -62,7 +62,7 @@ async function load(dir: string) {
     for (const handler of handlers.get(name) ?? [])
       await handler({ type: name, ...event }, ctx);
   };
-  return { fire, notices };
+  return { fire, notices, ctx };
 }
 
 /**
@@ -230,4 +230,36 @@ test("a missing helper or a failing export never throws into Pi", async () => {
   await turn(fire);
   await Bun.sleep(100);
   expect(notices).toHaveLength(1);
+});
+
+// Pi throws on any use of a session's context once the session has ended, and
+// an export fails after that in print mode. The throw would come from a
+// child-process callback and end the Pi process. Found live on 2026-11-13.
+test("a failing export after the session ended does not crash Pi", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  const home = join(dir, "home");
+  mkdirSync(home);
+  install(dir);
+  isolate(home);
+
+  const { fire, ctx } = await load(dir);
+  await fire("session_start", { reason: "startup" });
+  await fire("session_shutdown", { reason: "quit" });
+  let reads = 0;
+  Object.defineProperty(ctx, "hasUI", {
+    get() {
+      reads++;
+      throw new Error("This extension ctx is stale");
+    },
+  });
+  const crashes: unknown[] = [];
+  const onCrash = (error: unknown) => crashes.push(error);
+  process.on("uncaughtException", onCrash);
+  onTestFinished(() => process.off("uncaughtException", onCrash));
+  // The export of a turn that settles now fails after the shutdown.
+  await turn(fire);
+  for (let i = 0; i < 40 && reads === 0; i++) await Bun.sleep(25);
+  expect(reads).toBe(1);
+  expect(crashes).toEqual([]);
 });

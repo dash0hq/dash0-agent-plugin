@@ -163,6 +163,17 @@ the child's tokens are counted one time.
 - A background pi-subagents child is not inside the parent's trace. The
   `subagent` call returns before the child starts work, and pi-subagents does
   not give the child the parent's tool call.
+- A foreground child's totals cover only its own model calls. When a child
+  runs its own foreground children, their tokens are in the child's tool
+  result and not in the totals that the parent sees.
+- pi-subagents can run a child without a session file. With the opt-in that
+  loads this extension into children, such a child exports itself and the
+  parent cannot match it, so its tokens are counted two times. pi-subagents
+  0.88.0 writes a session file for every foreground child that a `subagent`
+  call starts.
+- The aggregate `chat` span names the child agent in `gen_ai.agent.name`, as
+  the child's own spans do on other runtimes. Child spend thus groups under
+  the child agent in Dash0, not under `pi`.
 - A model call's timing comes from Pi's own `timestamp` and `durationMs`.
   The extension measures tool timing from `tool_execution_start` to
   `tool_execution_end`. This includes time in other extensions' `tool_call`

@@ -461,9 +461,16 @@ test("malformed subagent results give no children, never throw", () => {
       usage: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
       turns: 0,
       billing_mode: undefined,
-      failed: true,
+      // No exitCode is not a failure: only a reported one is.
+      failed: false,
     },
   ]);
+  const throwing = {
+    get results() {
+      throw new Error("getter");
+    },
+  };
+  expect(subagentsOf(ctx, throwing)).toBeUndefined();
 });
 
 // With pi-subagents' defaultSubagentOnlyExtensions, this extension also loads
@@ -490,5 +497,11 @@ test("a child that exported itself keeps its agent but not its tokens", () => {
   const [own, other] = parent.sent[0].tools[0].subagents ?? [];
   expect(own.agent).toBe("delegate");
   expect(own.model).toBeUndefined();
+  expect(own.usage).toEqual({
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write: 0,
+  });
   expect(other.model).toBe("claude-code/claude-haiku-4-5");
 });

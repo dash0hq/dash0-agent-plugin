@@ -212,13 +212,6 @@ export function billingMode(
 }
 
 /**
- * Collect each user turn and hand it to `send` once Pi settles.
- *
- * A turn starts at before_agent_start and ends at agent_settled, not at
- * agent_end: Pi can retry, compact and retry, or run queued follow-ups after
- * agent_end, and all of that is still the same user turn.
- */
-/**
  * The foreground children in a pi-subagents `subagent` tool result. This is
  * the result shape of the pi-subagents extension, not a Pi API, so anything
  * unexpected gives no children. A background launch has no result rows: its
@@ -231,6 +224,17 @@ export function subagentsOf(
   ctx: ExtensionContext,
   details: unknown,
 ): Subagent[] | undefined {
+  try {
+    return readSubagents(ctx, details);
+  } catch {
+    return undefined;
+  }
+}
+
+function readSubagents(
+  ctx: ExtensionContext,
+  details: unknown,
+): Subagent[] | undefined {
   const rows = (details as { results?: unknown } | undefined)?.results;
   if (!Array.isArray(rows)) return undefined;
   const out: Subagent[] = [];
@@ -238,12 +242,16 @@ export function subagentsOf(
     if (typeof row !== "object" || row === null) continue;
     const r = row as Record<string, unknown>;
     if (!validString(r.agent)) continue;
-    const usage = (r.usage ?? {}) as Record<string, unknown>;
-    // Each child file is looked up once, so the set does not grow with them.
+    // A child that exported itself has its own session_start before the
+    // parent's tool call ends, because Pi starts the child's session first.
+    // Each file is looked up once, so the set does not grow with children.
     const exported =
       typeof r.sessionFile === "string" &&
       exportedSessions.delete(r.sessionFile);
+    const usage = (exported ? {} : (r.usage ?? {})) as Record<string, unknown>;
     const model = !exported && validString(r.model) ? r.model : undefined;
+    // The first slash separates the provider, as in splitModel in
+    // internal/source/pi.
     const provider = model?.split("/")[0];
     out.push({
       agent: r.agent,
@@ -256,7 +264,9 @@ export function subagentsOf(
       },
       turns: count(usage.turns),
       billing_mode: provider ? billingMode(ctx, provider) : undefined,
-      failed: r.exitCode !== 0 || typeof r.error === "string",
+      failed:
+        (typeof r.exitCode === "number" && r.exitCode !== 0) ||
+        typeof r.error === "string",
     });
   }
   return out.length ? out : undefined;
@@ -276,6 +286,13 @@ function skillAt(
   return skills.get(cwd ? resolve(cwd, p) : p);
 }
 
+/**
+ * Collect each user turn and hand it to `send` once Pi settles.
+ *
+ * A turn starts at before_agent_start and ends at agent_settled, not at
+ * agent_end: Pi can retry, compact and retry, or run queued follow-ups after
+ * agent_end, and all of that is still the same user turn.
+ */
 export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
   let state: Active | undefined;
   // SKILL.md path to skill name, from the skills Pi loaded for this run. A

@@ -265,6 +265,7 @@ and nothing else. Three consequences:
 | Sees what was sent | yes, through the plugin's debug log |
 | Session id | the stream's `session` header, which is also `gen_ai.conversation.id` |
 | Touches the machine | no. Pi's session file goes into the run directory, and the machine's extensions, skills and MCP servers do not load. Pi's login in `PI_CODING_AGENT_DIR` is read, not written |
+| Sub-agents | `QA_PI_SUBAGENTS=1` loads pi-subagents from the caller's agent directory and gives Pi an agent directory inside the run, so no user agent or setting is read. Only `claude-code` works there, because it brings its own login |
 
 Three sharp edges, each measured on 2026-11-13:
 
@@ -3363,6 +3364,36 @@ qa/tools/qa-session-pi.sh \
   'Run the bash command: echo qa-pi-first. Then reply with exactly the word done.' \
   setup-probe-pi
 qa/tools/qa-pi-compare.py qa/runs/setup-probe-pi
+```
+
+### pi-subagents-load-isolated
+
+- **proves.** `QA_PI_SUBAGENTS=1` loads pi-subagents with the plugin, and the
+  two kinds of child reach Dash0: a foreground child as `invoke_agent` under
+  its `subagent` call, and a background child as a session linked to the
+  parent. The run's own agent directory is the isolation, because a
+  background child reads Pi's settings and not the parent's `-e` paths.
+- **after.** pi-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false. Only the [subagents](specs/pi/subagents/) specs need it.
+- **pass.** Both comparisons print `AGREEMENT`.
+- **fail.** `QA_PI_SUBAGENTS: no pi-subagents at <dir>`: set
+  `QA_PI_SUBAGENTS_PACKAGE` to an installed pi-subagents package. A run whose
+  stream has no `subagent` call or no `bg_wait` completion is a model that did
+  not follow the prompt; run it again.
+- **verified.** 2026-11-13, signals: pass, pi-subagents 0.88.0. The first run
+  of the comparer failed on its own path check (a relative path against the
+  absolute one in the child header), which is fixed. Measured on
+  `qa/runs/spec-pi-subagent-foreground` and `-background`.
+
+```sh
+QA_PI_SUBAGENTS=1 qa/tools/qa-session-pi.sh \
+  'Call the subagent tool exactly once with agent "delegate" and task "Read a.txt with the read tool and reply with its content only." Do not use async. Then reply with exactly the word done.' \
+  spec-pi-subagent-foreground
+qa/tools/qa-pi-compare.py qa/runs/spec-pi-subagent-foreground
+QA_PI_SUBAGENTS=1 qa/tools/qa-session-pi.sh \
+  'Call the subagent tool exactly once with agent "delegate", async true, and task "Read a.txt with the read tool and reply with its content only." Then call bg_wait with that run id. Then reply with exactly the word done.' \
+  spec-pi-subagent-background
+qa/tools/qa-pi-compare.py qa/runs/spec-pi-subagent-background
 ```
 
 ### pi-span-carries-no-undeclared-attribute

@@ -11,6 +11,9 @@
 #
 #   - Pi runs with --no-extensions, so the machine's own extensions, including
 #     any installed copy of this plugin, do not load and cannot export twice.
+#     QA_PI_SUBAGENTS=1 gets the same isolation from an agent directory inside
+#     the run instead, because pi-subagents' background children read Pi's
+#     settings, not the parent's command line.
 #   - Pi runs with a session directory inside the run, so QA sessions do not
 #     appear in the user's /resume list.
 #   - The plugin's configuration comes from PI_PLUGIN_OPTION_*, which outranks
@@ -40,6 +43,9 @@
 #   QA_PI_SKILL=1 ...                                   # the qa-echo skill fixture
 #   QA_PI_TOOLS=read,bash ...                           # Pi's --tools allowlist; default read,bash
 #   QA_PI_PROVIDER_EXTENSION=<path> ...                 # a provider extension to load, see below
+#   QA_PI_SUBAGENTS=1 ...                               # load pi-subagents, isolated; see below
+#   QA_PI_SUBAGENTS_CHILD_EXPORT=1 ...                  # also load the plugin into foreground children
+#   QA_PI_SUBAGENTS_PACKAGE=<dir> ...                   # default: npm/node_modules/pi-subagents in the agent dir
 #
 # Auth: Pi's own login for the chosen provider. QA does not provision model
 # credentials. PI_CODING_AGENT_DIR is left as the caller has it, because that
@@ -90,11 +96,10 @@ cp qa/recorder/pi/index.ts "$RUN_DIR/recorder.ts"
 # configuration. a.txt gives the read tool something to read.
 printf 'qa-pi-fixture\n' > "$RUN_DIR/project/a.txt"
 
-PI_ARGS=(--mode json --no-extensions --no-skills --no-prompt-templates
+PI_ARGS=(--mode json --no-skills --no-prompt-templates
          --no-context-files --no-themes --offline
          --session-dir "$RUN_DIR/sessions"
-         --model "$MODEL"
-         -e "$RUN_DIR/recorder.ts" -e "$RUN_DIR/plugin/index.ts")
+         --model "$MODEL")
 
 # --no-extensions also drops a provider that is itself an extension, such as
 # claude-code. QA_PI_PROVIDER_EXTENSION names one to load anyway; by default it
@@ -104,7 +109,52 @@ PROVIDER_EXT=${QA_PI_PROVIDER_EXTENSION:-}
 if [ -z "$PROVIDER_EXT" ] && [ -e "$AGENT_DIR/extensions/claude-code" ]; then
   PROVIDER_EXT=$(readlink -f "$AGENT_DIR/extensions/claude-code")
 fi
-[ -n "$PROVIDER_EXT" ] && PI_ARGS+=(-e "$PROVIDER_EXT")
+
+SUBAGENTS_VERSION=
+if [ "${QA_PI_SUBAGENTS:-0}" = "1" ]; then
+  # A background pi-subagents child runs in a detached runner process that
+  # loads the extensions in Pi's settings, not the parent's -e paths. So this
+  # mode gives Pi an agent directory of its own, inside the run, whose
+  # settings name exactly the recorder, the plugin, the provider and
+  # pi-subagents. The user's agents, settings and extensions are then not
+  # read, by the parent or by any child.
+  #
+  # The agent directory is also where Pi keeps logins, and QA never copies
+  # credentials. So only a provider that brings its own login works here:
+  # claude-code, which starts the Claude Code CLI.
+  SUBAGENTS_PKG=${QA_PI_SUBAGENTS_PACKAGE:-$AGENT_DIR/npm/node_modules/pi-subagents}
+  [ -f "$SUBAGENTS_PKG/package.json" ] || { echo "QA_PI_SUBAGENTS: no pi-subagents at $SUBAGENTS_PKG" >&2; exit 2; }
+  [ -n "$PROVIDER_EXT" ] || { echo "QA_PI_SUBAGENTS: needs the claude-code provider extension" >&2; exit 2; }
+  SUBAGENTS_VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$SUBAGENTS_PKG/package.json")
+  mkdir -p "$RUN_DIR/agent"
+  python3 - "$RUN_DIR" "$PROVIDER_EXT" "$SUBAGENTS_PKG" "${QA_PI_SUBAGENTS_CHILD_EXPORT:-0}" <<'PY'
+import json, sys
+run, provider, package, child_export = sys.argv[1:5]
+plugin = f"{run}/plugin/index.ts"
+settings = {
+    "extensions": [f"{run}/recorder.ts", plugin, provider],
+    "packages": [package],
+    "quietStartup": True,
+    "defaultProjectTrust": "no",
+    "enableInstallTelemetry": False,
+}
+if child_export == "1":
+    # The pi-subagents setting that loads an extension into foreground
+    # children too. The recorder goes with it, so the child's events are
+    # recorded as well.
+    settings["subagents"] = {"defaultSubagentOnlyExtensions": [f"{run}/recorder.ts", plugin]}
+json.dump(settings, open(f"{run}/agent/settings.json", "w"), indent=2)
+PY
+  printf '{}\n' > "$RUN_DIR/agent/auth.json"
+  export PI_CODING_AGENT_DIR="$RUN_DIR/agent"
+  # pi-subagents adds these tools, and --tools would filter them out.
+  TOOLS="$TOOLS,subagent,bg_wait"
+else
+  # Pi runs with --no-extensions, so the machine's own extensions, including
+  # any installed copy of this plugin, do not load and cannot export twice.
+  PI_ARGS+=(--no-extensions -e "$RUN_DIR/recorder.ts" -e "$RUN_DIR/plugin/index.ts")
+  [ -n "$PROVIDER_EXT" ] && PI_ARGS+=(-e "$PROVIDER_EXT")
+fi
 
 # QA_PI_MCP=1 registers qa/mcp-fixture twice, as qa_fixture_alpha and
 # qa_fixture_beta, the same names the other runtimes' MCP specs use. They go in
@@ -177,9 +227,10 @@ printf '%s\n' "$SESSION_ID" > "$RUN_DIR/session-id"
 echo "session: $SESSION_ID" >&2
 
 python3 - "$RUN_DIR" "$RUN_ID" "$SESSION_ID" "$STARTED" "$PI_STATUS" \
-         "$QA_DATASET" "$QA_API_URL" "$MODEL" "${#PROMPTS[@]}" <<'PY'
+         "$QA_DATASET" "$QA_API_URL" "$MODEL" "${#PROMPTS[@]}" "$SUBAGENTS_VERSION" \
+         "${QA_PI_SUBAGENTS_CHILD_EXPORT:-0}" <<'PY'
 import json, sys, datetime
-run_dir, run_id, session, started, status, dataset, api_url, model, turns = sys.argv[1:10]
+run_dir, run_id, session, started, status, dataset, api_url, model, turns, subagents, child_export = sys.argv[1:12]
 finished = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 def stamp(value):
@@ -190,7 +241,8 @@ def stamp(value):
 json.dump({"runtime": "pi", "run_id": run_id, "session_id": session,
            "started": started, "finished": finished, "pi_exit": int(status),
            "model": model, "prompts": int(turns), "dataset": dataset,
-           "api_url": api_url}, open(f"{run_dir}/meta.json", "w"), indent=2)
+           "api_url": api_url, "pi_subagents": subagents or None,
+           "pi_subagents_child_export": bool(subagents) and child_export == "1"}, open(f"{run_dir}/meta.json", "w"), indent=2)
 json.dump({"runtime": "pi", "run_id": run_id, "session_id": session,
            "started_at": stamp(started), "ended_at": stamp(finished),
            "dataset": dataset}, open(f"{run_dir}/manifest.json", "w"), indent=2)

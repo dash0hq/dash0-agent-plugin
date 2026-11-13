@@ -22,6 +22,19 @@ What is compared, per run:
   tokens         per model call, Pi's usage: input + cacheRead + cacheWrite is
                  gen_ai.usage.input_tokens, output is output_tokens
 
+With pi-subagents (QA_PI_SUBAGENTS=1), two more sources count:
+
+  foreground     each row of a `subagent` tool result's details.results is
+                 one child, so one invoke_agent span under that tool's span,
+                 in the parent trace. The child's usage is one more chat
+                 span's tokens. Those rows are pi-subagents' output, which the
+                 plugin also reads, so this half checks the copy. The child's
+                 own session file, which the plugin never reads, checks the
+                 numbers.
+  background     a `bg_wait` completion names the child's session file. The
+                 child exports itself as its own session, so its spans are
+                 read by the child's session id and compared with that file.
+
 Exit codes: 0 agreement, 1 a real mismatch, 2 the comparison could not be made.
 
 Usage: qa/tools/qa-pi-compare.py qa/runs/<run-id>
@@ -109,6 +122,113 @@ def expectation(events: list[dict]) -> dict:
     return {"turns": turns, "calls": calls, "tools": tools, "errors": errors}
 
 
+def usage_counts(usage: dict) -> tuple[int, int]:
+    counts = [int(usage.get(k) or 0) for k in ("input", "cacheRead", "cacheWrite")]
+    return sum(counts), int(usage.get("output") or 0)
+
+
+def subagent_rows(events: list[dict]) -> dict:
+    """Foreground children per subagent tool call, and background children.
+
+    A foreground call returns its children in details.results. A background
+    launch returns no rows; its children finish later and a bg_wait result
+    lists them under completions.
+    """
+    foreground: dict[str, list[dict]] = {}
+    background: list[dict] = []
+    for event in events:
+        if event.get("type") != "tool_execution_end":
+            continue
+        details = (event.get("result") or {}).get("details") or {}
+        if event.get("toolName") == "subagent" and details.get("results"):
+            foreground[event.get("toolCallId")] = details["results"]
+        elif event.get("toolName") == "bg_wait":
+            for completion in details.get("completions") or []:
+                background.extend(completion.get("results") or [])
+    return {"foreground": foreground, "background": background}
+
+
+def session_file_usage(path: str) -> dict:
+    """What a child's own session file says: its id, calls and tokens."""
+    header, calls = {}, []
+    for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
+        entry = json.loads(line)
+        if entry.get("type") == "session":
+            header = entry
+        message = entry.get("message") or {}
+        if message.get("role") == "assistant" and message.get("model"):
+            calls.append(usage_counts(message.get("usage") or {}))
+    return {"id": header.get("id"), "parent": header.get("parentSession"),
+            "calls": len(calls), "input": sum(c[0] for c in calls),
+            "output": sum(c[1] for c in calls)}
+
+
+def subagent_table(config, dataset, rows, spans, run_dir, child_export):
+    """Rows for the sub-agent comparison, as (label, want, got)."""
+    out = []
+    by_id = {s["span_id"]: s for s in spans}
+    agents = [s for s in spans if str(s["name"]).startswith("invoke_agent ")]
+    tool_of = {s["attrs"].get("gen_ai.tool.call.id"): s for s in spans
+               if str(s["name"]) == "execute_tool subagent"}
+    parent_file = next((p.resolve() for p in (run_dir / "sessions").glob("*.jsonl")), None)
+
+    want_agents = sum(len(r) for r in rows["foreground"].values())
+    out.append(("foreground children -> invoke_agent", want_agents, len(agents)))
+    for call_id, children in rows["foreground"].items():
+        tool = tool_of.get(call_id)
+        under = [a for a in agents if tool and a["parent_span_id"] == tool["span_id"]]
+        out.append((f"  under subagent {call_id[-8:]}", [c.get("agent") for c in children],
+                    [a["attrs"].get("gen_ai.agent.name") for a in under]))
+        for child, agent in zip(children, under):
+            usage = [s for s in spans if s["parent_span_id"] == agent["span_id"]
+                     and str(s["name"]).startswith("chat")]
+            got_in = sum(int(s["attrs"].get("gen_ai.usage.input_tokens") or 0) for s in usage)
+            got_out = sum(int(s["attrs"].get("gen_ai.usage.output_tokens") or 0) for s in usage)
+            want_in, want_out = usage_counts(child.get("usage") or {})
+            file = child.get("sessionFile")
+            own = None
+            if file and pathlib.Path(file).exists():
+                own = session_file_usage(file)
+                out.append(("    child file names the parent", str(parent_file), own["parent"]))
+                out.append(("    child file -> tool result", (own["input"], own["output"]),
+                            (want_in, want_out)))
+            if child_export:
+                # The child loaded the plugin and exported itself, so the
+                # parent's agent span carries no tokens: each token once.
+                out.append(("    tokens on chat under agent", (0, 0), (got_in, got_out)))
+                if own:
+                    out += child_session_rows(config, dataset, own, run_dir, "    child session")
+            else:
+                out.append(("    tokens on chat under agent", (want_in, want_out), (got_in, got_out)))
+            out.append(("    same trace as parent", agent["trace_id"],
+                        by_id.get(agent["parent_span_id"], {}).get("trace_id")))
+
+    for child in rows["background"]:
+        file = child.get("sessionFile")
+        if not file or not pathlib.Path(file).exists():
+            out.append(("background child file", "present", "missing"))
+            continue
+        own = session_file_usage(file)
+        out += child_session_rows(config, dataset, own, run_dir, f"background {own['id'][-8:]}")
+    return out
+
+
+def child_session_rows(config, dataset, own, run_dir, label):
+    """A child that exported itself, read by its own session id."""
+    child_spans, error = wait_for_spans(config, own["id"], dataset, 1)
+    if error:
+        bail(error)
+    chats = [s for s in child_spans or [] if str(s["name"]).startswith("chat")]
+    parent_ids = {s["attrs"].get("dash0.pi.session.parent.id") for s in child_spans or []}
+    return [
+        (f"{label} model calls", own["calls"], len(chats)),
+        ("  tokens (in, out)", (own["input"], own["output"]),
+         (sum(int(s["attrs"].get("gen_ai.usage.input_tokens") or 0) for s in chats),
+          sum(int(s["attrs"].get("gen_ai.usage.output_tokens") or 0) for s in chats))),
+        ("  linked to parent session", {(run_dir / "session-id").read_text().strip()}, parent_ids),
+    ]
+
+
 def wait_for_spans(config, session, dataset, want_turns):
     deadline = time.monotonic() + SETTLE_SECONDS
     while True:
@@ -142,7 +262,9 @@ def main() -> int:
     if not dataset:
         bail("qa/config.local.json is missing: piDataset")
 
-    want = expectation(load_stream(run_dir / "stream.jsonl"))
+    events = load_stream(run_dir / "stream.jsonl")
+    want = expectation(events)
+    children = subagent_rows(events)
     spans, error = wait_for_spans(config, session, dataset, want["turns"])
     if error:
         bail(error)
@@ -150,7 +272,12 @@ def main() -> int:
         bail(f"no spans for {session} in {dataset} after {SETTLE_SECONDS}s. Check that "
              "the run set PI_PLUGIN_OPTION_DATASET, and read plugin-debug.log.")
 
-    chats = [s for s in spans if str(s["name"]).startswith("chat")]
+    # The chat span under an invoke_agent span carries a foreground child's
+    # totals. It is not one of the parent's model calls, so the parent rows
+    # leave it out, and the sub-agent rows check it.
+    agent_ids = {s["span_id"] for s in spans if str(s["name"]).startswith("invoke_agent ")}
+    chats = [s for s in spans if str(s["name"]).startswith("chat")
+             and s.get("parent_span_id") not in agent_ids]
     roots = [s for s in chats if not s.get("parent_span_id")]
     tool_spans = [s for s in spans if str(s["name"]).startswith("execute_tool ")]
     got_tools = Counter(str(s["name"]).removeprefix("execute_tool ") for s in tool_spans)
@@ -184,6 +311,9 @@ def main() -> int:
         ("output tokens", want_out, got_out),
         ("harness", {"pi"}, harness),
     ]
+    if children["foreground"] or children["background"]:
+        rows += subagent_table(config, dataset, children, spans, run_dir,
+                               bool(meta.get("pi_subagents_child_export")))
     print(f"run     : {run_dir}")
     print(f"session : {session}")
     print(f"dataset : {dataset}")

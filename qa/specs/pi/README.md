@@ -30,7 +30,7 @@ reports a clean pass over zero spans.
 | [usage](usage/) | Per-call tokens reconcile exactly with the stream. The provider comes from each call; verified for `claude-code` and `openai-codex`. |
 | [mcp](mcp/) | Prefix stripping, per-server naming, and failure status. Solid. |
 | [skills](skills/) | Both routes: the model reading `SKILL.md`, and a `/skill:name` command. Solid. |
-| subagents | Not applicable. Pi has no built-in sub-agent; extensions that start one run a separate `pi` process, which is a separate session. |
+| [subagents](subagents/) | pi-subagents, with `QA_PI_SUBAGENTS=1`: a foreground child as `invoke_agent` under its call with its tokens, a background child as a linked session, and the opt-in child export counted one time. Solid for single children. |
 | aborted turns | Not covered by a spec. `-p` cannot abort a turn on demand; `test/e2e` and the extension tests cover the abort path. |
 
 Every spec here was run against Dash0 on 2026-11-13 and agreed. The attribute

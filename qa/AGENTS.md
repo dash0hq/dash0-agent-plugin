@@ -60,6 +60,7 @@ arm, a run tests **this working tree**, not an install: the driver loads `pi/ind
 `--no-extensions -e`, next to a helper it builds into the run. Its second channel is Pi's own
 `--mode json` stream, which carries per-call usage, so token totals are an exact check. Pi
 writes to its own dataset (`piDataset`), and `qa-attrs.py` needs `--dataset <piDataset>`.
+Sub-agent runs need `QA_PI_SUBAGENTS=1`, see [specs/pi/subagents](specs/pi/subagents/README.md).
 Read [specs/pi](specs/pi/README.md).
 
 ## Findings

@@ -4,6 +4,7 @@
 package vcs
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -100,20 +101,64 @@ func TestNormalizeRemoteURLStripsCredentials(t *testing.T) {
 // secret. It comes off anyway: the scrub is by position, not by value, because
 // telling a username from a token would need an allowlist that the next
 // benign-looking token walks straight through.
-//
-// The accepted cost is that ssh://git@host/o/r now emits ssh://host/o/r, so the
-// value changes for an SSH user who never embedded a credential and no longer
-// round-trips through `git clone`. That is the same trade the scp form has always
-// made: it drops git@ on its way to https.
 func TestNormalizeRemoteURLStripsBenignUserinfo(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
 		want  string
 	}{
-		{"ssh scheme carries a user", "ssh://git@github.com/dash0hq/probe.git", "ssh://github.com/dash0hq/probe"},
+		{"ssh scheme carries a user", "ssh://git@github.com/dash0hq/probe.git", "https://github.com/dash0hq/probe"},
 		{"scp form, default user", "git@github.com:dash0hq/probe.git", "https://github.com/dash0hq/probe"},
 		{"scp form, custom user", "deploy@github.com:dash0hq/probe.git", "https://github.com/dash0hq/probe"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeRemoteURL(tt.input))
+		})
+	}
+}
+
+// TestNormalizeRemoteURLGivesOneURLPerRepository pins the join key. Every
+// spelling of one remote must export the same https URL: teammates on scp,
+// https and ssh:// remotes work in one repository, and Dash0 joins agent spans
+// to GitHub pull-request metrics by this value. The ssh:// form is common
+// without anyone typing it: `url."ssh://git@github.com/".insteadOf
+// https://github.com/` makes `git remote get-url` return it for an https
+// remote.
+func TestNormalizeRemoteURLGivesOneURLPerRepository(t *testing.T) {
+	const want = "https://github.com/dash0hq/probe"
+	for _, input := range []string{
+		"https://github.com/dash0hq/probe.git",
+		"git@github.com:dash0hq/probe.git",
+		"ssh://git@github.com/dash0hq/probe.git",
+		"ssh://github.com/dash0hq/probe",
+		"SSH://git@github.com/dash0hq/probe.git",
+		"git+ssh://git@github.com/dash0hq/probe.git",
+		"ssh+git://git@github.com/dash0hq/probe.git",
+		"ssh://git@github.com/dash0hq/probe/",
+	} {
+		t.Run(input, func(t *testing.T) {
+			assert.Equal(t, want, normalizeRemoteURL(input))
+		})
+	}
+}
+
+// An SSH port is not the https port, so it comes off with the scheme. Other
+// schemes keep their spelling: an https port or a local path still names the
+// repository exactly.
+func TestNormalizeRemoteURLOtherForms(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ssh with port", "ssh://git@gitlab.example.com:2222/grp/probe.git", "https://gitlab.example.com/grp/probe"},
+		{"ssh with credential", "ssh://deploy:s3cr3t@github.com/dash0hq/probe.git", "https://github.com/dash0hq/probe"},
+		{"ssh without a path", "ssh://git@github.com", "https://github.com"},
+		{"https with port", "https://gitlab.example.com:8443/grp/probe.git", "https://gitlab.example.com:8443/grp/probe"},
+		{"git protocol", "git://github.com/dash0hq/probe.git", "git://github.com/dash0hq/probe"},
+		{"local file", "file:///srv/git/probe.git", "file:///srv/git/probe"},
+		{"local path", "/srv/git/probe.git", "/srv/git/probe"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -236,4 +281,34 @@ func repoWithWorktree(t *testing.T, branch string) (main, worktree string) {
 		require.NoError(t, err, "git %v: %s", args, out)
 	}
 	return main, worktree
+}
+
+// TestDetectAtFollowsInsteadOf runs real git with the configuration that
+// produces an ssh:// remote without the user typing one. The remote is the
+// https URL from GitHub's clone button, and `git remote get-url` reports the
+// rewritten ssh:// URL. The exported value must still be the https URL.
+func TestDetectAtFollowsInsteadOf(t *testing.T) {
+	dir := t.TempDir()
+	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(gitConfig, []byte("[url \"ssh://git@github.com/\"]\n\tinsteadOf = https://github.com/\n"), 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"remote", "add", "origin", "https://github.com/dash0hq/probe.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	require.Equal(t, "ssh://git@github.com/dash0hq/probe.git", gitOutput(dir, "remote", "get-url", "origin"),
+		"precondition: git applies insteadOf to get-url")
+
+	info := DetectAt(dir)
+	require.NotNil(t, info)
+	assert.Equal(t, "https://github.com/dash0hq/probe", info.RepositoryURLFull)
+	assert.Equal(t, "dash0hq", info.OwnerName)
+	assert.Equal(t, "probe", info.RepositoryName)
+	assert.Equal(t, "github", info.ProviderName)
 }

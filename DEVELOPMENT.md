@@ -353,7 +353,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 | `dash0.team.name` | e.g. `platform`                                                                | Only when `team_name` is set. |
 | `gen_ai.conversation.id` | Session ID                                                                     | From the event's `session_id`. |
 | `process.working_directory` | e.g. `/home/me/proj`                                                           | `~`-redacted when `omit_user_info`. |
-| `dash0.gen_ai.vcs.repository.url.full` | `https://github.com/dash0hq/dash0-agent-plugin`                                | git remote, normalized to https. |
+| `dash0.gen_ai.vcs.repository.url.full` | `https://github.com/dash0hq/dash0-agent-plugin`                                | git remote, normalized to https. The scp form, `ssh://`, `git+ssh://` and an `insteadOf` rewrite of one remote all give the same value. |
 | `dash0.gen_ai.vcs.repository.name` | `dash0-agent-plugin`                                                           | |
 | `dash0.gen_ai.vcs.owner.name` | `dash0hq`                                                                      | |
 | `dash0.gen_ai.vcs.provider.name` | `github` / `gitlab` / `bitbucket` / `gitea`                                    | From the remote host. |

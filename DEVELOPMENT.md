@@ -390,7 +390,7 @@ omitted when its value is empty.
 | `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
 | `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript), Codex (from the rollout) and Copilot, all only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
 | `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh`                                     | Claude only, from the payload's `effort` field. The request-side counterpart to `reasoning.output_tokens`: the setting that produced the thinking those tokens paid for. The attribute is a free-form string — the convention asks for "the exact string value sent to the provider" and gives `low`/`medium`/`high` only as examples — so Claude Code's `xhigh` is reported as-is. |
-| `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude and Codex, on the chat span of a turn that a person's slash command or `$mention` started, and for Codex on any turn that loaded a skill at all. See below. |
+| `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude, Codex and Pi, on the chat span of a turn that a person's slash command or `$mention` started, and for Codex on any turn that loaded a skill at all. See below. |
 | `dash0.gen_ai.tool.skill.source` | `command`, `model`                                                   | Same rows as above. `model` reaches a chat span only on Codex, where the model's own choice also loads without a tool call. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
@@ -434,6 +434,12 @@ the turn's `chat` span, and the split comes from whether the person named the sk
 Codex's `$mention`: `command` when they did, `model` when the model chose from the
 catalogue. There is no `execute_tool Skill` span on Codex at all, which is worth knowing
 before comparing counts across runtimes.
+
+**Pi has both routes and no skill tool.** A person's `/skill:name` command expands into the
+prompt, so it lands on the turn's `chat` span with `command`. The model loads a skill by
+reading its `SKILL.md` with an ordinary tool, so that tool's `execute_tool` span (usually
+`read`) carries the name with `model`. The extension knows the skill paths from Pi itself,
+so a read of another file named `SKILL.md` does not count.
 
 The command route is read from the transcript, which is the only place it is recorded:
 Claude Code writes a `<command-name>` tag into the turn's user entry, and a skill load

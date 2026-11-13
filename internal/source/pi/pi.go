@@ -42,6 +42,9 @@ type Turn struct {
 	Truncated bool   `json:"truncated"`
 	Prompt    string `json:"prompt"`
 	Response  string `json:"response"`
+	// Skill names the skill that a person's /skill:name command loaded into
+	// the prompt that started this turn.
+	Skill string `json:"skill"`
 }
 
 // Call is one model request: one assistant message as Pi finalized it.
@@ -89,6 +92,9 @@ type Tool struct {
 	Call   *int   `json:"call"`
 	Input  string `json:"input"`
 	Output string `json:"output"`
+	// Skill names the skill whose SKILL.md this call read. Pi has no skill
+	// tool: the model loads a skill by reading its file.
+	Skill string `json:"skill"`
 }
 
 // Pi's own session ID rule (assertValidSessionId), with a length bound.
@@ -97,6 +103,10 @@ var sessionPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,254}[A-
 // Provider IDs and model names are free text in Pi, because extensions can
 // register providers. This only keeps them to a sane size and alphabet.
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]{0,255}$`)
+
+// Pi's skill name rule is lowercase letters, digits and hyphens. This accepts
+// a little more, so a renamed rule costs nothing but the bound.
+var skillPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 func validStatus(s string) bool { return s == "done" || s == "error" || s == "aborted" }
 
@@ -107,6 +117,9 @@ func (t Turn) Validate() error {
 	}
 	if t.ParentSessionID != "" && !sessionPattern.MatchString(t.ParentSessionID) {
 		return fmt.Errorf("invalid Pi parent session")
+	}
+	if t.Skill != "" && !skillPattern.MatchString(t.Skill) {
+		return fmt.Errorf("invalid Pi skill")
 	}
 	for _, c := range t.Calls {
 		u := c.Usage
@@ -228,6 +241,10 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 	if t.Response != "" {
 		root["last_assistant_message"] = t.Response
 	}
+	if t.Skill != "" {
+		root["skill_name"] = t.Skill
+		root["skill_source"] = "command"
+	}
 	rootCfg := cfg
 	calls := t.Calls
 	if len(calls) > 0 {
@@ -289,6 +306,10 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		}
 		if tool.Error {
 			event["error"] = "Pi tool error"
+		}
+		if skillPattern.MatchString(tool.Skill) {
+			event["skill_name"] = tool.Skill
+			event["skill_source"] = "model"
 		}
 		pipeline.EnrichToolEvent(event)
 		parent := rootID

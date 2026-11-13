@@ -200,6 +200,31 @@ func TestContentFollowsOmitIO(t *testing.T) {
 	require.Equal(t, "SECRET-FILE", attrs(spans[1])["gen_ai.tool.call.result"])
 }
 
+// Pi loads a skill two ways, and each lands where Claude and Codex put it: a
+// person's /skill:name command on the turn root, the model's read of SKILL.md
+// on that read's tool span.
+func TestSkillIsNamedByRoute(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done", Skill: "qa-echo",
+		Tools: []Tool{
+			{ID: "r1", Name: "read", Start: at(1), End: at(2), Skill: "pdf-tools"},
+			{ID: "r2", Name: "read", Start: at(2), End: at(3)},
+			{ID: "r3", Name: "read", Start: at(3), End: at(4), Skill: "../bad name"},
+		}}
+	spans := build(t, turn, true)
+	root := attrs(spans[0])
+	require.Equal(t, "qa-echo", root["dash0.gen_ai.tool.skill.name"])
+	require.Equal(t, "command", root["dash0.gen_ai.tool.skill.source"])
+	read := attrs(spans[1])
+	require.Equal(t, "pdf-tools", read["dash0.gen_ai.tool.skill.name"])
+	require.Equal(t, "model", read["dash0.gen_ai.tool.skill.source"])
+	for _, s := range spans[2:] {
+		require.NotContains(t, attrs(s), "dash0.gen_ai.tool.skill.name")
+	}
+
+	bad := Turn{SessionID: "s1", Start: at(0), End: at(1), Status: "done", Skill: "a b"}
+	require.Error(t, bad.Validate())
+}
+
 func TestForkedSessionNamesItsParent(t *testing.T) {
 	turn := Turn{SessionID: "child", ParentSessionID: "parent", Start: at(0), End: at(1), Status: "done", Truncated: true}
 	r := attrs(build(t, turn, true)[0])

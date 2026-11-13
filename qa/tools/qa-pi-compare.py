@@ -127,6 +127,12 @@ def usage_counts(usage: dict) -> tuple[int, int]:
     return sum(counts), int(usage.get("output") or 0)
 
 
+def span_tokens(spans: list[dict]) -> tuple[int, int]:
+    """Input and output tokens summed over spans, as Dash0 stored them."""
+    return (sum(int(s["attrs"].get("gen_ai.usage.input_tokens") or 0) for s in spans),
+            sum(int(s["attrs"].get("gen_ai.usage.output_tokens") or 0) for s in spans))
+
+
 def subagent_rows(events: list[dict]) -> dict:
     """Foreground children per subagent tool call, and background children.
 
@@ -163,7 +169,7 @@ def session_file_usage(path: str) -> dict:
             "output": sum(c[1] for c in calls)}
 
 
-def subagent_table(config, dataset, rows, spans, run_dir, child_export):
+def subagent_table(config, dataset, rows, spans, run_dir, session, child_export):
     """Rows for the sub-agent comparison, as (label, want, got)."""
     out = []
     by_id = {s["span_id"]: s for s in spans}
@@ -182,8 +188,7 @@ def subagent_table(config, dataset, rows, spans, run_dir, child_export):
         for child, agent in zip(children, under):
             usage = [s for s in spans if s["parent_span_id"] == agent["span_id"]
                      and str(s["name"]).startswith("chat")]
-            got_in = sum(int(s["attrs"].get("gen_ai.usage.input_tokens") or 0) for s in usage)
-            got_out = sum(int(s["attrs"].get("gen_ai.usage.output_tokens") or 0) for s in usage)
+            got_in, got_out = span_tokens(usage)
             want_in, want_out = usage_counts(child.get("usage") or {})
             file = child.get("sessionFile")
             own = None
@@ -197,7 +202,7 @@ def subagent_table(config, dataset, rows, spans, run_dir, child_export):
                 # parent's agent span carries no tokens: each token once.
                 out.append(("    tokens on chat under agent", (0, 0), (got_in, got_out)))
                 if own:
-                    out += child_session_rows(config, dataset, own, run_dir, "    child session")
+                    out += child_session_rows(config, dataset, own, session, "    child session")
             else:
                 out.append(("    tokens on chat under agent", (want_in, want_out), (got_in, got_out)))
             out.append(("    same trace as parent", agent["trace_id"],
@@ -209,11 +214,11 @@ def subagent_table(config, dataset, rows, spans, run_dir, child_export):
             out.append(("background child file", "present", "missing"))
             continue
         own = session_file_usage(file)
-        out += child_session_rows(config, dataset, own, run_dir, f"background {own['id'][-8:]}")
+        out += child_session_rows(config, dataset, own, session, f"background {own['id'][-8:]}")
     return out
 
 
-def child_session_rows(config, dataset, own, run_dir, label):
+def child_session_rows(config, dataset, own, session, label):
     """A child that exported itself, read by its own session id."""
     child_spans, error = wait_for_spans(config, own["id"], dataset, 1)
     if error:
@@ -222,10 +227,8 @@ def child_session_rows(config, dataset, own, run_dir, label):
     parent_ids = {s["attrs"].get("dash0.pi.session.parent.id") for s in child_spans or []}
     return [
         (f"{label} model calls", own["calls"], len(chats)),
-        ("  tokens (in, out)", (own["input"], own["output"]),
-         (sum(int(s["attrs"].get("gen_ai.usage.input_tokens") or 0) for s in chats),
-          sum(int(s["attrs"].get("gen_ai.usage.output_tokens") or 0) for s in chats))),
-        ("  linked to parent session", {(run_dir / "session-id").read_text().strip()}, parent_ids),
+        ("  tokens (in, out)", (own["input"], own["output"]), span_tokens(chats)),
+        ("  linked to parent session", {session}, parent_ids),
     ]
 
 
@@ -312,7 +315,7 @@ def main() -> int:
         ("harness", {"pi"}, harness),
     ]
     if children["foreground"] or children["background"]:
-        rows += subagent_table(config, dataset, children, spans, run_dir,
+        rows += subagent_table(config, dataset, children, spans, run_dir, session,
                                bool(meta.get("pi_subagents_child_export")))
     print(f"run     : {run_dir}")
     print(f"session : {session}")

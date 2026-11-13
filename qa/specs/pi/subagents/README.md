@@ -38,7 +38,7 @@ child's session file. The specs read that file as the independent record.
 
 | Invariant | Why not |
 | --- | --- |
-| A background child is inside the parent's trace | It is not, by design: the `subagent` call returns before the child works, and pi-subagents does not give the child the parent's tool call. The link is the session parent. `pi/README.md` records it |
+| A background child is inside the parent's trace | It is not: the `subagent` call returns before the child works, and pi-subagents does not give the child the parent's tool call. The link is the session parent. See the finding [pi-background-subagent-is-outside-the-parent-trace](../../../findings/pi-background-subagent-is-outside-the-parent-trace.md) |
 | Per-call timing of a foreground child | The plugin reports totals on one aggregate `chat` span (`dash0.pi.subagent.timing=aggregate`). Per-call detail is the opt-in that the third spec covers |
 | Parallel and chain calls | The same rows, several per call. Unit tests cover several children per call. Worth a spec once a prompt makes the model fan out reliably |
 | A failed child is marked | No way to make a child fail on demand. Unit tests cover `exitCode` other than 0 |

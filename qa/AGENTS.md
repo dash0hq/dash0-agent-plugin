@@ -65,11 +65,13 @@ Read [specs/pi](specs/pi/README.md).
 
 ## Findings
 
-Report spec failures that are unaddressed in `findings/`. Three are open today:
+Report spec failures that are unaddressed in `findings/`. Four are open today:
 [cursor-subagent-work-produces-no-span](findings/cursor-subagent-work-produces-no-span.md),
-[amp-server-side-tools-produce-no-span](findings/amp-server-side-tools-produce-no-span.md) and
-[amp-mcp-calls-run-inside-code-exec](findings/amp-mcp-calls-run-inside-code-exec.md).
+[amp-server-side-tools-produce-no-span](findings/amp-server-side-tools-produce-no-span.md),
+[amp-mcp-calls-run-inside-code-exec](findings/amp-mcp-calls-run-inside-code-exec.md) and
+[pi-background-subagent-is-outside-the-parent-trace](findings/pi-background-subagent-is-outside-the-parent-trace.md).
 The amp two are limits of Amp's plugin API, not bugs — they stay open and documented.
+The pi one is a limit of pi-subagents: the child is reported in full, as a linked session.
 
 Two amp findings were fixed on 2026-09-15 and are kept for their measurements:
 [amp-answering-model-call-is-never-attributed](findings/amp-answering-model-call-is-never-attributed.md)

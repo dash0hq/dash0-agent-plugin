@@ -235,20 +235,33 @@ function readSubagents(
   ctx: ExtensionContext,
   details: unknown,
 ): Subagent[] | undefined {
-  const rows = (details as { results?: unknown } | undefined)?.results;
-  if (!Array.isArray(rows)) return undefined;
+  // Another extension can also name its tool "subagent". Only the result
+  // shape of pi-subagents counts: a run ID, a mode, and rows that each carry
+  // the child's agent, usage object and exit code.
+  const d = details as
+    | { results?: unknown; runId?: unknown; mode?: unknown }
+    | undefined;
+  const rows = d?.results;
+  if (!Array.isArray(rows) || !validString(d?.runId) || !validString(d?.mode))
+    return undefined;
   const out: Subagent[] = [];
   for (const row of rows.slice(0, maxSubagents)) {
     if (typeof row !== "object" || row === null) continue;
     const r = row as Record<string, unknown>;
-    if (!validString(r.agent)) continue;
+    if (
+      !validString(r.agent) ||
+      typeof r.usage !== "object" ||
+      r.usage === null ||
+      typeof r.exitCode !== "number"
+    )
+      continue;
     // A child that exported itself has its own session_start before the
     // parent's tool call ends, because Pi starts the child's session first.
     // Each file is looked up once, so the set does not grow with children.
     const exported =
       typeof r.sessionFile === "string" &&
       exportedSessions.delete(r.sessionFile);
-    const usage = (exported ? {} : (r.usage ?? {})) as Record<string, unknown>;
+    const usage = (exported ? {} : r.usage) as Record<string, unknown>;
     const model = !exported && validString(r.model) ? r.model : undefined;
     // The first slash separates the provider, as in splitModel in
     // internal/source/pi.
@@ -264,9 +277,7 @@ function readSubagents(
       },
       turns: count(usage.turns),
       billing_mode: provider ? billingMode(ctx, provider) : undefined,
-      failed:
-        (typeof r.exitCode === "number" && r.exitCode !== 0) ||
-        typeof r.error === "string",
+      failed: r.exitCode !== 0 || typeof r.error === "string",
     });
   }
   return out.length ? out : undefined;

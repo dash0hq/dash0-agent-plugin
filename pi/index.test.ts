@@ -369,7 +369,7 @@ test("malformed events are ignored, never thrown", () => {
 /** A foreground pi-subagents result, as 0.88.0 shapes it. */
 const subagentResult = (rows: unknown[]) => ({
   content: [{ type: "text", text: "done" }],
-  details: { mode: "single", results: rows },
+  details: { mode: "single", runId: "run-1", results: rows },
 });
 const childRow = (extra: Record<string, unknown> = {}) => ({
   agent: "delegate",
@@ -428,7 +428,14 @@ test("a background launch and other tools have no children", () => {
   fire("tool_execution_end", {
     toolCallId: "c1",
     toolName: "subagent",
-    result: { details: { mode: "single", results: [], asyncId: "run-1" } },
+    result: {
+      details: {
+        mode: "single",
+        runId: "run-1",
+        results: [],
+        asyncId: "run-1",
+      },
+    },
   });
   fire("tool_execution_start", { toolCallId: "c2", toolName: "bash" });
   fire("tool_execution_end", {
@@ -444,33 +451,52 @@ test("malformed subagent results give no children, never throw", () => {
   const ctx = { modelRegistry: undefined } as unknown as Parameters<
     typeof subagentsOf
   >[0];
+  const row = { agent: "a", exitCode: 0, usage: { input: 1 } };
   for (const details of [
     undefined,
     null,
     "x",
-    { results: "x" },
-    { results: [null, 1, { agent: "" }, { agent: 5 }] },
+    { mode: "single", runId: "r", results: "x" },
+    {
+      mode: "single",
+      runId: "r",
+      results: [null, 1, { agent: "" }, { agent: 5 }],
+    },
+    // A row without a usage object or an exit code is not a finished child.
+    { mode: "single", runId: "r", results: [{ agent: "a", exitCode: 0 }] },
+    { mode: "single", runId: "r", results: [{ agent: "a", usage: {} }] },
   ])
     expect(subagentsOf(ctx, details)).toBeUndefined();
-  expect(
-    subagentsOf(ctx, { results: [{ agent: "a", usage: { input: -1 } }] }),
-  ).toEqual([
-    {
-      agent: "a",
-      model: undefined,
-      usage: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-      turns: 0,
-      billing_mode: undefined,
-      // No exitCode is not a failure: only a reported one is.
-      failed: false,
-    },
-  ]);
   const throwing = {
     get results() {
       throw new Error("getter");
     },
   };
   expect(subagentsOf(ctx, throwing)).toBeUndefined();
+  // Negative counts are not counts.
+  expect(
+    subagentsOf(ctx, {
+      mode: "single",
+      runId: "r",
+      results: [{ ...row, usage: { input: -1 } }],
+    })?.[0].usage,
+  ).toEqual({ input: 0, output: 0, cache_read: 0, cache_write: 0 });
+});
+
+// Another extension can also call its tool "subagent". Only the result shape
+// of pi-subagents gives children, so another tool keeps the old behaviour:
+// one execute_tool span, no invoke_agent span.
+test("another extension's subagent tool gives no children", () => {
+  const ctx = { modelRegistry: undefined } as unknown as Parameters<
+    typeof subagentsOf
+  >[0];
+  const row = { agent: "a", exitCode: 0, usage: { input: 1 } };
+  expect(subagentsOf(ctx, { results: [row] })).toBeUndefined();
+  expect(subagentsOf(ctx, { mode: "single", results: [row] })).toBeUndefined();
+  expect(subagentsOf(ctx, { runId: "r", results: [row] })).toBeUndefined();
+  expect(
+    subagentsOf(ctx, { mode: "single", runId: "r", results: [row] }),
+  ).toHaveLength(1);
 });
 
 // With pi-subagents' defaultSubagentOnlyExtensions, this extension also loads

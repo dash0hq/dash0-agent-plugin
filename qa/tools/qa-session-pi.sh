@@ -11,9 +11,11 @@
 #
 #   - Pi runs with --no-extensions, so the machine's own extensions, including
 #     any installed copy of this plugin, do not load and cannot export twice.
-#     QA_PI_SUBAGENTS=1 gets the same isolation from an agent directory inside
-#     the run instead, because pi-subagents' background children read Pi's
-#     settings, not the parent's command line.
+#     QA_PI_SUBAGENTS=1 gets the same isolation from a Pi agent directory
+#     (settings, extensions) inside the run instead, because pi-subagents'
+#     background children read Pi's settings, not the parent's command line.
+#   - An empty plugin configuration file in the run's project shadows the
+#     developer's ~/.pi/dash0-agent-plugin.local.md.
 #   - Pi runs with a session directory inside the run, so QA sessions do not
 #     appear in the user's /resume list.
 #   - The plugin's configuration comes from PI_PLUGIN_OPTION_*, which outranks
@@ -95,6 +97,13 @@ cp qa/recorder/pi/index.ts "$RUN_DIR/recorder.ts"
 # cannot touch the repository and a project .pi/ cannot change the plugin's
 # configuration. a.txt gives the read tool something to read.
 printf 'qa-pi-fixture\n' > "$RUN_DIR/project/a.txt"
+# The helper reads the project's .pi/dash0-agent-plugin.local.md, else
+# ~/.pi/dash0-agent-plugin.local.md, and the first file that exists wins as a
+# whole. An empty project file thus keeps the developer's own file, with keys
+# such as enabled or team_name, out of the run. PI_PLUGIN_OPTION_* below sets
+# everything the run needs.
+mkdir -p "$RUN_DIR/project/.pi"
+printf -- '---\n---\n' > "$RUN_DIR/project/.pi/dash0-agent-plugin.local.md"
 
 PI_ARGS=(--mode json --no-skills --no-prompt-templates
          --no-context-files --no-themes --offline

@@ -264,7 +264,7 @@ and nothing else. Three consequences:
 | Harness's own figures | the same stream, per assistant `message_end` |
 | Sees what was sent | yes, through the plugin's debug log |
 | Session id | the stream's `session` header, which is also `gen_ai.conversation.id` |
-| Touches the machine | no. Pi's session file goes into the run directory, and the machine's extensions, skills and MCP servers do not load. Pi's login in `PI_CODING_AGENT_DIR` is read, not written |
+| Touches the machine | no. Pi's session file goes into the run directory, and the machine's extensions, skills and MCP servers do not load. An empty `.pi/dash0-agent-plugin.local.md` in the run's project shadows the developer's `~/.pi` file. Pi's login in `PI_CODING_AGENT_DIR` is read, not written |
 | Sub-agents | `QA_PI_SUBAGENTS=1` loads pi-subagents from the caller's agent directory and gives Pi an agent directory inside the run, so no user agent or setting is read. Only `claude-code` works there, because it brings its own login |
 
 Three sharp edges, each measured on 2026-11-13:

@@ -1024,6 +1024,25 @@ func TestMCPUUIDServerOmitted(t *testing.T) {
 	assert.Contains(t, toolSpan.Name, "execute_tool slack_read_thread")
 }
 
+// Payloads as Claude Code 2.1.321 sent them from Claude Desktop's Code tab.
+func TestMCPDesktopHookServerNotExportedRaw(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)
+	srv, spans, _ := collectingServer(t)
+	t.Setenv("DASH0_OTLP_URL", srv.URL)
+
+	feed(t, `{"hook_event_name":"SessionStart","session_id":"sess-mcp-desktop","model":"claude-opus-5-5"}`)
+	feed(t, `{"hook_event_name":"UserPromptSubmit","session_id":"sess-mcp-desktop","prompt":"who am I in Linear"}`)
+	feed(t, `{"hook_event_name":"PreToolUse","session_id":"sess-mcp-desktop","tool_name":"mcp__b47efb4c-8952-4746-9962-e2b441b291ba__whoami","tool_input":{},"tool_use_id":"tu-mcp-desktop","mcp_server":{"name":"b47efb4c-8952-4746-9962-e2b441b291ba","source":"sdk"}}`)
+	feed(t, `{"hook_event_name":"PostToolUse","session_id":"sess-mcp-desktop","tool_name":"mcp__b47efb4c-8952-4746-9962-e2b441b291ba__whoami","tool_input":{},"tool_use_id":"tu-mcp-desktop","tool_response":"me","mcp_server":{"name":"b47efb4c-8952-4746-9962-e2b441b291ba","source":"sdk"}}`)
+
+	toolSpan := findSpan(*spans, "execute_tool")
+	require.NotNil(t, toolSpan)
+
+	assertStringAttr(t, toolSpan.Attributes, "dash0.gen_ai.tool.mcp_server", "claude.ai connector")
+	assertStringAttr(t, toolSpan.Attributes, "gen_ai.tool.name", "whoami")
+}
+
 func TestLinesOfCodeNotPresentOnNonEditTools(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("CLAUDE_PLUGIN_DATA", dataDir)

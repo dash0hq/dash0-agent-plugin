@@ -116,7 +116,8 @@ PI_ARGS=(--mode json --no-skills --no-prompt-templates
 AGENT_DIR=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
 PROVIDER_EXT=${QA_PI_PROVIDER_EXTENSION:-}
 if [ -z "$PROVIDER_EXT" ] && [ -e "$AGENT_DIR/extensions/claude-code" ]; then
-  PROVIDER_EXT=$(readlink -f "$AGENT_DIR/extensions/claude-code")
+  # Python, not readlink -f: older BSD readlink has no -f.
+  PROVIDER_EXT=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$AGENT_DIR/extensions/claude-code")
 fi
 
 SUBAGENTS_VERSION=

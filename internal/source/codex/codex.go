@@ -52,8 +52,9 @@ func Normalize(event map[string]any, sessionDir string, now time.Time) map[strin
 
 // injectRollout reads the Codex rollout file once and writes what it yields onto
 // the event: the just-completed turn's token usage as gen_ai.usage.* attributes,
+// its reasoning effort through the existing effort-to-OTel mapping,
 // and the account's billing/allowance state as dash0.gen_ai.* ones. The pipeline's
-// LLM span builder emits both verbatim. A sub-agent has its own rollout
+// LLM span builder emits these attributes. A sub-agent has its own rollout
 // (agent_transcript_path); the main session uses transcript_path. Best-effort: on
 // a missing path or any read/parse failure the event is left unchanged and the
 // span is emitted without these attributes.
@@ -85,6 +86,11 @@ func injectRollout(event map[string]any) {
 	}
 	if rollout == nil {
 		return
+	}
+	// Preserve a hook effort key when present, even if empty or invalid. Otherwise
+	// recover it from this turn's context, never from the user's global config.
+	if _, present := event["effort"]; !present && rollout.Effort != "" {
+		event["effort"] = rollout.Effort
 	}
 
 	if usage := rollout.Usage; usage != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/filelog"
+	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 )
 
 // logEvent mirrors what pipeline.Process does before each hook: stamp a
@@ -336,6 +338,182 @@ func TestNormalizeKeepsZeroCacheButOmitsZeroReasoning(t *testing.T) {
 	assert.Equal(t, int64(0), out["gen_ai.usage.cache_creation.input_tokens"])
 	_, hasReasoning := out["gen_ai.usage.reasoning.output_tokens"]
 	assert.False(t, hasReasoning, "a turn that did no thinking carries no reasoning key")
+}
+
+// Codex records effort on turn_context, not on the hook or token_count payload.
+// Exercise the reader, normalizer and final span with content/identity redaction
+// enabled: effort is request metadata and must survive those privacy controls.
+func TestNormalizeRolloutReasoningEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name, field, want string
+	}{
+		{"medium", `"effort":"medium"`, "medium"},
+		{"xhigh", `"effort":"xhigh"`, "xhigh"},
+		{"ultra", `"effort":"ultra"`, "ultra"},
+		{"none is a reported setting", `"effort":"none"`, "none"},
+		{"future value is not remapped", `"effort":"future-level"`, "future-level"},
+		{"absent", `"model":"test-model"`, ""},
+		{"empty", `"effort":""`, ""},
+		{"null", `"effort":null`, ""},
+		{"number", `"effort":3`, ""},
+		{"boolean", `"effort":true`, ""},
+		{"object", `"effort":{"level":"high"}`, ""},
+		{"array", `"effort":["high"]`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeEffortRollout(t,
+				`{"type":"event_msg","payload":{"type":"task_started"}}`,
+				`{"type":"turn_context","payload":{`+tc.field+`}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":60,"cache_write_input_tokens":5,"output_tokens":7,"reasoning_output_tokens":3}},"rate_limits":{"plan_type":"pro"}}}`,
+			)
+			now := time.Unix(123, 0).UTC()
+			out := Normalize(map[string]any{
+				"hook_event_name": "Stop", "session_id": "effort-test", "transcript_path": path,
+			}, t.TempDir(), now)
+			assert.Equal(t, int64(100), out["gen_ai.usage.input_tokens"])
+			assert.Equal(t, int64(60), out["gen_ai.usage.cache_read.input_tokens"])
+			assert.Equal(t, int64(5), out["gen_ai.usage.cache_creation.input_tokens"])
+			assert.Equal(t, int64(7), out["gen_ai.usage.output_tokens"])
+			assert.Equal(t, int64(3), out["gen_ai.usage.reasoning.output_tokens"])
+			assert.Equal(t, "subscription", out["dash0.gen_ai.billing_mode"])
+			assertReasoningEffort(t, out, tc.want)
+		})
+	}
+}
+
+func TestNormalizeReasoningEffortScopesToCurrentTurn(t *testing.T) {
+	for _, boundary := range []string{"task_started", "user_message"} {
+		for _, tc := range []struct{ name, context, want string }{
+			{"changed", `{"type":"turn_context","payload":{"effort":"medium"}}`, "medium"},
+			{"no context", "", ""},
+			{"absent effort", `{"type":"turn_context","payload":{}}`, ""},
+			{"null effort", `{"type":"turn_context","payload":{"effort":null}}`, ""},
+			{"malformed effort", `{"type":"turn_context","payload":{"effort":{}}}`, ""},
+		} {
+			t.Run(boundary+"/"+tc.name, func(t *testing.T) {
+				start := `{"type":"event_msg","payload":{"type":"` + boundary + `"}}`
+				path := writeEffortRollout(t, start,
+					`{"type":"turn_context","payload":{"effort":"xhigh"}}`,
+					`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":900}}}}`,
+					start, tc.context,
+					`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20}}}}`,
+				)
+				out := Normalize(map[string]any{
+					"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+				}, t.TempDir(), time.Unix(123, 0).UTC())
+				assert.Equal(t, int64(20), out["gen_ai.usage.input_tokens"])
+				assertReasoningEffort(t, out, tc.want)
+			})
+		}
+	}
+}
+
+func TestNormalizeReasoningEffortRepeatedContext(t *testing.T) {
+	for _, tc := range []struct{ name, field, want string }{
+		{"updated", `"effort":"medium"`, "medium"},
+		{"unreported", `"model":"test-model"`, ""},
+		{"invalid", `"effort":false`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeEffortRollout(t,
+				`{"type":"event_msg","payload":{"type":"task_started"}}`,
+				`{"type":"turn_context","payload":{"effort":"xhigh"}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10}}}}`,
+				`{"type":"turn_context","payload":{`+tc.field+`}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20}}}}`,
+				`{"type":"turn_context","payload":{"effort":`, // interrupted flush
+			)
+			out := Normalize(map[string]any{
+				"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+			}, t.TempDir(), time.Unix(123, 0).UTC())
+			assert.Equal(t, int64(30), out["gen_ai.usage.input_tokens"], "context updates must not reset usage")
+			assertReasoningEffort(t, out, tc.want)
+		})
+	}
+}
+
+func TestNormalizeReasoningEffortStopEvents(t *testing.T) {
+	parent := writeEffortRollout(t, `{"type":"turn_context","payload":{"effort":"high"}}`)
+	child := writeEffortRollout(t, `{"type":"turn_context","payload":{"effort":"low"}}`)
+	unknownChild := writeEffortRollout(t, `{"type":"turn_context","payload":{}}`)
+	for _, tc := range []struct{ name, hook, child, want string }{
+		{"main", "Stop", "", "high"},
+		{"failure", "StopFailure", "", "high"},
+		{"child", "SubagentStop", child, "low"},
+		{"child does not inherit parent effort", "SubagentStop", unknownChild, ""},
+		{"unreadable child does not inherit parent effort", "SubagentStop", filepath.Join(t.TempDir(), "missing.jsonl"), ""},
+		{"compressed child", "SubagentStop", "child.jsonl.zst", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := Normalize(map[string]any{
+				"hook_event_name": tc.hook, "session_id": "s1", "transcript_path": parent,
+				"agent_transcript_path": tc.child,
+			}, t.TempDir(), time.Unix(123, 0).UTC())
+			assertReasoningEffort(t, out, tc.want)
+			assert.NotContains(t, out, "gen_ai.usage.input_tokens", "effort must not invent usage")
+		})
+	}
+}
+
+func TestNormalizeReasoningEffortPreservesHookValue(t *testing.T) {
+	path := writeEffortRollout(t, `{"type":"turn_context","payload":{"effort":"low"}}`)
+	for _, effort := range []any{"high", map[string]any{"level": "high"}} {
+		out := Normalize(map[string]any{
+			"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path, "effort": effort,
+		}, t.TempDir(), time.Unix(123, 0).UTC())
+		assert.Equal(t, effort, out["effort"], "a hook-provided value is authoritative")
+		span := otlp.NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "",
+			time.Unix(123, 0), time.Unix(124, 0), out, false, otlp.Config{OmitIO: true, OmitUserInfo: true})
+		assert.Contains(t, span.Attributes, otlp.Attribute{Key: "gen_ai.request.reasoning.level", Value: otlp.StringVal("high")})
+	}
+}
+
+// Optional metadata must never make otherwise valid boundaries or usage fail
+// to decode, even if it appears on a record other than turn_context.
+func TestNormalizeReasoningEffortDoesNotBreakOtherRecords(t *testing.T) {
+	for _, effort := range []string{`[]`, `"low"`} {
+		t.Run(effort, func(t *testing.T) {
+			path := writeEffortRollout(t,
+				`{"type":"turn_context","payload":{"effort":"high"}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":900}}}}`,
+				`{"type":"event_msg","payload":{"type":"task_started","effort":{}}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","effort":`+effort+`,"info":{"last_token_usage":{"input_tokens":20}}}}`,
+			)
+			out := Normalize(map[string]any{
+				"hook_event_name": "Stop", "session_id": "s1", "transcript_path": path,
+			}, t.TempDir(), time.Unix(123, 0).UTC())
+			assert.Equal(t, int64(20), out["gen_ai.usage.input_tokens"])
+			assertReasoningEffort(t, out, "")
+		})
+	}
+}
+
+func writeEffortRollout(t *testing.T, records ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(records, "\n")+"\n"), 0o600))
+	return path
+}
+
+func assertReasoningEffort(t *testing.T, event map[string]any, want string) {
+	t.Helper()
+	if want == "" {
+		assert.NotContains(t, event, "effort")
+	} else {
+		assert.Equal(t, want, event["effort"])
+	}
+	span := otlp.NewLLMSpan("aaaabbbbccccddddaaaabbbbccccdddd", "1111222233334444", "",
+		time.Unix(123, 0), time.Unix(124, 0), event, false, otlp.Config{OmitIO: true, OmitUserInfo: true})
+	attrs := make(map[string]otlp.AttrValue)
+	for _, attr := range span.Attributes {
+		attrs[attr.Key] = attr.Value
+	}
+	if want == "" {
+		assert.NotContains(t, attrs, "gen_ai.request.reasoning.level")
+	} else {
+		assert.Equal(t, otlp.StringVal(want), attrs["gen_ai.request.reasoning.level"])
+	}
+	assert.NotContains(t, attrs, "effort", "the span uses the semantic convention, not the raw payload key")
 }
 
 // userMessage renders the rollout's shape for a message in the conversation.

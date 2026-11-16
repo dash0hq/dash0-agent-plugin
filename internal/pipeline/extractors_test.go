@@ -281,6 +281,33 @@ func TestExtractMCPServer(t *testing.T) {
 	}
 }
 
+func TestEnrichToolEventMCPServer(t *testing.T) {
+	desktopHookServer := map[string]any{"name": "b47efb4c-8952-4746-9962-e2b441b291ba", "source": "sdk"}
+	tests := []struct {
+		name     string
+		toolName string
+		reported any
+		want     any
+	}{
+		{"CLI connector keeps the tool-name server", "mcp__claude_ai_Linear__whoami", map[string]any{"name": "claude.ai Linear", "source": "claudeai"}, "claude_ai_Linear"},
+		{"Desktop connector with hook object", "mcp__b47efb4c-8952-4746-9962-e2b441b291ba__whoami", desktopHookServer, "claude.ai connector"},
+		{"UUID server without hook object stays unnamed", "mcp__b47efb4c-8952-4746-9962-e2b441b291ba__whoami", nil, nil},
+		{"hook object on a non-MCP tool name", "whoami", map[string]any{"name": "linear", "source": "plugin"}, "linear"},
+		{"source-set placeholder survives", "run_terminal_cmd", "cursor", "cursor"},
+		{"unusable hook object is dropped", "Bash", map[string]any{"source": "sdk"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := map[string]any{"tool_name": tt.toolName}
+			if tt.reported != nil {
+				event["mcp_server"] = tt.reported
+			}
+			EnrichToolEvent(event)
+			assert.Equal(t, tt.want, event["mcp_server"])
+		})
+	}
+}
+
 func TestNormalizeMCPToolName(t *testing.T) {
 	tests := []struct {
 		name     string

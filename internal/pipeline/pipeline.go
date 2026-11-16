@@ -503,8 +503,10 @@ func EnrichToolEvent(event map[string]any) {
 			event["skill_source"] = skillSourceModel
 		}
 	}
-	if server := ExtractMCPServer(toolName); server != "" {
+	if server := resolveMCPServer(toolName, event["mcp_server"]); server != "" {
 		event["mcp_server"] = server
+	} else {
+		delete(event, "mcp_server")
 	}
 	if normalized := NormalizeMCPToolName(toolName); normalized != toolName {
 		event["tool_name"] = normalized
@@ -975,6 +977,11 @@ func NormalizeMCPToolName(toolName string) string {
 	return parts[2]
 }
 
+// unnamedConnectorServer stands in for a server Claude Code's hook names only
+// by a UUID: Claude Desktop passes each claude.ai connector in under its
+// connector ID, and no display name reaches the hook.
+const unnamedConnectorServer = "claude.ai connector"
+
 // ExtractMCPServer parses the server name from an MCP tool name
 // (format: mcp__<server>__<tool>). Returns empty string for non-MCP tools
 // and for UUIDs (which are not meaningful server names).
@@ -990,6 +997,27 @@ func ExtractMCPServer(toolName string) string {
 		return ""
 	}
 	return parts[1]
+}
+
+// resolveMCPServer prefers the tool name, falling back to what the event
+// already holds: a string a source set before enrichment, or the object
+// Claude Code puts on hook inputs, {"name": ..., "source": ...}, which must
+// never be exported as is.
+func resolveMCPServer(toolName string, reported any) string {
+	if server := ExtractMCPServer(toolName); server != "" {
+		return server
+	}
+	switch v := reported.(type) {
+	case string:
+		return v
+	case map[string]any:
+		name, _ := v["name"].(string)
+		if isUUID(name) {
+			return unnamedConnectorServer
+		}
+		return name
+	}
+	return ""
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)

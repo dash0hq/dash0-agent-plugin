@@ -163,6 +163,9 @@ the child's tokens are counted one time.
 - A background pi-subagents child is not inside the parent's trace. The
   `subagent` call returns before the child starts work, and pi-subagents does
   not give the child the parent's tool call.
+- The parent drops the totals of a child whose session the extension saw
+  start, also when that child then exported nothing, for example because its
+  project's `.pi/dash0-agent-plugin.local.md` says `enabled: false`.
 - A foreground child's totals cover only its own model calls. When a child
   runs its own foreground children, their tokens are in the child's tool
   result and not in the totals that the parent sees.

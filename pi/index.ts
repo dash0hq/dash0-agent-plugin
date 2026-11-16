@@ -177,6 +177,22 @@ const count = (n: unknown): number =>
   typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : 0;
 const optionalCount = (n: unknown): number | undefined =>
   typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+
+/** Pi's usage, as Pi and pi-subagents both report it, in the helper's names. */
+function toUsage(u: unknown): Usage {
+  const v = (typeof u === "object" && u !== null ? u : {}) as Record<
+    string,
+    unknown
+  >;
+  return {
+    input: count(v.input),
+    output: count(v.output),
+    cache_read: count(v.cacheRead),
+    cache_write: count(v.cacheWrite),
+    cache_write_1h: optionalCount(v.cacheWrite1h),
+    reasoning: optionalCount(v.reasoning),
+  };
+}
 const validString = (s: unknown): s is string =>
   typeof s === "string" && s.length > 0 && s.length <= 256;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -269,12 +285,7 @@ function readSubagents(
     out.push({
       agent: r.agent,
       model,
-      usage: {
-        input: count(usage.input),
-        output: count(usage.output),
-        cache_read: count(usage.cacheRead),
-        cache_write: count(usage.cacheWrite),
-      },
+      usage: toUsage(usage),
       turns: count(usage.turns),
       billing_mode: provider ? billingMode(ctx, provider) : undefined,
       failed: r.exitCode !== 0 || typeof r.error === "string",
@@ -381,14 +392,7 @@ export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
         ? message.providerThinkingLevel
         : undefined,
       billing_mode: billingMode(ctx, message.provider),
-      usage: {
-        input: count(usage?.input),
-        output: count(usage?.output),
-        cache_read: count(usage?.cacheRead),
-        cache_write: count(usage?.cacheWrite),
-        cache_write_1h: optionalCount(usage?.cacheWrite1h),
-        reasoning: optionalCount(usage?.reasoning),
-      },
+      usage: toUsage(usage),
     });
     if (Array.isArray(message.content)) {
       for (const block of message.content) {

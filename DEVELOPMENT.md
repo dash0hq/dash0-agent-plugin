@@ -356,7 +356,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 
 | Key | Value / Example | Notes |
 |---|---|---|
-| `gen_ai.provider.name` | `anthropic`, `openai`, `gcp.gemini`, `x_ai`, `deepseek`, `mistral_ai`, `cursor` | Resolved from the model prefix; else the runtime default (Claude `anthropic`, Codex `openai`; Cursor omits it when no model). |
+| `gen_ai.provider.name` | `anthropic`, `openai`, `gcp.gemini`, `x_ai`, `deepseek`, `mistral_ai`, `cursor` | Resolved from the model prefix; else the runtime default (Claude `anthropic`, Codex `openai`; Cursor omits it when no model). Pi maps each call's own Pi provider ID instead, see `dash0.pi.provider`. |
 | `gen_ai.agent.name` | Agent name, or the sub-agent type on `invoke_agent` spans                      | |
 | `gen_ai.harness.name` | `claude-code` / `cursor` / `codex` / `github-copilot-cli` / `amp` / `pi`       | |
 | `dash0.team.name` | e.g. `platform`                                                                | Only when `team_name` is set. |
@@ -396,16 +396,16 @@ omitted when its value is empty.
 | `gen_ai.usage.cache_read.input_tokens` | integer                                                              |                                |
 | `gen_ai.usage.cache_creation.input_tokens` | integer                                                              | All five runtimes. Codex reports it as `cache_write_input_tokens`; every value observed so far is zero, but the field is on the wire and is emitted as it comes. Amp emits the exact per-model value from its thread export when present. |
 | `dash0.gen_ai.usage.cache_creation.ephemeral_5m.input_tokens` | integer                                                              | Claude only. |
-| `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude only. |
-| `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript), Codex (from the rollout) and Copilot, all only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
-| `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh`                                     | Claude only, from the payload's `effort` field. The request-side counterpart to `reasoning.output_tokens`: the setting that produced the thinking those tokens paid for. The attribute is a free-form string — the convention asks for "the exact string value sent to the provider" and gives `low`/`medium`/`high` only as examples — so Claude Code's `xhigh` is reported as-is. |
+| `dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens` | integer                                                              | Claude, and Pi when the provider reports it. |
+| `gen_ai.usage.reasoning.output_tokens` | integer                                                              | Claude (from the transcript), Codex (from the rollout), Copilot and Pi, all only when > 0. A subset of `output_tokens`, not an addition — cost is unaffected, and absence means the turn did no thinking. |
+| `gen_ai.request.reasoning.level` | `low`, `medium`, `high`, `xhigh`                                     | Claude, from the payload's `effort` field, and Pi, from the call's provider thinking level. The request-side counterpart to `reasoning.output_tokens`: the setting that produced the thinking those tokens paid for. The attribute is a free-form string — the convention asks for "the exact string value sent to the provider" and gives `low`/`medium`/`high` only as examples — so Claude Code's `xhigh` is reported as-is. |
 | `dash0.gen_ai.tool.skill.name` | e.g. `writing:unslop`                                                | Claude, Codex and Pi, on the chat span of a turn that a person's slash command or `$mention` started, and for Codex on any turn that loaded a skill at all. See below. |
 | `dash0.gen_ai.tool.skill.source` | `command`, `model`                                                   | Same rows as above. `model` reaches a chat span only on Codex, where the model's own choice also loads without a tool call. |
 | `gen_ai.input.messages` | JSON: `[{"role":"user","parts":[{"type":"text","content":"…"}]}]`    | Content-gated by `omit_io`.    |
 | `gen_ai.output.messages` | JSON: `[{"role":"assistant","parts":[{"type":"text","content":"…"}]}]` | Content-gated by `omit_io`.    |
 | `gen_ai.agent.id` | Sub-agent ID                                                         | On `invoke_agent` spans. Per invocation, not per kind: on Copilot it is the `call_…` id of the `task` tool that spawned the sub-agent, which is also the session id Copilot gives that sub-agent's own hooks under `copilot -p` (interactively that session id is a plain UUID instead, so the join holds in prompt mode only). If the spawning tool's span flushed into a later turn than the agent's, no `invoke_agent` span is emitted for that sub-agent at all — see `copilot/README.md`. |
 | `exception.message` | Error text                                                           | On `StopFailure`.              |
-| `dash0.gen_ai.billing_mode` | `subscription` \| `api` \| `metered_external` \| `unknown`             | Claude Code + Codex. Set whenever token usage is (Codex: always). Codex only ever says `subscription`/`unknown` — see below. |
+| `dash0.gen_ai.billing_mode` | `subscription` \| `api` \| `metered_external` \| `unknown`             | Claude Code, Codex and Pi. Set whenever token usage is (Codex: always). Codex and Pi only ever say `subscription`/`unknown` — see below. |
 | `dash0.gen_ai.billing_provider` | `bedrock` \| `vertex` \| `foundry` \| `gateway`                        | Claude Code only. Present only when the mode is `metered_external`. |
 | `dash0.gen_ai.plan_type` | Codex: `free`, `plus`, `pro`. Claude Code: `team_standard`, Max tiers | Claude Code + Codex. Omitted when unreported. Provider vocabulary — display, don't parse. |
 | `dash0.gen_ai.rate_limit.{primary,secondary}.used_percent` | float, 0–100                                                         | Codex only. Omitted per slot when unreported. |
@@ -422,7 +422,6 @@ omitted when its value is empty.
 | `dash0.amp.usage.source` | `thread-export` | Amp only. On the turn root when usage was matched. Names where the tokens came from, since Amp's hooks carry none. |
 | `dash0.pi.provider` | Pi provider ID, for example `claude-code` or `openai-codex` | Pi only. On `chat` spans. The ID that Pi used for the call, before the mapping to `gen_ai.provider.name`. |
 | `dash0.pi.session.parent.id` | Pi session ID | Pi only. On every span of a session that Pi forked or cloned from another session. |
-| `dash0.gen_ai.billing_mode` on Pi | `subscription` \| `unknown` | Pi sets it on every `chat` span that carries tokens. `subscription` when Pi used a subscription login, for example Claude Pro/Max through `claude-code`. Pi never reports `api`. |
 | `dash0.pi.subagent.timing` | `aggregate` | Pi only. On the `chat` span under the `invoke_agent` span of a foreground pi-subagents child. The span carries the child's total tokens, and its time range is the whole child run, not one model call. Do not read it as latency. |
 | `dash0.pi.subagent.turns` | integer | Pi only. On the same span: the number of model calls in the totals. |
 | `dash0.pi.truncated` | `true` | Pi only. On the turn root, and only when the extension dropped content to stay inside its envelope budget. |
@@ -641,8 +640,8 @@ Codex-scoped as a reader diagnostic.
 | `gen_ai.tool.call.result` | Tool output | Content-gated, ≤16 KB. |
 | `dash0.gen_ai.tool.mcp_server` | MCP server name (placeholder `cursor` on Cursor) | MCP tools only. |
 | `dash0.gen_ai.tool.bash.command_family` | Binary name, e.g. `git`, `npm` | Bash tool. |
-| `dash0.gen_ai.tool.skill.name` | Skill name | Skill tool. |
-| `dash0.gen_ai.tool.skill.source` | `model` | Skill tool. Constant here — the tool call *is* the model choosing. |
+| `dash0.gen_ai.tool.skill.name` | Skill name | Skill tool. On Pi, the `read` span that read a loaded skill's `SKILL.md`. |
+| `dash0.gen_ai.tool.skill.source` | `model` | Skill tool, and Pi's `read` span. Constant here — the tool call *is* the model choosing. |
 | `dash0.gen_ai.code.lines_added` | integer | Claude Code only — from the Edit/Write/MultiEdit `structuredPatch`. |
 | `dash0.gen_ai.code.lines_removed` | integer | Claude Code only — from the Edit/Write/MultiEdit `structuredPatch`. |
 | `dash0.gen_ai.vcs.pull_request.url` | PR / MR URL | Survives `omit_io`. |

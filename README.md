@@ -17,15 +17,16 @@ Check out our documentation for setting up and configuring the Dash0 Agent Plugi
 - **OpenCode V2** — installation, configuration, and usage in [`opencode-v2/README.md`](./opencode-v2/README.md).
 - **GitHub Copilot app** — installation, configuration, and usage in [`copilot-app/README.md`](./copilot-app/README.md).
 - **Amp / ampcode CLI and Orbs** — native plugin, installed through an Amp plugin repository (which reaches Orbs too) or scripted onto one machine (`install-amp.sh`, `install-amp.ps1`), and per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is on by default, is partial, and uses an unstable Amp export schema.
+- **Pi** - native extension, installed from source for now, in [`pi/README.md`](./pi/README.md). Completed-turn telemetry with per-call tokens, and pi-subagents children.
 
-All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. The shell-hook integrations use bootstrap scripts; Amp instead loads `amp/index.ts` as a native plugin and invokes its helper directly. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other runtimes use a PowerShell bootstrap.
+All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. The shell-hook integrations use bootstrap scripts; Amp and Pi instead load `amp/index.ts` and `pi/index.ts` as native extensions and invoke their helpers directly. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other runtimes use a PowerShell bootstrap.
 
 ## Repository layout
 
 This repo ships one shared Go pipeline (`cmd/`, `internal/`) and runtime-specific
 plugin surfaces. Each `<runtime>/` holds everything shipped to that runtime. The
-hook integrations include a `<runtime>-on-event.sh` bootstrap wrapper; Amp
-contains its native TypeScript plugin and built helper instead.
+hook integrations include a `<runtime>-on-event.sh` bootstrap wrapper; Amp and Pi
+contain their native TypeScript extension and built helper instead.
 
 | Path | Runtime | Purpose |
 |---|---|---|
@@ -35,9 +36,10 @@ contains its native TypeScript plugin and built helper instead.
 | `codex/` (`codex-on-event.sh`, `hooks.json`), `.codex-plugin/`, `.agents/plugins/marketplace.json`, `install-codex.sh` | OpenAI Codex | Bootstrap wrapper, hook registration, manifest, self-hosted Codex marketplace, installer. Installed via marketplace (`codex plugin add`) or the installer (hooks written to `~/.codex/config.toml`). `.agents/plugins/` is Codex-only — Claude reads `.claude-plugin/`, Cursor its own dir |
 | `copilot/` (`copilot-on-event.sh`, `plugin.json`, `hooks.json`, `skills/`), `.github/plugin/marketplace.json` | GitHub Copilot CLI | Self-contained plugin package (bootstrap wrapper, manifest, camelCase hooks, configure skill) + self-hosted Copilot marketplace listing it. Installed via marketplace (`copilot plugin install dash0-agent-plugin@dash0`) or the `:copilot` subpath. `.github/plugin/` is Copilot-only |
 | `opencode-v2/` (`index.js`, bootstraps, `skills/`, npm metadata) | OpenCode V2 | V2 `Plugin.define` package, configure skill and persistent event-stream consumer. Installed with `opencode plugin add @dash0/agent-plugin-opencode-v2` (npm, published by the release workflow) or from a cloned path |
+| `pi/` (`index.ts`, built `pi-on-event` helper, npm metadata) | Pi | Native extension that sends each settled turn, with its model calls, tools and foreground pi-subagents children, to the helper. Installed from source |
 | `copilot-app/` (`extension.mjs`, `copilot-app-on-event.sh`, `skills/`) | GitHub Copilot app | Session extension (no manifest) that turns the app's session events into one binary call per turn, plus bootstrap wrapper and configure skill. Installed with `install_extension` pointed at this folder |
 
-The dotted directories are fixed by each agent's plugin discovery and cannot move. Keeping every other runtime asset under `amp/`, `claude/`, `cursor/`, `codex/`, `copilot/`, `opencode-v2/`, and `copilot-app/` stops one marketplace from auto-discovering another runtime's components. `scripts/` is repo tooling only (release, version checks, the Docker test harness) — nothing there is shipped to a user.
+The dotted directories are fixed by each agent's plugin discovery and cannot move. Keeping every other runtime asset under `amp/`, `claude/`, `cursor/`, `codex/`, `copilot/`, `opencode-v2/`, `copilot-app/`, and `pi/` stops one marketplace from auto-discovering another runtime's components. `scripts/` is repo tooling only (release, version checks, the Docker test harness) — nothing there is shipped to a user.
 
 ## Contributing
 

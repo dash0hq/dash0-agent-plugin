@@ -14,6 +14,10 @@ import (
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
 )
 
+// MaxEnvelopeBytes is the largest envelope the helper accepts. The bridge
+// sheds content to stay below it.
+const MaxEnvelopeBytes = 1 << 20
+
 // Turn is the private bridge protocol, not an Amp API response. Prompt and
 // Response carry the turn's conversation, which the shared exporter redacts
 // when OmitIO is set — the same contract as every other harness.

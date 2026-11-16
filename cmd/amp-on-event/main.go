@@ -86,8 +86,8 @@ func run(input io.Reader, export func(string) ([]byte, error)) error {
 	if cfg.OTLPUrl == "" && !cfg.Debug {
 		return nil
 	}
-	data, err := io.ReadAll(io.LimitReader(input, (1<<20)+1))
-	if err != nil || len(data) > 1<<20 {
+	data, err := io.ReadAll(io.LimitReader(input, amp.MaxEnvelopeBytes+1))
+	if err != nil || len(data) > amp.MaxEnvelopeBytes {
 		return fmt.Errorf("invalid envelope size")
 	}
 	var turn amp.Turn

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
+	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
 
 var start = time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
@@ -443,4 +444,19 @@ func mustNano(t *testing.T, s string) int64 {
 	var n int64
 	require.NoError(t, json.Unmarshal([]byte(s), &n))
 	return n
+}
+
+// The shared request builder must keep Pi's resource and scope as they were
+// before it existed.
+func TestTraceRequestKeepsPiResourceAndScope(t *testing.T) {
+	req, err := BuildTrace(Turn{SessionID: "s1", Start: at(0), End: at(1), Status: "done"}, cfg(true))
+	require.NoError(t, err)
+	require.Len(t, req.ResourceSpans, 1)
+	rs := req.ResourceSpans[0]
+	require.Equal(t, []otlp.Attribute{
+		{Key: "service.name", Value: otlp.StringVal("pi")},
+		{Key: "service.version", Value: otlp.StringVal(version.Version)},
+	}, rs.Resource.Attributes)
+	require.Len(t, rs.ScopeSpans, 1)
+	require.Equal(t, otlp.Scope{Name: "dash0-agent-plugin", Version: version.Version}, rs.ScopeSpans[0].Scope)
 }

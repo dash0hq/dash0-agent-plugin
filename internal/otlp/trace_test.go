@@ -648,8 +648,9 @@ func repoForToolSpan(t *testing.T) (main, worktree string) {
 	return main, worktree
 }
 
-// Every export path shares one resource and scope, so the service name a
-// dashboard groups by cannot differ between runtimes that build requests.
+// The runtimes that build whole trace requests (Amp and Pi) share one
+// resource and scope, so the service name a dashboard groups by cannot differ
+// between them.
 func TestNewTracesRequestWrapsSpansInThePluginResource(t *testing.T) {
 	spans := []Span{{Name: "a"}, {Name: "b"}}
 	req := NewTracesRequest(Config{AgentName: "pi"}, spans...)

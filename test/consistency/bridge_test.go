@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
+	"github.com/dash0hq/dash0-agent-plugin/internal/source/amp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/source/pi"
 )
 
@@ -40,26 +41,34 @@ func TestBridgeContentHelpersAreIdentical(t *testing.T) {
 		"amp/index.ts and pi/index.ts must carry the same content helpers")
 }
 
-// The bridges budget content against limits that the Go side enforces. A
-// bridge field cap above otlp.MaxContentBytes keeps text that the exporter
-// cuts anyway, and an envelope cap at or above the helper's limit makes the
-// helper reject whole turns.
+// The bridges budget content against limits that the Go side enforces. The
+// field cap equals otlp.MaxContentBytes: a larger cap keeps text that the
+// exporter cuts anyway, and a smaller one cuts text that the exporter keeps.
+// An envelope cap at or above the helper's own limit makes that helper reject
+// whole turns.
 func TestBridgeBudgetsFitTheHelpers(t *testing.T) {
 	root := repoRoot(t)
 	limit := func(src, name string) int {
 		t.Helper()
-		m := regexp.MustCompile(`(?m)^const ` + name + ` = (\d+) \* 1024;$`).FindStringSubmatch(src)
+		// Either `N * 1024` or a plain number of bytes.
+		m := regexp.MustCompile(`(?m)^const ` + name + ` = (\d+)( \* 1024)?;$`).FindStringSubmatch(src)
 		require.NotNil(t, m, "no %s in the bridge", name)
 		n, err := strconv.Atoi(m[1])
 		require.NoError(t, err)
-		return n * 1024
+		if m[2] != "" {
+			n *= 1024
+		}
+		return n
 	}
-	for _, path := range []string{"amp/index.ts", "pi/index.ts"} {
+	for path, helperLimit := range map[string]int{
+		"amp/index.ts": amp.MaxEnvelopeBytes,
+		"pi/index.ts":  pi.MaxEnvelopeBytes,
+	} {
 		data, err := os.ReadFile(filepath.Join(root, path))
 		require.NoError(t, err)
 		src := string(data)
 		require.Equal(t, otlp.MaxContentBytes, limit(src, "maxField"), path)
-		require.Less(t, limit(src, "maxEnvelope"), pi.MaxEnvelopeBytes, path)
+		require.Less(t, limit(src, "maxEnvelope"), helperLimit, path)
 		// Escaping can double the content, and the rest of the envelope
 		// needs room too.
 		require.LessOrEqual(t, 2*limit(src, "maxContent"), limit(src, "maxEnvelope"), path)

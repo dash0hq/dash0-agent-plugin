@@ -453,12 +453,6 @@ const (
 	skillSourceModel   = "model"
 )
 
-// EnrichToolEvent applies the source-agnostic extractor rules to a tool event
-// whose tool_name/tool_input/tool_response are already populated in the
-// pipeline's canonical shape. It derives the semantic attributes (PR/issue/commit
-// URLs, line counts, bash command family, skill name, MCP server) and normalizes
-// the MCP tool name in place. Tool-name matching is case-insensitive so every
-// runtime shares one rule set (Claude emits "Bash"/"Skill", Copilot "bash"/"skill").
 // ToolInput gives tool arguments that a bridge sent as text the shape that
 // hooks deliver on the other runtimes: a JSON object becomes a map, so the
 // shared extractors can read it. Any other text stays as it is.
@@ -470,6 +464,12 @@ func ToolInput(text string) any {
 	return text
 }
 
+// EnrichToolEvent applies the source-agnostic extractor rules to a tool event
+// whose tool_name/tool_input/tool_response are already populated in the
+// pipeline's canonical shape. It derives the semantic attributes (PR/issue/commit
+// URLs, line counts, bash command family, skill name, MCP server) and normalizes
+// the MCP tool name in place. Tool-name matching is case-insensitive so every
+// runtime shares one rule set (Claude emits "Bash"/"Skill", Copilot "bash"/"skill").
 func EnrichToolEvent(event map[string]any) {
 	resp := event["tool_response"]
 	if prURL := ExtractPRURL(resp); prURL != "" {

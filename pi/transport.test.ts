@@ -232,6 +232,30 @@ test("a missing helper or a failing export never throws into Pi", async () => {
   expect(notices).toHaveLength(1);
 });
 
+// The extension caps detached helpers. A turn over the cap is not exported,
+// so the user gets the same notice as for a failed export.
+test.skipIf(process.platform === "win32")(
+  "a turn dropped at the helper cap shows the notice",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    isolate(home);
+    // A helper that succeeds, but only after every turn below is sent.
+    writeFileSync(join(dir, "pi-on-event"), "#!/bin/sh\nexec sleep 2\n", {
+      mode: 0o755,
+    });
+
+    const { fire, notices } = await load(dir);
+    for (let i = 0; i < 16; i++) await turn(fire);
+    expect(notices).toEqual([]);
+    await turn(fire);
+    expect(notices).toEqual(["dash0: telemetry unavailable"]);
+  },
+);
+
 // Pi throws on any use of a session's context once the session has ended, and
 // an export fails after that in print mode. The throw would come from a
 // child-process callback and end the Pi process. Found live on 2026-11-13.

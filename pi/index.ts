@@ -564,7 +564,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   register(pi, (turn) => {
-    if (live >= maxHelpers) return;
+    // The turn is lost, so the user hears about it as for a failed export.
+    if (live >= maxHelpers) {
+      warn?.();
+      return;
+    }
     let child;
     try {
       child = spawn(binary, [], {

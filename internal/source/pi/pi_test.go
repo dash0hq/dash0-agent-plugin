@@ -127,9 +127,6 @@ func TestBillingModeIsPerCallAndOnlyBesideTokens(t *testing.T) {
 	require.Equal(t, "unknown", attrs(spans[1])["dash0.gen_ai.billing_mode"])
 	require.NotContains(t, attrs(spans[2]), "dash0.gen_ai.billing_mode")
 
-	bad := turn
-	bad.Calls = []Call{{Provider: "p", Model: "m", BillingMode: "api"}}
-	require.Error(t, bad.Validate())
 }
 
 func TestUnknownProviderIsExportedAsItIs(t *testing.T) {
@@ -251,19 +248,52 @@ func TestValidateRejectsAmbiguousTurns(t *testing.T) {
 		"end before start": func(t *Turn) { t.End = at(-1) },
 		"zero start":       func(t *Turn) { t.Start = time.Time{} },
 		"unknown status":   func(t *Turn) { t.Status = "cancelled" },
-		"negative tokens":  func(t *Turn) { t.Calls = []Call{{Provider: "p", Model: "m", Usage: Usage{Input: -1}}} },
-		"empty model":      func(t *Turn) { t.Calls = []Call{{Provider: "p"}} },
-		"1h over total": func(t *Turn) {
-			t.Calls = []Call{{Provider: "p", Model: "m", Usage: Usage{CacheWrite1h: ptr[int64](1)}}}
-		},
-		"reasoning over out":  func(t *Turn) { t.Calls = []Call{{Provider: "p", Model: "m", Usage: Usage{Reasoning: ptr[int64](1)}}} },
-		"call ends too early": func(t *Turn) { t.Calls = []Call{{Provider: "p", Model: "m", Start: at(1), End: at(0)}} },
-		"too many tools":      func(t *Turn) { t.Tools = make([]Tool, maxItems+1) },
+		"too many tools":   func(t *Turn) { t.Tools = make([]Tool, maxItems+1) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			turn := ok
 			mutate(&turn)
 			require.Error(t, turn.Validate())
+		})
+	}
+}
+
+// Pi extensions register providers with free-text IDs and model names, so a
+// call the helper cannot export loses its own span, as a bad tool does, and
+// the rest of the turn is still sent. A tool keeps its span but loses the
+// model of a dropped call.
+func TestInvalidCallsAreSkippedNotFatal(t *testing.T) {
+	good := Call{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(0), End: at(1), StopReason: "toolUse", Usage: Usage{Input: 1, Output: 1}}
+	for name, bad := range map[string]Call{
+		"model with a space":  {Provider: "my-proxy", Model: "local llama", Start: at(1), End: at(2)},
+		"empty model":         {Provider: "p", Start: at(1), End: at(2)},
+		"negative tokens":     {Provider: "p", Model: "m", Start: at(1), End: at(2), Usage: Usage{Input: -1}},
+		"1h over total":       {Provider: "p", Model: "m", Start: at(1), End: at(2), Usage: Usage{CacheWrite1h: ptr[int64](1)}},
+		"reasoning over out":  {Provider: "p", Model: "m", Start: at(1), End: at(2), Usage: Usage{Reasoning: ptr[int64](1)}},
+		"call ends too early": {Provider: "p", Model: "m", Start: at(2), End: at(1)},
+		"billing mode api":    {Provider: "p", Model: "m", Start: at(1), End: at(2), BillingMode: "api"},
+		"bad response model":  {Provider: "p", Model: "m", Start: at(1), End: at(2), ResponseModel: "a b"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done",
+				Calls: []Call{good, bad, good},
+				Tools: []Tool{
+					{ID: "t0", Name: "read", Start: at(1), End: at(2), Call: ptr(0)},
+					{ID: "t1", Name: "bash", Start: at(2), End: at(3), Call: ptr(1)},
+					{ID: "t2", Name: "bash", Start: at(3), End: at(4), Call: ptr(2)},
+				}}
+			require.NoError(t, turn.Validate())
+			spans := build(t, turn, true)
+			require.Len(t, spans, 5, "two calls and three tools")
+			require.Equal(t, "chat claude-sonnet-5", spans[0].Name)
+			require.Equal(t, "chat claude-sonnet-5", spans[1].Name)
+			byID := map[string]map[string]string{}
+			for _, s := range spans[2:] {
+				byID[attrs(s)["gen_ai.tool.call.id"]] = attrs(s)
+			}
+			require.Equal(t, "claude-sonnet-5", byID["t0"]["gen_ai.request.model"])
+			require.NotContains(t, byID["t1"], "gen_ai.request.model")
+			require.Equal(t, "claude-sonnet-5", byID["t2"]["gen_ai.request.model"])
 		})
 	}
 }

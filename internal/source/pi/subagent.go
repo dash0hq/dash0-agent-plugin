@@ -49,14 +49,6 @@ func (s Subagent) valid() bool {
 		validUsage(s.Usage)
 }
 
-func validBillingMode(m string) bool { return m == "" || m == "subscription" || m == "unknown" }
-
-func validUsage(u Usage) bool {
-	return u.Input >= 0 && u.Output >= 0 && u.CacheRead >= 0 && u.CacheWrite >= 0 &&
-		(u.CacheWrite1h == nil || (*u.CacheWrite1h >= 0 && *u.CacheWrite1h <= u.CacheWrite)) &&
-		(u.Reasoning == nil || (*u.Reasoning >= 0 && *u.Reasoning <= u.Output))
-}
-
 // subagentSpans builds the spans of the children that one subagent tool call
 // ran. Each child is an invoke_agent span under the tool's span, with one
 // chat span under it that carries the child's total tokens. Dash0's

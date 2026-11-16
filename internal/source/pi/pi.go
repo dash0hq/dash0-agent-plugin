@@ -124,18 +124,50 @@ func (t Turn) Validate() error {
 	if t.Skill != "" && !skillPattern.MatchString(t.Skill) {
 		return fmt.Errorf("invalid Pi skill")
 	}
-	for _, c := range t.Calls {
-		if !namePattern.MatchString(c.Provider) || !namePattern.MatchString(c.Model) || c.End.Before(c.Start) || !validUsage(c.Usage) {
-			return fmt.Errorf("invalid Pi model call")
-		}
-		if !validBillingMode(c.BillingMode) {
-			return fmt.Errorf("invalid Pi billing mode")
-		}
-		if c.ResponseModel != "" && !namePattern.MatchString(c.ResponseModel) {
-			return fmt.Errorf("invalid Pi response model")
+	return nil
+}
+
+// valid reports whether a model call can be exported. Provider IDs and model
+// names are free text in Pi, so a bad call loses its own span, not the turn.
+func (c Call) valid() bool {
+	return namePattern.MatchString(c.Provider) && namePattern.MatchString(c.Model) && !c.End.Before(c.Start) &&
+		validUsage(c.Usage) && validBillingMode(c.BillingMode) &&
+		(c.ResponseModel == "" || namePattern.MatchString(c.ResponseModel))
+}
+
+func validBillingMode(m string) bool { return m == "" || m == "subscription" || m == "unknown" }
+
+func validUsage(u Usage) bool {
+	return u.Input >= 0 && u.Output >= 0 && u.CacheRead >= 0 && u.CacheWrite >= 0 &&
+		(u.CacheWrite1h == nil || (*u.CacheWrite1h >= 0 && *u.CacheWrite1h <= u.CacheWrite)) &&
+		(u.Reasoning == nil || (*u.Reasoning >= 0 && *u.Reasoning <= u.Output))
+}
+
+// validCalls drops the calls that cannot be exported and points each tool at
+// its call's new index, or at none when its call was dropped.
+func validCalls(t Turn) ([]Call, []Tool) {
+	index := make([]int, len(t.Calls))
+	var calls []Call
+	for i, c := range t.Calls {
+		index[i] = -1
+		if c.valid() {
+			index[i] = len(calls)
+			calls = append(calls, c)
 		}
 	}
-	return nil
+	tools := make([]Tool, len(t.Tools))
+	for i, tool := range t.Tools {
+		if tool.Call != nil {
+			if *tool.Call >= 0 && *tool.Call < len(index) && index[*tool.Call] >= 0 {
+				n := index[*tool.Call]
+				tool.Call = &n
+			} else {
+				tool.Call = nil
+			}
+		}
+		tools[i] = tool
+	}
+	return calls, tools
 }
 
 // providers maps Pi's built-in provider IDs to gen_ai.provider.name values.
@@ -213,6 +245,7 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 	if err != nil {
 		return otlp.ExportTracesRequest{}, fmt.Errorf("reading working directory: %w", err)
 	}
+	t.Calls, t.Tools = validCalls(t)
 	cfg = cfg.WithSpanContext()
 	traceID, err := otlp.GenerateTraceID()
 	if err != nil {

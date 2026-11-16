@@ -247,6 +247,8 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 	}
 	t.Calls, t.Tools = validCalls(t)
 	cfg = cfg.WithSpanContext()
+	// Pi names the provider of each call, which also prices the call.
+	cfg.PreferProvider = true
 	traceID, err := otlp.GenerateTraceID()
 	if err != nil {
 		return otlp.ExportTracesRequest{}, fmt.Errorf("building Pi turn: %w", err)

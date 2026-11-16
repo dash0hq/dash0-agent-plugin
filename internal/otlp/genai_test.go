@@ -49,6 +49,12 @@ func TestResolveProviderPrefersModelOverConfig(t *testing.T) {
 	assert.Equal(t, "openai", resolveProvider(event, cfg))
 }
 
+func TestResolveProviderPrefersConfigWhenAsked(t *testing.T) {
+	event := map[string]any{"model": "gpt-5"}
+	assert.Equal(t, "azure.ai.openai", resolveProvider(event, Config{Provider: "azure.ai.openai", PreferProvider: true}))
+	assert.Equal(t, "openai", resolveProvider(event, Config{PreferProvider: true}))
+}
+
 func TestResolveProviderFallsBackToConfig(t *testing.T) {
 	event := map[string]any{"hook_event_name": "SessionStart"}
 	cfg := Config{Provider: "anthropic"}

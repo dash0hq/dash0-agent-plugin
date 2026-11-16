@@ -56,8 +56,12 @@ func ProviderForModel(model string) string {
 // resolveProvider picks the gen_ai.provider.name value for an OTLP export.
 // Per-event model wins (Cursor sessions can mix providers); cfg.Provider is
 // the runtime-level fallback (Claude Code sets "anthropic" so non-LLM events
-// like SessionStart still carry a provider tag).
+// like SessionStart still carry a provider tag). With cfg.PreferProvider, a
+// non-empty cfg.Provider wins instead.
 func resolveProvider(event map[string]any, cfg Config) string {
+	if cfg.PreferProvider && cfg.Provider != "" {
+		return cfg.Provider
+	}
 	model, _ := event["model"].(string)
 	if p := ProviderForModel(model); p != "" {
 		return p

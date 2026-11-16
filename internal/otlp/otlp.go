@@ -116,6 +116,11 @@ type Config struct {
 	// rather have no attribution than an approximate one.
 	OmitIdentityFallback bool
 
+	// PreferProvider makes a non-empty Provider win over the vendor inferred
+	// from the model. Set it when the runtime names the provider of each call,
+	// so that a model served through Azure or Bedrock keeps that provider.
+	PreferProvider bool
+
 	// Set only on a batch-local copy by WithSpanContext. nil retains the
 	// existing per-event resolution behavior for other integrations.
 	spanContext *[]Attribute

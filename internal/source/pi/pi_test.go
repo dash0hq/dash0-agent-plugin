@@ -129,6 +129,27 @@ func TestBillingModeIsPerCallAndOnlyBesideTokens(t *testing.T) {
 
 }
 
+// A cloud provider such as Azure or Bedrock serves the same model names as
+// the vendor, but it bills differently. Pi's provider ID, not the model name,
+// sets gen_ai.provider.name on every span that names the call.
+func TestCloudProviderWinsOverTheModelName(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done",
+		Calls: []Call{
+			{Provider: "azure", Model: "gpt-5.5", Start: at(0), End: at(1), StopReason: "toolUse", Usage: Usage{Input: 1, Output: 1}},
+			{Provider: "amazon-bedrock", Model: "claude-sonnet-5", Start: at(2), End: at(9), StopReason: "stop", Usage: Usage{Input: 1, Output: 1}},
+		},
+		Tools: []Tool{{ID: "call_sub", Name: "subagent", Start: at(1), End: at(2), Call: ptr(0),
+			Subagents: []Subagent{{Agent: "scout", Model: "google-vertex/gemini-3-pro", Turns: 1, Usage: Usage{Input: 1, Output: 1}}}}}}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 5)
+	root, call, tool, agent, usage := spans[0], spans[1], spans[2], spans[3], spans[4]
+	require.Equal(t, "aws.bedrock", attrs(root)["gen_ai.provider.name"])
+	require.Equal(t, "azure.ai.openai", attrs(call)["gen_ai.provider.name"])
+	require.Equal(t, "azure.ai.openai", attrs(tool)["gen_ai.provider.name"])
+	require.Equal(t, "gcp.vertex_ai", attrs(agent)["gen_ai.provider.name"])
+	require.Equal(t, "gcp.vertex_ai", attrs(usage)["gen_ai.provider.name"])
+}
+
 func TestUnknownProviderIsExportedAsItIs(t *testing.T) {
 	turn := Turn{SessionID: "s1", Start: at(0), End: at(2), Status: "done",
 		Calls: []Call{{Provider: "my-proxy", Model: "local-llama", Start: at(0), End: at(2), StopReason: "stop", Usage: Usage{Input: 1, Output: 1}}}}

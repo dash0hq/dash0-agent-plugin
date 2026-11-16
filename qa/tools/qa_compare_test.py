@@ -21,6 +21,7 @@ def load(name, file):
 qa = load("qa_compare", "qa-compare.py")
 oc = load("qa_compare_opencode_v2", "qa-compare-opencode-v2.py")
 amp = load("qa_amp_compare", "qa-amp-compare.py")
+pi = load("qa_pi_compare", "qa-pi-compare.py")
 
 
 def span(trace, span_id, parent=""):
@@ -306,6 +307,37 @@ class AmpToolComparison(unittest.TestCase):
                                 (["shell_command"] * 2 + ["echo_text"], 1)):
             with self.subTest(tools=tools):
                 self.assertEqual(self.run_compare([], tools)[0], expected)
+
+
+class PiParentSessionFile(unittest.TestCase):
+    def test_the_parent_is_found_by_header_id_not_by_glob_order(self):
+        import pathlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            sessions = pathlib.Path(directory) / "sessions"
+            sessions.mkdir()
+            # The child sorts first, as glob order may also put it.
+            (sessions / "a-child.jsonl").write_text(json.dumps(
+                {"type": "session", "id": "child", "parentSession": "x"}) + "\n")
+            (sessions / "b-parent.jsonl").write_text(json.dumps(
+                {"type": "session", "id": "parent"}) + "\n")
+            found = pi.parent_session_file(pathlib.Path(directory), "parent")
+            self.assertEqual(found, (sessions / "b-parent.jsonl").resolve())
+            self.assertIsNone(pi.parent_session_file(pathlib.Path(directory), "other"))
+
+
+class PiChildSessionRows(unittest.TestCase):
+    def test_a_child_with_no_spans_cannot_be_compared(self):
+        original = pi.wait_for_spans
+        pi.wait_for_spans = lambda *args: ([], None)
+        try:
+            own = {"id": "child-session", "calls": 1, "input": 1, "output": 1}
+            with self.assertRaises(SystemExit) as stop:
+                pi.child_session_rows({}, "pi", own, "parent", "child")
+            self.assertEqual(stop.exception.code, 2)
+        finally:
+            pi.wait_for_spans = original
 
 
 class AmpDriver(unittest.TestCase):

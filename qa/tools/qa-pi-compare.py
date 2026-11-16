@@ -169,6 +169,24 @@ def session_file_usage(path: str) -> dict:
             "output": sum(c[1] for c in calls)}
 
 
+def parent_session_file(run_dir: pathlib.Path, session: str) -> pathlib.Path | None:
+    """The parent's own session file: the one whose header has the run's id.
+
+    The sessions directory is Pi's --session-dir, so a child's file can be
+    next to the parent's. Glob order is not an identity.
+    """
+    for path in sorted((run_dir / "sessions").glob("*.jsonl")):
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            first = handle.readline()
+        try:
+            header = json.loads(first)
+        except json.JSONDecodeError:
+            continue
+        if header.get("type") == "session" and header.get("id") == session:
+            return path.resolve()
+    return None
+
+
 def subagent_table(config, dataset, rows, spans, run_dir, session, child_export):
     """Rows for the sub-agent comparison, as (label, want, got)."""
     out = []
@@ -176,7 +194,9 @@ def subagent_table(config, dataset, rows, spans, run_dir, session, child_export)
     agents = [s for s in spans if str(s["name"]).startswith("invoke_agent ")]
     tool_of = {s["attrs"].get("gen_ai.tool.call.id"): s for s in spans
                if str(s["name"]) == "execute_tool subagent"}
-    parent_file = next((p.resolve() for p in (run_dir / "sessions").glob("*.jsonl")), None)
+    parent_file = parent_session_file(run_dir, session)
+    if parent_file is None:
+        bail(f"no session file with id {session} in {run_dir / 'sessions'}")
 
     want_agents = sum(len(r) for r in rows["foreground"].values())
     out.append(("foreground children -> invoke_agent", want_agents, len(agents)))
@@ -223,8 +243,13 @@ def child_session_rows(config, dataset, own, session, label):
     child_spans, error = wait_for_spans(config, own["id"], dataset, 1)
     if error:
         bail(error)
-    chats = [s for s in child_spans or [] if str(s["name"]).startswith("chat")]
-    parent_ids = {s["attrs"].get("dash0.pi.session.parent.id") for s in child_spans or []}
+    if not child_spans:
+        # As for the parent: no spans at all is backend lag or a wrong id,
+        # which the comparison cannot tell from a product fault.
+        bail(f"no spans for child session {own['id']} in {dataset} after "
+             f"{SETTLE_SECONDS}s. Check that the child loaded the plugin.")
+    chats = [s for s in child_spans if str(s["name"]).startswith("chat")]
+    parent_ids = {s["attrs"].get("dash0.pi.session.parent.id") for s in child_spans}
     return [
         (f"{label} model calls", own["calls"], len(chats)),
         ("  tokens (in, out)", (own["input"], own["output"]), span_tokens(chats)),

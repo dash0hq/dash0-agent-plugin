@@ -26,10 +26,7 @@ func TestBridgeContentHelpersAreIdentical(t *testing.T) {
 	root := repoRoot(t)
 	block := func(path string) string {
 		t.Helper()
-		data, err := os.ReadFile(filepath.Join(root, path))
-		require.NoError(t, err)
-		text := strings.ReplaceAll(string(data), "\r\n", "\n")
-		_, rest, ok := strings.Cut(text, "// BEGIN content helpers")
+		_, rest, ok := strings.Cut(readBridge(t, root, path), "// BEGIN content helpers")
 		require.True(t, ok, "%s has no BEGIN content helpers marker", path)
 		body, _, ok := strings.Cut(rest, "// END content helpers")
 		require.True(t, ok, "%s has no END content helpers marker", path)
@@ -37,6 +34,7 @@ func TestBridgeContentHelpersAreIdentical(t *testing.T) {
 	}
 	amp := block("amp/index.ts")
 	require.Contains(t, amp, "function asText", "the block holds the helpers")
+	require.Contains(t, amp, "function messageText", "the block holds the helpers")
 	require.Equal(t, amp, block("pi/index.ts"),
 		"amp/index.ts and pi/index.ts must carry the same content helpers")
 }
@@ -50,9 +48,10 @@ func TestBridgeBudgetsFitTheHelpers(t *testing.T) {
 	root := repoRoot(t)
 	limit := func(src, name string) int {
 		t.Helper()
-		// Either `N * 1024` or a plain number of bytes.
+		// Either `N * 1024` or a plain number of bytes. Other forms, such as
+		// `1 << 20`, `16_384` or a trailing comment, do not match.
 		m := regexp.MustCompile(`(?m)^const ` + name + ` = (\d+)( \* 1024)?;$`).FindStringSubmatch(src)
-		require.NotNil(t, m, "no %s in the bridge", name)
+		require.NotNil(t, m, "no %s in the bridge; write it as `const %s = N;` or `const %s = N * 1024;`", name, name, name)
 		n, err := strconv.Atoi(m[1])
 		require.NoError(t, err)
 		if m[2] != "" {
@@ -64,13 +63,22 @@ func TestBridgeBudgetsFitTheHelpers(t *testing.T) {
 		"amp/index.ts": amp.MaxEnvelopeBytes,
 		"pi/index.ts":  pi.MaxEnvelopeBytes,
 	} {
-		data, err := os.ReadFile(filepath.Join(root, path))
-		require.NoError(t, err)
-		src := string(data)
+		src := readBridge(t, root, path)
 		require.Equal(t, otlp.MaxContentBytes, limit(src, "maxField"), path)
 		require.Less(t, limit(src, "maxEnvelope"), helperLimit, path)
-		// Escaping can double the content, and the rest of the envelope
-		// needs room too.
+		// A sanity bound, not a guarantee: JSON escaping can grow content
+		// up to six times (a control character becomes `\u00XX`), and the
+		// rest of the envelope needs room too. The bridges shed content at
+		// run time when the encoded envelope still passes maxEnvelope.
 		require.LessOrEqual(t, 2*limit(src, "maxContent"), limit(src, "maxEnvelope"), path)
 	}
+}
+
+// readBridge reads a bridge source with CRLF line ends made LF, so that the
+// block markers and the `;$` anchor match on a Windows checkout too.
+func readBridge(t *testing.T, root, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, path))
+	require.NoError(t, err)
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }

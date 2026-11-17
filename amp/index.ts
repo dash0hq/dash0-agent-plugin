@@ -89,6 +89,9 @@ const unavailable = "dash0: telemetry unavailable";
 // BEGIN content helpers, kept identical in amp/index.ts and pi/index.ts.
 // Amp's installers fetch index.ts as one file, so the two cannot import a
 // shared module. test/consistency/bridge_test.go fails when they differ.
+// The per-turn budget (take) and the envelope shedding stay outside this
+// block: they read each bridge's own turn state and envelope shape, which
+// differ. That test checks their limits against the Go helpers instead.
 
 /** Truncate to a byte budget without leaving a split UTF-8 sequence behind. */
 function clip(value: string, max: number): string {
@@ -130,14 +133,18 @@ function asText(value: unknown): string {
     return "";
   }
 }
-// END content helpers
 
-/** Text of a message's text blocks, joined; thinking and tool blocks are skipped. */
-function messageText(message: { content?: unknown }): string {
-  // Same block filter as a tool payload, so an image or thinking block is
-  // dropped by exactly one rule rather than by two that can drift apart.
+/**
+ * Text of an assistant message's text blocks, joined. Thinking and tool blocks
+ * are skipped by the same filter as a tool payload, so an image or thinking
+ * block is dropped by one rule only. Both runtimes type this content as an
+ * array; any other value is malformed and gives no text, never its JSON.
+ */
+function messageText(message: { content?: unknown } | undefined): string {
   return Array.isArray(message?.content) ? asText(message.content).trim() : "";
 }
+// END content helpers
+
 const validID = (id: unknown): id is ThreadMessageID =>
   typeof id === "string"
     ? id.length > 0 && id.length <= 256

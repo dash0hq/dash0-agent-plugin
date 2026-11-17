@@ -837,3 +837,23 @@ test("a tool with usage outlives tools without tokens when a turn is cut", () =>
   expect(turn.tools.filter((t) => t.usage)).toHaveLength(4);
   expect(turn.tools.filter((t) => !t.usage && !t.subagents)).toHaveLength(0);
 });
+
+test("assistant content that is not an array gives no response text", () => {
+  const { sent, fire } = setup();
+  fire("before_agent_start", { messageType: "user", prompt: "the ask" });
+  fire("agent_start");
+  fire(
+    "message_end",
+    assistant("gpt-5.5", "openai", [{ type: "text", text: "the answer" }]),
+  );
+  // Pi types assistant content as an array of blocks. A malformed object must
+  // not reach the response as its JSON, the same rule as the Amp bridge.
+  const odd = assistant("gpt-5.5", "openai", []);
+  odd.message.content = { secret: "SECRET-OBJECT" } as unknown as unknown[];
+  fire("message_end", odd);
+  fire("agent_end", { messages: [] });
+  fire("agent_settled", { aborted: false });
+  expect(sent).toHaveLength(1);
+  expect(sent[0].response).toBe("the answer");
+  expect(JSON.stringify(sent)).not.toContain("SECRET");
+});

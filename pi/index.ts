@@ -117,6 +117,9 @@ const shutdownGrace = 2000;
 // BEGIN content helpers, kept identical in amp/index.ts and pi/index.ts.
 // Amp's installers fetch index.ts as one file, so the two cannot import a
 // shared module. test/consistency/bridge_test.go fails when they differ.
+// The per-turn budget (take) and the envelope shedding stay outside this
+// block: they read each bridge's own turn state and envelope shape, which
+// differ. That test checks their limits against the Go helpers instead.
 
 /** Truncate to a byte budget without leaving a split UTF-8 sequence behind. */
 function clip(value: string, max: number): string {
@@ -157,6 +160,16 @@ function asText(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * Text of an assistant message's text blocks, joined. Thinking and tool blocks
+ * are skipped by the same filter as a tool payload, so an image or thinking
+ * block is dropped by one rule only. Both runtimes type this content as an
+ * array; any other value is malformed and gives no text, never its JSON.
+ */
+function messageText(message: { content?: unknown } | undefined): string {
+  return Array.isArray(message?.content) ? asText(message.content).trim() : "";
 }
 // END content helpers
 
@@ -514,7 +527,7 @@ export function register(
     }
     // Only the last answer is kept, and it is charged to the budget at the
     // end, so a long run of intermediate answers costs nothing here.
-    const text = asText(message.content).trim();
+    const text = messageText(message);
     if (text) active.response = text;
   });
 

@@ -176,19 +176,55 @@ func TestUnknownProviderIsExportedAsItIs(t *testing.T) {
 	require.Equal(t, "my-proxy", attrs(build(t, turn, true)[0])["gen_ai.provider.name"])
 }
 
-func TestAbortedTurnIsAnErrorAndKeepsItsTools(t *testing.T) {
+// The user stopped the turn. That is not an error, so an Esc press does not
+// count toward the error rate. Attributes record the stop instead.
+func TestAbortedTurnIsNotAnErrorAndKeepsItsTools(t *testing.T) {
 	turn := Turn{SessionID: "s1", Start: at(0), End: at(5), Status: "aborted",
-		Calls: []Call{{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(0), End: at(4), StopReason: "aborted"}},
-		Tools: []Tool{{ID: "t1", Name: "bash", Start: at(1), End: at(4), Error: true, Call: ptr(0)}}}
+		Calls: []Call{
+			{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(0), End: at(1), StopReason: "aborted"},
+			{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(1), End: at(4), StopReason: "aborted"},
+		},
+		Tools: []Tool{{ID: "t1", Name: "bash", Start: at(1), End: at(4), Error: true, Call: ptr(1)}}}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 3)
+	root, call, tool := spans[0], spans[1], spans[2]
+	require.Equal(t, otlp.StatusCodeUnset, root.Status.Code)
+	require.Empty(t, root.Status.Message)
+	require.Equal(t, "aborted", attrs(root)["dash0.pi.turn.status"])
+	require.Equal(t, "aborted", attrs(root)["dash0.pi.call.stop_reason"])
+	require.Equal(t, otlp.StatusCodeUnset, call.Status.Code)
+	require.Equal(t, "aborted", attrs(call)["dash0.pi.call.stop_reason"])
+	// A tool that the abort stopped still failed.
+	require.Equal(t, otlp.StatusCodeError, tool.Status.Code)
+	// An aborted call reported no usage; zeros would read as a measurement.
+	for k := range attrs(root) {
+		require.NotContains(t, k, "gen_ai.usage.")
+	}
+}
+
+// A failed turn and a failed model call stay errors.
+func TestFailedTurnAndCallAreErrors(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(5), Status: "error",
+		Calls: []Call{
+			{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(0), End: at(1), StopReason: "error"},
+			{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(1), End: at(4), StopReason: "error"},
+		}}
 	spans := build(t, turn, true)
 	require.Len(t, spans, 2)
 	require.Equal(t, otlp.StatusCodeError, spans[0].Status.Code)
-	require.Equal(t, "Pi turn aborted", spans[0].Status.Message)
+	require.Equal(t, "Pi turn error", spans[0].Status.Message)
+	require.Equal(t, "error", attrs(spans[0])["dash0.pi.turn.status"])
 	require.Equal(t, otlp.StatusCodeError, spans[1].Status.Code)
-	// An aborted call reported no usage; zeros would read as a measurement.
-	for k := range attrs(spans[0]) {
-		require.NotContains(t, k, "gen_ai.usage.")
-	}
+	require.Equal(t, "Pi model call error", spans[1].Status.Message)
+	require.NotContains(t, attrs(spans[1]), "dash0.pi.call.stop_reason")
+}
+
+// A completed turn names no status, so the attribute marks only the turns
+// that did not complete.
+func TestDoneTurnHasNoStatusAttribute(t *testing.T) {
+	spans := build(t, Turn{SessionID: "s1", Start: at(0), End: at(1), Status: "done"}, true)
+	require.Equal(t, otlp.StatusCodeUnset, spans[0].Status.Code)
+	require.NotContains(t, attrs(spans[0]), "dash0.pi.turn.status")
 }
 
 func TestTurnWithoutModelCallHasAnUnnamedChatRoot(t *testing.T) {

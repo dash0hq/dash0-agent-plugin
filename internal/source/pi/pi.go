@@ -35,7 +35,7 @@ type Turn struct {
 	Start           time.Time `json:"start"`
 	End             time.Time `json:"end"`
 	// Status is "done", "error" when the last model call failed, or "aborted"
-	// when the user stopped the run.
+	// when the user stopped the run. An aborted turn is not an error.
 	Status    string `json:"status"`
 	Calls     []Call `json:"calls"`
 	Tools     []Tool `json:"tools"`
@@ -237,11 +237,28 @@ func callAttributes(event map[string]any, c Call) {
 	if c.ThinkingLevel != "" {
 		event["effort"] = c.ThinkingLevel
 	}
-	u := c.Usage
-	// Pi fills absent counts with zeros. A call that reports nothing at all,
-	// such as one aborted before the response, has no measurement to export.
-	if u.Input+u.Output+u.CacheRead+u.CacheWrite == 0 {
-		return
+	// The user stopped the call. This is not an error, so the span status
+	// stays unset and this attribute records the stop.
+	if c.StopReason == "aborted" {
+		event["dash0.pi.call.stop_reason"] = c.StopReason
+	}
+	if usageAttributes(event, c.Usage) && c.BillingMode != "" {
+		// Only beside tokens, as on Claude Code: the mode says what a cost
+		// figure means, and a span with no tokens has none.
+		event["dash0.gen_ai.billing_mode"] = c.BillingMode
+	}
+}
+
+// hasUsage reports whether u holds a measurement. Pi fills absent counts
+// with zeros, so a call that reports nothing at all, such as one aborted
+// before the response, has no measurement to export.
+func hasUsage(u Usage) bool { return u.Input+u.Output+u.CacheRead+u.CacheWrite > 0 }
+
+// usageAttributes puts the token counts of u on a span event. It returns
+// false and sets nothing when u holds no measurement.
+func usageAttributes(event map[string]any, u Usage) bool {
+	if !hasUsage(u) {
+		return false
 	}
 	// Exported inclusive of cache, as the GenAI conventions define it and as
 	// Dash0's cost calculation expects from every harness but Claude Code.
@@ -249,11 +266,6 @@ func callAttributes(event map[string]any, c Call) {
 	event["gen_ai.usage.output_tokens"] = u.Output
 	event["gen_ai.usage.cache_read.input_tokens"] = u.CacheRead
 	event["gen_ai.usage.cache_creation.input_tokens"] = u.CacheWrite
-	// Only beside tokens, as on Claude Code: the mode says what a cost
-	// figure means, and a span with no tokens has none.
-	if c.BillingMode != "" {
-		event["dash0.gen_ai.billing_mode"] = c.BillingMode
-	}
 	// An optional count that contradicts its total is dropped alone. The
 	// call and its other counts stay.
 	if u.CacheWrite1h != nil && *u.CacheWrite1h >= 0 && *u.CacheWrite1h <= u.CacheWrite {
@@ -262,9 +274,16 @@ func callAttributes(event map[string]any, c Call) {
 	if u.Reasoning != nil && *u.Reasoning > 0 && *u.Reasoning <= u.Output {
 		event["gen_ai.usage.reasoning.output_tokens"] = *u.Reasoning
 	}
+	return true
 }
 
-func callFailed(c Call) bool { return c.StopReason == "error" || c.StopReason == "aborted" }
+// callFailed reports whether a model call failed. A call that the user
+// stopped ("aborted") did not fail.
+func callFailed(c Call) bool { return c.StopReason == "error" }
+
+// turnFailed reports whether a turn failed. A turn that the user stopped
+// did not fail.
+func turnFailed(t Turn) bool { return t.Status != "done" && t.Status != "aborted" }
 
 // BuildTrace builds one completed turn on the shared span builders.
 //
@@ -300,6 +319,9 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		root["dash0.pi.truncated"] = true
 	}
 	if t.Status != "done" {
+		root["dash0.pi.turn.status"] = t.Status
+	}
+	if turnFailed(t) {
 		root["error"] = "Pi turn " + t.Status
 	}
 	if t.Prompt != "" {
@@ -320,7 +342,7 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		callAttributes(root, last)
 		rootCfg = withProvider(cfg, last.Provider)
 	}
-	spans := []otlp.Span{otlp.NewLLMSpan(traceID, rootID, "", t.Start, t.End, root, t.Status != "done", rootCfg)}
+	spans := []otlp.Span{otlp.NewLLMSpan(traceID, rootID, "", t.Start, t.End, root, turnFailed(t), rootCfg)}
 
 	callSpanID := func(i int) string { return otlp.SpanIDFromAgentID(fmt.Sprintf("call:%s:%d", traceID, i)) }
 	for i, c := range calls {
@@ -396,3 +418,4 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		ScopeSpans: []otlp.ScopeSpans{{Scope: otlp.Scope{Name: "dash0-agent-plugin", Version: version.Version}, Spans: spans}},
 	}}}, nil
 }
+

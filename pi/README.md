@@ -58,10 +58,12 @@ else `~/.local/state/dash0-agent-plugin/pi/bin`.
 A turn that settles before the helper is ready, for example during the first
 download, waits for it. When the download fails, that turn is not exported,
 Pi shows `dash0: telemetry unavailable`, and the next turn tries again. A
-pi-subagents parent leaves out a child's tokens only when the child's helper
-started before the parent read the child's result. When the parent reads
-first, it keeps the tokens and the child exports that turn without them, so
-the tokens are counted once. When Pi exits within 2 seconds of a turn that is
+pi-subagents parent leaves out the tokens of a child's turn only when the
+child's helper started before the parent read the child's result. When the
+parent reads first and is exported, it keeps the tokens and the child exports
+that turn without them, so the tokens are counted once. When the parent is
+not exported, for example at the helper cap, the child exports the turn with
+its tokens. When Pi exits within 2 seconds of a turn that is
 still waiting, for example in print mode during the first download, that turn
 is lost. The download outlives Pi, so the next run exports.
 
@@ -227,8 +229,11 @@ children too, with the pi-subagents setting in Pi's `settings.json`:
 The child then exports its own session, as a background child does. The
 parent still sends the `invoke_agent` span, but without a model or tokens, so
 the child's tokens are counted one time. When the child could not start its
-helper, the parent keeps the child's model and tokens. A helper that starts
-and then fails loses the child's turn, as it would for any session.
+helper, including a helper that Node fails to start after spawning it, the
+parent keeps that turn's tokens: it subtracts from the child's total only the
+model calls that the child exported, and keeps the model while anything is
+left. A helper that starts and then fails loses the child's turn, as it would
+for any session.
 
 ## Limits
 
@@ -240,6 +245,10 @@ and then fails loses the child's turn, as it would for any session.
 - The parent drops the totals of a child whose session the extension saw
   start, also when that child then exported nothing, for example because its
   project's `.pi/dash0-agent-plugin.local.md` says `enabled: false`.
+- When a parent kept a waiting child turn's tokens and the parent's own
+  helper then fails to start, those tokens are lost: the child already
+  exported the turn without them. In print mode, the quit waits only for the
+  parent's own envelopes, so such a child turn can also be cut off.
 - A foreground child's totals cover only its own model calls. When a child
   runs its own foreground children, their tokens are in the child's tool
   result and not in the totals that the parent sees.

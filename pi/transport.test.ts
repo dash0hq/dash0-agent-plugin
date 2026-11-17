@@ -437,9 +437,12 @@ test.skipIf(process.platform === "win32")(
     // A helper that reads only after a while, so an envelope larger than the
     // pipe buffer stays pending.
     const helper = join(dir, "helper");
-    writeFileSync(helper, "#!/bin/sh\nsleep 1\nexec cat >/dev/null\n", {
-      mode: 0o755,
-    });
+    const received = join(dir, "received.json");
+    writeFileSync(
+      helper,
+      `#!/bin/sh\nsleep 1\ncat >"${received}.tmp" && mv "${received}.tmp" "${received}"\n`,
+      { mode: 0o755 },
+    );
     // A bootstrap that resolves it after a short download.
     writeFileSync(join(dir, "pi-on-event.sh"), `sleep 0.3\necho "${helper}"\n`);
 
@@ -460,8 +463,37 @@ test.skipIf(process.platform === "win32")(
     await fire("agent_settled", { aborted: false });
     const started = Date.now();
     await fire("session_shutdown", { reason: "quit" });
-    // Resolution, then the helper's delay before it reads.
-    expect(Date.now() - started).toBeGreaterThanOrEqual(1100);
+    // Resolution, then the helper's delay before it reads. The quit ended
+    // because the write did, not because its 2-second grace ran out.
+    const waited = Date.now() - started;
+    expect(waited).toBeGreaterThanOrEqual(1100);
+    expect(waited).toBeLessThan(1900);
+    for (let i = 0; i < 40 && !existsSync(received); i++) await Bun.sleep(25);
+    expect(JSON.parse(readFileSync(received, "utf8")).session_id).toBe(
+      "019a-transport",
+    );
+  },
+);
+
+// A turn that waits for its helper holds a helper slot, so a stuck download
+// cannot queue turns without bound. The turn over the cap is dropped.
+test.skipIf(process.platform === "win32")(
+  "turns waiting for the helper count toward the helper cap",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    isolate(home);
+    // A bootstrap that does not finish while the test runs.
+    writeFileSync(join(dir, "pi-on-event.sh"), "exec sleep 5\n");
+
+    const { fire, notices } = await load(dir);
+    for (let i = 0; i < 16; i++) await turn(fire);
+    expect(notices).toEqual([]);
+    await turn(fire);
+    expect(notices).toEqual(["dash0: telemetry unavailable"]);
   },
 );
 

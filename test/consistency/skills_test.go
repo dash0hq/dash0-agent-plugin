@@ -36,9 +36,9 @@ var skillManifests = []struct {
 	// relative to the installed plugin directory, which the installers lay out
 	// to match this one.
 	{"amp", "", "amp/skills"},
-	// Pi's manifest is the "pi" key of pi/package.json, whose skills list
-	// names this directory.
-	{"pi", "", "pi/skills"},
+	// Pi's manifest is the "pi" key of pi/package.json, which lists its
+	// skills directories.
+	{"pi", "pi/package.json", "pi"},
 }
 
 // TestSkillFrontmatterParses parses the frontmatter of every shipped skill with
@@ -62,7 +62,14 @@ func TestSkillFrontmatterParses(t *testing.T) {
 			declared, dir := m.base, filepath.Join(root, m.base)
 			if m.manifest != "" {
 				var ok bool
-				declared, ok = readJSON(t, filepath.Join(root, m.manifest))["skills"].(string)
+				manifest := readJSON(t, filepath.Join(root, m.manifest))
+				if pi, isPi := manifest["pi"].(map[string]any); isPi {
+					// A Pi package lists its skills under "pi"; this one lists one.
+					list, _ := pi["skills"].([]any)
+					require.Len(t, list, 1, "%s must list one skills directory under pi.skills", m.manifest)
+					manifest = map[string]any{"skills": list[0]}
+				}
+				declared, ok = manifest["skills"].(string)
 				require.True(t, ok, "%s declares no skills directory", m.manifest)
 				dir = filepath.Join(root, m.base, filepath.Clean(strings.TrimPrefix(declared, "./")))
 			}

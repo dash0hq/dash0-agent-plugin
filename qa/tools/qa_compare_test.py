@@ -579,6 +579,44 @@ class PiSessionFile(unittest.TestCase):
         self.assertEqual(stop.exception.code, 2)
 
 
+class PiDriver(unittest.TestCase):
+    def drive(self, root, run_id):
+        import subprocess
+
+        return subprocess.run(["bash", os.path.join(HERE, "qa-session-pi.sh"), "unused", run_id],
+                              cwd=root, text=True, capture_output=True)
+
+    def setUp(self):
+        import pathlib
+        import subprocess
+        import tempfile
+
+        self.root = pathlib.Path(tempfile.mkdtemp())
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / "qa").mkdir()
+        (self.root / "qa/config.local.json").write_text(json.dumps({
+            "ingestUrl": "unused", "authToken": "fake", "piDataset": "pi", "apiUrl": "unused"}))
+
+    def test_a_run_id_with_a_path_is_refused(self):
+        keep = self.root / "qa/keep"
+        keep.write_text("evidence")
+        for run_id in ("..", "../qa", "a/b", ".", "a..b"):
+            with self.subTest(run_id=run_id):
+                result = self.drive(self.root, run_id)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("plain directory name", result.stderr)
+        self.assertTrue(keep.exists())
+
+    def test_an_existing_run_is_not_replaced(self):
+        run = self.root / "qa/runs/earlier"
+        run.mkdir(parents=True)
+        (run / "stream.jsonl").write_text("evidence")
+        result = self.drive(self.root, "earlier")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("exists", result.stderr)
+        self.assertEqual((run / "stream.jsonl").read_text(), "evidence")
+
+
 class AmpDriver(unittest.TestCase):
     def test_incomplete_config_stops_before_starting_amp(self):
         import pathlib

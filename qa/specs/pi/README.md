@@ -37,6 +37,13 @@ Every spec here was run against Dash0 on 2026-11-13 and agreed. The attribute
 surface was checked with `qa-attrs.py` on the four-turn conversation run: every
 key is documented.
 
+## A run directory is never replaced
+
+`qa-session-pi.sh` refuses a run id whose directory exists, and a run id that
+is not a plain directory name. To run a spec again, give the run a new id, or
+move the earlier run away first. The comparer reads the run's time window from
+`manifest.json`.
+
 ## Spans can arrive minutes after the run
 
 The helper is detached and exports at once, but Dash0 can take minutes to make

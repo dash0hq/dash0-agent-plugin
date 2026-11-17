@@ -60,6 +60,11 @@ cd "$ROOT"
 
 PROMPT=${1:?usage: qa-session-pi.sh "<prompt>" [run-id]}
 RUN_ID=${2:-pi-$(date -u +%Y%m%dT%H%M%SZ)}
+# The run id is a directory name under qa/runs. A path in it could point the
+# run, and its cleanup, at a directory outside qa/runs.
+case "$RUN_ID" in
+  ''|.|*/*|*..*) echo "run-id must be a plain directory name, not '$RUN_ID'" >&2; exit 2 ;;
+esac
 RUN_DIR="$ROOT/qa/runs/$RUN_ID"
 CONFIG=qa/config.local.json
 MODEL=${QA_PI_MODEL:-claude-code/claude-haiku-4-5-20251001}
@@ -82,7 +87,11 @@ PY
 )
 eval "$CONFIG_VARS"
 
-rm -rf "$RUN_DIR"
+# A run directory is evidence. A new run never replaces an earlier one.
+if [ -e "$RUN_DIR" ]; then
+  echo "$RUN_DIR exists; use a new run-id, or move the old run away first" >&2
+  exit 2
+fi
 mkdir -p "$RUN_DIR/sessions" "$RUN_DIR/project" "$RUN_DIR/plugin"
 
 # The plugin under test is this tree's. The extension is copied next to a

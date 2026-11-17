@@ -92,8 +92,10 @@ One Pi session can use several providers. Every span therefore takes
 span names the model and provider of the call that requested it. Pi's provider
 ID is also on every chat span as `dash0.pi.provider`. Pi provider IDs map to
 the GenAI provider names. For example, `claude-code` and `anthropic` map to
-`anthropic`, and `openai-codex` maps to `openai`. The helper exports an
-unknown ID unchanged.
+`anthropic`, and `openai-codex` maps to `openai`. For an ID that is not in
+this map, the helper uses the vendor of the model name, for example `openai`
+for `gpt-5.5`. If the model name does not identify a vendor, the helper
+exports the ID unchanged.
 
 Pi reports input tokens without cache reads and cache writes, for every
 provider. The helper adds them, so `gen_ai.usage.input_tokens` includes the

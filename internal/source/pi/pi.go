@@ -98,6 +98,11 @@ type Tool struct {
 	// Subagents are the children that a foreground pi-subagents `subagent`
 	// call ran in the Pi process. A background child is a session of its own.
 	Subagents []Subagent `json:"subagents"`
+	// Usage is the model usage that the tool reported for its own work, for
+	// example a tool that calls a model itself. It does not include the usage
+	// of the tools that this tool called: each of them reports its own. Pi
+	// gives no provider or model for it.
+	Usage *Usage `json:"usage"`
 }
 
 // Pi's own session ID rule (assertValidSessionId), with a length bound.
@@ -411,6 +416,9 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		}
 		spans = append(spans, otlp.NewToolSpan(traceID, toolSpanID(tool.ID), parent, tool.Start, tool.End, event, tool.Error, toolCfg))
 		spans = append(spans, subagentSpans(traceID, toolSpanID(tool.ID), tool, cfg, base)...)
+		if span, ok := toolUsageSpan(traceID, toolSpanID(tool.ID), tool, cfg, base); ok {
+			spans = append(spans, span)
+		}
 	}
 
 	return otlp.ExportTracesRequest{ResourceSpans: []otlp.ResourceSpans{{
@@ -419,3 +427,24 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 	}}}, nil
 }
 
+// toolUsageSpan builds a chat span under a tool's span for the model usage
+// that the tool reported for its own work. Dash0's coding-agent token metrics
+// read only chat spans, so the tokens go there and not on the tool span. The
+// span takes the times of its tool. Pi gives no provider or model for this
+// usage, so the span has neither and no cost can be calculated for it.
+//
+// A subagent tool reports the total of its children as its usage. The
+// children's chat spans already carry those tokens, so a tool with children
+// gets no usage span. A count that is not valid costs only this span.
+func toolUsageSpan(traceID, toolSpanID string, tool Tool, cfg otlp.Config, base func() map[string]any) (otlp.Span, bool) {
+	if tool.Usage == nil || len(tool.Subagents) > 0 || !validUsage(*tool.Usage) {
+		return otlp.Span{}, false
+	}
+	event := base()
+	if !usageAttributes(event, *tool.Usage) {
+		return otlp.Span{}, false
+	}
+	event["dash0.pi.usage.source"] = "tool"
+	id := otlp.SpanIDFromAgentID("tool-usage:" + traceID + ":" + tool.ID)
+	return otlp.NewLLMSpan(traceID, id, toolSpanID, tool.Start, tool.End, event, false, cfg), true
+}

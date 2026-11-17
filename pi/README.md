@@ -117,8 +117,11 @@ token is on one tool. The helper puts the tokens of each such tool on a
 tool's timing. Pi gives no provider or model for this usage, so the span has
 neither, and Dash0 cannot calculate its cost. It is not a model call of the
 agent. pi-subagents reports the total of its children as the usage of its
-`subagent` and wait results. Those results get no usage span, because the
-children's own spans already carry the tokens.
+`subagent` and wait results. With its `reportUsage` setting,
+@tintinweb/pi-subagents reports the tokens of its children as the usage of
+its `Agent`, `get_subagent_result` and `steer_subagent` results. Those
+results get no usage span, because the children's own spans already carry
+the tokens.
 
 | Attribute                                 | Value                                                                                                                                                                                         |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

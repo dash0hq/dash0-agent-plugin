@@ -773,6 +773,20 @@ test("subagent and wait results give no tool usage", () => {
   });
 });
 
+// @tintinweb/pi-subagents reports its children's billed tokens as the usage
+// of these tools. Its children export their own sessions.
+test("@tintinweb/pi-subagents tool results give no tool usage", () => {
+  const usage = { input: 4, output: 460, cacheRead: 5145, cacheWrite: 5211 };
+  for (const name of ["Agent", "get_subagent_result", "steer_subagent"])
+    expect(toolUsage(name, { usage, details: {} })).toBeUndefined();
+  expect(toolUsage("read", { usage })).toEqual({
+    input: 4,
+    output: 460,
+    cache_read: 5145,
+    cache_write: 5211,
+  });
+});
+
 test("malformed tool usage gives none, never throws", () => {
   for (const result of [
     undefined,

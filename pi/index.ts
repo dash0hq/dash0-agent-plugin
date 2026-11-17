@@ -310,6 +310,16 @@ function readSubagents(
 }
 
 /**
+ * The tools of @tintinweb/pi-subagents that report the billed tokens of its
+ * children as their own usage, when its `reportUsage` setting is on.
+ */
+const childrenTotalTools: ReadonlySet<string> = new Set([
+  "Agent",
+  "get_subagent_result",
+  "steer_subagent",
+]);
+
+/**
  * The model usage that a tool reported for its own work, from Pi's tool
  * result. Pi reports the usage of each nested call on that call's own result,
  * so each token is on one tool. Undefined when the tool reported no tokens.
@@ -319,13 +329,20 @@ function readSubagents(
  * Those children are already counted: a foreground child by its row on the
  * subagent call, a background child by its own session. So these results give
  * no usage.
+ *
+ * @tintinweb/pi-subagents, with its `reportUsage` setting, reports the billed
+ * tokens of its children as the usage of the results of the tools in
+ * `childrenTotalTools`. Its children run in the parent's process, load the
+ * parent's extensions, and so export their own sessions. So these results
+ * also give no usage.
  */
 export function toolUsage(
   toolName: string,
   result: unknown,
 ): Usage | undefined {
   try {
-    if (toolName === "subagent") return undefined;
+    if (toolName === "subagent" || childrenTotalTools.has(toolName))
+      return undefined;
     const r = result as { usage?: unknown; details?: unknown } | undefined;
     const d = r?.details as { mode?: unknown; results?: unknown } | undefined;
     if (d?.mode === "management" && Array.isArray(d.results)) return undefined;

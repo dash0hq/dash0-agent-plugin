@@ -1,8 +1,8 @@
 # Feature support matrix across coding agents
 
-Seven runtimes are implemented — **Claude Code**, **Cursor**, **OpenAI Codex**,
-**GitHub Copilot CLI**, **OpenCode V2**, the **GitHub Copilot app**, and
-**Amp** — sharing Go configuration and OTLP
+Eight runtimes are implemented: **Claude Code**, **Cursor**, **OpenAI Codex**,
+**GitHub Copilot CLI**, **OpenCode V2**, the **GitHub Copilot app**,
+**Amp**, and **Pi**. They share Go configuration and OTLP
 export (`internal/harness`, `internal/otlp`). The hook adapters and the
 Copilot app adapter use `internal/pipeline`; OpenCode's stream consumer uses its tool enrichment helpers.
 They differ in how they're installed, how config reaches
@@ -215,3 +215,28 @@ shell hooks and the on-disk pipeline lifecycle. See [installation and research](
 | Failures | Bounded helper; static diagnostics; tool calls always allowed |
 | Installation | `install-amp.sh` / `install-amp.ps1`, download + checksum, three destinations: `--plugin-repo DIR` fills an Amp plugin repository (`amp clone user-plugins` / `workspace-plugins`) with `index.ts` and one `amp-on-event-<os>-<arch>` per `--platforms` entry and writes no credential file, which is also how Orbs are covered; the default installs `amp-on-event` next to `index.ts` for one machine; `--project` scopes that to one workspace. `DASH0_SOURCE_DIR` for a source build. No hook or settings-file registration |
 | Shipped skill | `dash0-configure`, registered by `index.ts` through `registerSkill` rather than a manifest, so Amp exposes it as `dash0:dash0-configure`. Registration is optional — an Amp without `registerSkill` still gets a working bridge |
+
+## Pi
+
+Pi uses an in-process TypeScript extension and the shared Go OTLP builders, as
+Amp does. See [the Pi developer guide](pi/README.md).
+
+| Capability | Pi |
+| --- | --- |
+| Harness / entrypoint | `pi` / `cmd/pi-on-event`; default `service.name` is `pi` |
+| Extension API | Pi extension events, typed against `@earendil-works/pi-coding-agent` 1.5.0 |
+| Identity/config | `harness.Pi`, `PI_PLUGIN_OPTION_*`, then non-secret `DASH0_*`. File: `.pi/dash0-agent-plugin.local.md` in the project, else `~/.pi/dash0-agent-plugin.local.md`, as for the other runtimes. Pi's agent directory is not read |
+| Session / turn | Pi session ID / one user turn from `before_agent_start` to `agent_settled`, so retries, compaction retries and queued follow-ups stay in the turn |
+| Root operation | `chat`; the last model call names it and supplies its tokens |
+| Model calls | One timed `chat` child per earlier assistant message, from `message_end`, with its own provider, model, effort level and tokens |
+| Providers in a session | Per model call, never per session. Pi provider IDs map to `gen_ai.provider.name`; `dash0.pi.provider` keeps the Pi ID |
+| Tokens | Pi's normalized usage. Input is exported inclusive of cache reads and writes. A call with no usage has no token attributes |
+| Billing mode | `subscription` when Pi's auth for the provider is a subscription login (Pi's `isSubscription` OAuth marker), else `unknown`. Never `api`: an API key can sit behind a proxy |
+| Tools | `tool_execution_start` / `_end`, so blocked, unknown and invalid calls also get a span. Nested calls, for example from `codemode`, are children of the calling tool. A tool's own model usage is a `chat` span under it with `dash0.pi.usage.source=tool` and no provider or model |
+| Aborted turns | `agent_settled.aborted`; root status stays `Unset` with `dash0.pi.turn.status=aborted`. An aborted model call has `dash0.pi.call.stop_reason=aborted`. A failed turn or call has status `Error` |
+| Forks | `dash0.pi.session.parent.id` from the session header. Sub-agents that run as separate `pi` processes are not linked |
+| Sub-agents (pi-subagents) | Foreground: `invoke_agent <agent>` under `execute_tool subagent`, with one aggregate `chat` span that carries the child's total tokens from the tool result. Background: a separate session linked by `dash0.pi.session.parent.id`, not in the parent trace |
+| Content | Prompt, last answer, tool arguments and results under the shared `omit_io` rule; thinking and image blocks dropped in the extension |
+| Failures | Detached helper; a turn never waits for export. One `dash0: telemetry unavailable` notice per session |
+| Installation | From source: build `pi/pi-on-event`, then `pi -e pi/index.ts`, `pi install <path>`, or a `settings.json` `extensions` entry. Releases build `pi-on-event-<os>-<arch>`; no installer or Pi package yet |
+| Claude Code provider | Pi's `claude-code` worker loads no settings, so the Claude Code plugin does not report the same calls. See the Pi README |

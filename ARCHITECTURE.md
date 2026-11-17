@@ -2,7 +2,7 @@
 
 The plugin starts a short-lived Go binary for each coding-agent hook event.
 It keeps session state on disk and exports OTLP JSON over HTTP. It is not a
-daemon, and the seven runtimes do not expose equivalent data.
+daemon, and the eight runtimes do not expose equivalent data.
 
 ## Event flow
 
@@ -41,6 +41,11 @@ already complete — `internal/source/amp` builds the whole turn's spans in one
 call on the shared `internal/otlp` builders. Nothing is kept on disk between
 events, so the session-state contracts below do not apply to it.
 
+Pi follows the Amp design. `pi/index.ts` runs in Pi's process and collects one
+user turn, from the prompt until Pi settles. It then spawns `cmd/pi-on-event`
+detached with the turn on stdin. `internal/source/pi` builds the spans. Pi also
+keeps no state on disk between events.
+
 ## Package ownership
 
 | Path | Responsibility | Change here when |
@@ -77,6 +82,7 @@ context. Follow existing callers before moving behavior between packages.
 | OpenCode V2 | Live V2 event stream, no hooks | `session.step.ended` token counts |
 | GitHub Copilot app | Session extension buffers the app's session events, one binary call per turn; no hooks | `assistant.usage` events, and for a first turn missed before the extension listened, the session's usage metrics |
 | Amp | Native in-process TypeScript plugin, one completed-turn envelope per turn; no hooks | `amp threads export`, polled by the helper after the turn |
+| Pi | In-process TypeScript extension, one envelope per user turn at `agent_settled`; no hooks | Each assistant message at `message_end`, with its own provider and model |
 
 Do not infer support in one runtime from support in another. Missing measurements
 are not measured zeroes. Copilot's native OTel input cannot independently prove

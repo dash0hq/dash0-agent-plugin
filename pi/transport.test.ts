@@ -423,6 +423,48 @@ test("a failing export after the session ended does not crash Pi", async () => {
   expect(crashes).toEqual([]);
 });
 
+// A turn that waited for the helper is written after the quit began. The
+// quit still waits for that write, or print mode exits mid-envelope.
+test.skipIf(process.platform === "win32")(
+  "a quit waits for the envelope of a turn that waited for its helper",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    isolate(home);
+    // A helper that reads only after a while, so an envelope larger than the
+    // pipe buffer stays pending.
+    const helper = join(dir, "helper");
+    writeFileSync(helper, "#!/bin/sh\nsleep 1\nexec cat >/dev/null\n", {
+      mode: 0o755,
+    });
+    // A bootstrap that resolves it after a short download.
+    writeFileSync(join(dir, "pi-on-event.sh"), `sleep 0.3\necho "${helper}"\n`);
+
+    const { fire } = await load(dir);
+    await fire("session_start", { reason: "startup" });
+    await fire("before_agent_start", { messageType: "user", prompt: "x" });
+    for (let i = 0; i < 16; i++) {
+      await fire("tool_execution_start", {
+        toolCallId: `t${i}`,
+        toolName: "bash",
+        args: { command: "x".repeat(16_000) },
+      });
+      await fire("tool_execution_end", {
+        toolCallId: `t${i}`,
+        toolName: "bash",
+      });
+    }
+    await fire("agent_settled", { aborted: false });
+    const started = Date.now();
+    await fire("session_shutdown", { reason: "quit" });
+    // Resolution, then the helper's delay before it reads.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1100);
+  },
+);
+
 // Only a quit ends the Pi process. A session switch, fork or reload must not
 // wait for a helper that is slow to read its envelope.
 test.skipIf(process.platform === "win32")(

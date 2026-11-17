@@ -457,7 +457,8 @@ export function fit(turn: Turn): string {
  * Collect each user turn and hand it to `send` once Pi settles. `send`
  * returns false when it could not hand the turn to a helper. It returns a
  * promise when the turn waits for a helper; it must then start the helper
- * through `own`, which skips it when a parent has kept the turn's tokens.
+ * through `own`, with the envelope `own` gives it: without the turn's tokens
+ * when a parent has kept them.
  *
  * A turn starts at before_agent_start and ends at agent_settled, not at
  * agent_end: Pi can retry, compact and retry, or run queued follow-ups after
@@ -468,7 +469,7 @@ export function register(
   send: (
     turn: Turn,
     json: string,
-    own: (start: () => boolean) => boolean,
+    own: (start: (json: string) => boolean) => boolean,
   ) => boolean | Promise<boolean>,
 ) {
   let state: Active | undefined;
@@ -652,12 +653,20 @@ export function register(
     } catch {
       // No session file: no parent can look this session up.
     }
-    // Starts a waiting turn's helper, unless a parent has claimed the
-    // turn's tokens. A started turn counts as exported at once, so no parent
-    // can read in between.
-    const own = (start: () => boolean) => {
-      if (file !== undefined && claimedSessions.has(file)) return false;
-      const started = start();
+    // Starts a waiting turn's helper. A started turn counts as exported at
+    // once, so no parent can read in between. When a parent has already
+    // claimed the turn's tokens, the turn is exported without them.
+    let claimed = false;
+    let owned = false;
+    const own = (start: (json: string) => boolean) => {
+      owned = true;
+      claimed = file !== undefined && claimedSessions.has(file);
+      if (claimed) {
+        const none = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+        const calls = turn.calls.map((call) => ({ ...call, usage: none }));
+        return start(fit({ ...turn, calls }));
+      }
+      const started = start(json);
       if (started && file !== undefined) exportedSessions.add(file);
       return started;
     };
@@ -672,7 +681,9 @@ export function register(
         pendingSessions.delete(file);
         claimedSessions.delete(file);
       }
-      if (ok) exportedSessions.add(file);
+      // A turn that went through own() was recorded when it started; a
+      // parent may have read it since.
+      if (ok && !claimed && !owned) exportedSessions.add(file);
     };
     if (typeof handed === "boolean") record(handed);
     else void handed.then(record);
@@ -881,8 +892,7 @@ export default function (pi: ExtensionAPI) {
     // The helper is still being resolved, for example during the first
     // download or in a print-mode run whose turn beat it. The turn waits,
     // counted toward the cap. A parent drops the tokens of a child that
-    // reports a handoff, so it is reported only once a helper has started,
-    // and not at all when the parent kept the tokens in the meantime.
+    // reports a handoff, so it is reported only once a helper has started.
     live++;
     const handed = resolveHelper().then((path) => {
       live--;
@@ -890,15 +900,14 @@ export default function (pi: ExtensionAPI) {
         warn?.();
         return false;
       }
-      return own(() => {
-        const written = start(path, json);
-        if (!written) {
-          warn?.();
-          return false;
-        }
-        track(written);
-        return true;
+      let written: Promise<void> | undefined;
+      const started = own((envelope) => {
+        written = start(path, envelope);
+        if (!written) warn?.();
+        return written !== undefined;
       });
+      // Settles once the envelope is written, so a quit waits for the write.
+      return started && written ? written.then(() => true) : false;
     });
     track(handed.then(() => undefined));
     return handed;

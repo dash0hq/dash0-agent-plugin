@@ -60,8 +60,8 @@ download, waits for it. When the download fails, that turn is not exported,
 Pi shows `dash0: telemetry unavailable`, and the next turn tries again. A
 pi-subagents parent leaves out a child's tokens only when the child's helper
 started before the parent read the child's result. When the parent reads
-first, it keeps the tokens and the child does not export that turn, so the
-tokens are counted once. When Pi exits within 2 seconds of a turn that is
+first, it keeps the tokens and the child exports that turn without them, so
+the tokens are counted once. When Pi exits within 2 seconds of a turn that is
 still waiting, for example in print mode during the first download, that turn
 is lost. The download outlives Pi, so the next run exports.
 

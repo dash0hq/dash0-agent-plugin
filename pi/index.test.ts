@@ -20,7 +20,9 @@ function setup(
   parentSession?: string,
   handedOff:
     | boolean
-    | ((own: (start: () => boolean) => boolean) => Promise<boolean>) = true,
+    | ((
+        own: (start: (json: string) => boolean) => boolean,
+      ) => Promise<boolean>) = true,
 ) {
   const handlers = new Map<string, Handler>();
   const sent: Turn[] = [];
@@ -539,11 +541,14 @@ test("another extension's subagent tool gives no children", () => {
 function childTurn(
   handedOff:
     | boolean
-    | ((own: (start: () => boolean) => boolean) => Promise<boolean>),
+    | ((
+        own: (start: (json: string) => boolean) => boolean,
+      ) => Promise<boolean>),
 ) {
   const child = setup("019a-child", undefined, handedOff);
   child.fire("session_start", { reason: "startup" });
   child.fire("before_agent_start", { messageType: "user", prompt: "task" });
+  child.fire("message_end", assistant("claude-haiku-4-5", "claude-code", []));
   child.fire("agent_settled", { aborted: false });
 }
 
@@ -608,46 +613,60 @@ test("a child waiting for its helper is counted once, by whoever goes first", as
   const [dropped] = parentReads();
   expect(dropped.usage.output).toBe(0);
 
-  // The parent reads first: it keeps the tokens, and the child may not
-  // start a helper.
+  // The parent reads first: it keeps the tokens, and the child exports its
+  // turn without them.
   let release: () => void = () => {};
   const resolved = new Promise<void>((r) => (release = r));
-  let owned: boolean | undefined;
+  const envelopes: string[] = [];
   childTurn(async (own) => {
     await resolved;
-    owned = own(() => true);
-    return owned;
+    return own((json) => (envelopes.push(json), true));
   });
   const [kept] = parentReads();
   expect(kept.usage.output).toBe(460);
   release();
   await resolved;
   await Bun.sleep(0);
-  expect(owned).toBe(false);
+  const [exported] = envelopes.map((json) => JSON.parse(json) as Turn);
+  expect(exported.calls).toHaveLength(1);
+  expect(exported.calls[0].model).toBe("claude-haiku-4-5");
+  expect(exported.calls[0].usage).toEqual({
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write: 0,
+  });
+  // Exported without tokens, so a later read does not drop the child's.
+  expect(parentReads()[0].usage.output).toBe(460);
 });
 
 // Two turns of one session can both wait for the same download. Both start
-// their helper, unless a parent claimed the session's tokens first.
+// their helper, without tokens when a parent claimed them first.
 test("every waiting turn of a session starts its helper", async () => {
   for (const parentFirst of [false, true]) {
     let release: () => void = () => {};
     const resolved = new Promise<void>((r) => (release = r));
-    const owned: boolean[] = [];
+    const tokens: number[] = [];
     const child = setup("019a-child", undefined, async (own) => {
       await resolved;
-      owned.push(own(() => true));
-      return owned.at(-1)!;
+      return own((json) => {
+        const t = JSON.parse(json) as Turn;
+        tokens.push(t.calls.reduce((n, c) => n + c.usage.output, 0));
+        return true;
+      });
     });
     child.fire("session_start", { reason: "startup" });
     for (const prompt of ["one", "two"]) {
       child.fire("before_agent_start", { messageType: "user", prompt });
+      child.fire("message_end", assistant("m", "p", []));
       child.fire("agent_settled", { aborted: false });
     }
     if (parentFirst) parentReads();
     release();
     await resolved;
     await Bun.sleep(0);
-    expect(owned).toEqual(parentFirst ? [false, false] : [true, true]);
+    expect(tokens).toHaveLength(2);
+    expect(tokens.every((n) => (parentFirst ? n === 0 : n > 0))).toBe(true);
     // Claims end with the last waiting turn: an exported child is dropped.
     if (!parentFirst) expect(parentReads()[0].usage.output).toBe(0);
   }

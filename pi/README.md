@@ -103,6 +103,12 @@ this from every harness except Claude Code. A model call that reports no
 tokens at all, for example one aborted before the response, has no token
 attributes.
 
+A turn or a model call that the user stopped, for example with Esc, is not an
+error. Its status stays unset, and an attribute records the stop:
+`dash0.pi.turn.status=aborted` on the turn root and
+`dash0.pi.call.stop_reason=aborted` on the call. A turn whose last model call
+failed has `dash0.pi.turn.status=error` and status `Error`.
+
 | Attribute                                 | Value                                                                                                                                                                                         |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dash0.gen_ai.tool.skill.name`, `.source` | The skill a turn loaded. `command` on the turn root for a `/skill:name` prompt. `model` on the `read` span that read a loaded skill's `SKILL.md`.                                             |
@@ -110,6 +116,8 @@ attributes.
 | `dash0.gen_ai.billing_mode`               | `subscription` when Pi used a subscription login for the call, for example Claude Pro/Max through `claude-code` or ChatGPT through `openai-codex`. Else `unknown`. On chat spans with tokens. |
 | `dash0.pi.session.parent.id`              | The session that Pi forked or cloned this session from. On every span.                                                                                                                        |
 | `dash0.pi.truncated`                      | `true` when the extension dropped content, tools or sub-agent rows to stay inside its 1 MiB envelope. Absent otherwise.                                                                       |
+| `dash0.pi.turn.status`                    | `aborted` when the user stopped the turn, `error` when its last model call failed. On the turn root. Absent on a completed turn.                                                              |
+| `dash0.pi.call.stop_reason`               | `aborted` on a model call that the user stopped.                                                                                                                                              |
 
 ## Claude Code through Pi
 

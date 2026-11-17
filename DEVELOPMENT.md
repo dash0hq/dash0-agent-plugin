@@ -342,7 +342,7 @@ dropped entirely, and `process.working_directory` is home-dir-redacted to `~`.
 |---|---|
 | Span name | `chat <model>`, `invoke_agent <agent_type>` (sub-agent), or `execute_tool <tool_name>` |
 | Span kind | `Internal` (always) |
-| Status | `Unset` normally; `Error` (with `exception.message`) on `StopFailure` / `PostToolUseFailure` |
+| Status | `Unset` normally; `Error` (with `exception.message`) on `StopFailure` / `PostToolUseFailure`. On Pi, a turn or model call that the user stopped stays `Unset`, see `dash0.pi.turn.status` |
 | Trace / parent IDs | random per turn, allocated at prompt submit; tool spans and sub-agents parent to the turn's chat span, except that a tool call carrying `agent_id` parents to the span derived from that id — the `execute_tool Agent` span that launched it — so a sub-agent's work keeps its depth instead of being flattened onto the turn |
 
 ### Resource attributes
@@ -420,7 +420,9 @@ omitted when its value is empty.
 | `dash0.amp.truncated` | `true` | Amp only. On the turn root, and only when the bridge dropped content or tools to stay inside its envelope budget, so an absent content field on such a turn is a deliberate omission rather than an empty one. Absent on turns that kept everything. |
 | `dash0.amp.usage.status` | `disabled` \| `unavailable` \| `unsupported` \| `invalid` \| `partial` \| `matched` | Amp only. On the turn root. Why the turn does or does not carry tokens; usage export is on by default; `export_usage: false` or `AMP_PLUGIN_OPTION_EXPORT_USAGE=false` turns it off. `partial` means the thread had not finished persisting when the poll gave up, so some of the turn's assistant messages carried no usage record yet; the turn still exports, with every record it did find as a child and an unlabelled root. |
 | `dash0.amp.usage.source` | `thread-export` | Amp only. On the turn root when usage was matched. Names where the tokens came from, since Amp's hooks carry none. |
-| `dash0.pi.provider` | Pi provider ID, for example `claude-code` or `openai-codex` | Pi only. On `chat` spans. The ID that Pi used for the call, before the mapping to `gen_ai.provider.name`. |
+| `dash0.pi.provider` | Pi provider ID, for example `claude-code` or `openai-codex` | Pi only. On `chat` spans of a model call. The ID that Pi used for the call, before the mapping to `gen_ai.provider.name`. |
+| `dash0.pi.turn.status` | `aborted` \| `error` | Pi only. On the turn root of a turn that did not complete. `aborted` means the user stopped the turn: the status stays `Unset`, so a stop does not count as an error. `error` comes with status `Error`. Absent on a completed turn. |
+| `dash0.pi.call.stop_reason` | `aborted` | Pi only. On the `chat` span of a model call that the user stopped, including the turn root when the last call stopped. The status stays `Unset`. A failed call has status `Error` instead. |
 | `dash0.pi.session.parent.id` | Pi session ID | Pi only. On every span of a session that Pi forked or cloned from another session. |
 | `dash0.pi.subagent.timing` | `aggregate` | Pi only. On the `chat` span under the `invoke_agent` span of a foreground pi-subagents child. The span carries the child's total tokens, and its time range is the whole child run, not one model call. Do not read it as latency. |
 | `dash0.pi.subagent.turns` | integer | Pi only. On the same span: the number of model calls in the totals. |

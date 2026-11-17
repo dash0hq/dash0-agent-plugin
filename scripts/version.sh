@@ -9,7 +9,7 @@
 #   scripts/version.sh latest                 the newest published release
 #   scripts/version.sh next patch|minor|major print what comes after it
 #
-# Eighteen files carry twenty pins (marketplace.json and package-lock.json have two each). They must agree:
+# Twenty-one files carry twenty-three pins (marketplace.json and package-lock.json have two each). They must agree:
 # a bootstrap left behind asks GitHub for a release that was never tagged, and
 # since the Claude marketplace lists this repo with no ref, that reaches users
 # on their next `plugin install`.
@@ -36,7 +36,9 @@ MANIFESTS=(
   copilot/plugin.json
   .github/plugin/marketplace.json
 )
-NPM_PACKAGE=opencode-v2
+# The npm packages. opencode-v2 also pins its version twice in package-lock.json;
+# pi has a bun.lock, which records no version of its own.
+NPM_PACKAGES=(opencode-v2 pi)
 BOOTSTRAPS=(
   claude/claude-on-event.sh
   cursor/cursor-on-event.sh
@@ -44,6 +46,7 @@ BOOTSTRAPS=(
   copilot/copilot-on-event.sh
   opencode-v2/opencode-v2-on-event.sh
   copilot-app/copilot-app-on-event.sh
+  pi/pi-on-event.sh
 )
 # The Windows bootstraps, which pin the same version in PowerShell syntax. There
 # is no Claude one: its hook runs the POSIX script.
@@ -53,6 +56,7 @@ PS_BOOTSTRAPS=(
   copilot/copilot-on-event.ps1
   opencode-v2/opencode-v2-on-event.ps1
   copilot-app/copilot-app-on-event.ps1
+  pi/pi-on-event.ps1
 )
 
 # Tag names of published, non-draft, non-prerelease releases.
@@ -74,9 +78,12 @@ pins() {
       printf '%s\t%s\n' "$f" "$(jq -r '.version' "$f")"
     fi
   done
-  printf '%s\t%s\n' "$NPM_PACKAGE/package.json" "$(jq -r '.version' "$NPM_PACKAGE/package.json")"
-  printf '%s (lockfile)\t%s\n' "$NPM_PACKAGE/package-lock.json" "$(jq -r '.version' "$NPM_PACKAGE/package-lock.json")"
-  printf '%s (root package)\t%s\n' "$NPM_PACKAGE/package-lock.json" "$(jq -r '.packages[""].version' "$NPM_PACKAGE/package-lock.json")"
+  for p in "${NPM_PACKAGES[@]}"; do
+    printf '%s\t%s\n' "$p/package.json" "$(jq -r '.version' "$p/package.json")"
+    [ -f "$p/package-lock.json" ] || continue
+    printf '%s (lockfile)\t%s\n' "$p/package-lock.json" "$(jq -r '.version' "$p/package-lock.json")"
+    printf '%s (root package)\t%s\n' "$p/package-lock.json" "$(jq -r '.packages[""].version' "$p/package-lock.json")"
+  done
   for f in "${BOOTSTRAPS[@]}"; do
     # The pinned default only. DASH0_VERSION overrides it at runtime from a
     # separate line, which this deliberately does not match.
@@ -129,7 +136,9 @@ set_version() {
   done
   # npm owns both package.json and the top-level/root-package lockfile versions.
   # Using its version command avoids a blanket rewrite of dependency versions.
-  npm version "$version" --no-git-tag-version --prefix "$NPM_PACKAGE" >/dev/null
+  for p in "${NPM_PACKAGES[@]}"; do
+    npm version "$version" --no-git-tag-version --prefix "$p" >/dev/null
+  done
   for f in "${BOOTSTRAPS[@]}"; do
     sed -i.bak "s/^VERSION=\"[^\"]*\"/VERSION=\"${version}\"/" "$f"
     rm -f "$f.bak"

@@ -36,7 +36,7 @@ const (
 // error. Claude's is deliberately excluded: it uses `set -euo pipefail` and
 // exits non-zero, and its cache filename is the unprefixed legacy one, so its
 // body cannot be identical.
-var failOpenAgents = []string{"cursor", "codex", "copilot", "opencode-v2", "copilot-app"}
+var failOpenAgents = []string{"cursor", "codex", "copilot", "opencode-v2", "copilot-app", "pi"}
 
 func bootstrapPath(t *testing.T, agent string) string {
 	t.Helper()
@@ -170,6 +170,7 @@ func runBootstrap(t *testing.T, agent, dataDir string, args ...string) (string, 
 		"COPILOT_PLUGIN_DATA="+dataDir,
 		"OPENCODE_V2_PLUGIN_DATA="+dataDir,
 		"COPILOT_APP_PLUGIN_DATA="+dataDir,
+		"PI_PLUGIN_DATA="+dataDir,
 		"DASH0_VERSION=",
 	)
 	out, err := cmd.CombinedOutput()
@@ -194,7 +195,7 @@ func TestRunBootstrapIgnoresTheCallersDataDir(t *testing.T) {
 			}
 			callers := t.TempDir()
 			stubIn(callers, agent, "CALLERS-RAN")
-			for _, v := range []string{"DASH0_PLUGIN_DATA", "PLUGIN_DATA", "COPILOT_PLUGIN_DATA", "COPILOT_APP_PLUGIN_DATA"} {
+			for _, v := range []string{"DASH0_PLUGIN_DATA", "PLUGIN_DATA", "COPILOT_PLUGIN_DATA", "COPILOT_APP_PLUGIN_DATA", "PI_PLUGIN_DATA"} {
 				t.Setenv(v, callers)
 			}
 			dataDir := t.TempDir()

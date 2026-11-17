@@ -524,18 +524,29 @@ jobs:
           AUTH=$(echo "$RESULT" | jq '[.requests[] | select(.auth == "Bearer e2e-release-test-token")] | length')
           [ "$AUTH" -ge 1 ] || { echo "::error::no request carried the auth header"; exit 1; }
 
-  # The OpenCode V2 plugin's npm package, so `opencode plugin add
-  # @dash0/agent-plugin-opencode-v2` works. After the release job, because the
-  # package's bootstrap downloads this version's binary from the GitHub release.
-  # npm versions are immutable, so a re-run that finds the version already
-  # published skips instead of failing.
+  # The npm packages, so `opencode plugin add @dash0/agent-plugin-opencode-v2`
+  # and `pi install npm:@dash0/agent-plugin-pi` work. After the release job,
+  # because each package's bootstrap downloads this version's binary from the
+  # GitHub release. npm versions are immutable, so a re-run that finds the
+  # version already published skips instead of failing. One job per package, so
+  # a failure in one is re-run alone and never holds back the other.
   #
-  # Published with npm trusted publishing (OIDC), not a token. The package's
+  # Published with npm trusted publishing (OIDC), not a token. Each package's
   # trusted publisher on npmjs.com must name repository dash0hq/dash0-agent-plugin,
   # workflow release.yml and environment release (see DEVELOPMENT.md).
   npm:
-    name: Publish the OpenCode V2 npm package
+    name: Publish the ${{ matrix.package }} npm package
     needs: [plan, release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: opencode-v2
+            package: '@dash0/agent-plugin-opencode-v2'
+            install: opencode plugin add
+          - dir: pi
+            package: '@dash0/agent-plugin-pi'
+            install: pi install
     # Not only on success: the release job's last steps (asset check, moving
     # main) can fail after the GitHub release is public, and that release
     # cannot be redone. Whether to publish is decided by the release itself.
@@ -589,20 +600,25 @@ jobs:
 
       - name: Publish
         if: steps.published.outputs.yes == 'true'
-        working-directory: opencode-v2
+        working-directory: ${{ matrix.dir }}
+        env:
+          PACKAGE: ${{ matrix.package }}
+          INSTALL: ${{ matrix.install }}
         run: |
           set -euo pipefail
+          [ "$(jq -r .name package.json)" = "$PACKAGE" ] \
+            || { echo "::error::$PWD/package.json is not $PACKAGE"; exit 1; }
           [ "$(jq -r .version package.json)" = "$VERSION" ] \
             || { echo "::error::package.json does not pin $VERSION"; exit 1; }
-          if npm view "@dash0/agent-plugin-opencode-v2@$VERSION" version >/dev/null 2>&1; then
-            echo "@dash0/agent-plugin-opencode-v2@$VERSION is already published"
+          if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+            echo "$PACKAGE@$VERSION is already published"
             exit 0
           fi
           # A failure, so a release without its npm package is not missed. It
           # cannot block or undo the GitHub release, which is already public:
           # fix the trusted publisher and re-run this job, which publishes from the tag.
           if ! npm publish --access public; then
-            msg="@dash0/agent-plugin-opencode-v2@$VERSION was not published, so \`opencode plugin add\` cannot install it. Check the package's trusted publisher on npmjs.com (repository dash0hq/dash0-agent-plugin, workflow release.yml, environment release), then re-run this job."
+            msg="$PACKAGE@$VERSION was not published, so \`$INSTALL\` cannot install it. Check the package's trusted publisher on npmjs.com (repository dash0hq/dash0-agent-plugin, workflow release.yml, environment release), then re-run this job."
             echo "::error::$msg"
             echo "> [!CAUTION]"$'\n'"> $msg" >>"$GITHUB_STEP_SUMMARY"
             exit 1

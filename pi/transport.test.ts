@@ -5,8 +5,10 @@ import { expect, onTestFinished, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -231,6 +233,116 @@ test("a missing helper or a failing export never throws into Pi", async () => {
   await Bun.sleep(100);
   expect(notices).toHaveLength(1);
 });
+
+// The npm package ships index.ts and the bootstraps, no helper. The extension
+// then runs the bootstrap, which runs the helper it cached on the first turn.
+test.skipIf(process.platform === "win32")(
+  "without a local helper the bootstrap runs the cached release helper",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    copyFileSync(
+      fileURLToPath(new URL("./pi-on-event.sh", import.meta.url)),
+      join(dir, "pi-on-event.sh"),
+    );
+    isolate(home);
+    const data = join(dir, "data");
+    process.env.PI_PLUGIN_DATA = data;
+    const version = /^VERSION="(.+)"$/m.exec(
+      readFileSync(join(dir, "pi-on-event.sh"), "utf8"),
+    )![1];
+    const os = process.platform;
+    const arch = process.arch === "x64" ? "amd64" : process.arch;
+    // A cached helper, so the bootstrap does not download one.
+    mkdirSync(join(data, "bin"), { recursive: true });
+    const received = join(dir, "received.json");
+    writeFileSync(
+      join(data, "bin", `pi-on-event-${version}-${os}-${arch}`),
+      `#!/bin/sh\ncat >"${received}.tmp" && mv "${received}.tmp" "${received}"\n`,
+      { mode: 0o755 },
+    );
+
+    const { fire, notices } = await load(dir);
+    await turn(fire);
+    await fire("session_shutdown", { reason: "quit" });
+    for (let i = 0; i < 100 && !existsSync(received); i++) await Bun.sleep(50);
+
+    expect(notices).toEqual([]);
+    expect(JSON.parse(readFileSync(received, "utf8")).session_id).toBe(
+      "019a-transport",
+    );
+  },
+);
+
+// On Windows, PowerShell only resolves the helper; the extension spawns the
+// helper itself, so the envelope's bytes reach it unchanged. Runs the Windows
+// branch on a POSIX host, with a stand-in for System32's powershell.exe.
+test.skipIf(process.platform === "win32")(
+  "on Windows the bootstrap resolves the helper and the extension runs it",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    isolate(home);
+    const received = join(dir, "received.json");
+    const helper = join(dir, "cache", "pi-on-event.exe");
+    mkdirSync(join(dir, "cache"));
+    writeFileSync(
+      helper,
+      `#!/bin/sh\ncat >"${received}.tmp" && mv "${received}.tmp" "${received}"\n`,
+      { mode: 0o755 },
+    );
+    const system = join(dir, "System32", "WindowsPowerShell", "v1.0");
+    mkdirSync(system, { recursive: true });
+    const calls = join(dir, "powershell-args");
+    writeFileSync(
+      join(system, "powershell.exe"),
+      // Fails open with no path the first time, as on a failed download.
+      `#!/bin/sh\necho "$@" >>"${calls}"\n[ -e "${calls}.ok" ] && echo "${helper}"\ntouch "${calls}.ok"\n`,
+      { mode: 0o755 },
+    );
+    process.env.SystemRoot = dir;
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    let loaded;
+    try {
+      loaded = await load(dir);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+    const { fire, notices } = loaded;
+    const resolutions = () => readFileSync(calls, "utf8").trim().split("\n");
+
+    // The failed resolution loses the turn, with the notice.
+    await turn(fire);
+    for (let i = 0; i < 100 && notices.length === 0; i++) await Bun.sleep(20);
+    expect(notices).toEqual(["dash0: telemetry unavailable"]);
+    expect(existsSync(received)).toBe(false);
+
+    // The next turn resolves again and reaches the helper.
+    await turn(fire);
+    for (let i = 0; i < 100 && !existsSync(received); i++) await Bun.sleep(50);
+    const envelope = JSON.parse(readFileSync(received, "utf8"));
+    expect(envelope.session_id).toBe("019a-transport");
+    expect(resolutions()).toEqual([
+      `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${join(dir, "pi-on-event.ps1")} --resolve-binary`,
+      `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${join(dir, "pi-on-event.ps1")} --resolve-binary`,
+    ]);
+
+    // A resolved path is kept for later turns.
+    rmSync(received);
+    await turn(fire);
+    for (let i = 0; i < 100 && !existsSync(received); i++) await Bun.sleep(50);
+    expect(existsSync(received)).toBe(true);
+    expect(resolutions()).toHaveLength(2);
+    await fire("session_shutdown", { reason: "quit" });
+  },
+);
 
 // The extension caps detached helpers. A turn over the cap is not exported,
 // so the user gets the same notice as for a failed export.

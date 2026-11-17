@@ -36,6 +36,9 @@ var skillManifests = []struct {
 	// relative to the installed plugin directory, which the installers lay out
 	// to match this one.
 	{"amp", "", "amp/skills"},
+	// Pi's manifest is the "pi" key of pi/package.json, whose skills list
+	// names this directory.
+	{"pi", "", "pi/skills"},
 }
 
 // TestSkillFrontmatterParses parses the frontmatter of every shipped skill with

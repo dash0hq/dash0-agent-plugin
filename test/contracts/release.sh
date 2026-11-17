@@ -210,17 +210,18 @@ echo "== What a bump actually writes =="
 ( cd "$REPO" && tar cf - scripts/version.sh \
     .claude-plugin/plugin.json .cursor-plugin/plugin.json .codex-plugin/plugin.json \
     copilot/plugin.json .github/plugin/marketplace.json \
-    opencode-v2/package.json opencode-v2/package-lock.json \
+    opencode-v2/package.json opencode-v2/package-lock.json pi/package.json \
     claude/claude-on-event.sh cursor/cursor-on-event.sh \
     codex/codex-on-event.sh copilot/copilot-on-event.sh \
     copilot-app/copilot-app-on-event.sh \
     cursor/cursor-on-event.ps1 codex/codex-on-event.ps1 \
     copilot/copilot-on-event.ps1 opencode-v2/opencode-v2-on-event.sh \
-    opencode-v2/opencode-v2-on-event.ps1 copilot-app/copilot-app-on-event.ps1 ) | tar xf - -C "$sandbox"
+    opencode-v2/opencode-v2-on-event.ps1 copilot-app/copilot-app-on-event.ps1 \
+    pi/pi-on-event.sh pi/pi-on-event.ps1 ) | tar xf - -C "$sandbox"
 
 if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
   case "$out" in
-    *"all 20 pins agree on 9.9.9"*) echo "  ok   a bump rewrites every pin" ;;
+    *"all 23 pins agree on 9.9.9"*) echo "  ok   a bump rewrites every pin" ;;
     *) echo "  FAIL a bump rewrites every pin"; printf '    %s\n' "$out"; fail=1 ;;
   esac
   # Named individually, because `check` compares the pins to each other: were a
@@ -228,14 +229,14 @@ if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
   # the old version — and check would pass.
   for f in claude/claude-on-event.sh cursor/cursor-on-event.sh \
            codex/codex-on-event.sh copilot/copilot-on-event.sh opencode-v2/opencode-v2-on-event.sh \
-           copilot-app/copilot-app-on-event.sh; do
+           copilot-app/copilot-app-on-event.sh pi/pi-on-event.sh; do
     grep -q '^VERSION="9.9.9"$' "$sandbox/$f" \
       || { echo "  FAIL $f still pins $(grep -m1 '^VERSION=' "$sandbox/$f")"; fail=1; }
   done
   # PowerShell pins the same version in its own syntax, so its rewrite is a
   # separate sed that can drift on its own.
   for f in cursor/cursor-on-event.ps1 codex/codex-on-event.ps1 copilot/copilot-on-event.ps1 opencode-v2/opencode-v2-on-event.ps1 \
-           copilot-app/copilot-app-on-event.ps1; do
+           copilot-app/copilot-app-on-event.ps1 pi/pi-on-event.ps1; do
     grep -q "^\$Version = '9.9.9'$" "$sandbox/$f" \
       || { echo "  FAIL $f did not get the new version"; fail=1; }
   done
@@ -243,6 +244,8 @@ if out=$("$sandbox/scripts/version.sh" set 9.9.9 2>&1); then
     || { echo "  FAIL marketplace.json metadata.version was not rewritten"; fail=1; }
   [ "$(jq -r '.packages[""].version' "$sandbox/opencode-v2/package-lock.json")" = "9.9.9" ] \
     || { echo "  FAIL package-lock.json root package version was not rewritten"; fail=1; }
+  [ "$(jq -r .version "$sandbox/pi/package.json")" = "9.9.9" ] \
+    || { echo "  FAIL pi/package.json was not rewritten"; fail=1; }
   # The refusal, now that every pin in the sandbox reads 9.9.9.
   refuse "a bump to the version already pinned" "nothing to prepare" -- \
     "$sandbox/scripts/version.sh" set 9.9.9

@@ -198,22 +198,26 @@ The Developer ID certificate expires after 5 years. Renew it and replace both
 and a `TeamIdentifier`, and `spctl -a -vvv -t install <binary>` must show
 `source=Notarized Developer ID`.
 
-### The npm package
+### The npm packages
 
-After the release, the `npm` job publishes `@dash0/agent-plugin-opencode-v2` at the
-release version, from the release tag. It uses npm trusted publishing (OIDC),
-so there is no token: npmjs.com accepts the publish because the package's
-trusted publisher names repository `dash0hq/dash0-agent-plugin`, workflow
-`release.yml` and environment `release`. All three must match exactly.
+After the release, the `npm` job publishes `@dash0/agent-plugin-opencode-v2`
+(from `opencode-v2/`) and `@dash0/agent-plugin-pi` (from `pi/`) at the release
+version, from the release tag, one matrix job per package. Neither package
+carries a binary: each bootstrap downloads this release's helper. It uses npm
+trusted publishing (OIDC), so there is no token: npmjs.com accepts the publish
+because each package's trusted publisher names repository
+`dash0hq/dash0-agent-plugin`, workflow `release.yml` and environment `release`.
+All three must match exactly.
 
-One-time setup, by someone who can publish to the `@dash0` npm scope. npm only
-offers the trusted-publisher setting on a package that exists, so create the
-package first, then add the trusted publisher with the three values above and
-"Allow `npm publish`" checked: the job publishes directly rather than staging.
-Until that is done, the release's `npm` job fails with a message saying so.
+Each package has its trusted publisher set up on npmjs.com with the three values
+above and "Allow `npm publish`" checked: the job publishes directly rather than
+staging. A new package needs the same one-time setup by someone who can publish
+to the `@dash0` npm scope. npm only offers the trusted-publisher setting on a
+package that exists, so create the package first. Until that is done, its
+`npm` job fails with a message saying so.
 
-A failed `npm` job never touches the GitHub release or `main`. Fix the cause and
-use "Re-run failed jobs" on that job alone. That is safe here, unlike the
+A failed `npm` job never touches the GitHub release, `main` or the other
+package. Fix the cause and use "Re-run failed jobs" on that job alone. That is safe here, unlike the
 recovery above, because the job only reads the tag and skips a version that is
 already on npm.
 
@@ -229,7 +233,7 @@ anything — a rollback, or a build under test:
 export DASH0_VERSION=0.1.24
 ```
 
-The five POSIX bootstraps read it, and the cache filename embeds the version, so
+The POSIX bootstraps read it, and the cache filename embeds the version, so
 it never collides with the pinned build. They validate it against the same shape
 a release uses, because it reaches both a download URL and a filesystem path: a
 value containing `..` retargets the download at another repository, and
@@ -239,7 +243,7 @@ attacker's own manifest.
 Two gaps, neither closed here:
 
 - **The Windows hooks ignore it.** `cursor-on-event.ps1`, `codex-on-event.ps1`,
-  `copilot-on-event.ps1`, `opencode-v2-on-event.ps1`, and `copilot-app-on-event.ps1` always use
+  `copilot-on-event.ps1`, `opencode-v2-on-event.ps1`, `copilot-app-on-event.ps1`, and `pi-on-event.ps1` always use
   their pinned `$Version`. Confusingly,
   `install-cursor.ps1` and `install-codex.ps1` *do* read it, so on Windows the
   variable is honoured at install time and ignored at event time.

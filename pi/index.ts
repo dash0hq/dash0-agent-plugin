@@ -3,7 +3,8 @@
 
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import type { Socket } from "node:net";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   ExtensionAPI,
@@ -649,15 +650,76 @@ export default function (pi: ExtensionAPI) {
   // uses the plain name.
   const arch = process.arch === "x64" ? "amd64" : process.arch;
   const perPlatform = beside(`./pi-on-event-${os}-${arch}${exe}`);
-  const binary = existsSync(perPlatform)
+  const plain = beside(`./pi-on-event${exe}`);
+  const local = existsSync(perPlatform)
     ? perPlatform
-    : beside(`./pi-on-event${exe}`);
+    : existsSync(plain)
+      ? plain
+      : undefined;
   // `pi install` from git or npm does not keep the exec bit everywhere.
   try {
-    chmodSync(binary, 0o755);
+    if (local) chmodSync(local, 0o755);
   } catch {
-    // Read-only or absent: spawn reports the real problem.
+    // Read-only: spawn reports the real problem.
   }
+  // The npm package ships no helper. Its bootstrap downloads the release
+  // helper on the first turn, verifies its checksum and caches it. On POSIX
+  // the bootstrap then execs the helper with the envelope on stdin. On
+  // Windows it only prints the helper's path, and the helper is spawned
+  // directly: through a detached PowerShell, the envelope would be decoded
+  // with the console code page and the helper would open a console window.
+  const windows = process.platform === "win32";
+  // A full path, because Windows looks for a bare name in the cwd (the
+  // user's project) before PATH.
+  const powershell = join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  let resolving: Promise<string | undefined> | undefined;
+  const resolveHelper = () =>
+    (resolving ??= new Promise<string | undefined>((done) => {
+      let out = "";
+      try {
+        const child = spawn(
+          powershell,
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            beside("./pi-on-event.ps1"),
+            "--resolve-binary",
+          ],
+          {
+            stdio: ["ignore", "pipe", "ignore"],
+            detached: true,
+            windowsHide: true,
+          },
+        );
+        // A download must not keep a Pi that is done from exiting, and must
+        // outlive it: Windows kills a child that is not detached when Pi
+        // exits. The download then completes for the next run.
+        child.unref();
+        // A pipe is a Socket, which Node types as a plain Readable.
+        (child.stdout as Socket).unref();
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (data: string) => (out += data));
+        child.on("error", () => done(undefined));
+        child.on("close", (code) =>
+          done(code === 0 && out.trim() !== "" ? out.trim() : undefined),
+        );
+      } catch {
+        done(undefined);
+      }
+    }).then((path) => {
+      // The bootstrap fails open with no path. The next turn tries again.
+      if (path === undefined) resolving = undefined;
+      return path;
+    }));
 
   let cwd: string | undefined;
   let warned = false;
@@ -697,15 +759,20 @@ export default function (pi: ExtensionAPI) {
     clearTimeout(timer);
   });
 
-  register(pi, (_turn, json) => {
-    // The turn is lost, so the user hears about it as for a failed export.
-    if (live >= maxHelpers) {
-      warn?.();
-      return false;
-    }
+  const track = (promise: Promise<void>) => {
+    pending.add(promise);
+    void promise.then(() => pending.delete(promise));
+  };
+
+  /** Starts a detached helper; returns when its envelope is written. */
+  const start = (
+    command: string,
+    args: string[],
+    json: string,
+  ): Promise<void> | undefined => {
     let child;
     try {
-      child = spawn(binary, [], {
+      child = spawn(command, args, {
         // The helper resolves the project configuration and the repository
         // from its working directory.
         cwd,
@@ -716,8 +783,7 @@ export default function (pi: ExtensionAPI) {
         windowsHide: true,
       });
     } catch {
-      warn?.();
-      return false;
+      return undefined;
     }
     live++;
     child.unref();
@@ -728,14 +794,45 @@ export default function (pi: ExtensionAPI) {
       live--;
       if (failed) warn?.();
     };
-    child.on("error", () => end(true));
+    child.on("error", () => {
+      // The cached helper is gone, so the next turn resolves it again.
+      resolving = undefined;
+      end(true);
+    });
     child.on("close", (code) => end(code !== 0));
-    const written = new Promise<void>((resolve) => {
+    return new Promise<void>((resolve) => {
       child.stdin.on("error", () => resolve());
       child.stdin.end(json, () => resolve());
     });
-    pending.add(written);
-    void written.then(() => pending.delete(written));
+  };
+
+  register(pi, (_turn, json) => {
+    // The turn is lost, so the user hears about it as for a failed export.
+    if (live >= maxHelpers) {
+      warn?.();
+      return false;
+    }
+    if (local || !windows) {
+      const written = local
+        ? start(local, [], json)
+        : start("bash", [beside("./pi-on-event.sh")], json);
+      if (!written) {
+        warn?.();
+        return false;
+      }
+      track(written);
+      return true;
+    }
+    // Counted while it waits, so a slow first download still hits the cap.
+    live++;
+    track(
+      resolveHelper().then((path) => {
+        live--;
+        const written = path === undefined ? undefined : start(path, [], json);
+        if (!written) warn?.();
+        return written;
+      }),
+    );
     return true;
   });
 }

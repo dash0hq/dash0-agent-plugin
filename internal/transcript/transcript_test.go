@@ -6,6 +6,7 @@ package transcript
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -411,6 +412,156 @@ func TestReadTurnUsageSkillOnlyWithoutTrailingChat(t *testing.T) {
 	assert.Equal(t, int64(87), usage.OutputTokens)
 	assert.Equal(t, int64(10513), usage.CacheCreationInputTokens)
 	assert.Equal(t, int64(20977), usage.CacheReadInputTokens)
+}
+
+// /loop wake-ups arrive as isMeta user prompts with a new promptId. Each one
+// starts a turn, so each Stop reports only that turn's calls, not the running
+// total since the last typed prompt.
+func TestReadTurnUsageMetaPromptWithNewPromptIDStartsTurn(t *testing.T) {
+	turns := [][]string{
+		{
+			`{"type":"user","promptId":"p0","message":{"role":"user","content":"/loop 10m check CI"}}`,
+			`{"type":"assistant","message":{"id":"msg_0a","role":"assistant","model":"model-0","stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":1,"output_tokens":10,"cache_read_input_tokens":1000}}}`,
+			`{"type":"user","promptId":"p0","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu0","content":"ok"}]}}`,
+			`{"type":"assistant","message":{"id":"msg_0b","role":"assistant","model":"model-0","stop_reason":"end_turn","content":[{"type":"text","text":"scheduled"}],"usage":{"input_tokens":1,"output_tokens":20,"cache_read_input_tokens":2000}}}`,
+		},
+	}
+	for i, id := range []string{"w1", "w2", "w3"} {
+		n := strconv.Itoa(i + 1)
+		turn := []string{
+			`{"type":"user","isMeta":true,"promptId":"` + id + `","message":{"role":"user","content":"check CI"}}`,
+			`{"type":"assistant","message":{"id":"msg_` + n + `a","role":"assistant","model":"model-` + n + `","stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":1,"output_tokens":5,"cache_read_input_tokens":100}}}`,
+			`{"type":"user","promptId":"` + id + `","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu` + n + `","content":"ok"}]}}`,
+			`{"type":"user","isMeta":true,"promptId":"` + id + `","message":{"role":"user","content":"Skill /x is already loaded above; instructions unchanged."}}`,
+			`{"type":"assistant","message":{"id":"msg_` + n + `b","role":"assistant","model":"model-` + n + `","stop_reason":"end_turn","content":[{"type":"text","text":"still green"}],"usage":{"input_tokens":1,"output_tokens":7,"cache_read_input_tokens":200}}}`,
+		}
+		turns = append(turns, turn)
+	}
+
+	var lines []string
+	for i, turn := range turns {
+		path := filepath.Join(t.TempDir(), "transcript.jsonl")
+
+		writeTranscript(t, path, append(lines, turn[0]))
+		complete, err := TurnComplete(path)
+		require.NoError(t, err)
+		assert.False(t, complete, "turn %d has no assistant entry yet", i)
+		model, hasAssistant := ReadCurrentTurnModel(path)
+		assert.False(t, hasAssistant, "turn %d", i)
+		assert.Empty(t, model, "turn %d", i)
+
+		lines = append(lines, turn...)
+		writeTranscript(t, path, lines)
+
+		usage, err := ReadTurnUsage(path)
+		require.NoError(t, err)
+		require.NotNil(t, usage)
+		if i == 0 {
+			assert.Equal(t, int64(3000), usage.CacheReadInputTokens, "turn %d", i)
+			assert.Equal(t, int64(30), usage.OutputTokens, "turn %d", i)
+		} else {
+			assert.Equal(t, int64(300), usage.CacheReadInputTokens, "turn %d", i)
+			assert.Equal(t, int64(12), usage.OutputTokens, "turn %d", i)
+		}
+		model, _ = ReadCurrentTurnModel(path)
+		assert.Equal(t, "model-"+strconv.Itoa(i), model)
+		complete, err = TurnComplete(path)
+		require.NoError(t, err)
+		assert.True(t, complete, "turn %d", i)
+	}
+}
+
+func TestReadTurnSkillCommandMetaPromptWithNewPromptIDStartsTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","promptId":"p0","message":{"role":"user","content":"<command-name>/writing:unslop</command-name>"}}`,
+		`{"type":"user","isMeta":true,"promptId":"p0","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /home/u/.claude/skills/unslop\n\n# Unslop"}]}}`,
+		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+	})
+	require.Equal(t, "writing:unslop", ReadTurnSkillCommand(path))
+
+	writeTranscript(t, path, []string{
+		`{"type":"user","promptId":"p0","message":{"role":"user","content":"<command-name>/writing:unslop</command-name>"}}`,
+		`{"type":"user","isMeta":true,"promptId":"p0","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /home/u/.claude/skills/unslop\n\n# Unslop"}]}}`,
+		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"user","isMeta":true,"promptId":"w1","message":{"role":"user","content":"check CI"}}`,
+	})
+	assert.Empty(t, ReadTurnSkillCommand(path), "the wake-up turn invoked no skill")
+}
+
+// A meta relay whose promptId was seen before belongs to an earlier prompt, even
+// when another promptId sits between them (replayed history, a mid-turn message).
+func TestReadTurnUsageMetaPromptWithSeenPromptIDIsNotBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","promptId":"p2","message":{"role":"user","content":"earlier"}}`,
+		`{"type":"assistant","message":{"id":"msg_old","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":1,"output_tokens":100}}}`,
+		`{"type":"user","promptId":"p5","message":{"role":"user","content":"current"}}`,
+		`{"type":"user","promptId":"p2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]}}`,
+		`{"type":"assistant","message":{"id":"msg_A","role":"assistant","content":[{"type":"tool_use","name":"Skill"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"user","isMeta":true,"promptId":"p5","message":{"role":"user","content":"Skill /x is already loaded above; instructions unchanged."}}`,
+		`{"type":"assistant","message":{"id":"msg_B","role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":1,"output_tokens":3}}}`,
+	})
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(5), usage.OutputTokens)
+}
+
+// The continuation nudge keeps the wake-up's promptId, so it extends the
+// wake-up turn instead of starting one.
+func TestTurnCompleteNudgeInsideMetaStartedTurnIsIncomplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	lines := []string{
+		`{"type":"user","promptId":"p0","message":{"role":"user","content":"/loop 10m check CI"}}`,
+		`{"type":"assistant","message":{"id":"msg_0","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"scheduled"}],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		`{"type":"user","isMeta":true,"promptId":"w1","message":{"role":"user","content":"check CI"}}`,
+		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"..."}],"usage":{"input_tokens":1,"output_tokens":10}}}`,
+		`{"type":"user","isMeta":true,"promptId":"w1","message":{"role":"user","content":"[Your previous response had no visible output. Please continue and produce a user-visible response.]"}}`,
+	}
+	writeTranscript(t, path, lines)
+	complete, err := TurnComplete(path)
+	require.NoError(t, err)
+	assert.False(t, complete)
+
+	writeTranscript(t, path, append(lines,
+		`{"type":"assistant","message":{"id":"msg_2","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"green"}],"usage":{"input_tokens":1,"output_tokens":20}}}`,
+	))
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(30), usage.OutputTokens)
+}
+
+// A transcript started by a Claude Code version that wrote no promptId gives the
+// first meta prompt nothing to compare with, so it does not start a turn.
+func TestReadTurnUsageMetaPromptAfterPromptWithoutIDIsNotBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"user","isMeta":true,"promptId":"w1","message":{"role":"user","content":"check CI"}}`,
+		`{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":1,"output_tokens":3}}}`,
+	})
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(5), usage.OutputTokens)
+}
+
+// The first promptId seen has nothing to compare with, so an isMeta entry
+// there does not start a turn.
+func TestReadTurnUsageFirstMetaPromptIDIsNotBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"user","isMeta":true,"promptId":"w1","message":{"role":"user","content":"check CI"}}`,
+		`{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":1,"output_tokens":3}}}`,
+	})
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(5), usage.OutputTokens)
 }
 
 func TestTurnCompleteTerminalAssistant(t *testing.T) {

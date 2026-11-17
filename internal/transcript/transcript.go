@@ -58,6 +58,7 @@ func (u *Usage) add(eff usageData) {
 type transcriptEntry struct {
 	Type      string           `json:"type"`
 	RequestID string           `json:"requestId"`
+	PromptID  string           `json:"promptId"`
 	IsMeta    bool             `json:"isMeta"`
 	Message   *messageEnvelope `json:"message"`
 }
@@ -149,8 +150,8 @@ type contentType struct {
 }
 
 // ReadTurnUsage reads the transcript file and returns aggregated token usage
-// for the most recent turn (all assistant messages since the last real user
-// message). Returns nil when no usage data is found.
+// for the most recent turn (all assistant messages since the last turn start,
+// see turnBoundary). Returns nil when no usage data is found.
 //
 // Streaming duplicates (same requestId across multiple transcript entries) are
 // deduplicated so usage is counted only once per API call. When a call was
@@ -193,9 +194,10 @@ func ReadTurnUsage(transcriptPath string) (*Usage, error) {
 	// entryCount seeds a synthetic key for entries carrying neither id, so
 	// distinct calls are still counted separately rather than merged.
 	entryCount := 0
+	var boundary turnBoundary
 
 	err := forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
-		if isRealUserMessage(entry) {
+		if boundary.startsTurn(entry) {
 			// New turn — the calls counted so far belong to the turn that just
 			// ended, so a replay of them later in the file must not count again.
 			for _, key := range callOrder {
@@ -283,7 +285,7 @@ var terminalStopReasons = map[string]bool{
 }
 
 // TurnComplete reports whether the most recent assistant message of the current
-// turn (the entries since the last real user message) is terminal — i.e. the
+// turn (the entries since the last turn start) is terminal — i.e. the
 // turn has been fully written to the transcript.
 //
 // Claude Code flushes the transcript asynchronously and may lag the in-memory
@@ -296,8 +298,9 @@ func TurnComplete(transcriptPath string) (bool, error) {
 	var sawAssistant bool
 	var continuationPending bool
 	var lastAssistantWasVisible bool
+	var boundary turnBoundary
 	err := forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
-		if isRealUserMessage(entry) {
+		if boundary.startsTurn(entry) {
 			// New turn — only the current turn's terminal state matters.
 			lastReason = ""
 			sawAssistant = false
@@ -415,8 +418,9 @@ var skillBaseDirPattern = regexp.MustCompile(`Base directory for this skill: ([^
 // because the tag is written by the expansion, not by the user's text.
 func ReadTurnSkillCommand(transcriptPath string) string {
 	var command, skillDir string
+	var boundary turnBoundary
 	_ = forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
-		if isRealUserMessage(entry) {
+		if boundary.startsTurn(entry) {
 			// New turn — only the current turn's invocation counts. The entry that
 			// carries the command tag IS the turn's user message, so read it here.
 			command, skillDir = "", ""
@@ -473,7 +477,7 @@ func SubagentPath(sessionTranscriptPath, sessionID, agentID string) string {
 
 // ReadModel reads the transcript file and returns the model from the most
 // recent assistant message in the current turn, or empty string if none is
-// found. A new real user message resets the result so a tool hook that beats
+// found. A new turn start resets the result so a tool hook that beats
 // the current assistant flush waits instead of reusing the previous turn.
 func ReadModel(transcriptPath string) string {
 	model, _ := ReadCurrentTurnModel(transcriptPath)
@@ -485,8 +489,9 @@ func ReadModel(transcriptPath string) string {
 // transcript append between separate model and readiness checks from making a
 // caller treat the wrong turn as ready.
 func ReadCurrentTurnModel(transcriptPath string) (model string, hasAssistant bool) {
+	var boundary turnBoundary
 	_ = forEachEntry(transcriptPath, func(entry transcriptEntry) bool {
-		if isRealUserMessage(entry) {
+		if boundary.startsTurn(entry) {
 			model = ""
 			hasAssistant = false
 			return true
@@ -544,12 +549,36 @@ func forEachEntry[T any](transcriptPath string, fn func(entry T) bool) error {
 	return nil
 }
 
+// turnBoundary finds the user entries that start a turn. Use one per scan.
+type turnBoundary struct {
+	seenPromptIDs map[string]bool
+}
+
+// startsTurn reports whether entry is a typed prompt or an isMeta prompt with
+// a promptId not seen before. Claude Code gives every entry of a turn the
+// turn's promptId, so /loop wake-ups start a turn and mid-turn relays do not.
+func (b *turnBoundary) startsTurn(entry transcriptEntry) bool {
+	if entry.Type != "user" {
+		return false
+	}
+	isNewPrompt := entry.PromptID != "" && len(b.seenPromptIDs) > 0 && !b.seenPromptIDs[entry.PromptID]
+	if entry.PromptID != "" {
+		if b.seenPromptIDs == nil {
+			b.seenPromptIDs = make(map[string]bool)
+		}
+		b.seenPromptIDs[entry.PromptID] = true
+	}
+	if isRealUserMessage(entry) {
+		return true
+	}
+	return entry.IsMeta && isNewPrompt
+}
+
 // isRealUserMessage returns true if the entry is a user message that is NOT
 // a tool_result relay and NOT an injected meta message. Typed prompts carry
 // content as a plain string; tool-result relays carry an array with
-// content[0].type == "tool_result", and meta messages (isMeta, e.g. the
-// skill-loading relay injected mid-turn) both should not reset the turn
-// boundary — otherwise usage accumulated earlier in the turn is discarded.
+// content[0].type == "tool_result". An injected meta message starts a turn
+// only through turnBoundary.
 func isRealUserMessage(entry transcriptEntry) bool {
 	if entry.Type != "user" {
 		return false

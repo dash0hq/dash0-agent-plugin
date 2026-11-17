@@ -440,3 +440,13 @@ func TestBranchFallsBackToTheWorkingDirectory(t *testing.T) {
 		})
 	}
 }
+
+// Without a configured agent name, Amp's traces keep Amp's identity and are
+// not filed under another agent's default.
+func TestTraceWithoutAgentNameIsNamedAfterAmp(t *testing.T) {
+	start := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	turn := Turn{ThreadID: "T-test", ID: json.RawMessage(`"M-prompt"`), Start: start, End: start.Add(time.Second), Status: "done", Executor: "local"}
+	req, err := BuildTrace(turn, nil, "disabled", otlp.Config{HarnessName: "amp", OmitIO: true})
+	require.NoError(t, err)
+	require.Equal(t, otlp.Attribute{Key: "service.name", Value: otlp.StringVal("amp")}, req.ResourceSpans[0].Resource.Attributes[0])
+}

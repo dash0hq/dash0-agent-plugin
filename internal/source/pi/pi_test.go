@@ -460,3 +460,13 @@ func TestTraceRequestKeepsPiResourceAndScope(t *testing.T) {
 	require.Len(t, rs.ScopeSpans, 1)
 	require.Equal(t, otlp.Scope{Name: "dash0-agent-plugin", Version: version.Version}, rs.ScopeSpans[0].Scope)
 }
+
+// Without a configured agent name, Pi's traces keep Pi's identity and are not
+// filed under another agent's default.
+func TestTraceWithoutAgentNameIsNamedAfterPi(t *testing.T) {
+	c := cfg(true)
+	c.AgentName = ""
+	req, err := BuildTrace(Turn{SessionID: "s1", Start: at(0), End: at(1), Status: "done"}, c)
+	require.NoError(t, err)
+	require.Equal(t, otlp.Attribute{Key: "service.name", Value: otlp.StringVal("pi")}, req.ResourceSpans[0].Resource.Attributes[0])
+}

@@ -134,11 +134,16 @@ func SendTrace(span Span, event map[string]any, cfg Config) error {
 }
 
 // NewTracesRequest wraps spans in the plugin's one resource and scope. The
-// service name is cfg.AgentName, or "claude-code" when it is empty.
+// service name is cfg.AgentName. When it is empty, the service name is
+// cfg.HarnessName, so that a runtime is never filed under a different agent.
+// "claude-code" applies only when both are empty.
 func NewTracesRequest(cfg Config, spans ...Span) ExportTracesRequest {
 	serviceName := "claude-code"
-	if cfg.AgentName != "" {
+	switch {
+	case cfg.AgentName != "":
 		serviceName = cfg.AgentName
+	case cfg.HarnessName != "":
+		serviceName = cfg.HarnessName
 	}
 	return ExportTracesRequest{
 		ResourceSpans: []ResourceSpans{{

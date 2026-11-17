@@ -19,7 +19,7 @@ Check out our documentation for setting up and configuring the Dash0 Agent Plugi
 - **Amp / ampcode CLI and Orbs** — native plugin, installed through an Amp plugin repository (which reaches Orbs too) or scripted onto one machine (`install-amp.sh`, `install-amp.ps1`), and per-model usage in [`amp/README.md`](./amp/README.md). Completed-turn telemetry; export-based usage is on by default, is partial, and uses an unstable Amp export schema.
 - **Pi** — native extension, installed with `pi install npm:@dash0/agent-plugin-pi`, in [`pi/README.md`](./pi/README.md). Completed-turn telemetry with per-call tokens, and pi-subagents children.
 
-All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. The shell-hook integrations use bootstrap scripts; Amp and Pi instead load `amp/index.ts` and `pi/index.ts` as native extensions. Amp invokes its installed helper directly; Pi runs a bootstrap that downloads and caches its helper on the first turn. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other runtimes use a PowerShell bootstrap.
+All runtimes run on macOS, Linux, and Windows, on `amd64` or `arm64`. The shell-hook integrations use bootstrap scripts; Amp and Pi instead load `amp/index.ts` and `pi/index.ts` as native extensions. Amp invokes its installed helper directly; Pi runs a bootstrap that downloads and caches its helper when the first session starts. On Windows, Claude Code also needs [Git for Windows](https://gitforwindows.org/): it runs hook commands through Git Bash, where the other runtimes use a PowerShell bootstrap.
 
 ## Repository layout
 

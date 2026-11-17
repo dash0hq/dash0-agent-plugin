@@ -235,9 +235,10 @@ test("a missing helper or a failing export never throws into Pi", async () => {
 });
 
 // The npm package ships index.ts and the bootstraps, no helper. The extension
-// then runs the bootstrap, which runs the helper it cached on the first turn.
+// asks the bootstrap for the helper's path and runs the helper itself. A
+// bootstrap that fails open prints no path, so the turn is not handed off.
 test.skipIf(process.platform === "win32")(
-  "without a local helper the bootstrap runs the cached release helper",
+  "without a local helper the extension runs the helper the bootstrap resolves",
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
     onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
@@ -251,26 +252,36 @@ test.skipIf(process.platform === "win32")(
     isolate(home);
     const data = join(dir, "data");
     process.env.PI_PLUGIN_DATA = data;
+    // A download that fails, without the network.
+    const bin = join(dir, "fake-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "curl"), "#!/bin/sh\nexit 22\n", { mode: 0o755 });
+    process.env.PATH = `${bin}:${process.env.PATH}`;
     const version = /^VERSION="(.+)"$/m.exec(
       readFileSync(join(dir, "pi-on-event.sh"), "utf8"),
     )![1];
     const os = process.platform;
     const arch = process.arch === "x64" ? "amd64" : process.arch;
-    // A cached helper, so the bootstrap does not download one.
-    mkdirSync(join(data, "bin"), { recursive: true });
     const received = join(dir, "received.json");
+
+    const { fire, notices } = await load(dir);
+    // The turn waits for the bootstrap, which fails open with exit 0 and no
+    // path: no handoff, and the notice.
+    await turn(fire);
+    for (let i = 0; i < 100 && notices.length === 0; i++) await Bun.sleep(20);
+    expect(notices).toEqual(["dash0: telemetry unavailable"]);
+
+    // A cached helper, as a download leaves it. The next turn resolves it.
+    mkdirSync(join(data, "bin"), { recursive: true });
     writeFileSync(
       join(data, "bin", `pi-on-event-${version}-${os}-${arch}`),
       `#!/bin/sh\ncat >"${received}.tmp" && mv "${received}.tmp" "${received}"\n`,
       { mode: 0o755 },
     );
-
-    const { fire, notices } = await load(dir);
     await turn(fire);
     await fire("session_shutdown", { reason: "quit" });
     for (let i = 0; i < 100 && !existsSync(received); i++) await Bun.sleep(50);
 
-    expect(notices).toEqual([]);
     expect(JSON.parse(readFileSync(received, "utf8")).session_id).toBe(
       "019a-transport",
     );
@@ -325,8 +336,9 @@ test.skipIf(process.platform === "win32")(
       await Bun.sleep(150);
     };
 
-    // A turn that settles before a helper is resolved is not handed off, so
-    // a parent keeps a child's tokens. The user gets the notice.
+    // The turn waits for the first resolution, which prints no path, as on a
+    // failed download. The turn is not handed off, and the user gets the
+    // notice.
     await turn(fire);
     for (let i = 0; i < 100 && notices.length === 0; i++) await Bun.sleep(20);
     expect(notices).toEqual(["dash0: telemetry unavailable"]);

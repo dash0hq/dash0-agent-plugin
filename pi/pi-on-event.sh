@@ -2,14 +2,17 @@
 # SPDX-FileCopyrightText: Copyright 2026 Dash0 Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Bootstrap for the Pi telemetry helper. The Pi extension (index.ts) starts it
-# detached once per settled turn, with the turn's envelope on stdin:
+# Bootstrap for the Pi telemetry helper. The Pi extension (index.ts) runs it
+# with --resolve-binary: it downloads and verifies the release helper on a
+# cache miss and prints its path. The extension then spawns the helper itself,
+# detached, with each turn's envelope on stdin:
 #
-#   index.ts -> pi-on-event.sh -> Go helper -> OTLP
+#   index.ts -> pi-on-event.sh --resolve-binary -> path
+#   index.ts -> Go helper -> OTLP
 #
-# The npm package carries this script and no binary. The first turn downloads
-# the checksummed release helper into the cache below; later turns run it
-# directly. A helper built next to index.ts (a source install) wins, and the
+# The npm package carries this script and no binary. The first resolution
+# downloads the checksummed release helper into the cache below; later ones
+# find it there. A helper built next to index.ts (a source install) wins, and the
 # extension then never runs this script.
 #
 # Fail-open: any error before exec'ing the binary logs to stderr and exits 0 so
@@ -158,6 +161,13 @@ if [ ! -x "$BINARY" ]; then
   if ! mv -f "$TMP" "$BINARY" 2>/dev/null; then
     [ -x "$BINARY" ] || fail_open "could not move $TMP into place"
   fi
+fi
+
+# Persistent or detached hosts resolve the verified executable, then spawn it
+# directly, so they know a helper started. A fail_open above prints nothing.
+if [ "$#" -eq 1 ] && [ "$1" = "--resolve-binary" ]; then
+  printf '%s\n' "$BINARY"
+  exit 0
 fi
 
 # Forward stdin, plus the event-name argument for the agents that pass one. The

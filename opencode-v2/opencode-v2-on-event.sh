@@ -155,6 +155,13 @@ if [ ! -x "$BINARY" ]; then
   fi
 fi
 
+# Persistent or detached hosts resolve the verified executable, then spawn it
+# directly, so they know a helper started. A fail_open above prints nothing.
+if [ "$#" -eq 1 ] && [ "$1" = "--resolve-binary" ]; then
+  printf '%s\n' "$BINARY"
+  exit 0
+fi
+
 # Forward stdin, plus the event-name argument for the agents that pass one. The
 # binary exits 0 on telemetry errors, so no trap is needed around this.
 exec "$BINARY" "$@"

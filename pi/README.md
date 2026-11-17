@@ -46,27 +46,27 @@ package and writes the OTLP URL, token and options to
 file on every turn.
 
 The package holds `index.ts`, the `dash0-configure` skill and a bootstrap, but
-no binary. On the first turn, the bootstrap (`pi-on-event.sh`, or
-`pi-on-event.ps1` on Windows) downloads `pi-on-event-<os>-<arch>` for the
-package's version from the GitHub release, verifies it against the release's
-`checksums.txt`, and caches it. Later turns run the cached helper. The cache is
-`$PI_PLUGIN_DATA/bin`, else `$DASH0_PLUGIN_DATA/bin`, else
-`$XDG_STATE_HOME/dash0-agent-plugin/pi/bin`, else
-`~/.local/state/dash0-agent-plugin/pi/bin`. On Windows, PowerShell only
-downloads and verifies the helper, and the extension then starts it directly.
-It does this when the session starts. A turn that settles before the helper is
-ready is not exported, and Pi shows `dash0: telemetry unavailable`. The
-extension does not queue that turn, so a pi-subagents parent keeps the tokens
-of such a child instead of losing them.
+no binary. When a session starts, the extension runs the bootstrap
+(`pi-on-event.sh`, or `pi-on-event.ps1` on Windows). The first time, it
+downloads `pi-on-event-<os>-<arch>` for the package's version from the GitHub
+release, verifies it against the release's `checksums.txt`, and caches it.
+The bootstrap only prints the helper's path; the extension then starts the
+helper directly for each turn. The cache is `$PI_PLUGIN_DATA/bin`, else
+`$DASH0_PLUGIN_DATA/bin`, else `$XDG_STATE_HOME/dash0-agent-plugin/pi/bin`,
+else `~/.local/state/dash0-agent-plugin/pi/bin`.
 
-A failed download loses that turn, and the next turn tries again. On Windows
-the extension shows `dash0: telemetry unavailable`; on macOS and Linux the
-bootstrap fails without a notice. When Pi exits within 2 seconds of the first
-turn, for example in print mode, the download can outlast Pi and that turn is
-lost. The download still completes, so the next run exports.
+A turn that settles before the helper is ready, for example during the first
+download, waits for it. When the download fails, that turn is not exported,
+Pi shows `dash0: telemetry unavailable`, and the next turn tries again. A
+pi-subagents parent leaves out a child's tokens only when the child's helper
+started before the parent read the child's result. When the parent reads
+first, it keeps the tokens and the child does not export that turn, so the
+tokens are counted once. When Pi exits within 2 seconds of a turn that is
+still waiting, for example in print mode during the first download, that turn
+is lost. The download outlives Pi, so the next run exports.
 
 `pi update --extensions` moves an unpinned install to the newest version. A
-new version downloads its own helper on its first turn.
+new version downloads its own helper in its first session.
 
 ## Install from source
 

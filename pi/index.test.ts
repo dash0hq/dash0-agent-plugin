@@ -18,7 +18,9 @@ type Handler = (event: unknown, ctx: unknown) => unknown;
 function setup(
   session = "019a-session",
   parentSession?: string,
-  handedOff = true,
+  handedOff:
+    | boolean
+    | ((own: (start: () => boolean) => boolean) => Promise<boolean>) = true,
 ) {
   const handlers = new Map<string, Handler>();
   const sent: Turn[] = [];
@@ -26,10 +28,10 @@ function setup(
   const api = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
   } as unknown as ExtensionAPI;
-  register(api, (turn, json) => {
+  register(api, (turn, json, own) => {
     sent.push(turn);
     encoded.push(json);
-    return handedOff;
+    return typeof handedOff === "boolean" ? handedOff : handedOff(own);
   });
   const ctx = {
     sessionManager: {
@@ -533,12 +535,20 @@ test("another extension's subagent tool gives no children", () => {
   ).toHaveLength(1);
 });
 
-/** A child session runs one turn, and its parent then reads the child's row. */
-function childThenParent(childHandedOff: boolean) {
-  const child = setup("019a-child", undefined, childHandedOff);
+/** A child session runs one turn. */
+function childTurn(
+  handedOff:
+    | boolean
+    | ((own: (start: () => boolean) => boolean) => Promise<boolean>),
+) {
+  const child = setup("019a-child", undefined, handedOff);
   child.fire("session_start", { reason: "startup" });
   child.fire("before_agent_start", { messageType: "user", prompt: "task" });
   child.fire("agent_settled", { aborted: false });
+}
+
+/** The parent reads the child's row from its subagent tool result. */
+function parentReads() {
   const parent = setup();
   parent.fire("before_agent_start", { messageType: "user", prompt: "x" });
   parent.fire("tool_execution_start", {
@@ -555,6 +565,12 @@ function childThenParent(childHandedOff: boolean) {
   });
   parent.fire("agent_settled", { aborted: false });
   return parent.sent[0].tools[0].subagents ?? [];
+}
+
+/** A child session runs one turn, and its parent then reads the child's row. */
+function childThenParent(childHandedOff: boolean) {
+  childTurn(childHandedOff);
+  return parentReads();
 }
 
 // With pi-subagents' defaultSubagentOnlyExtensions, this extension also loads
@@ -579,6 +595,62 @@ test("a child whose export did not start keeps its tokens in the parent", () => 
   const [own] = childThenParent(false);
   expect(own.model).toBe("claude-code/claude-haiku-4-5");
   expect(own.usage.output).toBe(460);
+});
+
+// A child whose turn waits for its helper settles before the parent reads,
+// but may start its helper after. Whichever comes first decides who counts
+// the tokens, so they are counted once.
+test("a child waiting for its helper is counted once, by whoever goes first", async () => {
+  // The helper starts first: the parent leaves the tokens out.
+  let started: Promise<boolean> | undefined;
+  childTurn((own) => (started = Promise.resolve(own(() => true))));
+  expect(await started).toBe(true);
+  const [dropped] = parentReads();
+  expect(dropped.usage.output).toBe(0);
+
+  // The parent reads first: it keeps the tokens, and the child may not
+  // start a helper.
+  let release: () => void = () => {};
+  const resolved = new Promise<void>((r) => (release = r));
+  let owned: boolean | undefined;
+  childTurn(async (own) => {
+    await resolved;
+    owned = own(() => true);
+    return owned;
+  });
+  const [kept] = parentReads();
+  expect(kept.usage.output).toBe(460);
+  release();
+  await resolved;
+  await Bun.sleep(0);
+  expect(owned).toBe(false);
+});
+
+// Two turns of one session can both wait for the same download. Both start
+// their helper, unless a parent claimed the session's tokens first.
+test("every waiting turn of a session starts its helper", async () => {
+  for (const parentFirst of [false, true]) {
+    let release: () => void = () => {};
+    const resolved = new Promise<void>((r) => (release = r));
+    const owned: boolean[] = [];
+    const child = setup("019a-child", undefined, async (own) => {
+      await resolved;
+      owned.push(own(() => true));
+      return owned.at(-1)!;
+    });
+    child.fire("session_start", { reason: "startup" });
+    for (const prompt of ["one", "two"]) {
+      child.fire("before_agent_start", { messageType: "user", prompt });
+      child.fire("agent_settled", { aborted: false });
+    }
+    if (parentFirst) parentReads();
+    release();
+    await resolved;
+    await Bun.sleep(0);
+    expect(owned).toEqual(parentFirst ? [false, false] : [true, true]);
+    // Claims end with the last waiting turn: an exported child is dropped.
+    if (!parentFirst) expect(parentReads()[0].usage.output).toBe(0);
+  }
 });
 
 // The helper drops a part count that is larger than its total. The bridge

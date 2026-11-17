@@ -109,6 +109,19 @@ const exportedSessions = ((globalThis as Record<symbol, unknown>)[
   Symbol.for("dash0.pi.exported-sessions")
 ] ??= new Set<string>()) as Set<string>;
 
+/**
+ * Session files with turns that wait for their helper, and how many. A parent
+ * that reads such a child first claims the file and keeps the child's
+ * tokens; the child then exports none of its waiting turns, so no token is
+ * counted twice. A claim ends with the file's last waiting turn.
+ */
+const pendingSessions = ((globalThis as Record<symbol, unknown>)[
+  Symbol.for("dash0.pi.pending-sessions")
+] ??= new Map<string, number>()) as Map<string, number>;
+const claimedSessions = ((globalThis as Record<symbol, unknown>)[
+  Symbol.for("dash0.pi.claimed-sessions")
+] ??= new Set<string>()) as Set<string>;
+
 /** Detached helpers alive at once. Stops a runaway, not ordinary overlap. */
 const maxHelpers = 16;
 
@@ -309,11 +322,15 @@ function readSubagents(
     )
       continue;
     // A child that exported itself handed its turn to a helper before the
-    // parent's tool call ends, because the child settles first. Each file is
-    // looked up once, so the set does not grow with children.
+    // parent's tool call ends, because the child settles first. A child still
+    // waiting for its helper is claimed here and does not export. Each file
+    // is looked up once, so the sets do not grow with children.
     const exported =
       typeof r.sessionFile === "string" &&
       exportedSessions.delete(r.sessionFile);
+    if (!exported && typeof r.sessionFile === "string")
+      if (pendingSessions.has(r.sessionFile))
+        claimedSessions.add(r.sessionFile);
     const usage = (exported ? {} : r.usage) as Record<string, unknown>;
     const model = !exported && validString(r.model) ? r.model : undefined;
     // The first slash separates the provider, as in splitModel in
@@ -438,7 +455,9 @@ export function fit(turn: Turn): string {
 
 /**
  * Collect each user turn and hand it to `send` once Pi settles. `send`
- * returns false when it could not hand the turn to a helper.
+ * returns false when it could not hand the turn to a helper. It returns a
+ * promise when the turn waits for a helper; it must then start the helper
+ * through `own`, which skips it when a parent has kept the turn's tokens.
  *
  * A turn starts at before_agent_start and ends at agent_settled, not at
  * agent_end: Pi can retry, compact and retry, or run queued follow-ups after
@@ -446,7 +465,11 @@ export function fit(turn: Turn): string {
  */
 export function register(
   pi: ExtensionAPI,
-  send: (turn: Turn, json: string) => boolean,
+  send: (
+    turn: Turn,
+    json: string,
+    own: (start: () => boolean) => boolean,
+  ) => boolean | Promise<boolean>,
 ) {
   let state: Active | undefined;
   // SKILL.md path to skill name, from the skills Pi loaded for this run. A
@@ -622,14 +645,37 @@ export function register(
     const json = fit(turn);
     // A parent in this process leaves out the tokens of a child that handed
     // its turn to a helper. A child that could not keep them in the parent.
-    if (send(turn, json)) {
-      try {
-        const file = ctx.sessionManager.getSessionFile();
-        if (typeof file === "string") exportedSessions.add(file);
-      } catch {
-        // No session file: no parent can look this session up.
-      }
+    let file: string | undefined;
+    try {
+      const f = ctx.sessionManager.getSessionFile();
+      if (typeof f === "string") file = f;
+    } catch {
+      // No session file: no parent can look this session up.
     }
+    // Starts a waiting turn's helper, unless a parent has claimed the
+    // turn's tokens. A started turn counts as exported at once, so no parent
+    // can read in between.
+    const own = (start: () => boolean) => {
+      if (file !== undefined && claimedSessions.has(file)) return false;
+      const started = start();
+      if (started && file !== undefined) exportedSessions.add(file);
+      return started;
+    };
+    if (file !== undefined)
+      pendingSessions.set(file, (pendingSessions.get(file) ?? 0) + 1);
+    const handed = send(turn, json, own);
+    const record = (ok: boolean) => {
+      if (file === undefined) return;
+      const waiting = (pendingSessions.get(file) ?? 1) - 1;
+      if (waiting > 0) pendingSessions.set(file, waiting);
+      else {
+        pendingSessions.delete(file);
+        claimedSessions.delete(file);
+      }
+      if (ok) exportedSessions.add(file);
+    };
+    if (typeof handed === "boolean") record(handed);
+    else void handed.then(record);
   });
 
   // A session switch, fork or reload replaces this extension instance, so a
@@ -662,12 +708,13 @@ export default function (pi: ExtensionAPI) {
   } catch {
     // Read-only: spawn reports the real problem.
   }
-  // The npm package ships no helper. Its bootstrap downloads the release
-  // helper on the first turn, verifies its checksum and caches it. On POSIX
-  // the bootstrap then execs the helper with the envelope on stdin. On
-  // Windows it only prints the helper's path, and the helper is spawned
-  // directly: through a detached PowerShell, the envelope would be decoded
-  // with the console code page and the helper would open a console window.
+  // The npm package ships no helper. Its bootstrap, run with
+  // --resolve-binary, downloads the release helper, verifies its checksum,
+  // caches it and prints its path; the helper is then spawned directly. The
+  // bootstrap fails open with exit 0, so only a printed path shows that a
+  // helper exists. On Windows a PowerShell between Pi and the helper would
+  // also decode the envelope with the console code page and open a console
+  // window.
   const windows = process.platform === "win32";
   // A full path, because Windows looks for a bare name in the cwd (the
   // user's project) before PATH.
@@ -687,17 +734,22 @@ export default function (pi: ExtensionAPI) {
       let out = "";
       try {
         const child = spawn(
-          powershell,
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            beside("./pi-on-event.ps1"),
-            "--resolve-binary",
-          ],
+          windows ? powershell : "bash",
+          windows
+            ? [
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                beside("./pi-on-event.ps1"),
+                "--resolve-binary",
+              ]
+            : [beside("./pi-on-event.sh"), "--resolve-binary"],
           {
+            // A relative cache directory then names the same place for the
+            // resolver and for the helper, which runs in this cwd too.
+            cwd,
             stdio: ["ignore", "pipe", "ignore"],
             detached: true,
             windowsHide: true,
@@ -735,7 +787,7 @@ export default function (pi: ExtensionAPI) {
     cwd = ctx.cwd;
     // Started with the session, so the helper is usually ready before the
     // first turn settles.
-    if (windows && !local) void resolveHelper();
+    if (!local) void resolveHelper();
     warn = () => {
       if (warned) return;
       warned = true;
@@ -772,14 +824,10 @@ export default function (pi: ExtensionAPI) {
   };
 
   /** Starts a detached helper; returns when its envelope is written. */
-  const start = (
-    command: string,
-    args: string[],
-    json: string,
-  ): Promise<void> | undefined => {
+  const start = (command: string, json: string): Promise<void> | undefined => {
     let child;
     try {
-      child = spawn(command, args, {
+      child = spawn(command, [], {
         // The helper resolves the project configuration and the repository
         // from its working directory.
         cwd,
@@ -814,28 +862,45 @@ export default function (pi: ExtensionAPI) {
     });
   };
 
-  register(pi, (_turn, json) => {
+  register(pi, (_turn, json, own) => {
     // The turn is lost, so the user hears about it as for a failed export.
     if (live >= maxHelpers) {
       warn?.();
       return false;
     }
-    const [command, args] = local
-      ? [local, []]
-      : !windows
-        ? ["bash", [beside("./pi-on-event.sh")]]
-        : [helper, []];
-    // On Windows before the helper is resolved, the turn is lost rather than
-    // queued: a parent drops the tokens of a child that reports a handoff,
-    // so a handoff is reported only for a helper that has started.
-    const written =
-      command === undefined ? undefined : start(command, args, json);
-    if (!written) {
-      if (command === undefined) void resolveHelper();
-      warn?.();
-      return false;
+    const command = local ?? helper;
+    if (command !== undefined) {
+      const written = start(command, json);
+      if (!written) {
+        warn?.();
+        return false;
+      }
+      track(written);
+      return true;
     }
-    track(written);
-    return true;
+    // The helper is still being resolved, for example during the first
+    // download or in a print-mode run whose turn beat it. The turn waits,
+    // counted toward the cap. A parent drops the tokens of a child that
+    // reports a handoff, so it is reported only once a helper has started,
+    // and not at all when the parent kept the tokens in the meantime.
+    live++;
+    const handed = resolveHelper().then((path) => {
+      live--;
+      if (path === undefined) {
+        warn?.();
+        return false;
+      }
+      return own(() => {
+        const written = start(path, json);
+        if (!written) {
+          warn?.();
+          return false;
+        }
+        track(written);
+        return true;
+      });
+    });
+    track(handed.then(() => undefined));
+    return handed;
   });
 }

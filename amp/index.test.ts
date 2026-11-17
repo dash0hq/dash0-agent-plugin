@@ -352,3 +352,30 @@ test("a clipped response still reports the turn as truncated", async () => {
   expect(sent[0].response!.length).toBe(16 * 1024);
   expect(sent[0].truncated).toBe(true);
 });
+
+test("assistant content that is not an array gives no response text", async () => {
+  const { sent, fire } = setup("local");
+  const thread = { id: "T-odd" } as const;
+  fire("agent.start", { thread, id: 1, message: "the ask" });
+  await fire("agent.end", {
+    thread,
+    id: 1,
+    status: "done",
+    messages: [
+      {
+        role: "assistant",
+        id: 2,
+        content: [{ type: "text", text: "the answer" }],
+      },
+      {
+        role: "assistant",
+        id: 3,
+        content: { secret: "SECRET-OBJECT" },
+      } as unknown as PluginEventMap["agent.end"]["messages"][number],
+    ],
+  });
+  // The same rule as the Pi bridge: a malformed message is skipped, never
+  // sent as its JSON.
+  expect(sent[0].response).toBe("the answer");
+  expect(JSON.stringify(sent)).not.toContain("SECRET");
+});

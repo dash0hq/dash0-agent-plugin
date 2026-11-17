@@ -114,16 +114,64 @@ const maxHelpers = 16;
 /** How long session_shutdown waits for envelopes still being written. */
 const shutdownGrace = 2000;
 
+// BEGIN content helpers, kept identical in amp/index.ts and pi/index.ts.
+// Amp's installers fetch index.ts as one file, so the two cannot import a
+// shared module. test/consistency/bridge_test.go fails when they differ.
+// The per-turn budget (take) and the envelope shedding stay outside this
+// block: they read each bridge's own turn state and envelope shape, which
+// differ. That test checks their limits against the Go helpers instead.
+
 /** Truncate to a byte budget without leaving a split UTF-8 sequence behind. */
 function clip(value: string, max: number): string {
+  // byteLength measures without copying, so the common case never allocates
+  // a Buffer for the whole field.
   if (Buffer.byteLength(value, "utf8") <= max) return value;
-  // Every UTF-16 unit encodes to at least one byte, so the first `max` units
-  // cover the first `max` bytes without encoding a multi-megabyte value.
+  // Slice first: every UTF-16 unit encodes to at least one byte, so the first
+  // `max` units always cover the first `max` bytes. Encoding the whole value
+  // would copy a multi-megabyte tool output to keep 16 KiB of it.
   return Buffer.from(value.slice(0, max), "utf8")
     .subarray(0, max)
     .toString("utf8")
     .replace(/\uFFFD+$/, "");
 }
+
+const isTextBlock = (b: unknown): b is { type: "text"; text: string } =>
+  typeof b === "object" &&
+  b !== null &&
+  (b as { type?: unknown }).type === "text" &&
+  typeof (b as { text?: unknown }).text === "string";
+
+/**
+ * Render a tool payload or message content as text, never throwing on odd
+ * values. Any array keeps only its text blocks, even when it mixes an image
+ * block with an unknown element, so inline image data and image URLs never
+ * enter telemetry, even with I/O capture on.
+ */
+function asText(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value))
+    return value
+      .filter(isTextBlock)
+      .map((block) => block.text)
+      .join("\n");
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Text of an assistant message's text blocks, joined. Thinking and tool blocks
+ * are skipped by the same filter as a tool payload, so an image or thinking
+ * block is dropped by one rule only. Both runtimes type this content as an
+ * array; any other value is malformed and gives no text, never its JSON.
+ */
+function messageText(message: { content?: unknown } | undefined): string {
+  return Array.isArray(message?.content) ? asText(message.content).trim() : "";
+}
+// END content helpers
 
 /**
  * Claim budget for one content field. Returns undefined once the turn's
@@ -147,32 +195,6 @@ function take(state: Active, render: () => string): string | undefined {
   }
   state.content += size;
   return text;
-}
-
-const isTextBlock = (b: unknown): b is { type: "text"; text: string } =>
-  typeof b === "object" &&
-  b !== null &&
-  (b as { type?: unknown }).type === "text" &&
-  typeof (b as { text?: unknown }).text === "string";
-
-/**
- * Render a tool payload or message content as text, never throwing. An array
- * keeps only its text blocks, so image data, thinking and tool-call blocks
- * never enter telemetry, even with I/O capture on.
- */
-function asText(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value))
-    return value
-      .filter(isTextBlock)
-      .map((block) => block.text)
-      .join("\n");
-  try {
-    return JSON.stringify(value) ?? "";
-  } catch {
-    return "";
-  }
 }
 
 const count = (n: unknown): number =>
@@ -505,7 +527,7 @@ export function register(
     }
     // Only the last answer is kept, and it is charged to the budget at the
     // end, so a long run of intermediate answers costs nothing here.
-    const text = asText(message.content).trim();
+    const text = messageText(message);
     if (text) active.response = text;
   });
 

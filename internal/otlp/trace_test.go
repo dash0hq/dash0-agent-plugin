@@ -17,6 +17,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
 
 func TestTraceIDFromSessionID(t *testing.T) {
@@ -646,4 +648,33 @@ func repoForToolSpan(t *testing.T) (main, worktree string) {
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "a.txt"), []byte("a"), 0o644))
 	return main, worktree
+}
+
+// The runtimes that build whole trace requests (Amp and Pi) share one
+// resource and scope, so the service name a dashboard groups by cannot differ
+// between them.
+func TestNewTracesRequestWrapsSpansInThePluginResource(t *testing.T) {
+	spans := []Span{{Name: "a"}, {Name: "b"}}
+	req := NewTracesRequest(Config{AgentName: "pi"}, spans...)
+	require.Len(t, req.ResourceSpans, 1)
+	rs := req.ResourceSpans[0]
+	assert.Equal(t, "service.name", rs.Resource.Attributes[0].Key)
+	assert.Equal(t, "pi", *rs.Resource.Attributes[0].Value.StringValue)
+	assert.Equal(t, "service.version", rs.Resource.Attributes[1].Key)
+	assert.Equal(t, version.Version, *rs.Resource.Attributes[1].Value.StringValue)
+	assert.Equal(t, Scope{Name: "dash0-agent-plugin", Version: version.Version}, rs.ScopeSpans[0].Scope)
+	assert.Equal(t, spans, rs.ScopeSpans[0].Spans)
+}
+
+// A config without an agent name keeps the runtime's own identity. Only a
+// config with no harness name either falls back to "claude-code", which is
+// what SendTrace sent before the builder existed.
+func TestNewTracesRequestFallsBackToTheHarnessName(t *testing.T) {
+	serviceName := func(cfg Config) string {
+		return *NewTracesRequest(cfg, Span{}).ResourceSpans[0].Resource.Attributes[0].Value.StringValue
+	}
+	assert.Equal(t, "amp", serviceName(Config{HarnessName: "amp"}))
+	assert.Equal(t, "pi", serviceName(Config{HarnessName: "pi"}))
+	assert.Equal(t, "my-agent", serviceName(Config{AgentName: "my-agent", HarnessName: "pi"}))
+	assert.Equal(t, "claude-code", serviceName(Config{}))
 }

@@ -14,7 +14,25 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
+	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
+
+// The shared request builder must keep Amp's resource and scope as they were
+// before it existed.
+func TestTraceRequestKeepsAmpResourceAndScope(t *testing.T) {
+	start := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	turn := Turn{ThreadID: "T-test", ID: json.RawMessage(`"M-prompt"`), Start: start, End: start.Add(time.Second), Status: "done", Executor: "local"}
+	req, err := BuildTrace(turn, nil, "disabled", otlp.Config{AgentName: "amp", HarnessName: "amp", OmitIO: true})
+	require.NoError(t, err)
+	require.Len(t, req.ResourceSpans, 1)
+	rs := req.ResourceSpans[0]
+	require.Equal(t, []otlp.Attribute{
+		{Key: "service.name", Value: otlp.StringVal("amp")},
+		{Key: "service.version", Value: otlp.StringVal(version.Version)},
+	}, rs.Resource.Attributes)
+	require.Len(t, rs.ScopeSpans, 1)
+	require.Equal(t, otlp.Scope{Name: "dash0-agent-plugin", Version: version.Version}, rs.ScopeSpans[0].Scope)
+}
 
 func TestCompletedTurnHasChatRootAndTimedTools(t *testing.T) {
 	start := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
@@ -421,4 +439,14 @@ func TestBranchFallsBackToTheWorkingDirectory(t *testing.T) {
 			require.Equal(t, otlp.StringVal("main"), root["dash0.gen_ai.vcs.ref.head.name"])
 		})
 	}
+}
+
+// Without a configured agent name, Amp's traces keep Amp's identity and are
+// not filed under another agent's default.
+func TestTraceWithoutAgentNameIsNamedAfterAmp(t *testing.T) {
+	start := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	turn := Turn{ThreadID: "T-test", ID: json.RawMessage(`"M-prompt"`), Start: start, End: start.Add(time.Second), Status: "done", Executor: "local"}
+	req, err := BuildTrace(turn, nil, "disabled", otlp.Config{HarnessName: "amp", OmitIO: true})
+	require.NoError(t, err)
+	require.Equal(t, otlp.Attribute{Key: "service.name", Value: otlp.StringVal("amp")}, req.ResourceSpans[0].Resource.Attributes[0])
 }

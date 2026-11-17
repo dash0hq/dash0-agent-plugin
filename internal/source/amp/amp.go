@@ -12,8 +12,11 @@ import (
 
 	"github.com/dash0hq/dash0-agent-plugin/internal/otlp"
 	"github.com/dash0hq/dash0-agent-plugin/internal/pipeline"
-	"github.com/dash0hq/dash0-agent-plugin/internal/version"
 )
+
+// MaxEnvelopeBytes is the largest envelope the helper accepts. The bridge
+// sheds content to stay below it.
+const MaxEnvelopeBytes = 1 << 20
 
 // Turn is the private bridge protocol, not an Amp API response. Prompt and
 // Response carry the turn's conversation, which the shared exporter redacts
@@ -166,14 +169,7 @@ func BuildTrace(t Turn, usage []Usage, usageStatus string, cfg otlp.Config) (otl
 		event["tool_name"] = tool.Name
 		event["tool_use_id"] = tool.ID
 		if tool.Input != "" {
-			// Decode so the shared extractors see the map shape hooks deliver on
-			// the other runtimes; a non-object payload is kept as its own text.
-			var args map[string]any
-			if json.Unmarshal([]byte(tool.Input), &args) == nil && args != nil {
-				event["tool_input"] = args
-			} else {
-				event["tool_input"] = tool.Input
-			}
+			event["tool_input"] = pipeline.ToolInput(tool.Input)
 		}
 		if tool.Output != "" {
 			event["tool_response"] = tool.Output
@@ -204,8 +200,5 @@ func BuildTrace(t Turn, usage []Usage, usageStatus string, cfg otlp.Config) (otl
 		// none at all.
 		spans = append(spans, otlp.NewLLMSpan(traceID, spanID, rootID, t.End, t.End, event, false, rootCfg))
 	}
-	return otlp.ExportTracesRequest{ResourceSpans: []otlp.ResourceSpans{{
-		Resource:   otlp.Resource{Attributes: []otlp.Attribute{{Key: "service.name", Value: otlp.StringVal(cfg.AgentName)}, {Key: "service.version", Value: otlp.StringVal(version.Version)}}},
-		ScopeSpans: []otlp.ScopeSpans{{Scope: otlp.Scope{Name: "dash0-agent-plugin", Version: version.Version}, Spans: spans}},
-	}}}, nil
+	return otlp.NewTracesRequest(cfg, spans...), nil
 }

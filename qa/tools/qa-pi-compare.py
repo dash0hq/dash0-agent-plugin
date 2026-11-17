@@ -108,14 +108,22 @@ def load_stream(path: pathlib.Path) -> list[dict]:
     return events
 
 
-def children_total(name: str, result: dict) -> bool:
-    """Whether a tool result's usage is the total of pi-subagents children.
+# @tintinweb/pi-subagents, with its reportUsage setting, reports the billed
+# tokens of its children as the usage of these tools. Its children export
+# their own sessions.
+TINTINWEB_SUBAGENT_TOOLS = frozenset({"Agent", "get_subagent_result", "steer_subagent"})
 
-    The `subagent` result and a management result, such as the wait tool's,
-    report the usage of children that are counted elsewhere.
+
+def children_total(name: str, result: dict) -> bool:
+    """Whether a tool result's usage is the total of sub-agent children.
+
+    The pi-subagents `subagent` result and a management result, such as the
+    wait tool's, and the @tintinweb/pi-subagents tools in
+    TINTINWEB_SUBAGENT_TOOLS report the usage of children that are counted
+    elsewhere.
     """
     details = result.get("details") or {}
-    return name == "subagent" or (details.get("mode") == "management"
+    return name == "subagent" or name in TINTINWEB_SUBAGENT_TOOLS or (details.get("mode") == "management"
                                   and isinstance(details.get("results"), list))
 
 

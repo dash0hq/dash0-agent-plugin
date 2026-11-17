@@ -500,6 +500,14 @@ class PiToolUsage(unittest.TestCase):
                   *pi_tool("web", "t", {"input": 0, "output": 0})]
         self.assertEqual(pi.expectation(events)["tool_usage"], [])
 
+    def test_tintinweb_subagents_tool_usage_is_a_children_total(self):
+        usage = {"input": 4, "output": 9}
+        events = [*pi_tool("Agent", "a", usage, {}),
+                  *pi_tool("get_subagent_result", "g", usage, {}),
+                  *pi_tool("steer_subagent", "s", usage, {}),
+                  *pi_tool("read", "r", usage)]
+        self.assertEqual(pi.expectation(events)["tool_usage"], [("read", 4, 9)])
+
 
 class PiAbortedTurn(unittest.TestCase):
     """A turn that the user stopped is marked by an attribute, not by an error."""

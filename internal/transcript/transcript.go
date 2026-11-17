@@ -147,6 +147,9 @@ type contentType struct {
 	// whitespace-only text block is a response with no visible output, which is
 	// the case the continuation nudge exists for.
 	Text string `json:"text"`
+	// ID and ToolUseID pair a tool_use block with its tool_result block.
+	ID        string `json:"id"`
+	ToolUseID string `json:"tool_use_id"`
 }
 
 // ReadTurnUsage reads the transcript file and returns aggregated token usage
@@ -552,17 +555,29 @@ func forEachEntry[T any](transcriptPath string, fn func(entry T) bool) error {
 // turnBoundary finds the user entries that start a turn. Use one per scan.
 type turnBoundary struct {
 	seenPromptIDs map[string]bool
-	lastTurnEnded bool
+	openToolCalls map[string]bool
 }
 
 // startsTurn reports whether entry is a typed prompt, or an isMeta prompt with
-// a new promptId that arrives after the previous turn ended. A meta prompt that
-// arrives mid-turn is answered in that turn, under the same Stop.
+// a new promptId while no tool call waits for its result. A meta prompt that
+// arrives while tools run is answered in that turn, under the same Stop.
 func (b *turnBoundary) startsTurn(entry transcriptEntry) bool {
 	switch entry.Type {
 	case "assistant":
-		if entry.Message != nil {
-			b.lastTurnEnded = terminalStopReasons[entry.Message.StopReason]
+		if entry.Message == nil {
+			return false
+		}
+		if terminalStopReasons[entry.Message.StopReason] {
+			clear(b.openToolCalls)
+			return false
+		}
+		for _, block := range contentBlocks(entry.Message.Content) {
+			if block.Type == "tool_use" && block.ID != "" {
+				if b.openToolCalls == nil {
+					b.openToolCalls = make(map[string]bool)
+				}
+				b.openToolCalls[block.ID] = true
+			}
 		}
 		return false
 	case "user":
@@ -576,14 +591,27 @@ func (b *turnBoundary) startsTurn(entry transcriptEntry) bool {
 		}
 		b.seenPromptIDs[entry.PromptID] = true
 	}
-	if isToolResultRelay(entry) {
-		b.lastTurnEnded = false
+	if entry.Message != nil {
+		for _, block := range contentBlocks(entry.Message.Content) {
+			if block.Type == "tool_result" {
+				delete(b.openToolCalls, block.ToolUseID)
+			}
+		}
 	}
-	starts := isRealUserMessage(entry) || (entry.IsMeta && isNewPrompt && b.lastTurnEnded)
-	if starts {
-		b.lastTurnEnded = false
+	if isRealUserMessage(entry) {
+		clear(b.openToolCalls)
+		return true
 	}
-	return starts
+	return entry.IsMeta && isNewPrompt && len(b.openToolCalls) == 0
+}
+
+// contentBlocks decodes an array content body. A string body has no blocks.
+func contentBlocks(content json.RawMessage) []contentType {
+	var blocks []contentType
+	if err := json.Unmarshal(content, &blocks); err != nil {
+		return nil
+	}
+	return blocks
 }
 
 // isRealUserMessage returns true if the entry is a user message that is NOT
@@ -611,10 +639,6 @@ func isToolResultRelay(entry transcriptEntry) bool {
 	if entry.Message == nil {
 		return false
 	}
-	var blocks []json.RawMessage
-	if err := json.Unmarshal(entry.Message.Content, &blocks); err != nil || len(blocks) == 0 {
-		return false
-	}
-	var ct contentType
-	return json.Unmarshal(blocks[0], &ct) == nil && ct.Type == "tool_result"
+	blocks := contentBlocks(entry.Message.Content)
+	return len(blocks) > 0 && blocks[0].Type == "tool_result"
 }

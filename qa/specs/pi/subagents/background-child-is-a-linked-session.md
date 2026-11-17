@@ -55,8 +55,8 @@ session file has the child's session ID, its model calls and their usage.
   file.
 - `linked to parent session` agrees.
 
-If the stream has no `bg_wait` completion, the model did not wait. Run it
-again: without the completion the run has no record of the child file.
+If the stream has no `bg_wait` completion, the model did not wait. The
+comparer then exits `2`. Run it again: without the completion the run has no record of the child file.
 
 ## Tolerance
 

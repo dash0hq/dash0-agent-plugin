@@ -20,7 +20,10 @@ What is compared, per run:
   tool errors    `isError: true` is a span with exception.message, which the
                  plugin sets together with ERROR status
   tokens         per model call, Pi's usage: input + cacheRead + cacheWrite is
-                 gen_ai.usage.input_tokens, output is output_tokens
+                 gen_ai.usage.input_tokens, output is output_tokens. The
+                 (input, output) pairs of the calls are compared as a
+                 multiset, so tokens moved from one call to another fail
+                 even when the session totals agree
 
 With pi-subagents (QA_PI_SUBAGENTS=1), two more sources count:
 
@@ -34,6 +37,9 @@ With pi-subagents (QA_PI_SUBAGENTS=1), two more sources count:
   background     a `bg_wait` completion names the child's session file. The
                  child exports itself as its own session, so its spans are
                  read by the child's session id and compared with that file.
+
+A sub-agent run with no child in the stream exits 2: the model did not follow
+the prompt, and a run with no child checks no child.
 
 Exit codes: 0 agreement, 1 a real mismatch, 2 the comparison could not be made.
 
@@ -127,6 +133,20 @@ def usage_counts(usage: dict) -> tuple[int, int]:
     return sum(counts), int(usage.get("output") or 0)
 
 
+def call_pairs(calls: list[dict]) -> list[tuple]:
+    """(input, output) of each stream call, sorted. None is a call with no usage."""
+    return sorted(((c["input"], c["output"]) for c in calls), key=repr)
+
+
+def span_pairs(spans: list[dict]) -> list[tuple]:
+    """(input, output) of each chat span, sorted. None is an absent attribute."""
+    def count(span, attr):
+        value = span["attrs"].get(attr)
+        return None if value is None else int(value)
+    return sorted(((count(s, "gen_ai.usage.input_tokens"), count(s, "gen_ai.usage.output_tokens"))
+                   for s in spans), key=repr)
+
+
 def span_tokens(spans: list[dict]) -> tuple[int, int]:
     """Input and output tokens summed over spans, as Dash0 stored them."""
     return (sum(int(s["attrs"].get("gen_ai.usage.input_tokens") or 0) for s in spans),
@@ -155,16 +175,30 @@ def subagent_rows(events: list[dict]) -> dict:
 
 
 def session_file_usage(path: str) -> dict:
-    """What a child's own session file says: its id, calls and tokens."""
+    """What a child's own session file says: its id, calls and tokens.
+
+    A line that is not JSON, such as a last line that is not completely
+    written, or a file with no session header, exits 2: the file cannot be
+    compared, which is not a product mismatch.
+    """
     header, calls = {}, []
-    for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-        entry = json.loads(line)
+    lines = pathlib.Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    for number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as error:
+            bail(f"{path}:{number} is not JSON ({error}); the child session file "
+                 "is incomplete")
         if entry.get("type") == "session":
             header = entry
         message = entry.get("message") or {}
         if message.get("role") == "assistant" and message.get("model"):
             calls.append(usage_counts(message.get("usage") or {}))
-    return {"id": header.get("id"), "parent": header.get("parentSession"),
+    if not header.get("id"):
+        bail(f"{path} has no session header with an id; it cannot be compared")
+    return {"id": header["id"], "parent": header.get("parentSession"),
             "calls": len(calls), "input": sum(c[0] for c in calls),
             "output": sum(c[1] for c in calls)}
 
@@ -187,8 +221,32 @@ def parent_session_file(run_dir: pathlib.Path, session: str) -> pathlib.Path | N
     return None
 
 
-def subagent_table(config, dataset, rows, spans, run_dir, session, child_export):
-    """Rows for the sub-agent comparison, as (label, want, got)."""
+def resolved(path: str | None) -> str | None:
+    """A path with symlinks resolved, so /tmp and /private/tmp compare equal."""
+    return str(pathlib.Path(path).resolve()) if path else None
+
+
+def turn_root(span: dict, by_id: dict) -> dict | None:
+    """The span at the top of a span's parent chain, or None if a link is missing."""
+    seen = set()
+    while span.get("parent_span_id"):
+        if span["span_id"] in seen:
+            return None
+        seen.add(span["span_id"])
+        span = by_id.get(span["parent_span_id"])
+        if span is None:
+            return None
+    return span
+
+
+def subagent_table(config, dataset, rows, spans, run_dir, session, child_export,
+                   window=("now-2h", "now")):
+    """Rows for the sub-agent comparison, as (label, want, got).
+
+    Dash0 returns spans in query order, and children of one call can run in
+    parallel, so a child is matched to its agent span by agent name, never by
+    position.
+    """
     out = []
     by_id = {s["span_id"]: s for s in spans}
     agents = [s for s in spans if str(s["name"]).startswith("invoke_agent ")]
@@ -203,30 +261,41 @@ def subagent_table(config, dataset, rows, spans, run_dir, session, child_export)
     for call_id, children in rows["foreground"].items():
         tool = tool_of.get(call_id)
         under = [a for a in agents if tool and a["parent_span_id"] == tool["span_id"]]
-        out.append((f"  under subagent {call_id[-8:]}", [c.get("agent") for c in children],
-                    [a["attrs"].get("gen_ai.agent.name") for a in under]))
-        for child, agent in zip(children, under):
+        out.append((f"  under subagent {call_id[-8:]}",
+                    sorted(str(c.get("agent")) for c in children),
+                    sorted(str(a["attrs"].get("gen_ai.agent.name")) for a in under)))
+
+        want_tokens: Counter[tuple] = Counter()
+        for child in children:
+            want_in, want_out = usage_counts(child.get("usage") or {})
+            # A child that exported itself leaves no tokens on the parent's
+            # agent span: each token once.
+            want_tokens[(str(child.get("agent")), *((0, 0) if child_export else (want_in, want_out)))] += 1
+            file = child.get("sessionFile")
+            if not file or not pathlib.Path(file).exists():
+                out.append((f"    child {child.get('agent')} file", "present", "missing"))
+                continue
+            own = session_file_usage(file)
+            out.append(("    child file names the parent", str(parent_file), resolved(own["parent"])))
+            out.append(("    child file -> tool result", (own["input"], own["output"]),
+                        (want_in, want_out)))
+            if child_export:
+                out += child_session_rows(config, dataset, own, session, "    child session",
+                                          window)
+
+        got_tokens: Counter[tuple] = Counter()
+        for agent in under:
             usage = [s for s in spans if s["parent_span_id"] == agent["span_id"]
                      and str(s["name"]).startswith("chat")]
-            got_in, got_out = span_tokens(usage)
-            want_in, want_out = usage_counts(child.get("usage") or {})
-            file = child.get("sessionFile")
-            own = None
-            if file and pathlib.Path(file).exists():
-                own = session_file_usage(file)
-                out.append(("    child file names the parent", str(parent_file), own["parent"]))
-                out.append(("    child file -> tool result", (own["input"], own["output"]),
-                            (want_in, want_out)))
-            if child_export:
-                # The child loaded the plugin and exported itself, so the
-                # parent's agent span carries no tokens: each token once.
-                out.append(("    tokens on chat under agent", (0, 0), (got_in, got_out)))
-                if own:
-                    out += child_session_rows(config, dataset, own, session, "    child session")
-            else:
-                out.append(("    tokens on chat under agent", (want_in, want_out), (got_in, got_out)))
-            out.append(("    same trace as parent", agent["trace_id"],
-                        by_id.get(agent["parent_span_id"], {}).get("trace_id")))
+            got_tokens[(str(agent["attrs"].get("gen_ai.agent.name")), *span_tokens(usage))] += 1
+            # The agent span's turn root must be a chat root of this session.
+            # Its own parent is always in its trace, so that proves nothing.
+            root = turn_root(agent, by_id)
+            is_chat_root = root is not None and str(root["name"]).startswith("chat")
+            out.append(("    same trace as parent chat root", agent["trace_id"],
+                        root["trace_id"] if is_chat_root else None))
+        out.append(("    tokens on chat under agent",
+                    sorted(want_tokens.elements()), sorted(got_tokens.elements())))
 
     for child in rows["background"]:
         file = child.get("sessionFile")
@@ -234,13 +303,14 @@ def subagent_table(config, dataset, rows, spans, run_dir, session, child_export)
             out.append(("background child file", "present", "missing"))
             continue
         own = session_file_usage(file)
-        out += child_session_rows(config, dataset, own, session, f"background {own['id'][-8:]}")
+        out += child_session_rows(config, dataset, own, session,
+                                  f"background {own['id'][-8:]}", window)
     return out
 
 
-def child_session_rows(config, dataset, own, session, label):
+def child_session_rows(config, dataset, own, session, label, window=("now-2h", "now")):
     """A child that exported itself, read by its own session id."""
-    child_spans, error = wait_for_spans(config, own["id"], dataset, 1)
+    child_spans, error = wait_for_spans(config, own["id"], dataset, 1, window)
     if error:
         bail(error)
     if not child_spans:
@@ -257,12 +327,31 @@ def child_session_rows(config, dataset, own, session, label):
     ]
 
 
-def wait_for_spans(config, session, dataset, want_turns):
+# The span query's limit. A result this long can be cut off.
+SPAN_LIMIT = 100
+
+
+def run_window(manifest: dict) -> tuple[str, str]:
+    """The run's time window from manifest.json, widened as qa-attrs.py does."""
+    return (compare.widen(manifest.get("started_at") or "now-2h", -60),
+            compare.widen(manifest.get("ended_at") or "now", 120))
+
+
+def wait_for_spans(config, session, dataset, want_turns, window=("now-2h", "now")):
+    """Every span for the session in the window, once the turn roots are there.
+
+    A result as long as the limit can be cut off, which would read as a
+    mismatch, so it is returned as an error: the comparison cannot be made.
+    """
     deadline = time.monotonic() + SETTLE_SECONDS
     while True:
-        spans, error = compare.query_dash0(config, session, dataset, "now-2h", "now", 100)
+        spans, error = compare.query_dash0(config, session, dataset, *window, SPAN_LIMIT)
         if error:
             return None, error
+        if len(spans or []) >= SPAN_LIMIT:
+            return None, (f"the query for {session} returned {len(spans)} spans, its "
+                          f"limit of {SPAN_LIMIT}. The span set can be cut off, so a "
+                          "comparison would cover part of the session.")
         roots = [s for s in spans or [] if str(s["name"]).startswith("chat")
                  and not s.get("parent_span_id")]
         if len(roots) >= want_turns or time.monotonic() >= deadline:
@@ -275,11 +364,12 @@ def main() -> int:
     if len(sys.argv) != 2:
         bail(__doc__)
     run_dir = pathlib.Path(sys.argv[1])
-    for name in ("stream.jsonl", "session-id", "meta.json"):
+    for name in ("stream.jsonl", "session-id", "meta.json", "manifest.json"):
         if not (run_dir / name).exists():
             bail(f"{run_dir / name} does not exist; the run is incomplete")
     session = (run_dir / "session-id").read_text().strip()
     meta = json.loads((run_dir / "meta.json").read_text())
+    window = run_window(json.loads((run_dir / "manifest.json").read_text()))
     if meta.get("pi_exit"):
         bail(f"pi exited {meta['pi_exit']}; the run is incomplete")
 
@@ -293,7 +383,11 @@ def main() -> int:
     events = load_stream(run_dir / "stream.jsonl")
     want = expectation(events)
     children = subagent_rows(events)
-    spans, error = wait_for_spans(config, session, dataset, want["turns"])
+    if meta.get("pi_subagents") and not (children["foreground"] or children["background"]):
+        bail("the stream has no sub-agent child: no subagent result with "
+             "details.results and no bg_wait completion. The model did not "
+             "follow the prompt; run it again.")
+    spans, error = wait_for_spans(config, session, dataset, want["turns"], window)
     if error:
         bail(error)
     if not spans:
@@ -337,11 +431,12 @@ def main() -> int:
         ("tool errors", dict(want["errors"]), dict(got_errors)),
         ("input tokens", want_in, got_in),
         ("output tokens", want_out, got_out),
+        ("(input, output) per call", call_pairs(want["calls"]), span_pairs(chats)),
         ("harness", {"pi"}, harness),
     ]
     if children["foreground"] or children["background"]:
         rows += subagent_table(config, dataset, children, spans, run_dir, session,
-                               bool(meta.get("pi_subagents_child_export")))
+                               bool(meta.get("pi_subagents_child_export")), window)
     print(f"run     : {run_dir}")
     print(f"session : {session}")
     print(f"dataset : {dataset}")

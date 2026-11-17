@@ -33,8 +33,8 @@ qa/tools/qa-pi-compare.py qa/runs/spec-pi-usage
 
 For each assistant `message_end` in `stream.jsonl`, take Pi's normalized
 usage. The expected input tokens are `usage.input + usage.cacheRead +
-usage.cacheWrite`, and the expected output tokens are `usage.output`. Sum over
-all calls. Pi reports `input` without cache for every provider. The GenAI
+usage.cacheWrite`, and the expected output tokens are `usage.output`. Compare
+the calls one by one, and sum over all calls. Pi reports `input` without cache for every provider. The GenAI
 conventions, and Dash0's cost processor for every harness except Claude Code,
 expect input with cache.
 
@@ -50,6 +50,9 @@ expect input with cache.
   spans equals the expected input.
 - `output tokens`: the sum of `gen_ai.usage.output_tokens` equals the sum of
   `usage.output`.
+- `(input, output) per call`: the multiset of (input, output) pairs over the
+  `chat` spans equals the pairs of the calls. Tokens moved from one call to
+  another fail here, also when the sums agree.
 - `models`: the multiset of models agrees. The comparer reads
   `dash0.gen_ai.request.model.original`, because Dash0 normalizes
   `gen_ai.request.model` at ingest: `claude-haiku-4-5-20251001` is stored as

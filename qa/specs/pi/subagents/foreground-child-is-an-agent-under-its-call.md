@@ -65,12 +65,15 @@ file.
 - `child file names the parent` agrees: the child file is a child of this run.
 - `child file -> tool result` agrees: the tool result reports what the child
   file holds.
-- `tokens on chat under agent` agrees with both.
-- `same trace as parent` agrees.
+- `tokens on chat under agent` agrees with both. It lists `(agent, input,
+  output)` per child, matched by agent name, not by the order Dash0 returns.
+- `same trace as parent chat root` agrees: the agent span's chain ends at a
+  `chat` root of the parent, in the same trace.
 - The parent's `input tokens` and `output tokens` rows agree without the child,
   so no token is on two spans.
 
-If the stream has no `subagent` call, the model did not delegate. Run it again.
+If the stream has no `subagent` call, the model did not delegate. The comparer
+then exits `2`. Run it again.
 
 ## Tolerance
 

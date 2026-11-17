@@ -37,7 +37,8 @@ qa/tools/qa-pi-compare.py qa/runs/spec-pi-subagent-child-export
 
 - The `invoke_agent delegate` span is still under `execute_tool subagent`,
   so the trace shows that a child ran.
-- It has no `chat` child with tokens: `tokens on chat under agent` is `(0, 0)`.
+- It has no `chat` child with tokens: `tokens on chat under agent` is
+  `[('delegate', 0, 0)]`.
 - The child's own session has one `chat` span per model call in its file, with
   the same tokens, linked to the parent session.
 
@@ -48,7 +49,7 @@ As in the foreground spec. The child file is the record of the child's tokens.
 ## Then
 
 - `qa-pi-compare.py` exits `0` and prints `AGREEMENT`.
-- `tokens on chat under agent` is `(0, 0)` on both sides.
+- `tokens on chat under agent` is `[('delegate', 0, 0)]` on both sides.
 - `child session model calls`, `tokens (in, out)` and `linked to parent
   session` agree with the child file.
 

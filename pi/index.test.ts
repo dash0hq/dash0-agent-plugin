@@ -9,6 +9,7 @@ import {
   register,
   sessionIDFromPath,
   subagentsOf,
+  toolUsage,
   type Turn,
 } from "./index";
 
@@ -673,4 +674,130 @@ test("a turn that fits is sent unchanged", () => {
   };
   expect(fit(turn)).toBe(JSON.stringify(turn));
   expect(turn.prompt).toBe("p");
+});
+
+// A tool that calls a model itself reports that usage in its result. Pi puts
+// the usage of a nested call on that call's own result, so each tool keeps
+// what it reported.
+test("a tool carries the model usage that it reported", () => {
+  const { sent, fire } = setup();
+  fire("before_agent_start", { messageType: "user", prompt: "x" });
+  fire("tool_execution_start", { toolCallId: "c1", toolName: "codemode" });
+  fire("tool_execution_start", {
+    toolCallId: "c1/1",
+    toolName: "web_search",
+    parentToolCallId: "c1",
+  });
+  fire("tool_execution_end", {
+    toolCallId: "c1/1",
+    toolName: "web_search",
+    result: {
+      content: [],
+      usage: {
+        input: 5,
+        output: 7,
+        cacheRead: 11,
+        cacheWrite: 13,
+        totalTokens: 36,
+      },
+    },
+  });
+  fire("tool_execution_end", {
+    toolCallId: "c1",
+    toolName: "codemode",
+    result: {
+      content: [],
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+  });
+  fire("tool_execution_start", { toolCallId: "c2", toolName: "bash" });
+  fire("tool_execution_end", {
+    toolCallId: "c2",
+    toolName: "bash",
+    result: { content: [] },
+  });
+  fire("agent_settled", { aborted: false });
+  expect(sent[0].tools.map((t) => [t.id, t.usage])).toEqual([
+    ["c1/1", { input: 5, output: 7, cache_read: 11, cache_write: 13 }],
+    ["c1", undefined],
+    ["c2", undefined],
+  ]);
+});
+
+// pi-subagents reports its children's total as the usage of the subagent
+// result and of a wait result. The children are already counted.
+test("subagent and wait results give no tool usage", () => {
+  const usage = { input: 4, output: 460, cacheRead: 5145, cacheWrite: 5211 };
+  expect(
+    toolUsage("subagent", { ...subagentResult([childRow()]), usage }),
+  ).toBeUndefined();
+  expect(
+    toolUsage("subagent", {
+      details: { mode: "single", runId: "r", results: [] },
+      usage,
+    }),
+  ).toBeUndefined();
+  expect(
+    toolUsage("bg_wait", {
+      usage,
+      details: { mode: "management", results: [], completions: [{}] },
+    }),
+  ).toBeUndefined();
+  expect(toolUsage("bash", { usage })).toEqual({
+    input: 4,
+    output: 460,
+    cache_read: 5145,
+    cache_write: 5211,
+  });
+});
+
+test("malformed tool usage gives none, never throws", () => {
+  for (const result of [
+    undefined,
+    null,
+    "x",
+    { usage: null },
+    { usage: "x" },
+    { usage: { input: -1, output: Number.NaN } },
+    {
+      get usage() {
+        throw new Error("boom");
+      },
+    },
+  ])
+    expect(toolUsage("bash", result)).toBeUndefined();
+});
+
+// A tool's usage carries tokens, so the tool is kept as long as child rows.
+test("a tool with usage outlives tools without tokens when a turn is cut", () => {
+  const { sent, encoded, fire } = setup();
+  fire("before_agent_start", { messageType: "user", prompt: "p" });
+  const long = (i: number) => `${i}-${"x".repeat(250)}`;
+  for (let i = 0; i < 400; i++) {
+    fire("tool_execution_start", { toolCallId: long(i), toolName: long(i) });
+    fire("tool_execution_end", {
+      toolCallId: long(i),
+      toolName: long(i),
+      result: i % 100 === 0 ? { usage: { input: 1, output: 2 } } : {},
+    });
+  }
+  for (let i = 0; i < 40; i++) {
+    const id = `s${i}`;
+    fire("tool_execution_start", { toolCallId: id, toolName: "subagent" });
+    fire("tool_execution_end", {
+      toolCallId: id,
+      toolName: "subagent",
+      result: subagentResult(
+        Array.from({ length: 64 }, (_, n) =>
+          childRow({ agent: long(n), model: `p/${long(n)}` }),
+        ),
+      ),
+    });
+  }
+  fire("agent_settled", { aborted: false });
+  const turn = sent[0];
+  expect(turn.truncated).toBe(true);
+  expect(Buffer.byteLength(encoded[0])).toBeLessThanOrEqual(helperLimit);
+  expect(turn.tools.filter((t) => t.usage)).toHaveLength(4);
+  expect(turn.tools.filter((t) => !t.usage && !t.subagents)).toHaveLength(0);
 });

@@ -82,6 +82,7 @@ files, so keep it on unless you need the content.
 | --------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `chat <model>`        | none                             | The turn. The last model call names it and supplies its tokens.                                        |
 | `chat <model>`        | turn                             | Each earlier model call, with its own timing, model, provider and tokens.                              |
+| `chat`                | a tool                           | The tokens of model calls that the tool made itself. See below.                                        |
 | `execute_tool <tool>` | turn, or the tool that called it | One tool call. A nested call, such as one a `codemode` script makes, is a child of that script's span. |
 
 `gen_ai.harness.name` is `pi`, and the default `service.name` is `pi`.
@@ -109,6 +110,16 @@ error. Its status stays unset, and an attribute records the stop:
 `dash0.pi.call.stop_reason=aborted` on the call. A turn whose last model call
 failed has `dash0.pi.turn.status=error` and status `Error`.
 
+A tool can call a model itself and report that usage in its result. Pi
+reports the usage of a nested tool call on that call's own result, so each
+token is on one tool. The helper puts the tokens of each such tool on a
+`chat` span under the tool's span, with `dash0.pi.usage.source=tool` and the
+tool's timing. Pi gives no provider or model for this usage, so the span has
+neither, and Dash0 cannot calculate its cost. It is not a model call of the
+agent. pi-subagents reports the total of its children as the usage of its
+`subagent` and wait results. Those results get no usage span, because the
+children's own spans already carry the tokens.
+
 | Attribute                                 | Value                                                                                                                                                                                         |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dash0.gen_ai.tool.skill.name`, `.source` | The skill a turn loaded. `command` on the turn root for a `/skill:name` prompt. `model` on the `read` span that read a loaded skill's `SKILL.md`.                                             |
@@ -118,6 +129,7 @@ failed has `dash0.pi.turn.status=error` and status `Error`.
 | `dash0.pi.truncated`                      | `true` when the extension dropped content, tools or sub-agent rows to stay inside its 1 MiB envelope. Absent otherwise.                                                                       |
 | `dash0.pi.turn.status`                    | `aborted` when the user stopped the turn, `error` when its last model call failed. On the turn root. Absent on a completed turn.                                                              |
 | `dash0.pi.call.stop_reason`               | `aborted` on a model call that the user stopped.                                                                                                                                              |
+| `dash0.pi.usage.source`                   | `tool` on the `chat` span that carries a tool's own model usage.                                                                                                                              |
 
 ## Claude Code through Pi
 

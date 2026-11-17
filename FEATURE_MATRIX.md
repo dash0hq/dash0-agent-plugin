@@ -232,7 +232,7 @@ Amp does. See [the Pi developer guide](pi/README.md).
 | Providers in a session | Per model call, never per session. Pi provider IDs map to `gen_ai.provider.name`; `dash0.pi.provider` keeps the Pi ID |
 | Tokens | Pi's normalized usage. Input is exported inclusive of cache reads and writes. A call with no usage has no token attributes |
 | Billing mode | `subscription` when Pi's auth for the provider is a subscription login (Pi's `isSubscription` OAuth marker), else `unknown`. Never `api`: an API key can sit behind a proxy |
-| Tools | `tool_execution_start` / `_end`, so blocked, unknown and invalid calls also get a span. Nested calls, for example from `codemode`, are children of the calling tool |
+| Tools | `tool_execution_start` / `_end`, so blocked, unknown and invalid calls also get a span. Nested calls, for example from `codemode`, are children of the calling tool. A tool's own model usage is a `chat` span under it with `dash0.pi.usage.source=tool` and no provider or model |
 | Aborted turns | `agent_settled.aborted`; root status stays `Unset` with `dash0.pi.turn.status=aborted`. An aborted model call has `dash0.pi.call.stop_reason=aborted`. A failed turn or call has status `Error` |
 | Forks | `dash0.pi.session.parent.id` from the session header. Sub-agents that run as separate `pi` processes are not linked |
 | Sub-agents (pi-subagents) | Foreground: `invoke_agent <agent>` under `execute_tool subagent`, with one aggregate `chat` span that carries the child's total tokens from the tool result. Background: a separate session linked by `dash0.pi.session.parent.id`, not in the parent trace |

@@ -45,6 +45,8 @@ type Tool = {
   skill?: string;
   /** The children that a foreground pi-subagents call ran. */
   subagents?: Subagent[];
+  /** Model usage that the tool reported for its own work. */
+  usage?: Usage;
 };
 /** One foreground pi-subagents child, from the subagent tool result. */
 type Subagent = {
@@ -307,6 +309,35 @@ function readSubagents(
   return out.length ? out : undefined;
 }
 
+/**
+ * The model usage that a tool reported for its own work, from Pi's tool
+ * result. Pi reports the usage of each nested call on that call's own result,
+ * so each token is on one tool. Undefined when the tool reported no tokens.
+ *
+ * pi-subagents reports the total of its children as the usage of its
+ * `subagent` result and of its management results, such as the wait tool's.
+ * Those children are already counted: a foreground child by its row on the
+ * subagent call, a background child by its own session. So these results give
+ * no usage.
+ */
+export function toolUsage(
+  toolName: string,
+  result: unknown,
+): Usage | undefined {
+  try {
+    if (toolName === "subagent") return undefined;
+    const r = result as { usage?: unknown; details?: unknown } | undefined;
+    const d = r?.details as { mode?: unknown; results?: unknown } | undefined;
+    if (d?.mode === "management" && Array.isArray(d.results)) return undefined;
+    const usage = toUsage(r?.usage);
+    return usage.input + usage.output + usage.cache_read + usage.cache_write > 0
+      ? usage
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The skill that a /skill:name command expanded into, as Pi writes it. */
 const skillBlock = /^<skill name="([^"]{1,128})" location="/;
 
@@ -323,8 +354,9 @@ function skillAt(
 
 /**
  * Make the turn fit the envelope limit. Content goes first, then tools
- * without children, then child rows, then the other tools. A child row
- * carries tokens, so it is kept the longest. Returns the encoded turn.
+ * without children or usage, then child rows, then the other tools. A child
+ * row and a tool's usage carry tokens, so they are kept the longest. Returns
+ * the encoded turn.
  */
 export function fit(turn: Turn): string {
   let json = "";
@@ -340,11 +372,12 @@ export function fit(turn: Turn): string {
   // Each step halves what it keeps until the turn fits, so a turn of any
   // size is encoded a few dozen times at most.
   const all = turn.tools;
-  const plain = all.filter((t) => !t.subagents);
+  const carriesTokens = (t: Tool) => t.subagents || t.usage;
+  const plain = all.filter((t) => !carriesTokens(t));
   for (let n = plain.length; !fits() && n > 0; ) {
     n >>= 1;
     const kept = new Set(plain.slice(0, n));
-    turn.tools = all.filter((t) => t.subagents || kept.has(t));
+    turn.tools = all.filter((t) => carriesTokens(t) || kept.has(t));
   }
   const parents = turn.tools;
   for (let rows = maxSubagents; !fits() && rows > 0; ) {
@@ -510,6 +543,7 @@ export function register(
         event.toolName === "subagent"
           ? subagentsOf(ctx, event.result?.details)
           : undefined,
+      usage: toolUsage(event.toolName, event.result),
     });
   });
 

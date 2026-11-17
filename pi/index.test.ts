@@ -5,6 +5,7 @@ import { expect, test } from "bun:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   billingMode,
+  fit,
   register,
   sessionIDFromPath,
   subagentsOf,
@@ -13,13 +14,22 @@ import {
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
-function setup(session = "019a-session", parentSession?: string) {
+function setup(
+  session = "019a-session",
+  parentSession?: string,
+  handedOff = true,
+) {
   const handlers = new Map<string, Handler>();
   const sent: Turn[] = [];
+  const encoded: string[] = [];
   const api = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
   } as unknown as ExtensionAPI;
-  register(api, (turn) => sent.push(turn));
+  register(api, (turn, json) => {
+    sent.push(turn);
+    encoded.push(json);
+    return handedOff;
+  });
   const ctx = {
     sessionManager: {
       getSessionId: () => session,
@@ -30,7 +40,7 @@ function setup(session = "019a-session", parentSession?: string) {
   };
   const fire = (name: string, event: Record<string, unknown> = {}) =>
     handlers.get(name)?.({ type: name, ...event }, ctx);
-  return { sent, fire, handlers };
+  return { sent, encoded, fire, handlers };
 }
 
 /** A model registry where each provider maps to [OAuth in use, subscription]. */
@@ -230,13 +240,14 @@ test("a nested tool call belongs to the model call of its parent", () => {
   ]);
 });
 
-test("a run without a prompt still makes a turn, without a prompt", () => {
+// Pi 1.5.0 emits agent_start only inside a run that before_agent_start
+// opened, so events without that are not a turn.
+test("a run without before_agent_start makes no turn", () => {
   const { sent, fire } = setup();
   fire("agent_start");
   fire("message_end", assistant("m", "p", [{ type: "text", text: "hi" }]));
   fire("agent_settled", { aborted: false });
-  expect(sent).toHaveLength(1);
-  expect(sent[0].prompt).toBeUndefined();
+  expect(sent).toHaveLength(0);
 });
 
 test("a custom-message run carries no prompt", () => {
@@ -499,12 +510,12 @@ test("another extension's subagent tool gives no children", () => {
   ).toHaveLength(1);
 });
 
-// With pi-subagents' defaultSubagentOnlyExtensions, this extension also loads
-// into a foreground child, in the same process. The child then exports its
-// own session, and the parent must not count the same tokens again.
-test("a child that exported itself keeps its agent but not its tokens", () => {
-  const child = setup("019a-child");
+/** A child session runs one turn, and its parent then reads the child's row. */
+function childThenParent(childHandedOff: boolean) {
+  const child = setup("019a-child", undefined, childHandedOff);
   child.fire("session_start", { reason: "startup" });
+  child.fire("before_agent_start", { messageType: "user", prompt: "task" });
+  child.fire("agent_settled", { aborted: false });
   const parent = setup();
   parent.fire("before_agent_start", { messageType: "user", prompt: "x" });
   parent.fire("tool_execution_start", {
@@ -520,7 +531,14 @@ test("a child that exported itself keeps its agent but not its tokens", () => {
     ]),
   });
   parent.fire("agent_settled", { aborted: false });
-  const [own, other] = parent.sent[0].tools[0].subagents ?? [];
+  return parent.sent[0].tools[0].subagents ?? [];
+}
+
+// With pi-subagents' defaultSubagentOnlyExtensions, this extension also loads
+// into a foreground child, in the same process. The child then exports its
+// own session, and the parent must not count the same tokens again.
+test("a child that exported itself keeps its agent but not its tokens", () => {
+  const [own, other] = childThenParent(true);
   expect(own.agent).toBe("delegate");
   expect(own.model).toBeUndefined();
   expect(own.usage).toEqual({
@@ -530,4 +548,129 @@ test("a child that exported itself keeps its agent but not its tokens", () => {
     cache_write: 0,
   });
   expect(other.model).toBe("claude-code/claude-haiku-4-5");
+});
+
+// A child that started but could not hand its turn to a helper, for example
+// at the helper cap, exported nothing. Its tokens then stay with the parent.
+test("a child whose export did not start keeps its tokens in the parent", () => {
+  const [own] = childThenParent(false);
+  expect(own.model).toBe("claude-code/claude-haiku-4-5");
+  expect(own.usage.output).toBe(460);
+});
+
+// The helper drops a part count that is larger than its total. The bridge
+// drops it first, so the call keeps its other tokens.
+test("a part count larger than its total is dropped alone", () => {
+  const { sent, fire } = setup();
+  fire("before_agent_start", { messageType: "user", prompt: "x" });
+  fire(
+    "message_end",
+    assistant("m", "p", [], {
+      usage: {
+        input: 1,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 3,
+        cacheWrite1h: 4,
+        reasoning: 6,
+      },
+    }),
+  );
+  fire(
+    "message_end",
+    assistant("m", "p", [], {
+      usage: {
+        input: 1,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 3,
+        cacheWrite1h: 3,
+        reasoning: 5,
+      },
+    }),
+  );
+  fire("agent_settled", { aborted: false });
+  expect(sent[0].calls.map((c) => c.usage)).toEqual([
+    { input: 1, output: 5, cache_read: 0, cache_write: 3 },
+    {
+      input: 1,
+      output: 5,
+      cache_read: 0,
+      cache_write: 3,
+      cache_write_1h: 3,
+      reasoning: 5,
+    },
+  ]);
+});
+
+// splitModel in internal/source/pi gives no provider for a model without a
+// slash, so the bridge looks up no billing mode for it.
+test("a child model without a provider gets no billing mode", () => {
+  const ctx = {
+    modelRegistry: registry({ "gpt-5": [true, true] }),
+  } as unknown as Parameters<typeof subagentsOf>[0];
+  const rows = subagentsOf(ctx, {
+    mode: "single",
+    runId: "r",
+    results: [
+      { agent: "a", exitCode: 0, usage: {}, model: "gpt-5" },
+      { agent: "b", exitCode: 0, usage: {}, model: "/gpt-5" },
+    ],
+  });
+  expect(rows?.map((r) => r.billing_mode)).toEqual([undefined, undefined]);
+});
+
+const helperLimit = 1 << 20;
+
+// Shedding content is not enough when the turn has many tools with long IDs
+// and many children. The bridge then drops tools and child rows until the
+// envelope is under the helper's limit.
+test("an oversized turn is cut until it fits the helper's limit", () => {
+  const { sent, encoded, fire } = setup();
+  fire("before_agent_start", { messageType: "user", prompt: "p" });
+  const long = (i: number) => `${i}-${"x".repeat(250)}`;
+  for (let i = 0; i < 400; i++) {
+    fire("tool_execution_start", { toolCallId: long(i), toolName: long(i) });
+    fire("tool_execution_end", { toolCallId: long(i), toolName: long(i) });
+  }
+  for (let i = 0; i < 40; i++) {
+    const id = `s${i}`;
+    fire("tool_execution_start", { toolCallId: id, toolName: "subagent" });
+    fire("tool_execution_end", {
+      toolCallId: id,
+      toolName: "subagent",
+      result: subagentResult(
+        Array.from({ length: 64 }, (_, n) =>
+          childRow({ agent: long(n), model: `p/${long(n)}` }),
+        ),
+      ),
+    });
+  }
+  fire("agent_settled", { aborted: false });
+  const turn = sent[0];
+  expect(turn.truncated).toBe(true);
+  expect(Buffer.byteLength(encoded[0])).toBeLessThanOrEqual(helperLimit);
+  expect(encoded[0]).toBe(JSON.stringify(turn));
+  // Child rows carry tokens, so tools without children go first, and then
+  // each call keeps its first children.
+  expect(turn.tools.filter((t) => !t.subagents)).toHaveLength(0);
+  const rows = turn.tools.map((t) => t.subagents?.length ?? 0);
+  expect(rows).toHaveLength(40);
+  expect(Math.min(...rows)).toBeGreaterThan(0);
+  expect(Math.max(...rows)).toBeLessThan(64);
+});
+
+test("a turn that fits is sent unchanged", () => {
+  const turn: Turn = {
+    session_id: "s",
+    start: "a",
+    end: "b",
+    status: "done",
+    calls: [],
+    tools: [],
+    truncated: false,
+    prompt: "p",
+  };
+  expect(fit(turn)).toBe(JSON.stringify(turn));
+  expect(turn.prompt).toBe("p");
 });

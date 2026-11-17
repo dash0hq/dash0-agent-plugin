@@ -178,19 +178,31 @@ const count = (n: unknown): number =>
 const optionalCount = (n: unknown): number | undefined =>
   typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
 
-/** Pi's usage, as Pi and pi-subagents both report it, in the helper's names. */
+/**
+ * Pi's usage, as Pi and pi-subagents both report it, in the helper's names.
+ * A part count that is larger than its total is dropped alone, as the helper
+ * also does, so the other counts of the call stay.
+ */
 function toUsage(u: unknown): Usage {
   const v = (typeof u === "object" && u !== null ? u : {}) as Record<
     string,
     unknown
   >;
+  const output = count(v.output);
+  const cacheWrite = count(v.cacheWrite);
+  const cacheWrite1h = optionalCount(v.cacheWrite1h);
+  const reasoning = optionalCount(v.reasoning);
   return {
     input: count(v.input),
-    output: count(v.output),
+    output,
     cache_read: count(v.cacheRead),
-    cache_write: count(v.cacheWrite),
-    cache_write_1h: optionalCount(v.cacheWrite1h),
-    reasoning: optionalCount(v.reasoning),
+    cache_write: cacheWrite,
+    cache_write_1h:
+      cacheWrite1h !== undefined && cacheWrite1h <= cacheWrite
+        ? cacheWrite1h
+        : undefined,
+    reasoning:
+      reasoning !== undefined && reasoning <= output ? reasoning : undefined,
   };
 }
 const validString = (s: unknown): s is string =>
@@ -271,17 +283,18 @@ function readSubagents(
       typeof r.exitCode !== "number"
     )
       continue;
-    // A child that exported itself has its own session_start before the
-    // parent's tool call ends, because Pi starts the child's session first.
-    // Each file is looked up once, so the set does not grow with children.
+    // A child that exported itself handed its turn to a helper before the
+    // parent's tool call ends, because the child settles first. Each file is
+    // looked up once, so the set does not grow with children.
     const exported =
       typeof r.sessionFile === "string" &&
       exportedSessions.delete(r.sessionFile);
     const usage = (exported ? {} : r.usage) as Record<string, unknown>;
     const model = !exported && validString(r.model) ? r.model : undefined;
     // The first slash separates the provider, as in splitModel in
-    // internal/source/pi.
-    const provider = model?.split("/")[0];
+    // internal/source/pi. A model without a slash names no provider.
+    const slash = model?.indexOf("/") ?? -1;
+    const provider = slash > 0 ? model?.slice(0, slash) : undefined;
     out.push({
       agent: r.agent,
       model,
@@ -309,13 +322,59 @@ function skillAt(
 }
 
 /**
- * Collect each user turn and hand it to `send` once Pi settles.
+ * Make the turn fit the envelope limit. Content goes first, then tools
+ * without children, then child rows, then the other tools. A child row
+ * carries tokens, so it is kept the longest. Returns the encoded turn.
+ */
+export function fit(turn: Turn): string {
+  let json = "";
+  const fits = () => {
+    json = JSON.stringify(turn);
+    return Buffer.byteLength(json, "utf8") <= maxEnvelope;
+  };
+  if (fits()) return json;
+  turn.truncated = true;
+  turn.prompt = undefined;
+  turn.response = undefined;
+  turn.tools = turn.tools.map(({ input, output, ...tool }) => tool);
+  // Each step halves what it keeps until the turn fits, so a turn of any
+  // size is encoded a few dozen times at most.
+  const all = turn.tools;
+  const plain = all.filter((t) => !t.subagents);
+  for (let n = plain.length; !fits() && n > 0; ) {
+    n >>= 1;
+    const kept = new Set(plain.slice(0, n));
+    turn.tools = all.filter((t) => t.subagents || kept.has(t));
+  }
+  const parents = turn.tools;
+  for (let rows = maxSubagents; !fits() && rows > 0; ) {
+    rows >>= 1;
+    turn.tools = parents.map((t) =>
+      t.subagents && t.subagents.length > rows
+        ? { ...t, subagents: rows ? t.subagents.slice(0, rows) : undefined }
+        : t,
+    );
+  }
+  const rest = turn.tools;
+  for (let n = rest.length; !fits() && n > 0; ) {
+    n >>= 1;
+    turn.tools = rest.slice(0, n);
+  }
+  return json;
+}
+
+/**
+ * Collect each user turn and hand it to `send` once Pi settles. `send`
+ * returns false when it could not hand the turn to a helper.
  *
  * A turn starts at before_agent_start and ends at agent_settled, not at
  * agent_end: Pi can retry, compact and retry, or run queued follow-ups after
  * agent_end, and all of that is still the same user turn.
  */
-export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
+export function register(
+  pi: ExtensionAPI,
+  send: (turn: Turn, json: string) => boolean,
+) {
   let state: Active | undefined;
   // SKILL.md path to skill name, from the skills Pi loaded for this run. A
   // read of any other file called SKILL.md is not a skill load.
@@ -358,12 +417,6 @@ export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
       active.turn.skill =
         typeof prompt === "string" ? skillBlock.exec(prompt)?.[1] : undefined;
     }
-  });
-
-  // A run that no prompt started, for example after an extension sent a
-  // message while Pi was busy starting, still gets a turn.
-  pi.on("agent_start", (_event, ctx) => {
-    if (!state) begin(ctx);
   });
 
   pi.on("message_end", (event, ctx) => {
@@ -443,11 +496,6 @@ export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
     });
   });
 
-  pi.on("session_start", (_event, ctx) => {
-    const file = ctx.sessionManager.getSessionFile();
-    if (typeof file === "string") exportedSessions.add(file);
-  });
-
   pi.on("tool_execution_end", (event, ctx) => {
     const active = state;
     const call = active?.running.get(event.toolCallId);
@@ -465,7 +513,7 @@ export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
     });
   });
 
-  pi.on("agent_settled", (event) => {
+  pi.on("agent_settled", (event, ctx) => {
     const active = state;
     state = undefined;
     if (!active) return;
@@ -489,14 +537,18 @@ export function register(pi: ExtensionAPI, send: (turn: Turn) => void) {
     turn.response = take(active, () => answer);
     turn.truncated ||= active.turn.truncated;
     // IDs, names and counts are outside the content budget, and escaping
-    // grows control-heavy text, so shed content, never the turn.
-    if (Buffer.byteLength(JSON.stringify(turn), "utf8") > maxEnvelope) {
-      turn.truncated = true;
-      turn.prompt = undefined;
-      turn.response = undefined;
-      turn.tools = turn.tools.map(({ input, output, ...tool }) => tool);
+    // grows control-heavy text, so shed parts of the turn, never the turn.
+    const json = fit(turn);
+    // A parent in this process leaves out the tokens of a child that handed
+    // its turn to a helper. A child that could not keep them in the parent.
+    if (send(turn, json)) {
+      try {
+        const file = ctx.sessionManager.getSessionFile();
+        if (typeof file === "string") exportedSessions.add(file);
+      } catch {
+        // No session file: no parent can look this session up.
+      }
     }
-    send(turn);
   });
 
   // A session switch, fork or reload replaces this extension instance, so a
@@ -550,9 +602,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Print mode exits as soon as the prompt is answered. A detached helper
-  // survives that, but the envelope must reach its stdin first.
-  pi.on("session_shutdown", async () => {
-    if (pending.size === 0) return;
+  // survives that, but the envelope must reach its stdin first. Only a quit
+  // ends the process: after a session switch, fork or reload, the write
+  // continues, so the switch does not wait.
+  pi.on("session_shutdown", async (event) => {
+    if (event.reason !== "quit" || pending.size === 0) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       Promise.allSettled(pending),
@@ -563,11 +617,11 @@ export default function (pi: ExtensionAPI) {
     clearTimeout(timer);
   });
 
-  register(pi, (turn) => {
+  register(pi, (_turn, json) => {
     // The turn is lost, so the user hears about it as for a failed export.
     if (live >= maxHelpers) {
       warn?.();
-      return;
+      return false;
     }
     let child;
     try {
@@ -583,7 +637,7 @@ export default function (pi: ExtensionAPI) {
       });
     } catch {
       warn?.();
-      return;
+      return false;
     }
     live++;
     child.unref();
@@ -598,9 +652,10 @@ export default function (pi: ExtensionAPI) {
     child.on("close", (code) => end(code !== 0));
     const written = new Promise<void>((resolve) => {
       child.stdin.on("error", () => resolve());
-      child.stdin.end(JSON.stringify(turn), () => resolve());
+      child.stdin.end(json, () => resolve());
     });
     pending.add(written);
     void written.then(() => pending.delete(written));
+    return true;
   });
 }

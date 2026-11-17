@@ -15,11 +15,10 @@ and no state on disk between turns.
 | Pi event                          | Use                                                                          |
 | --------------------------------- | ---------------------------------------------------------------------------- |
 | `before_agent_start`              | Starts a turn. Records the prompt of a user run.                             |
-| `agent_start`                     | Starts a turn for a run that no prompt started.                              |
 | `message_end` (assistant)         | One model call: provider, model, timing, stop reason, effort level, tokens.  |
 | `tool_execution_start` and `_end` | One tool call: timing, error flag, arguments, result.                        |
 | `agent_settled`                   | Ends the turn and sends it. `aborted` marks a turn that the user stopped.    |
-| `session_shutdown`                | Drops an open turn and waits up to 2 seconds for envelopes still in transit. |
+| `session_shutdown`                | Drops an open turn. On quit, waits up to 2 seconds for envelopes in transit. |
 
 A turn ends at `agent_settled`, not at `agent_end`. After `agent_end`, Pi can
 retry a model call, compact the context and retry, or run queued follow-up
@@ -110,7 +109,7 @@ attributes.
 | `dash0.pi.provider`                       | Pi's provider ID, for example `claude-code`. On chat spans.                                                                                                                                   |
 | `dash0.gen_ai.billing_mode`               | `subscription` when Pi used a subscription login for the call, for example Claude Pro/Max through `claude-code` or ChatGPT through `openai-codex`. Else `unknown`. On chat spans with tokens. |
 | `dash0.pi.session.parent.id`              | The session that Pi forked or cloned this session from. On every span.                                                                                                                        |
-| `dash0.pi.truncated`                      | `true` when the extension dropped content to stay inside its 1 MiB envelope. Absent otherwise.                                                                                                |
+| `dash0.pi.truncated`                      | `true` when the extension dropped content, tools or sub-agent rows to stay inside its 1 MiB envelope. Absent otherwise.                                                                       |
 
 ## Claude Code through Pi
 
@@ -156,7 +155,9 @@ children too, with the pi-subagents setting in Pi's `settings.json`:
 
 The child then exports its own session, as a background child does. The
 parent still sends the `invoke_agent` span, but without a model or tokens, so
-the child's tokens are counted one time.
+the child's tokens are counted one time. When the child could not start its
+helper, the parent keeps the child's model and tokens. A helper that starts
+and then fails loses the child's turn, as it would for any session.
 
 ## Limits
 

@@ -287,3 +287,44 @@ test("a failing export after the session ended does not crash Pi", async () => {
   expect(reads).toBe(1);
   expect(crashes).toEqual([]);
 });
+
+// Only a quit ends the Pi process. A session switch, fork or reload must not
+// wait for a helper that is slow to read its envelope.
+test.skipIf(process.platform === "win32")(
+  "only a quit waits for envelopes still being written",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    isolate(home);
+    // A helper that does not read, so an envelope larger than the pipe
+    // buffer stays pending.
+    writeFileSync(join(dir, "pi-on-event"), "#!/bin/sh\nexec sleep 3\n", {
+      mode: 0o755,
+    });
+
+    const { fire } = await load(dir);
+    await fire("session_start", { reason: "startup" });
+    await fire("before_agent_start", { messageType: "user", prompt: "x" });
+    for (let i = 0; i < 16; i++) {
+      await fire("tool_execution_start", {
+        toolCallId: `t${i}`,
+        toolName: "bash",
+        args: { command: "x".repeat(16_000) },
+      });
+      await fire("tool_execution_end", {
+        toolCallId: `t${i}`,
+        toolName: "bash",
+      });
+    }
+    await fire("agent_settled", { aborted: false });
+    let started = Date.now();
+    await fire("session_shutdown", { reason: "new" });
+    expect(Date.now() - started).toBeLessThan(500);
+    started = Date.now();
+    await fire("session_shutdown", { reason: "quit" });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1500);
+  },
+);

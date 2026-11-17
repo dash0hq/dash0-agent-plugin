@@ -49,7 +49,11 @@ From Pi's `--mode json` stream in `stream.jsonl`, which the plugin never reads:
 
 - `turns -> chat roots`: Dash0 holds one parentless `chat` span per turn.
 - `model calls -> chat spans`: one `chat` span per model call. The root is the
-  last call of the turn. Each earlier call is a child of the root.
+  last call of the turn. Each earlier call is a child of the root. A `chat`
+  span with `dash0.pi.usage.source=tool` carries a tool's own model usage and
+  is not a model call, so this row does not count it.
+- `aborted turns -> turn.status`: each `agent_settled` with `aborted: true` is
+  a root with `dash0.pi.turn.status=aborted`. 0 here.
 - `tools`: one `execute_tool` span per tool call, with the same name.
 - `harness`: every span carries `gen_ai.harness.name=pi`.
 

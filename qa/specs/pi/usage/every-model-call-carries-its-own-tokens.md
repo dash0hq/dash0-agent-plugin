@@ -53,6 +53,12 @@ expect input with cache.
 - `(input, output) per call`: the multiset of (input, output) pairs over the
   `chat` spans equals the pairs of the calls. Tokens moved from one call to
   another fail here, also when the sums agree.
+- `(tool, input, output) tool usage`: only when a tool reported its own
+  model usage. Each `tool_execution_end` whose `result.usage` is not zero is
+  one `chat` span with `dash0.pi.usage.source=tool` under that tool's span,
+  with the same tokens. The rows above leave these spans out. The pi-subagents
+  `subagent` and `bg_wait` results report their children's total, which the
+  sub-agent rows check, so they are not in this row.
 - `models`: the multiset of models agrees. The comparer reads
   `dash0.gen_ai.request.model.original`, because Dash0 normalizes
   `gen_ai.request.model` at ingest: `claude-haiku-4-5-20251001` is stored as

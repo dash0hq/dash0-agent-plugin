@@ -12,8 +12,12 @@ What is compared, per run:
 
   turns          one `agent_settled` in the stream is one turn, so one chat
                  root (a chat span with no parent)
+  aborted turns  `agent_settled` with `aborted: true` is a root with
+                 dash0.pi.turn.status=aborted. The plugin does not set ERROR
+                 status for a stop by the user
   model calls    one assistant `message_end` is one model call, so one chat
-                 span; the last call of a turn is its root
+                 span; the last call of a turn is its root. A chat span with
+                 dash0.pi.usage.source=tool is not a model call of the agent
   models         the multiset of models those calls used
   tools          one `tool_execution_end` is one execute_tool span, by name,
                  with the MCP prefix stripped as the plugin does
@@ -24,6 +28,11 @@ What is compared, per run:
                  (input, output) pairs of the calls are compared as a
                  multiset, so tokens moved from one call to another fail
                  even when the session totals agree
+  tool usage     a `tool_execution_end` whose result has non-zero `usage` is
+                 one chat span with dash0.pi.usage.source=tool under that
+                 tool's span, with those tokens. Not for the pi-subagents
+                 `subagent` and wait results: their usage is the children's
+                 total, which the sub-agent rows and the child sessions check
 
 With pi-subagents (QA_PI_SUBAGENTS=1), two more sources count:
 
@@ -99,15 +108,28 @@ def load_stream(path: pathlib.Path) -> list[dict]:
     return events
 
 
+def children_total(name: str, result: dict) -> bool:
+    """Whether a tool result's usage is the total of pi-subagents children.
+
+    The `subagent` result and a management result, such as the wait tool's,
+    report the usage of children that are counted elsewhere.
+    """
+    details = result.get("details") or {}
+    return name == "subagent" or (details.get("mode") == "management"
+                                  and isinstance(details.get("results"), list))
+
+
 def expectation(events: list[dict]) -> dict:
     calls = []
     tools: Counter[str] = Counter()
     errors: Counter[str] = Counter()
-    turns = 0
+    tool_usage = []
+    turns = aborted = 0
     for event in events:
         kind = event.get("type")
         if kind == "agent_settled":
             turns += 1
+            aborted += bool(event.get("aborted"))
         elif kind == "message_end":
             message = event.get("message") or {}
             if message.get("role") != "assistant" or not message.get("model"):
@@ -125,7 +147,37 @@ def expectation(events: list[dict]) -> dict:
             tools[name] += 1
             if event.get("isError"):
                 errors[name] += 1
-    return {"turns": turns, "calls": calls, "tools": tools, "errors": errors}
+            result = event.get("result") or {}
+            usage = result.get("usage")
+            if isinstance(usage, dict) and not children_total(str(event.get("toolName")), result):
+                counts = usage_counts(usage)
+                if any(counts):
+                    tool_usage.append((name, *counts))
+    return {"turns": turns, "aborted": aborted, "calls": calls, "tools": tools,
+            "errors": errors, "tool_usage": sorted(tool_usage, key=repr)}
+
+
+def is_tool_usage(span: dict) -> bool:
+    """A chat span that carries a tool's own model usage, not a model call."""
+    return span["attrs"].get("dash0.pi.usage.source") == "tool"
+
+
+def model_chats(spans: list[dict]) -> list[dict]:
+    """The chat spans that are model calls: not a tool's usage span."""
+    return [s for s in spans if str(s["name"]).startswith("chat") and not is_tool_usage(s)]
+
+
+def tool_usage_spans(spans: list[dict]) -> list[tuple]:
+    """(tool, input, output) of each tool usage span, by the tool it is under."""
+    by_id = {s["span_id"]: s for s in spans}
+    out = []
+    for span in spans:
+        if not (str(span["name"]).startswith("chat") and is_tool_usage(span)):
+            continue
+        parent = by_id.get(span.get("parent_span_id")) or {}
+        name = str(parent.get("name") or "").removeprefix("execute_tool ")
+        out.append((name or None, *span_tokens([span])))
+    return sorted(out, key=repr)
 
 
 def usage_counts(usage: dict) -> tuple[int, int]:
@@ -318,7 +370,7 @@ def child_session_rows(config, dataset, own, session, label, window=("now-2h", "
         # which the comparison cannot tell from a product fault.
         bail(f"no spans for child session {own['id']} in {dataset} after "
              f"{SETTLE_SECONDS}s. Check that the child loaded the plugin.")
-    chats = [s for s in child_spans if str(s["name"]).startswith("chat")]
+    chats = model_chats(child_spans)
     parent_ids = {s["attrs"].get("dash0.pi.session.parent.id") for s in child_spans}
     return [
         (f"{label} model calls", own["calls"], len(chats)),
@@ -398,9 +450,9 @@ def main() -> int:
     # totals. It is not one of the parent's model calls, so the parent rows
     # leave it out, and the sub-agent rows check it.
     agent_ids = {s["span_id"] for s in spans if str(s["name"]).startswith("invoke_agent ")}
-    chats = [s for s in spans if str(s["name"]).startswith("chat")
-             and s.get("parent_span_id") not in agent_ids]
+    chats = [s for s in model_chats(spans) if s.get("parent_span_id") not in agent_ids]
     roots = [s for s in chats if not s.get("parent_span_id")]
+    got_aborted = sum(s["attrs"].get("dash0.pi.turn.status") == "aborted" for s in roots)
     tool_spans = [s for s in spans if str(s["name"]).startswith("execute_tool ")]
     got_tools = Counter(str(s["name"]).removeprefix("execute_tool ") for s in tool_spans)
     got_errors = Counter(str(s["name"]).removeprefix("execute_tool ") for s in tool_spans
@@ -425,6 +477,7 @@ def main() -> int:
 
     rows = [
         ("turns -> chat roots", want["turns"], len(roots)),
+        ("aborted turns -> turn.status", want["aborted"], got_aborted),
         ("model calls -> chat spans", len(want["calls"]), len(chats)),
         ("models", dict(want_models), dict(got_models)),
         ("tools", dict(want["tools"]), dict(got_tools)),
@@ -434,6 +487,9 @@ def main() -> int:
         ("(input, output) per call", call_pairs(want["calls"]), span_pairs(chats)),
         ("harness", {"pi"}, harness),
     ]
+    got_tool_usage = tool_usage_spans(spans)
+    if want["tool_usage"] or got_tool_usage:
+        rows.append(("(tool, input, output) tool usage", want["tool_usage"], got_tool_usage))
     if children["foreground"] or children["background"]:
         rows += subagent_table(config, dataset, children, spans, run_dir, session,
                                bool(meta.get("pi_subagents_child_export")), window)

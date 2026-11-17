@@ -31,7 +31,8 @@ reports a clean pass over zero spans.
 | [mcp](mcp/) | Prefix stripping, per-server naming, and failure status. Solid. |
 | [skills](skills/) | Both routes: the model reading `SKILL.md`, and a `/skill:name` command. Solid. |
 | [subagents](subagents/) | pi-subagents, with `QA_PI_SUBAGENTS=1`: a foreground child as `invoke_agent` under its call with its tokens, a background child as a linked session, and the opt-in child export counted one time. Solid for single children. |
-| aborted turns | Not covered by a spec. `-p` cannot abort a turn on demand; `test/e2e` and the extension tests cover the abort path. |
+| aborted turns | Not covered by a spec. `-p` cannot abort a turn on demand; `test/e2e` and the extension tests cover the abort path. The comparer still checks `dash0.pi.turn.status=aborted` on any aborted turn in a stream. |
+| tool usage | No recorded run has a tool, other than pi-subagents', that reports its own model usage. The comparer checks such a tool when a stream has one; the unit tests cover it. |
 
 Every spec here was run against Dash0 on 2026-11-13 and agreed. The attribute
 surface was checked with `qa-attrs.py` on the four-turn conversation run: every

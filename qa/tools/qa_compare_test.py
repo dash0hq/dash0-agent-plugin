@@ -428,6 +428,96 @@ class PiTokensPerCall(unittest.TestCase):
         self.assertEqual(code, 1)
 
 
+def pi_tool(name, call_id, usage=None, details=None):
+    result = {}
+    if usage is not None:
+        result["usage"] = usage
+    if details is not None:
+        result["details"] = details
+    return [{"type": "tool_execution_start", "toolCallId": call_id, "toolName": name},
+            {"type": "tool_execution_end", "toolCallId": call_id, "toolName": name,
+             "result": result}]
+
+
+class PiToolUsage(unittest.TestCase):
+    """A tool's own model usage is a chat span under the tool, not a model call."""
+
+    EVENTS = [pi_call(input=10, output=1), *pi_tool("web", "t1", {"input": 5, "cacheRead": 2, "output": 3}),
+              {"type": "agent_settled"}]
+
+    def spans(self, usage_parent="tool", source="tool"):
+        return [pi_span("chat m", "root", **{"gen_ai.usage.input_tokens": 10,
+                                              "gen_ai.usage.output_tokens": 1}),
+                pi_span("execute_tool web", "tool", "root"),
+                {"name": "chat", "trace_id": "T", "span_id": "u", "parent_span_id": usage_parent,
+                 "attrs": {"gen_ai.harness.name": "pi", "dash0.pi.usage.source": source,
+                           "gen_ai.usage.input_tokens": 7, "gen_ai.usage.output_tokens": 3}}]
+
+    def test_tool_usage_is_not_a_model_call(self):
+        code, out = PiRun(self, self.EVENTS, self.spans()).run()
+        self.assertEqual(code, 0, out)
+        self.assertIn("(tool, input, output) tool usage", out)
+
+    def test_tool_usage_under_the_wrong_span_fails(self):
+        code, out = PiRun(self, self.EVENTS, self.spans(usage_parent="root")).run()
+        self.assertEqual(code, 1)
+        self.assertIn("tool usage", [l for l in out.splitlines() if "MISMATCH" in l][0])
+
+    def test_tool_usage_without_its_marker_is_a_model_call(self):
+        code, out = PiRun(self, self.EVENTS, self.spans(source=None)).run()
+        self.assertEqual(code, 1)
+        self.assertTrue(any(l.startswith("model calls") and "MISMATCH" in l
+                            for l in out.splitlines()), out)
+
+    def test_missing_tool_usage_span_fails(self):
+        code, _ = PiRun(self, self.EVENTS, self.spans()[:2]).run()
+        self.assertEqual(code, 1)
+
+    def test_rows_of_one_tool_sort_the_same_on_both_sides(self):
+        # Sorted by value, (web, 9, 1) comes before (web, 10, 1). Sorted by
+        # repr, it comes after. Both sides must use the same order.
+        events = [pi_call(input=10, output=1),
+                  *pi_tool("web", "t1", {"input": 9, "output": 1}),
+                  *pi_tool("web", "t2", {"input": 10, "output": 1}),
+                  {"type": "agent_settled"}]
+
+        def usage_span(span_id, parent, tokens):
+            return {"name": "chat", "trace_id": "T", "span_id": span_id, "parent_span_id": parent,
+                    "attrs": {"gen_ai.harness.name": "pi", "dash0.pi.usage.source": "tool",
+                              "gen_ai.usage.input_tokens": tokens, "gen_ai.usage.output_tokens": 1}}
+        spans = [pi_span("chat m", "root", **{"gen_ai.usage.input_tokens": 10,
+                                               "gen_ai.usage.output_tokens": 1}),
+                 pi_span("execute_tool web", "tool1", "root"),
+                 pi_span("execute_tool web", "tool2", "root"),
+                 usage_span("u1", "tool1", 9), usage_span("u2", "tool2", 10)]
+        code, out = PiRun(self, events, spans).run()
+        self.assertEqual(code, 0, out)
+
+    def test_children_totals_are_not_tool_usage(self):
+        usage = {"input": 4, "output": 9}
+        events = [*pi_tool("subagent", "s", usage), *pi_tool("bg_wait", "w", usage,
+                                                             {"mode": "management", "results": []}),
+                  *pi_tool("web", "t", {"input": 0, "output": 0})]
+        self.assertEqual(pi.expectation(events)["tool_usage"], [])
+
+
+class PiAbortedTurn(unittest.TestCase):
+    """A turn that the user stopped is marked by an attribute, not by an error."""
+
+    EVENTS = [pi_call(), {"type": "agent_settled", "aborted": True}]
+
+    def test_aborted_turn_carries_the_status_attribute(self):
+        spans = [pi_span("chat m", "root", **{"dash0.pi.turn.status": "aborted"})]
+        code, out = PiRun(self, self.EVENTS, spans).run()
+        self.assertEqual(code, 0, out)
+
+    def test_aborted_turn_without_the_attribute_fails(self):
+        code, out = PiRun(self, self.EVENTS, [pi_span("chat m", "root")]).run()
+        self.assertEqual(code, 1)
+        self.assertTrue(any(l.startswith("aborted turns") and "MISMATCH" in l
+                            for l in out.splitlines()), out)
+
+
 class PiRunWindow(unittest.TestCase):
     EVENTS = [pi_call(), {"type": "agent_settled"}]
 

@@ -433,6 +433,28 @@ test("a foreground subagent call carries its children's totals", () => {
   ]);
 });
 
+test("children over the row cap mark the turn as truncated", () => {
+  const send = (rows: number) => {
+    const { sent, fire } = setup();
+    fire("before_agent_start", { messageType: "user", prompt: "delegate" });
+    fire("tool_execution_start", { toolCallId: "c1", toolName: "subagent" });
+    fire("tool_execution_end", {
+      toolCallId: "c1",
+      toolName: "subagent",
+      isError: false,
+      result: subagentResult(Array.from({ length: rows }, () => childRow())),
+    });
+    fire("agent_settled", { aborted: false });
+    return sent[0];
+  };
+  const full = send(64);
+  expect(full.tools[0].subagents).toHaveLength(64);
+  expect(full.truncated).toBe(false);
+  const over = send(65);
+  expect(over.tools[0].subagents).toHaveLength(64);
+  expect(over.truncated).toBe(true);
+});
+
 test("a background launch and other tools have no children", () => {
   const { sent, fire } = setup();
   fire("before_agent_start", { messageType: "user", prompt: "x" });

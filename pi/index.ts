@@ -534,15 +534,22 @@ export function register(
     const call = active?.running.get(event.toolCallId);
     if (!active || !call || call.name !== event.toolName) return;
     active.running.delete(event.toolCallId);
+    const subagents =
+      event.toolName === "subagent"
+        ? subagentsOf(ctx, event.result?.details)
+        : undefined;
+    // Rows over maxSubagents are dropped, as calls and tools over their caps
+    // are, and the turn says so in the same way.
+    const results = (event.result?.details as { results?: unknown } | undefined)
+      ?.results;
+    if (subagents && Array.isArray(results) && results.length > maxSubagents)
+      active.turn.truncated = true;
     active.turn.tools.push({
       ...call,
       end: new Date().toISOString(),
       error: event.isError === true,
       output: take(active, () => asText(event.result?.content)),
-      subagents:
-        event.toolName === "subagent"
-          ? subagentsOf(ctx, event.result?.details)
-          : undefined,
+      subagents,
       usage: toolUsage(event.toolName, event.result),
     });
   });

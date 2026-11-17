@@ -18,5 +18,10 @@ opencode-v2/node_modules/
 amp/node_modules/
 amp/amp-on-event
 amp/amp-on-event.exe
+pi/node_modules/
+pi/pi-on-event
+pi/pi-on-event.exe
+pi/pi-on-event-*
+.pi/*.local.md
 .amp/*.local.md
 .amp/plugins/

@@ -45,6 +45,8 @@ var (
 	CopilotApp = Harness{Name: "github-copilot-app", EnvPrefix: "COPILOT_APP", DataSubdir: "copilot-app", ConfigDir: ".copilot"}
 	// Amp serves multiple models and providers within a single turn.
 	Amp = Harness{Name: "amp", EnvPrefix: "AMP", DataSubdir: "amp", ConfigDir: ".amp"}
+	// Pi serves many providers in one session; each model call names its own.
+	Pi = Harness{Name: "pi", EnvPrefix: "PI", DataSubdir: "pi", ConfigDir: ".pi"}
 )
 
 // Harness names one coding agent's environment conventions.

@@ -316,15 +316,26 @@ test.skipIf(process.platform === "win32")(
       Object.defineProperty(process, "platform", platform);
     }
     const { fire, notices } = loaded;
-    const resolutions = () => readFileSync(calls, "utf8").trim().split("\n");
+    const resolutions = () =>
+      existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : [];
+    const resolved = async (n: number) => {
+      for (let i = 0; i < 100 && resolutions().length < n; i++)
+        await Bun.sleep(20);
+      // The resolver has written its line; let its output and exit land.
+      await Bun.sleep(150);
+    };
 
-    // The failed resolution loses the turn, with the notice.
+    // A turn that settles before a helper is resolved is not handed off, so
+    // a parent keeps a child's tokens. The user gets the notice.
     await turn(fire);
     for (let i = 0; i < 100 && notices.length === 0; i++) await Bun.sleep(20);
     expect(notices).toEqual(["dash0: telemetry unavailable"]);
     expect(existsSync(received)).toBe(false);
 
-    // The next turn resolves again and reaches the helper.
+    // The failed resolution is retried, and the next turn reaches the helper.
+    await resolved(1);
+    await fire("session_start", { reason: "startup" });
+    await resolved(2);
     await turn(fire);
     for (let i = 0; i < 100 && !existsSync(received); i++) await Bun.sleep(50);
     const envelope = JSON.parse(readFileSync(received, "utf8"));

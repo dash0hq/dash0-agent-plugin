@@ -54,6 +54,10 @@ package's version from the GitHub release, verifies it against the release's
 `$XDG_STATE_HOME/dash0-agent-plugin/pi/bin`, else
 `~/.local/state/dash0-agent-plugin/pi/bin`. On Windows, PowerShell only
 downloads and verifies the helper, and the extension then starts it directly.
+It does this when the session starts. A turn that settles before the helper is
+ready is not exported, and Pi shows `dash0: telemetry unavailable`. The
+extension does not queue that turn, so a pi-subagents parent keeps the tokens
+of such a child instead of losing them.
 
 A failed download loses that turn, and the next turn tries again. On Windows
 the extension shows `dash0: telemetry unavailable`; on macOS and Linux the

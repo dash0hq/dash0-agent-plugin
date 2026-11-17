@@ -678,6 +678,9 @@ export default function (pi: ExtensionAPI) {
     "v1.0",
     "powershell.exe",
   );
+  // The resolved helper. A turn is handed off only once a helper has
+  // started with its envelope, so it is read synchronously at settle time.
+  let helper: string | undefined;
   let resolving: Promise<string | undefined> | undefined;
   const resolveHelper = () =>
     (resolving ??= new Promise<string | undefined>((done) => {
@@ -718,6 +721,7 @@ export default function (pi: ExtensionAPI) {
     }).then((path) => {
       // The bootstrap fails open with no path. The next turn tries again.
       if (path === undefined) resolving = undefined;
+      helper = path;
       return path;
     }));
 
@@ -729,6 +733,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     cwd = ctx.cwd;
+    // Started with the session, so the helper is usually ready before the
+    // first turn settles.
+    if (windows && !local) void resolveHelper();
     warn = () => {
       if (warned) return;
       warned = true;
@@ -797,6 +804,7 @@ export default function (pi: ExtensionAPI) {
     child.on("error", () => {
       // The cached helper is gone, so the next turn resolves it again.
       resolving = undefined;
+      helper = undefined;
       end(true);
     });
     child.on("close", (code) => end(code !== 0));
@@ -812,27 +820,22 @@ export default function (pi: ExtensionAPI) {
       warn?.();
       return false;
     }
-    if (local || !windows) {
-      const written = local
-        ? start(local, [], json)
-        : start("bash", [beside("./pi-on-event.sh")], json);
-      if (!written) {
-        warn?.();
-        return false;
-      }
-      track(written);
-      return true;
+    const [command, args] = local
+      ? [local, []]
+      : !windows
+        ? ["bash", [beside("./pi-on-event.sh")]]
+        : [helper, []];
+    // On Windows before the helper is resolved, the turn is lost rather than
+    // queued: a parent drops the tokens of a child that reports a handoff,
+    // so a handoff is reported only for a helper that has started.
+    const written =
+      command === undefined ? undefined : start(command, args, json);
+    if (!written) {
+      if (command === undefined) void resolveHelper();
+      warn?.();
+      return false;
     }
-    // Counted while it waits, so a slow first download still hits the cap.
-    live++;
-    track(
-      resolveHelper().then((path) => {
-        live--;
-        const written = path === undefined ? undefined : start(path, [], json);
-        if (!written) warn?.();
-        return written;
-      }),
-    );
+    track(written);
     return true;
   });
 }

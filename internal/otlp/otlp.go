@@ -177,11 +177,13 @@ func contextSpanAttributes(c Config) []Attribute {
 
 // toolContextSpanAttributes is contextSpanAttributes for a tool span.
 //
-// Only Amp resolves a batch context, and it names the directory of each tool
-// call itself, from typed input the event no longer carries. Every other
-// harness has no batch context and falls through to toolVCSSpanAttributes,
-// which reads the repository of the file the tool named — the branch an agent
-// editing a linked worktree by absolute path is actually working on.
+// Amp and Pi resolve a batch context. Amp names the directory of each tool
+// call itself, from typed input the event no longer carries. Pi does not: each
+// Pi tool span gets the repository of the working directory, also for a tool
+// that edits a linked worktree by absolute path. Every other harness has no
+// batch context and falls through to toolVCSSpanAttributes, which reads the
+// repository of the file the tool named — the branch an agent editing a linked
+// worktree by absolute path is actually working on.
 func toolContextSpanAttributes(event map[string]any, c Config) []Attribute {
 	if c.spanContext != nil {
 		return *c.spanContext

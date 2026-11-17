@@ -4,6 +4,7 @@
 package vcs
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,6 +137,9 @@ func TestNormalizeRemoteURLGivesOneURLPerRepository(t *testing.T) {
 		"git+ssh://git@github.com/dash0hq/probe.git",
 		"ssh+git://git@github.com/dash0hq/probe.git",
 		"ssh://git@github.com/dash0hq/probe/",
+		"https://github.com/dash0hq/probe/",
+		"https://github.com/dash0hq/probe.git/",
+		"git@github.com:dash0hq/probe.git/",
 	} {
 		t.Run(input, func(t *testing.T) {
 			assert.Equal(t, want, normalizeRemoteURL(input))
@@ -155,6 +159,8 @@ func TestNormalizeRemoteURLOtherForms(t *testing.T) {
 		{"ssh with port", "ssh://git@gitlab.example.com:2222/grp/probe.git", "https://gitlab.example.com/grp/probe"},
 		{"ssh with credential", "ssh://deploy:s3cr3t@github.com/dash0hq/probe.git", "https://github.com/dash0hq/probe"},
 		{"ssh without a path", "ssh://git@github.com", "https://github.com"},
+		{"ssh to an IPv6 host with port", "ssh://git@[2001:db8::1]:2222/grp/probe.git", "https://[2001:db8::1]/grp/probe"},
+		{"ssh to an IPv6 host", "ssh://git@[2001:db8::1]/grp/probe.git", "https://[2001:db8::1]/grp/probe"},
 		{"https with port", "https://gitlab.example.com:8443/grp/probe.git", "https://gitlab.example.com:8443/grp/probe"},
 		{"git protocol", "git://github.com/dash0hq/probe.git", "git://github.com/dash0hq/probe"},
 		{"local file", "file:///srv/git/probe.git", "file:///srv/git/probe"},
@@ -288,6 +294,7 @@ func repoWithWorktree(t *testing.T, branch string) (main, worktree string) {
 // https URL from GitHub's clone button, and `git remote get-url` reports the
 // rewritten ssh:// URL. The exported value must still be the https URL.
 func TestDetectAtFollowsInsteadOf(t *testing.T) {
+	requireGitVersion(t, 2, 32) // GIT_CONFIG_GLOBAL
 	dir := t.TempDir()
 	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
 	require.NoError(t, os.WriteFile(gitConfig, []byte("[url \"ssh://git@github.com/\"]\n\tinsteadOf = https://github.com/\n"), 0o600))
@@ -311,4 +318,19 @@ func TestDetectAtFollowsInsteadOf(t *testing.T) {
 	assert.Equal(t, "dash0hq", info.OwnerName)
 	assert.Equal(t, "probe", info.RepositoryName)
 	assert.Equal(t, "github", info.ProviderName)
+}
+
+// requireGitVersion skips the test when the installed git is older than
+// major.minor, because the test needs a feature of that version.
+func requireGitVersion(t *testing.T, major, minor int) {
+	t.Helper()
+	out, err := exec.Command("git", "version").Output()
+	require.NoError(t, err)
+	var gotMajor, gotMinor int
+	if _, err := fmt.Sscanf(string(out), "git version %d.%d", &gotMajor, &gotMinor); err != nil {
+		t.Skipf("cannot parse %q: %v", out, err)
+	}
+	if gotMajor < major || (gotMajor == major && gotMinor < minor) {
+		t.Skipf("needs git %d.%d or newer, have %d.%d", major, minor, gotMajor, gotMinor)
+	}
 }

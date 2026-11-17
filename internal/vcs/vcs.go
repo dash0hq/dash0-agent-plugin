@@ -113,14 +113,16 @@ func normalizeRemoteURL(remote string) string {
 	}
 
 	// https://oauth2:ghp_TOKEN@github.com/owner/repo?private_token=abc →
-	// https://github.com/owner/repo. Only rewrite when there is something to
-	// remove, so every other remote keeps the exact spelling git reports.
+	// https://github.com/owner/repo. A URL with none of these parts and a
+	// non-SSH scheme keeps the exact spelling git reports.
 	//
 	// ssh://git@github.com/owner/repo → https://github.com/owner/repo, the same
 	// value the scp form gives. Without it one repository has two URLs, and
 	// git produces this form unasked: `url."ssh://git@github.com/".insteadOf
 	// https://github.com/` rewrites what `git remote get-url` returns. The SSH
-	// port comes off with the scheme, because it is not the https port.
+	// port comes off with the scheme, because it is not the https port. Only the
+	// port comes off the host: u.Hostname() would also drop the brackets of an
+	// IPv6 literal and make the URL invalid.
 	if u, err := url.Parse(remote); err == nil {
 		ssh := isSSHScheme(u.Scheme)
 		if ssh || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
@@ -130,15 +132,16 @@ func normalizeRemoteURL(remote string) string {
 			u.Fragment = ""
 			if ssh {
 				u.Scheme = "https"
-				u.Host = u.Hostname()
-				u.Path = strings.TrimSuffix(u.Path, "/")
+				u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
 			}
 			remote = u.String()
 		}
 	}
 
 	// After the scrub, not before it: repo.git?private_token=abc does not end in
-	// ".git" until the query is gone.
+	// ".git" until the query is gone. The trailing slash comes off first, for
+	// every form, so that repo.git/ also loses its ".git".
+	remote = strings.TrimSuffix(remote, "/")
 	remote = strings.TrimSuffix(remote, ".git")
 
 	// A remote we failed to parse must never ship a credential. Report nothing

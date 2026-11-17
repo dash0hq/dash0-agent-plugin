@@ -483,10 +483,32 @@ func TestReadTurnSkillCommandMetaPromptWithNewPromptIDStartsTurn(t *testing.T) {
 	writeTranscript(t, path, []string{
 		`{"type":"user","promptId":"p0","message":{"role":"user","content":"<command-name>/writing:unslop</command-name>"}}`,
 		`{"type":"user","isMeta":true,"promptId":"p0","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /home/u/.claude/skills/unslop\n\n# Unslop"}]}}`,
-		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
 		`{"type":"user","isMeta":true,"promptId":"w1","message":{"role":"user","content":"check CI"}}`,
 	})
 	assert.Empty(t, ReadTurnSkillCommand(path), "the wake-up turn invoked no skill")
+}
+
+// A message from another session can arrive while a turn still runs tools. It
+// carries its own promptId, but the model answers it in the same turn, so the
+// turn's earlier calls stay in the turn. Seen in a real transcript, 2026-11-02.
+func TestReadTurnUsageMetaPromptMidTurnIsNotBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeTranscript(t, path, []string{
+		`{"type":"user","promptId":"p1","message":{"role":"user","content":"do it"}}`,
+		`{"type":"assistant","message":{"id":"msg_A","role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"user","promptId":"p1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]}}`,
+		`{"type":"user","isMeta":true,"promptId":"q1","message":{"role":"user","content":"Another Claude session sent a message: done"}}`,
+		`{"type":"user","promptId":"p1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2","content":"ok"}]}}`,
+		`{"type":"assistant","message":{"id":"msg_B","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":3}}}`,
+	})
+	usage, err := ReadTurnUsage(path)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(5), usage.OutputTokens)
+	complete, err := TurnComplete(path)
+	require.NoError(t, err)
+	assert.True(t, complete)
 }
 
 // A meta relay whose promptId was seen before belongs to an earlier prompt, even

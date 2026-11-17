@@ -552,13 +552,21 @@ func forEachEntry[T any](transcriptPath string, fn func(entry T) bool) error {
 // turnBoundary finds the user entries that start a turn. Use one per scan.
 type turnBoundary struct {
 	seenPromptIDs map[string]bool
+	lastTurnEnded bool
 }
 
-// startsTurn reports whether entry is a typed prompt or an isMeta prompt with
-// a promptId not seen before. Claude Code gives every entry of a turn the
-// turn's promptId, so /loop wake-ups start a turn and mid-turn relays do not.
+// startsTurn reports whether entry is a typed prompt, or an isMeta prompt with
+// a new promptId that arrives after the previous turn ended. A meta prompt that
+// arrives mid-turn is answered in that turn, under the same Stop.
 func (b *turnBoundary) startsTurn(entry transcriptEntry) bool {
-	if entry.Type != "user" {
+	switch entry.Type {
+	case "assistant":
+		if entry.Message != nil {
+			b.lastTurnEnded = terminalStopReasons[entry.Message.StopReason]
+		}
+		return false
+	case "user":
+	default:
 		return false
 	}
 	isNewPrompt := entry.PromptID != "" && len(b.seenPromptIDs) > 0 && !b.seenPromptIDs[entry.PromptID]
@@ -568,10 +576,14 @@ func (b *turnBoundary) startsTurn(entry transcriptEntry) bool {
 		}
 		b.seenPromptIDs[entry.PromptID] = true
 	}
-	if isRealUserMessage(entry) {
-		return true
+	if isToolResultRelay(entry) {
+		b.lastTurnEnded = false
 	}
-	return entry.IsMeta && isNewPrompt
+	starts := isRealUserMessage(entry) || (entry.IsMeta && isNewPrompt && b.lastTurnEnded)
+	if starts {
+		b.lastTurnEnded = false
+	}
+	return starts
 }
 
 // isRealUserMessage returns true if the entry is a user message that is NOT
@@ -589,18 +601,20 @@ func isRealUserMessage(entry transcriptEntry) bool {
 	if entry.Message == nil || entry.Message.Role != "user" {
 		return false
 	}
+	return !isToolResultRelay(entry)
+}
+
+// isToolResultRelay reports whether a user entry carries a tool result: its
+// content is an array whose first block has type "tool_result". Typed prompts
+// carry plain string content.
+func isToolResultRelay(entry transcriptEntry) bool {
+	if entry.Message == nil {
+		return false
+	}
 	var blocks []json.RawMessage
-	if err := json.Unmarshal(entry.Message.Content, &blocks); err != nil {
-		// Not an array — string content, i.e. a typed prompt.
-		return true
+	if err := json.Unmarshal(entry.Message.Content, &blocks); err != nil || len(blocks) == 0 {
+		return false
 	}
-	if len(blocks) > 0 {
-		var ct contentType
-		if err := json.Unmarshal(blocks[0], &ct); err == nil {
-			if ct.Type == "tool_result" {
-				return false
-			}
-		}
-	}
-	return true
+	var ct contentType
+	return json.Unmarshal(blocks[0], &ct) == nil && ct.Type == "tool_result"
 }

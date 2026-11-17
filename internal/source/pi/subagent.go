@@ -71,7 +71,7 @@ func subagentSpans(traceID, toolSpanID string, tool Tool, cfg otlp.Config, base 
 		provider, model := splitModel(sub.Model)
 		agentCfg := cfg
 		if provider != "" {
-			agentCfg.Provider = providerName(provider)
+			agentCfg = withProvider(cfg, provider)
 		}
 
 		agent := base()

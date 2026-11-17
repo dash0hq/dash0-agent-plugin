@@ -150,6 +150,26 @@ func TestCloudProviderWinsOverTheModelName(t *testing.T) {
 	require.Equal(t, "gcp.vertex_ai", attrs(usage)["gen_ai.provider.name"])
 }
 
+// A router such as OpenRouter or Copilot does not say who serves the model,
+// so the vendor of a known model name wins over the router's raw ID.
+func TestUnmappedProviderDoesNotWinOverAKnownModel(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done",
+		Calls: []Call{
+			{Provider: "github-copilot", Model: "gpt-5.5", Start: at(0), End: at(1), StopReason: "toolUse", Usage: Usage{Input: 1, Output: 1}},
+			{Provider: "openrouter", Model: "claude-sonnet-5", Start: at(2), End: at(9), StopReason: "stop", Usage: Usage{Input: 1, Output: 1}},
+		},
+		Tools: []Tool{{ID: "call_sub", Name: "subagent", Start: at(1), End: at(2), Call: ptr(0),
+			Subagents: []Subagent{{Agent: "scout", Model: "vercel-ai-gateway/gemini-3-pro", Turns: 1, Usage: Usage{Input: 1, Output: 1}}}}}}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 5)
+	require.Equal(t, "anthropic", attrs(spans[0])["gen_ai.provider.name"])
+	require.Equal(t, "openrouter", attrs(spans[0])["dash0.pi.provider"])
+	require.Equal(t, "openai", attrs(spans[1])["gen_ai.provider.name"])
+	require.Equal(t, "openai", attrs(spans[2])["gen_ai.provider.name"])
+	require.Equal(t, "gcp.gemini", attrs(spans[3])["gen_ai.provider.name"])
+	require.Equal(t, "gcp.gemini", attrs(spans[4])["gen_ai.provider.name"])
+}
+
 func TestUnknownProviderIsExportedAsItIs(t *testing.T) {
 	turn := Turn{SessionID: "s1", Start: at(0), End: at(2), Status: "done",
 		Calls: []Call{{Provider: "my-proxy", Model: "local-llama", Start: at(0), End: at(2), StopReason: "stop", Usage: Usage{Input: 1, Output: 1}}}}
@@ -197,6 +217,51 @@ func TestNestedToolParentsToTheToolThatCalledIt(t *testing.T) {
 	require.Equal(t, byName["code"].SpanID, byName["code/1"].ParentSpanID)
 	require.Equal(t, spans[0].SpanID, byName["code"].ParentSpanID)
 	require.Equal(t, spans[0].SpanID, byName["orphan"].ParentSpanID)
+}
+
+// Bridge data can name a loop of parents. No span may be its own ancestor,
+// so each tool on the loop goes under the root, and a tool below the loop
+// keeps its parent.
+func TestToolParentCycleFallsBackToTheRoot(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done",
+		Tools: []Tool{
+			{ID: "self", ParentID: "self", Name: "read", Start: at(1), End: at(2)},
+			{ID: "a", ParentID: "b", Name: "read", Start: at(1), End: at(2)},
+			{ID: "b", ParentID: "c", Name: "read", Start: at(1), End: at(2)},
+			{ID: "c", ParentID: "a", Name: "read", Start: at(1), End: at(2)},
+			{ID: "leaf", ParentID: "a", Name: "read", Start: at(1), End: at(2)},
+		}}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 6)
+	byName := map[string]otlp.Span{}
+	for _, s := range spans[1:] {
+		byName[attrs(s)["gen_ai.tool.call.id"]] = s
+	}
+	for _, id := range []string{"self", "a", "b", "c"} {
+		require.Equal(t, spans[0].SpanID, byName[id].ParentSpanID, id)
+	}
+	require.Equal(t, byName["a"].SpanID, byName["leaf"].ParentSpanID)
+}
+
+// An optional count that contradicts its total is dropped alone. The call
+// keeps its span and its other tokens, and so stays the turn's last call.
+func TestInconsistentOptionalCountIsDroppedAlone(t *testing.T) {
+	turn := Turn{SessionID: "s1", Start: at(0), End: at(9), Status: "done",
+		Calls: []Call{
+			{Provider: "openai", Model: "gpt-5.5", Start: at(0), End: at(1), StopReason: "toolUse", Usage: Usage{Input: 1, Output: 1}},
+			{Provider: "anthropic", Model: "claude-sonnet-5", Start: at(2), End: at(9), StopReason: "stop",
+				Usage: Usage{Input: 10, Output: 5, CacheWrite: 3, CacheWrite1h: ptr[int64](4), Reasoning: ptr[int64](6)}},
+		}}
+	spans := build(t, turn, true)
+	require.Len(t, spans, 2)
+	r := attrs(spans[0])
+	require.Equal(t, "chat claude-sonnet-5", spans[0].Name)
+	require.Equal(t, "anthropic", r["gen_ai.provider.name"])
+	require.Equal(t, "13", r["gen_ai.usage.input_tokens"])
+	require.Equal(t, "5", r["gen_ai.usage.output_tokens"])
+	require.Equal(t, "3", r["gen_ai.usage.cache_creation.input_tokens"])
+	require.NotContains(t, r, "dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens")
+	require.NotContains(t, r, "gen_ai.usage.reasoning.output_tokens")
 }
 
 func TestContentFollowsOmitIO(t *testing.T) {
@@ -289,9 +354,9 @@ func TestInvalidCallsAreSkippedNotFatal(t *testing.T) {
 		"model with a space":  {Provider: "my-proxy", Model: "local llama", Start: at(1), End: at(2)},
 		"empty model":         {Provider: "p", Start: at(1), End: at(2)},
 		"negative tokens":     {Provider: "p", Model: "m", Start: at(1), End: at(2), Usage: Usage{Input: -1}},
-		"1h over total":       {Provider: "p", Model: "m", Start: at(1), End: at(2), Usage: Usage{CacheWrite1h: ptr[int64](1)}},
-		"reasoning over out":  {Provider: "p", Model: "m", Start: at(1), End: at(2), Usage: Usage{Reasoning: ptr[int64](1)}},
 		"call ends too early": {Provider: "p", Model: "m", Start: at(2), End: at(1)},
+		"zero start":          {Provider: "p", Model: "m", End: at(2)},
+		"zero start and end":  {Provider: "p", Model: "m"},
 		"billing mode api":    {Provider: "p", Model: "m", Start: at(1), End: at(2), BillingMode: "api"},
 		"bad response model":  {Provider: "p", Model: "m", Start: at(1), End: at(2), ResponseModel: "a b"},
 	} {
@@ -326,6 +391,10 @@ func TestInvalidToolsAreSkippedNotFatal(t *testing.T) {
 			{ID: "dup", Name: "read", Start: at(1), End: at(2)},
 			{ID: "", Name: "read", Start: at(1), End: at(2)},
 			{ID: "back", Name: "read", Start: at(2), End: at(1)},
+			// The child spans of a sub-agent take the times of their tool.
+			{ID: "zero", Name: "subagent", End: at(1),
+				Subagents: []Subagent{{Agent: "scout", Model: "anthropic/claude-sonnet-5", Turns: 1, Usage: Usage{Input: 1, Output: 1}}}},
+			{ID: "zero-both", Name: "read"},
 			{ID: "bad-call", Name: "read", Start: at(1), End: at(2), Call: ptr(7)},
 		}}
 	spans := build(t, turn, true)

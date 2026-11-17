@@ -127,20 +127,43 @@ func (t Turn) Validate() error {
 	return nil
 }
 
+// validSpan reports whether a span can be built from start and end. A zero
+// time is outside the range of UnixNano, as Turn.Validate also checks.
+func validSpan(start, end time.Time) bool { return !start.IsZero() && !end.Before(start) }
+
 // valid reports whether a model call can be exported. Provider IDs and model
 // names are free text in Pi, so a bad call loses its own span, not the turn.
 func (c Call) valid() bool {
-	return namePattern.MatchString(c.Provider) && namePattern.MatchString(c.Model) && !c.End.Before(c.Start) &&
+	return namePattern.MatchString(c.Provider) && namePattern.MatchString(c.Model) && validSpan(c.Start, c.End) &&
 		validUsage(c.Usage) && validBillingMode(c.BillingMode) &&
 		(c.ResponseModel == "" || namePattern.MatchString(c.ResponseModel))
 }
 
 func validBillingMode(m string) bool { return m == "" || m == "subscription" || m == "unknown" }
 
+// validUsage checks the counts that every call has. callAttributes drops an
+// inconsistent optional count by itself, so that count does not cost the call.
 func validUsage(u Usage) bool {
-	return u.Input >= 0 && u.Output >= 0 && u.CacheRead >= 0 && u.CacheWrite >= 0 &&
-		(u.CacheWrite1h == nil || (*u.CacheWrite1h >= 0 && *u.CacheWrite1h <= u.CacheWrite)) &&
-		(u.Reasoning == nil || (*u.Reasoning >= 0 && *u.Reasoning <= u.Output))
+	return u.Input >= 0 && u.Output >= 0 && u.CacheRead >= 0 && u.CacheWrite >= 0
+}
+
+func (tool Tool) valid() bool {
+	return tool.ID != "" && len(tool.ID) <= 256 && tool.Name != "" && len(tool.Name) <= 256 && validSpan(tool.Start, tool.End)
+}
+
+// onParentCycle reports whether the parent chain of the tool id leads back
+// to id. Bridge data can name a tool as its own parent, or two tools as each
+// other's parent. Each tool on such a loop goes under the root instead, so no
+// span is its own ancestor. parentOf holds only valid tools.
+func onParentCycle(id string, parentOf map[string]string) bool {
+	seen := map[string]bool{}
+	for cur := parentOf[id]; cur != "" && !seen[cur]; cur = parentOf[cur] {
+		if cur == id {
+			return true
+		}
+		seen[cur] = true
+	}
+	return false
 }
 
 // validCalls drops the calls that cannot be exported and points each tool at
@@ -171,7 +194,8 @@ func validCalls(t Turn) ([]Call, []Tool) {
 }
 
 // providers maps Pi's built-in provider IDs to gen_ai.provider.name values.
-// An ID not listed is exported as it is, as OpenCode V2 does.
+// The keys are Pi's KnownProvider IDs, not its API IDs: Azure is "azure",
+// and "azure-openai-responses" is the API that it uses.
 var providers = map[string]string{
 	"anthropic":      "anthropic",
 	"claude-code":    "anthropic",
@@ -187,11 +211,20 @@ var providers = map[string]string{
 	"groq":           "groq",
 }
 
-func providerName(id string) string {
+// withProvider sets the provider of one span from Pi's provider ID. A mapped
+// ID wins over the vendor of the model name, so a model that Azure or Bedrock
+// serves keeps that provider. An unmapped ID, such as a router like
+// "openrouter", does not say who serves the model, so the vendor of the model
+// name wins, and the raw ID is the fallback, as on OpenCode V2.
+func withProvider(cfg otlp.Config, id string) otlp.Config {
 	if p, ok := providers[id]; ok {
-		return p
+		cfg.Provider = p
+		cfg.PreferProvider = true
+		return cfg
 	}
-	return id
+	cfg.Provider = id
+	cfg.PreferProvider = false
+	return cfg
 }
 
 // callAttributes puts one call's model and token counts on a span event.
@@ -221,10 +254,12 @@ func callAttributes(event map[string]any, c Call) {
 	if c.BillingMode != "" {
 		event["dash0.gen_ai.billing_mode"] = c.BillingMode
 	}
-	if u.CacheWrite1h != nil {
+	// An optional count that contradicts its total is dropped alone. The
+	// call and its other counts stay.
+	if u.CacheWrite1h != nil && *u.CacheWrite1h >= 0 && *u.CacheWrite1h <= u.CacheWrite {
 		event["dash0.gen_ai.usage.cache_creation.ephemeral_1h.input_tokens"] = *u.CacheWrite1h
 	}
-	if u.Reasoning != nil && *u.Reasoning > 0 {
+	if u.Reasoning != nil && *u.Reasoning > 0 && *u.Reasoning <= u.Output {
 		event["gen_ai.usage.reasoning.output_tokens"] = *u.Reasoning
 	}
 }
@@ -247,8 +282,6 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 	}
 	t.Calls, t.Tools = validCalls(t)
 	cfg = cfg.WithSpanContext()
-	// Pi names the provider of each call, which also prices the call.
-	cfg.PreferProvider = true
 	traceID, err := otlp.GenerateTraceID()
 	if err != nil {
 		return otlp.ExportTracesRequest{}, fmt.Errorf("building Pi turn: %w", err)
@@ -285,7 +318,7 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		last := calls[len(calls)-1]
 		calls = calls[:len(calls)-1]
 		callAttributes(root, last)
-		rootCfg.Provider = providerName(last.Provider)
+		rootCfg = withProvider(cfg, last.Provider)
 	}
 	spans := []otlp.Span{otlp.NewLLMSpan(traceID, rootID, "", t.Start, t.End, root, t.Status != "done", rootCfg)}
 
@@ -296,8 +329,7 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		if callFailed(c) {
 			event["error"] = "Pi model call " + c.StopReason
 		}
-		callCfg := cfg
-		callCfg.Provider = providerName(c.Provider)
+		callCfg := withProvider(cfg, c.Provider)
 		spans = append(spans, otlp.NewLLMSpan(traceID, callSpanID(i), rootID, c.Start, c.End, event, callFailed(c), callCfg))
 	}
 
@@ -305,14 +337,18 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 	// A bad tool loses its own span, not the turn. The set is complete before
 	// any span is built, because Pi reports a nested call before its parent.
 	valid := make(map[string]bool)
+	// parentOf holds the parent of the first valid tool with each ID, which
+	// is the one that gets a span.
+	parentOf := make(map[string]string)
 	for _, tool := range t.Tools {
-		if tool.ID != "" && len(tool.ID) <= 256 && tool.Name != "" && len(tool.Name) <= 256 && !tool.End.Before(tool.Start) {
+		if tool.valid() && !valid[tool.ID] {
 			valid[tool.ID] = true
+			parentOf[tool.ID] = tool.ParentID
 		}
 	}
 	emitted := make(map[string]bool)
 	for _, tool := range t.Tools {
-		if !valid[tool.ID] || emitted[tool.ID] {
+		if !tool.valid() || emitted[tool.ID] {
 			continue
 		}
 		emitted[tool.ID] = true
@@ -320,10 +356,11 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		event["tool_name"] = tool.Name
 		event["tool_use_id"] = tool.ID
 		toolCfg := cfg
-		if tool.Call != nil && *tool.Call >= 0 && *tool.Call < len(t.Calls) {
+		// validCalls has pointed Call at a kept call, or set it to nil.
+		if tool.Call != nil {
 			c := t.Calls[*tool.Call]
 			event["model"] = c.Model
-			toolCfg.Provider = providerName(c.Provider)
+			toolCfg = withProvider(cfg, c.Provider)
 		}
 		if tool.Input != "" {
 			// Decoded so the shared extractors see the map shape that hooks
@@ -347,7 +384,7 @@ func BuildTrace(t Turn, cfg otlp.Config) (otlp.ExportTracesRequest, error) {
 		}
 		pipeline.EnrichToolEvent(event)
 		parent := rootID
-		if tool.ParentID != "" && valid[tool.ParentID] {
+		if tool.ParentID != "" && valid[tool.ParentID] && !onParentCycle(tool.ID, parentOf) {
 			parent = toolSpanID(tool.ParentID)
 		}
 		spans = append(spans, otlp.NewToolSpan(traceID, toolSpanID(tool.ID), parent, tool.Start, tool.End, event, tool.Error, toolCfg))

@@ -5,5 +5,6 @@
   "authToken": "auth_REPLACE_ME",
   "dataset": "default",
   "ampDataset": "your-qa-dataset",
+  "piDataset": "your-pi-qa-dataset",
   "org": "your-org-slug"
 }

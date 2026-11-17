@@ -20,6 +20,9 @@ config_file: qa/config.local.json
 # checks were repaired that day (they assumed the old path and a system
 # install); everything passed except the one spec documented as failing. No
 # other arm was re-run, so it is not a full pass.
+# 2026-11-13 added the pi arm and ran its checks and all six specs against real
+# sessions on claude-code and openai-codex. Every one agreed. No other arm was
+# re-run, so it is not a full pass.
 last_full_pass: 2026-08-25
 ---
 
@@ -45,8 +48,8 @@ spec, learning, finding, and report.
 
 All supported agents are covered here, **one spec tree per runtime**:
 `qa/specs/claude/`, `qa/specs/codex/`, `qa/specs/copilot/`,
-`qa/specs/cursor/`, `qa/specs/opencode-v2/`, `qa/specs/copilot-app/` and
-`qa/specs/amp/`, each split by topic underneath. Each spec also names its
+`qa/specs/cursor/`, `qa/specs/opencode-v2/`, `qa/specs/copilot-app/`,
+`qa/specs/amp/` and `qa/specs/pi/`, each split by topic underneath. Each spec also names its
 runtime in frontmatter, so the area and the field cannot drift apart. The split
 is by runtime rather than by topic because a run is one driver, one credential
 and one cost profile — `/qa-run codex` is a coherent thing to execute, while a
@@ -64,6 +67,11 @@ therefore share most invariants, but they differ in what a run can prove:
 | Sees what was sent | no | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log | yes, through the plugin's debug log |
 | Session id | pinned with `--session-id` | discovered from the recording | pinned with `--session-id` | discovered from the recording | discovered from `opencode run --format json` | from `get_session`, passed to `collect --session-id` | the thread id, discovered from the run; amp has no `--session-id` |
 | Touches the machine | yes: the binary cache, under `QA_SWAP_BINARY=1` | no | no | no. `DASH0_PLUGIN_DATA` moves the cache into the run | only OpenCode's session database: QA sessions show up in `opencode session list` | yes: the binary cache, the extension folder, and the worktree the app created | no, on the local arm. The orb arm installs into the orb |
+
+The `pi` arm is **runnable**: driver `qa/tools/qa-session-pi.sh`, recorder
+`qa/recorder/pi/`, comparer `qa/tools/qa-pi-compare.py`, the `pi-` checks below,
+and [specs](specs/pi/). It differs from every other arm in one way that matters:
+it tests **this working tree**, never an install. See `### Pi` below.
 
 The `amp` arm is **runnable** for the local executor: driver, recorder,
 comparison tool, [checks](#amp-toolchain-present) and [specs](specs/amp/).
@@ -245,6 +253,35 @@ and nothing else. Three consequences:
   session cannot reach: the exact bytes, and failure shapes the app will not
   produce on demand.
 
+### Pi
+
+| | pi |
+| --- | --- |
+| Driver | `qa/tools/qa-session-pi.sh`, one `pi --mode json -p` invocation with every prompt, so all turns share one session |
+| What is under test | this working tree's `pi/index.ts` and a helper built from it into the run directory, loaded with `--no-extensions -e`. Never an install |
+| Who configures it | QA, through `PI_PLUGIN_OPTION_*`, which outranks every config file. The dataset is **`piDataset`** |
+| Second channel | Pi's own `--mode json` stream, `stream.jsonl`. The plugin never reads it, and it carries per-call usage |
+| Harness's own figures | the same stream, per assistant `message_end` |
+| Sees what was sent | yes, through the plugin's debug log |
+| Session id | the stream's `session` header, which is also `gen_ai.conversation.id` |
+| Touches the machine | no. Pi's session file goes into the run directory, and the machine's extensions, skills and MCP servers do not load. An empty `.pi/dash0-agent-plugin.local.md` in the run's project shadows the developer's `~/.pi` file. Pi's login in `PI_CODING_AGENT_DIR` is read, not written |
+| Sub-agents | `QA_PI_SUBAGENTS=1` loads pi-subagents from the caller's agent directory and gives Pi an agent directory inside the run, so no user agent or setting is read. Only `claude-code` works there, because it brings its own login |
+
+Three sharp edges, each measured on 2026-11-13:
+
+- `--no-extensions` also drops a provider that is itself an extension, such as
+  `claude-code`, and Pi's built-in MCP support. The driver loads the
+  `claude-code` extension from the caller's agent directory and, for MCP runs,
+  `builtin:mcp` explicitly. Without the second, an MCP prompt reaches no MCP
+  tool, and the counts still agree on whatever the model did instead.
+- Built-in MCP also reads the user's own `mcp.json`. The `--tools` allowlist is
+  the isolation: an entry that starts with `mcp__` keeps only the MCP tools it
+  names.
+- Dash0 normalizes `gen_ai.request.model` at ingest
+  (`claude-haiku-4-5-20251001` is stored as `claude-haiku-4-5`) and keeps the
+  sent value in `dash0.gen_ai.request.model.original`. The comparer reads the
+  original.
+
 ## Layout
 
 - specs:     qa/specs/<runtime>/<topic>/   (`claude/session`, `codex/subagents`, `copilot/turns`, `cursor/mcp`, `opencode-v2/turns`, ...)
@@ -273,6 +310,7 @@ chmod 600 qa/config.local.json
 | `ingestUrl` | Where the plugin is expected to write | For `claude`, nothing is sent here: it exists so a check can prove QA reads the environment the plugin writes to. For `codex`, `copilot` and `cursor`, this is where the install actually exports. |
 | `authToken` | Reads spans back, and for `codex`, `copilot` and `cursor` also ingests them | A live token, and it must do **both**. The `claude` runtime only reads, so a read-scoped token is enough there. The other two provision the install and hand this same token to the plugin, and a token that cannot ingest 401s on every export — a run that looks perfectly healthy and reports zero spans. `ingest-token-reaches-the-ingress` proves it before a session is paid for. The two permissions really are separate, so reading is no guarantee of ingesting: measured 2026-08-26, an ingest-scoped token answers a query with `403 ... *:read permission is required`, and measured 2026-08-28, an access token copied out of the `dash0` CLI's own profile gets `401` from the ingress. Ask the team for the QA token rather than improvising one from a CLI profile. |
 | `dataset` | The dataset to read, and for `codex`, `copilot` and `cursor` to write. **Not used by the `amp` arm** | Must be the installed plugin's `DATASET`, which is `default`, not `qa`. Reading a *different readable* dataset returns an empty result that looks exactly like the plugin having sent nothing. |
+| `piDataset` | The dataset the `pi` arm writes to and reads back, via `PI_PLUGIN_OPTION_DATASET` | A dataset of its own, not `default`. The token must read and ingest it: measured 2026-11-13, a token scoped to `pi-qa` answers `403` for a read of `default` and `401` for an ingest into it. |
 | `ampDataset` | The dataset the `amp` arm writes to and reads back, via `AMP_PLUGIN_OPTION_DATASET` | A dataset of your own, deliberately not `default`, so QA sessions stay out of the shared dataset. The override only works through the harness prefix; `DASH0_DATASET` loses to the machine's config file and silently leaves spans in `default`. |
 | `org` | Organization slug | Informational. |
 
@@ -1359,7 +1397,7 @@ tree at 0.1.28 and OpenCode 2.0.15. Every one ran green, including `qa-attrs.py`
 on the first probe, at 38 observed keys.
 
 Checks with no prefix apply to every runtime. A `codex-`, `copilot-`, `cursor-`,
-`opencode-` or `amp-` prefix means the check belongs to that runtime alone; skip it when a run targets
+`opencode-`, `amp-` or `pi-` prefix means the check belongs to that runtime alone; skip it when a run targets
 another one, and skip the `claude`-only ones the same way. The runtime-specific
 blocking checks are `probe-session-agrees-with-what-it-was-fed` for `claude`,
 `codex-probe-session-agrees-with-what-it-was-fed` for `codex`,
@@ -1427,7 +1465,9 @@ for p in qa/tools/qa-session.sh qa/tools/qa-compare.py qa/tools/qa-attrs.py \
          qa/tools/qa-session-opencode-v2.sh qa/tools/qa-compare-opencode-v2.py \
          qa/tools/qa-app-run.py qa/tools/qa-amp-dataset-header.py \
          qa/tools/qa-session-amp.sh qa/tools/qa-amp-compare.py \
-         qa/recorder/amp/index.ts; do
+         qa/recorder/amp/index.ts \
+         qa/tools/qa-session-pi.sh qa/tools/qa-pi-compare.py \
+         qa/recorder/pi/index.ts; do
   git check-ignore -q "$p" && echo "IGNORED: $p" || echo "tracked: $p"
 done
 ```
@@ -3249,4 +3289,125 @@ QA_AMP_USAGE=1 qa/tools/qa-session-amp.sh \
 # `amp threads export` for up to twenty seconds, so spans land after `amp` exits.
 sleep 30
 qa/tools/qa-amp-compare.py qa/runs/setup-probe-amp-server-tools
+```
+
+### pi-toolchain-present
+
+- **proves.** A `pi` run needs `go`, `python3`, `dash0`, `pi` and `bun`. `bun`
+  installs the extension's dependencies that `pi/index.ts` imports. `claude` is
+  absent on purpose: the `claude-code` provider starts its own worker.
+- **after.** none
+- **blocking.** true
+- **pass.** No output.
+- **fail.** `MISSING: <tool>`.
+- **verified.** 2026-11-13, signals: pass-only.
+
+```sh
+for t in go python3 dash0 pi bun; do command -v "$t" >/dev/null || echo "MISSING: $t"; done
+```
+
+### pi-config-has-dataset
+
+- **proves.** The `pi` arm has its own dataset configured, and the token both
+  reads and ingests it. The two permissions are separate, and a token with
+  only one runs a healthy session that reports zero spans.
+- **after.** config-is-complete
+- **blocking.** true
+- **pass.** `read ok`, then `400` for the ingest probe: the ingress
+  authenticated the token and rejected the malformed body, so no span is
+  written.
+- **fail.** `missing: piDataset`, a `403` on read, or `401` on ingest. Ask for a
+  token that both reads and ingests `piDataset`.
+- **verified.** 2026-11-13, signals: pass+fail. The fail half is the same token
+  against `default`, which it is not scoped to: `403` on read, `401` on ingest.
+
+```sh
+python3 - <<'PY'
+import json, subprocess, sys
+c = json.load(open('qa/config.local.json'))
+ds = c.get('piDataset') or sys.exit('missing: piDataset')
+q = subprocess.run(['dash0', 'spans', 'query', '--api-url', c['apiUrl'],
+                    '--auth-token', c['authToken'], '--dataset', ds,
+                    '--precision', 'disabled', '--from', 'now-1h', '--limit', '1',
+                    '-o', 'json'], capture_output=True, text=True)
+print('read ok' if q.returncode == 0 else 'read FAILED: ' +
+      (q.stdout + q.stderr).strip().splitlines()[0].replace(c['authToken'], '<authToken>'))
+i = subprocess.run(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '-X', 'POST',
+                    c['ingestUrl'] + '/v1/traces', '-H', 'Content-Type: application/json',
+                    '-H', 'Dash0-Dataset: ' + ds, '-H', 'Authorization: Bearer ' + c['authToken'],
+                    '--data', '{ not json'], capture_output=True, text=True)
+print('ingest', i.stdout)
+PY
+```
+
+### pi-probe-session-agrees-with-what-it-was-fed
+
+- **proves.** The whole method on one small session: the recorder saw the
+  plugin's events, the plugin exported, Dash0 stored the spans in `piDataset`,
+  and they agree with Pi's own stream on turns, model calls, models, tools,
+  tool errors and tokens. This is the blocking check for the `pi` arm.
+- **after.** pi-toolchain-present, pi-config-has-dataset
+- **blocking.** true
+- **pass.** `qa-pi-compare.py` exits `0` and prints `AGREEMENT`.
+- **fail.** `no spans for <id> in <piDataset>` after the six-minute poll: read
+  `plugin-debug.log` in the run. A `401` there is a token problem; no debug log
+  at all means the extension did not load, so check `pi-stderr.log`. A model
+  that did not call the tool is a failed run; run it again.
+- **verified.** 2026-11-13, signals: pass, and one real failure on the first
+  run: `models` disagreed because Dash0 normalizes the model name at ingest.
+  The comparer now reads `dash0.gen_ai.request.model.original`. Measured on
+  `qa/runs/setup-probe-pi`: 1 root, 2 chat spans, `bash: 1`, 4516 input and 64
+  output tokens on both channels.
+
+```sh
+qa/tools/qa-session-pi.sh \
+  'Run the bash command: echo qa-pi-first. Then reply with exactly the word done.' \
+  setup-probe-pi
+qa/tools/qa-pi-compare.py qa/runs/setup-probe-pi
+```
+
+### pi-subagents-load-isolated
+
+- **proves.** `QA_PI_SUBAGENTS=1` loads pi-subagents with the plugin, and the
+  two kinds of child reach Dash0: a foreground child as `invoke_agent` under
+  its `subagent` call, and a background child as a session linked to the
+  parent. The run's own agent directory is the isolation, because a
+  background child reads Pi's settings and not the parent's `-e` paths.
+- **after.** pi-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false. Only the [subagents](specs/pi/subagents/) specs need it.
+- **pass.** Both comparisons print `AGREEMENT`.
+- **fail.** `QA_PI_SUBAGENTS: no pi-subagents at <dir>`: set
+  `QA_PI_SUBAGENTS_PACKAGE` to an installed pi-subagents package. A run whose
+  stream has no `subagent` call or no `bg_wait` completion is a model that did
+  not follow the prompt; run it again.
+- **verified.** 2026-11-13, signals: pass, pi-subagents 0.88.0. The first run
+  of the comparer failed on its own path check (a relative path against the
+  absolute one in the child header), which is fixed. Measured on
+  `qa/runs/spec-pi-subagent-foreground` and `-background`.
+
+```sh
+QA_PI_SUBAGENTS=1 qa/tools/qa-session-pi.sh \
+  'Call the subagent tool exactly once with agent "delegate" and task "Read a.txt with the read tool and reply with its content only." Do not use async. Then reply with exactly the word done.' \
+  spec-pi-subagent-foreground
+qa/tools/qa-pi-compare.py qa/runs/spec-pi-subagent-foreground
+QA_PI_SUBAGENTS=1 qa/tools/qa-session-pi.sh \
+  'Call the subagent tool exactly once with agent "delegate", async true, and task "Read a.txt with the read tool and reply with its content only." Then call bg_wait with that run id. Then reply with exactly the word done.' \
+  spec-pi-subagent-background
+qa/tools/qa-pi-compare.py qa/runs/spec-pi-subagent-background
+```
+
+### pi-span-carries-no-undeclared-attribute
+
+- **proves.** Every attribute key on every `pi` span is in `DEVELOPMENT.md`. A
+  count cannot see a surplus attribute.
+- **after.** pi-probe-session-agrees-with-what-it-was-fed
+- **blocking.** false
+- **pass.** `Every attribute is in the documented contract.`
+- **fail.** `Undocumented exports` means `DEVELOPMENT.md` is stale or an export
+  was not meant to ship.
+- **verified.** 2026-11-13, signals: pass-only, on the four-turn conversation
+  run: 53 keys observed, all documented. `--dataset` is not optional.
+
+```sh
+qa/tools/qa-attrs.py qa/runs/setup-probe-pi-conversation --dataset <piDataset>
 ```

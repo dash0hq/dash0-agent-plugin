@@ -249,6 +249,10 @@ for any session.
   helper starts but then fails its export, those tokens are lost: the child
   already exported the turn without them. In print mode, the quit waits only
   for the parent's own envelopes, so such a child turn can also be cut off.
+- When a child's helper fails to start after the parent read the child's
+  row, the parent gets the child's tokens back only while its own turn is
+  still open. A parent turn that ends in the same moment, for example one
+  aborted right after the `subagent` call, loses them.
 - A foreground child's totals cover only its own model calls. When a child
   runs its own foreground children, their tokens are in the child's tool
   result and not in the totals that the parent sees.

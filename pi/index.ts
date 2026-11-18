@@ -411,8 +411,9 @@ function readSubagents(
       turns,
       failed: r.exitCode !== 0 || typeof r.error === "string",
     };
-    // Node reports a child helper that cannot run only after this read. The
-    // child then gives its turn back here, while this row is not yet sent.
+    // Node can report a child helper that cannot run after this read. The
+    // child then gives its turn back here. That counts only until the parent
+    // settles its turn, which encodes this row once.
     if (exported)
       exported.giveBack = (back, calls) => {
         sub.usage = add(sub.usage, back);

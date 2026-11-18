@@ -246,9 +246,9 @@ for any session.
   start, also when that child then exported nothing, for example because its
   project's `.pi/dash0-agent-plugin.local.md` says `enabled: false`.
 - When a parent kept a waiting child turn's tokens and the parent's own
-  helper then fails to start, those tokens are lost: the child already
-  exported the turn without them. In print mode, the quit waits only for the
-  parent's own envelopes, so such a child turn can also be cut off.
+  helper starts but then fails its export, those tokens are lost: the child
+  already exported the turn without them. In print mode, the quit waits only
+  for the parent's own envelopes, so such a child turn can also be cut off.
 - A foreground child's totals cover only its own model calls. When a child
   runs its own foreground children, their tokens are in the child's tool
   result and not in the totals that the parent sees.

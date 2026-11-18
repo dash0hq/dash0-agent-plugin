@@ -557,7 +557,7 @@ function child(handedOff: Send, ...turns: Record<string, number>[][]) {
 }
 
 /** The parent reads the child's row; its own turn is handed off or not. */
-function parentReads(handedOff = true) {
+function parentReads(handedOff: Send = true, beforeSettle = () => {}) {
   const parent = setup("019a-session", undefined, handedOff);
   parent.fire("before_agent_start", { messageType: "user", prompt: "x" });
   parent.fire("tool_execution_start", {
@@ -572,8 +572,10 @@ function parentReads(handedOff = true) {
       childRow(),
     ]),
   });
+  beforeSettle();
   parent.fire("agent_settled", { aborted: false });
-  return parent.sent[0].tools[0].subagents ?? [];
+  const sent = JSON.parse(parent.encoded[0]) as Turn;
+  return sent.tools[0].subagents ?? [];
 }
 
 const zero = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
@@ -627,15 +629,33 @@ test("a parent keeps the tokens of a child's turns that were not exported", () =
 // tokens then stay with the parent.
 test("a helper that fails after spawn gives the tokens back", () => {
   let failed = () => {};
-  child((own) => own((_json, f) => ((failed = f), true)), [callA, callB]);
+  child(
+    (own) => own((_json, ok) => ((failed = () => ok(false)), true)),
+    [callA, callB],
+  );
   failed();
   expect(parentReads()[0].usage.output).toBe(460);
 
   // Two turns that both recorded, then both failed, give both back.
   const failures: (() => void)[] = [];
-  child((own) => own((_json, f) => (failures.push(f), true)), [callA], [callB]);
+  child(
+    (own) => own((_json, ok) => (failures.push(() => ok(false)), true)),
+    [callA],
+    [callB],
+  );
   for (const f of failures) f();
   expect(parentReads()[0].usage.output).toBe(460);
+
+  // The parent read first: the failure gives the tokens back to its row,
+  // which it has not sent yet.
+  child(
+    (own) => own((_json, ok) => ((failed = () => ok(false)), true)),
+    [callA, callB],
+  );
+  const [row] = parentReads(true, () => failed());
+  expect(row.usage.output).toBe(460);
+  expect(row.turns).toBe(2);
+  expect(row.model).toBe("claude-code/claude-haiku-4-5");
 });
 
 /** A child turn that waits for its helper until release() is called. */
@@ -685,6 +705,19 @@ test("a child waiting for its helper is counted once, by whoever goes first", as
   parentReads(false);
   await w.settle();
   expect(w.tokens()).toEqual([460]);
+
+  // The parent's helper spawns but then fails to run: the child waits for
+  // that and exports its turn with its tokens.
+  for (const ran of [false, true]) {
+    w = waitingChild([callA, callB]);
+    let report: (ok: boolean) => void = () => {};
+    parentReads((own) => own((_json, ok) => ((report = ok), true)));
+    await w.settle();
+    expect(w.tokens()).toEqual([]);
+    report(ran);
+    await w.settle();
+    expect(w.tokens()).toEqual([ran ? 0 : 460]);
+  }
 });
 
 // Two turns of one session can both wait for the same download. Both start

@@ -103,7 +103,13 @@ const maxEnvelope = 768 * 1024;
 const maxSubagents = 64;
 
 /** Tokens and model calls that a session handed to its own helpers. */
-type Exported = { usage: Usage; calls: number };
+type Exported = {
+  usage: Usage;
+  calls: number;
+  /** Set by the parent read that took this entry: gives a turn's tokens
+   * back to the parent's row when its helper then fails to start. */
+  giveBack?: (usage: Usage, calls: number) => void;
+};
 /** A turn that waits for its helper to be resolved. */
 type Waiting = {
   /** Set when a parent read the child first: whether the parent's turn,
@@ -387,20 +393,33 @@ function readSubagents(
     const turns = Math.max(0, count(total.turns) - (exported?.calls ?? 0));
     const left =
       usage.input + usage.output + usage.cache_read + usage.cache_write;
-    const model =
-      (!exported || left > 0) && validString(r.model) ? r.model : undefined;
     // The first slash separates the provider, as in splitModel in
     // internal/source/pi. A model without a slash names no provider.
-    const slash = model?.indexOf("/") ?? -1;
-    const provider = slash > 0 ? model?.slice(0, slash) : undefined;
-    out.push({
+    const withModel = (model: string | undefined) => {
+      const slash = model?.indexOf("/") ?? -1;
+      const provider = slash > 0 ? model?.slice(0, slash) : undefined;
+      return {
+        model,
+        billing_mode: provider ? billingMode(ctx, provider) : undefined,
+      };
+    };
+    const name = validString(r.model) ? r.model : undefined;
+    const sub: Subagent = {
       agent: r.agent,
-      model,
+      ...withModel(!exported || left > 0 ? name : undefined),
       usage,
       turns,
-      billing_mode: provider ? billingMode(ctx, provider) : undefined,
       failed: r.exitCode !== 0 || typeof r.error === "string",
-    });
+    };
+    // Node reports a child helper that cannot run only after this read. The
+    // child then gives its turn back here, while this row is not yet sent.
+    if (exported)
+      exported.giveBack = (back, calls) => {
+        sub.usage = add(sub.usage, back);
+        sub.turns += calls;
+        if (sub.model === undefined) Object.assign(sub, withModel(name));
+      };
+    out.push(sub);
   }
   return out.length ? out : undefined;
 }
@@ -526,7 +545,7 @@ export function register(
     turn: Turn,
     json: string,
     own: (
-      start: (json: string, failed: () => void) => boolean,
+      start: (json: string, started: (ok: boolean) => void) => boolean,
     ) => boolean | Promise<boolean>,
   ) => boolean | Promise<boolean>,
 ) {
@@ -742,23 +761,37 @@ export function register(
       exportedSessions.set(file, recorded);
     };
     const retract = () => {
-      // Only while no parent has read it: a read takes the entry out.
-      if (
-        file !== undefined &&
-        recorded &&
-        exportedSessions.get(file) === recorded
-      ) {
-        recorded.usage = subtract(recorded.usage, usage);
-        recorded.calls = Math.max(0, recorded.calls - turn.calls.length);
-        if (recorded.calls === 0) exportedSessions.delete(file);
+      if (file !== undefined && recorded) {
+        if (exportedSessions.get(file) === recorded) {
+          recorded.usage = subtract(recorded.usage, usage);
+          recorded.calls = Math.max(0, recorded.calls - turn.calls.length);
+          if (recorded.calls === 0) exportedSessions.delete(file);
+        } else {
+          // A parent already took the entry out and left these tokens out.
+          recorded.giveBack?.(usage, turn.calls.length);
+        }
       }
       recorded = undefined;
     };
     let owned = false;
+    // Settles with whether the helper of this turn started.
+    let confirm: (started: boolean) => void = () => {};
+    const spawned = new Promise<boolean>((r) => (confirm = r));
     const own = (
-      start: (json: string, failed: () => void) => boolean,
+      start: (json: string, started: (ok: boolean) => void) => boolean,
     ): boolean | Promise<boolean> => {
       owned = true;
+      const launch = (envelope: string, failed: () => void) => {
+        const ok = start(envelope, (started) => {
+          if (!started) failed();
+          confirm(started);
+        });
+        if (!ok) {
+          failed();
+          confirm(false);
+        }
+        return ok;
+      };
       const go = (claimed: boolean | undefined) => {
         // A parent that read this turn first and was handed off carries
         // its tokens, so the turn goes out without them. A parent that was
@@ -766,13 +799,11 @@ export function register(
         if (claimed === true) {
           const none = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
           const calls = turn.calls.map((call) => ({ ...call, usage: none }));
-          return start(fit({ ...turn, calls }), () => {});
+          return launch(fit({ ...turn, calls }), () => {});
         }
-        if (claimed === false) return start(json, () => {});
+        if (claimed === false) return launch(json, () => {});
         record();
-        const started = start(json, retract);
-        if (!started) retract();
-        return started;
+        return launch(json, retract);
       };
       return waiting.claim ? waiting.claim.then(go) : go(undefined);
     };
@@ -784,7 +815,11 @@ export function register(
       }
       // A send that did not go through own() is recorded here.
       if (handed && !owned) record();
-      active.handoff?.settle(handed);
+      // A claimed child learns whether this turn's helper really started:
+      // Node reports one that cannot run only after spawn returned.
+      const handoff = active.handoff;
+      if (handed && owned && handoff) void spawned.then(handoff.settle);
+      else handoff?.settle(handed);
     };
     const handed = send(turn, json, own);
     if (typeof handed === "boolean") finish(handed);
@@ -937,12 +972,14 @@ export default function (pi: ExtensionAPI) {
     void promise.then(() => pending.delete(promise));
   };
 
-  /** Starts a detached helper; returns when its envelope is written. */
-  /** Starts a detached helper; `failed` runs if it then fails to start. */
+  /**
+   * Starts a detached helper; `started` then tells whether it ran. The
+   * promise settles when its envelope is written.
+   */
   const start = (
     command: string,
     json: string,
-    failed: () => void,
+    started: (ok: boolean) => void,
   ): Promise<void> | undefined => {
     let child;
     try {
@@ -973,9 +1010,10 @@ export default function (pi: ExtensionAPI) {
       // The cached helper is gone, so the next turn resolves it again.
       resolving = undefined;
       helper = undefined;
-      failed();
+      started(false);
       end(true);
     });
+    child.on("spawn", () => started(true));
     child.on("close", (code) => end(code !== 0));
     return new Promise<void>((resolve) => {
       child.stdin.on("error", () => resolve());
@@ -991,13 +1029,13 @@ export default function (pi: ExtensionAPI) {
   const run = (
     path: string,
     own: (
-      start: (json: string, failed: () => void) => boolean,
+      start: (json: string, started: (ok: boolean) => void) => boolean,
     ) => boolean | Promise<boolean>,
     settle: boolean,
   ): boolean | Promise<boolean> => {
     let written: Promise<void> | undefined;
-    const started = own((envelope, failed) => {
-      written = start(path, envelope, failed);
+    const started = own((envelope, ok) => {
+      written = start(path, envelope, ok);
       if (!written) warn?.();
       return written !== undefined;
     });

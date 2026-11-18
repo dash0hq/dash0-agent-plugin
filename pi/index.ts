@@ -82,9 +82,6 @@ type Active = {
   response: string;
   /** Content bytes already attached to this turn, before JSON escaping. */
   content: number;
-  /** Set once the turn claims a waiting child turn: settles with whether
-   * this turn was handed to a helper. */
-  handoff?: { promise: Promise<boolean>; settle: (handed: boolean) => void };
 };
 
 /** Model calls and tool calls kept per turn, as the helper accepts. */
@@ -102,75 +99,17 @@ const maxEnvelope = 768 * 1024;
 /** Children kept per subagent call, as the helper accepts. */
 const maxSubagents = 64;
 
-/** Tokens and model calls that a session handed to its own helpers. */
-type Exported = {
-  usage: Usage;
-  calls: number;
-  /** Set by the parent read that took this entry: gives a turn's tokens
-   * back to the parent's row when its helper then fails to start. */
-  giveBack?: (usage: Usage, calls: number) => void;
-};
-/** A turn that waits for its helper to be resolved. */
-type Waiting = {
-  /** Set when a parent read the child first: whether the parent's turn,
-   * which then carries this turn's tokens, was handed to a helper. */
-  claim?: Promise<boolean>;
-};
-
 /**
- * What the sessions of this process exported themselves, by session file. A
- * foreground child that loads this extension, for example through
- * pi-subagents' `defaultSubagentOnlyExtensions`, runs in the parent's
- * process but with its own copy of this module, so only a global is shared
- * with the parent. The parent keeps the part of a child's total that the
- * child did not export.
+ * Session files that an instance of this extension exports. A foreground
+ * child that loads this extension, for example through pi-subagents'
+ * `defaultSubagentOnlyExtensions`, runs in the parent's process but with its
+ * own copy of this module, so only a global is shared with the parent. As in
+ * the OpenCode plugin, such a child reports its own tokens and the parent
+ * leaves them out.
  */
 const exportedSessions = ((globalThis as Record<symbol, unknown>)[
-  Symbol.for("dash0.pi.exported-usage")
-] ??= new Map<string, Exported>()) as Map<string, Exported>;
-
-/** Turns that wait for their helper, by session file. */
-const waitingSessions = ((globalThis as Record<symbol, unknown>)[
-  Symbol.for("dash0.pi.waiting-turns")
-] ??= new Map<string, Set<Waiting>>()) as Map<string, Set<Waiting>>;
-
-const usageKeys = [
-  "input",
-  "output",
-  "cache_read",
-  "cache_write",
-  "cache_write_1h",
-  "reasoning",
-] as const;
-
-/** The promise a turn settles with its handoff, created on first use. */
-function handoffOf(active: Active): Promise<boolean> {
-  if (!active.handoff) {
-    let settle: (handed: boolean) => void = () => {};
-    const promise = new Promise<boolean>((r) => (settle = r));
-    active.handoff = { promise, settle };
-  }
-  return active.handoff.promise;
-}
-
-/** a minus b, field by field, never below zero; absent fields stay absent. */
-function subtract(a: Usage, b: Usage): Usage {
-  const out: Usage = { ...a };
-  for (const key of usageKeys) {
-    const v = a[key];
-    if (v !== undefined) out[key] = Math.max(0, v - (b[key] ?? 0));
-  }
-  return out;
-}
-
-/** a plus b, field by field. */
-function add(a: Usage, b: Usage): Usage {
-  const out: Usage = { ...a };
-  for (const key of usageKeys)
-    if (a[key] !== undefined || b[key] !== undefined)
-      out[key] = (a[key] ?? 0) + (b[key] ?? 0);
-  return out;
-}
+  Symbol.for("dash0.pi.exported-sessions")
+] ??= new Set<string>()) as Set<string>;
 
 /** Detached helpers alive at once. Stops a runaway, not ordinary overlap. */
 const maxHelpers = 16;
@@ -339,10 +278,9 @@ export function billingMode(
 export function subagentsOf(
   ctx: ExtensionContext,
   details: unknown,
-  handoff?: Promise<boolean>,
 ): Subagent[] | undefined {
   try {
-    return readSubagents(ctx, details, handoff);
+    return readSubagents(ctx, details);
   } catch {
     return undefined;
   }
@@ -351,7 +289,6 @@ export function subagentsOf(
 function readSubagents(
   ctx: ExtensionContext,
   details: unknown,
-  handoff?: Promise<boolean>,
 ): Subagent[] | undefined {
   // Another extension can also name its tool "subagent". Only the result
   // shape of pi-subagents counts: a run ID, a mode, and rows that each carry
@@ -373,54 +310,26 @@ function readSubagents(
       typeof r.exitCode !== "number"
     )
       continue;
-    // A child that exported its turns handed them to a helper before the
-    // parent's tool call ends, because the child settles first. The parent
-    // keeps what the child did not export. A turn still waiting for its
-    // helper is claimed here: the parent keeps its tokens, and the child
-    // exports it without them once the parent's own turn is handed off.
-    // Each file is looked up once, so the maps do not grow with children.
-    const file = typeof r.sessionFile === "string" ? r.sessionFile : undefined;
+    // A child that exported itself handed its turn to a helper before the
+    // parent's tool call ends, because the child settles first. Each file is
+    // looked up once, so the set does not grow with children.
     const exported =
-      file === undefined ? undefined : exportedSessions.get(file);
-    if (file !== undefined) exportedSessions.delete(file);
-    if (file !== undefined && handoff)
-      for (const turn of waitingSessions.get(file) ?? [])
-        turn.claim ??= handoff;
-    const total = r.usage as Record<string, unknown>;
-    const usage = exported
-      ? subtract(toUsage(total), exported.usage)
-      : toUsage(total);
-    const turns = Math.max(0, count(total.turns) - (exported?.calls ?? 0));
-    const left =
-      usage.input + usage.output + usage.cache_read + usage.cache_write;
+      typeof r.sessionFile === "string" &&
+      exportedSessions.delete(r.sessionFile);
+    const usage = (exported ? {} : r.usage) as Record<string, unknown>;
+    const model = !exported && validString(r.model) ? r.model : undefined;
     // The first slash separates the provider, as in splitModel in
     // internal/source/pi. A model without a slash names no provider.
-    const withModel = (model: string | undefined) => {
-      const slash = model?.indexOf("/") ?? -1;
-      const provider = slash > 0 ? model?.slice(0, slash) : undefined;
-      return {
-        model,
-        billing_mode: provider ? billingMode(ctx, provider) : undefined,
-      };
-    };
-    const name = validString(r.model) ? r.model : undefined;
-    const sub: Subagent = {
+    const slash = model?.indexOf("/") ?? -1;
+    const provider = slash > 0 ? model?.slice(0, slash) : undefined;
+    out.push({
       agent: r.agent,
-      ...withModel(!exported || left > 0 ? name : undefined),
-      usage,
-      turns,
+      model,
+      usage: toUsage(usage),
+      turns: count(usage.turns),
+      billing_mode: provider ? billingMode(ctx, provider) : undefined,
       failed: r.exitCode !== 0 || typeof r.error === "string",
-    };
-    // Node can report a child helper that cannot run after this read. The
-    // child then gives its turn back here. That counts only until the parent
-    // settles its turn, which encodes this row once.
-    if (exported)
-      exported.giveBack = (back, calls) => {
-        sub.usage = add(sub.usage, back);
-        sub.turns += calls;
-        if (sub.model === undefined) Object.assign(sub, withModel(name));
-      };
-    out.push(sub);
+    });
   }
   return out.length ? out : undefined;
 }
@@ -530,11 +439,7 @@ export function fit(turn: Turn): string {
 }
 
 /**
- * Collect each user turn and hand it to `send` once Pi settles. `send`
- * returns false when it could not hand the turn to a helper, and a promise
- * when the turn waits for a helper. It starts the helper through `own`, with
- * the envelope and the failure callback `own` gives it: the envelope has no
- * tokens when a parent has kept them.
+ * Collect each user turn and hand it to `send` once Pi settles.
  *
  * A turn starts at before_agent_start and ends at agent_settled, not at
  * agent_end: Pi can retry, compact and retry, or run queued follow-ups after
@@ -542,13 +447,7 @@ export function fit(turn: Turn): string {
  */
 export function register(
   pi: ExtensionAPI,
-  send: (
-    turn: Turn,
-    json: string,
-    own: (
-      start: (json: string, started: (ok: boolean) => void) => boolean,
-    ) => boolean | Promise<boolean>,
-  ) => boolean | Promise<boolean>,
+  send: (turn: Turn, json: string) => void,
 ) {
   let state: Active | undefined;
   // SKILL.md path to skill name, from the skills Pi loaded for this run. A
@@ -556,11 +455,7 @@ export function register(
   let skills = new Map<string, string>();
   let cwd: string | undefined;
 
-  // A turn that ends without an export releases its claims on children.
-  const drop = () => state?.handoff?.settle(false);
-
   const begin = (ctx: ExtensionContext): Active | undefined => {
-    drop();
     const session = ctx.sessionManager.getSessionId();
     if (!validString(session)) return undefined;
     state = {
@@ -682,7 +577,7 @@ export function register(
     active.running.delete(event.toolCallId);
     const subagents =
       event.toolName === "subagent"
-        ? subagentsOf(ctx, event.result?.details, handoffOf(active))
+        ? subagentsOf(ctx, event.result?.details)
         : undefined;
     // Rows over maxSubagents are dropped, as calls and tools over their caps
     // are, and the turn says so in the same way.
@@ -726,111 +621,22 @@ export function register(
     // IDs, names and counts are outside the content budget, and escaping
     // grows control-heavy text, so shed parts of the turn, never the turn.
     const json = fit(turn);
-    // A parent in this process leaves out the tokens that a child handed to
-    // its own helpers. A turn that could not keep them in the parent.
-    let file: string | undefined;
+    // A parent in this process leaves out the tokens of a child that exports
+    // itself. The child marks its session before its helper starts, which
+    // may wait for a download, so the parent reads the mark in time. A turn
+    // whose helper then fails is lost, as for any session.
     try {
-      const f = ctx.sessionManager.getSessionFile();
-      if (typeof f === "string") file = f;
+      const file = ctx.sessionManager.getSessionFile();
+      if (typeof file === "string") exportedSessions.add(file);
     } catch {
       // No session file: no parent can look this session up.
     }
-    const waiting: Waiting = {};
-    if (file !== undefined) {
-      const turns = waitingSessions.get(file) ?? new Set<Waiting>();
-      turns.add(waiting);
-      waitingSessions.set(file, turns);
-    }
-    // Recorded before the helper starts, so no parent can read in between,
-    // and taken back when it does not start. A session has one entry, which
-    // each turn changes in place, until a parent read takes it out.
-    const usage = turn.calls.reduce((sum, call) => add(sum, call.usage), {
-      input: 0,
-      output: 0,
-      cache_read: 0,
-      cache_write: 0,
-    } as Usage);
-    let recorded: Exported | undefined;
-    const record = () => {
-      if (file === undefined || recorded) return;
-      recorded = exportedSessions.get(file) ?? {
-        usage: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-        calls: 0,
-      };
-      recorded.usage = add(recorded.usage, usage);
-      recorded.calls += turn.calls.length;
-      exportedSessions.set(file, recorded);
-    };
-    const retract = () => {
-      if (file !== undefined && recorded) {
-        if (exportedSessions.get(file) === recorded) {
-          recorded.usage = subtract(recorded.usage, usage);
-          recorded.calls = Math.max(0, recorded.calls - turn.calls.length);
-          if (recorded.calls === 0) exportedSessions.delete(file);
-        } else {
-          // A parent already took the entry out and left these tokens out.
-          recorded.giveBack?.(usage, turn.calls.length);
-        }
-      }
-      recorded = undefined;
-    };
-    let owned = false;
-    // Settles with whether the helper of this turn started.
-    let confirm: (started: boolean) => void = () => {};
-    const spawned = new Promise<boolean>((r) => (confirm = r));
-    const own = (
-      start: (json: string, started: (ok: boolean) => void) => boolean,
-    ): boolean | Promise<boolean> => {
-      owned = true;
-      const launch = (envelope: string, failed: () => void) => {
-        const ok = start(envelope, (started) => {
-          if (!started) failed();
-          confirm(started);
-        });
-        if (!ok) {
-          failed();
-          confirm(false);
-        }
-        return ok;
-      };
-      const go = (claimed: boolean | undefined) => {
-        // A parent that read this turn first and was handed off carries
-        // its tokens, so the turn goes out without them. A parent that was
-        // not handed off carries nothing, so the turn goes out whole.
-        if (claimed === true) {
-          const none = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
-          const calls = turn.calls.map((call) => ({ ...call, usage: none }));
-          return launch(fit({ ...turn, calls }), () => {});
-        }
-        if (claimed === false) return launch(json, () => {});
-        record();
-        return launch(json, retract);
-      };
-      return waiting.claim ? waiting.claim.then(go) : go(undefined);
-    };
-    const finish = (handed: boolean) => {
-      if (file !== undefined) {
-        const turns = waitingSessions.get(file);
-        turns?.delete(waiting);
-        if (turns?.size === 0) waitingSessions.delete(file);
-      }
-      // A send that did not go through own() is recorded here.
-      if (handed && !owned) record();
-      // A claimed child learns whether this turn's helper really started:
-      // Node reports one that cannot run only after spawn returned.
-      const handoff = active.handoff;
-      if (handed && owned && handoff) void spawned.then(handoff.settle);
-      else handoff?.settle(handed);
-    };
-    const handed = send(turn, json, own);
-    if (typeof handed === "boolean") finish(handed);
-    else void handed.then(finish);
+    send(turn, json);
   });
 
   // A session switch, fork or reload replaces this extension instance, so a
   // turn still open here can never settle.
   pi.on("session_shutdown", () => {
-    drop();
     state = undefined;
   });
 }
@@ -875,8 +681,7 @@ export default function (pi: ExtensionAPI) {
     "v1.0",
     "powershell.exe",
   );
-  // The resolved helper. A turn is handed off only once a helper has
-  // started with its envelope, so it is read synchronously at settle time.
+  // The resolved helper, cached for the turns after the first.
   let helper: string | undefined;
   let resolving: Promise<string | undefined> | undefined;
   const resolveHelper = () =>
@@ -973,15 +778,8 @@ export default function (pi: ExtensionAPI) {
     void promise.then(() => pending.delete(promise));
   };
 
-  /**
-   * Starts a detached helper; `started` then tells whether it ran. The
-   * promise settles when its envelope is written.
-   */
-  const start = (
-    command: string,
-    json: string,
-    started: (ok: boolean) => void,
-  ): Promise<void> | undefined => {
+  /** Starts a detached helper; the promise settles when its envelope is written. */
+  const start = (command: string, json: string): Promise<void> | undefined => {
     let child;
     try {
       child = spawn(command, [], {
@@ -995,6 +793,7 @@ export default function (pi: ExtensionAPI) {
         windowsHide: true,
       });
     } catch {
+      warn?.();
       return undefined;
     }
     live++;
@@ -1011,10 +810,8 @@ export default function (pi: ExtensionAPI) {
       // The cached helper is gone, so the next turn resolves it again.
       resolving = undefined;
       helper = undefined;
-      started(false);
       end(true);
     });
-    child.on("spawn", () => started(true));
     child.on("close", (code) => end(code !== 0));
     return new Promise<void>((resolve) => {
       child.stdin.on("error", () => resolve());
@@ -1022,55 +819,28 @@ export default function (pi: ExtensionAPI) {
     });
   };
 
-  /**
-   * Hands a turn to the helper at path through `own`. With `settle`, or when
-   * the turn waits for a parent's claim, the result settles once the
-   * envelope is written, so a quit waits for the write.
-   */
-  const run = (
-    path: string,
-    own: (
-      start: (json: string, started: (ok: boolean) => void) => boolean,
-    ) => boolean | Promise<boolean>,
-    settle: boolean,
-  ): boolean | Promise<boolean> => {
-    let written: Promise<void> | undefined;
-    const started = own((envelope, ok) => {
-      written = start(path, envelope, ok);
-      if (!written) warn?.();
-      return written !== undefined;
-    });
-    if (typeof started === "boolean" && !settle) {
-      if (written) track(written);
-      return started;
-    }
-    const done = Promise.resolve(started).then((ok) =>
-      ok && written ? written.then(() => true) : false,
-    );
-    track(done.then(() => undefined));
-    return done;
-  };
-
-  register(pi, (_turn, _json, own) => {
+  register(pi, (_turn, json) => {
     // The turn is lost, so the user hears about it as for a failed export.
     if (live >= maxHelpers) {
       warn?.();
-      return false;
+      return;
     }
     const command = local ?? helper;
-    if (command !== undefined) return run(command, own, false);
+    if (command !== undefined) {
+      const written = start(command, json);
+      if (written) track(written);
+      return;
+    }
     // The helper is still being resolved, for example during the first
     // download or in a print-mode run whose turn beat it. The turn waits,
-    // counted toward the cap.
+    // counted toward the cap, and a quit waits for it too.
     live++;
-    const handed = resolveHelper().then((path) => {
-      live--;
-      if (path !== undefined) return run(path, own, true);
-      warn?.();
-      return false;
-    });
-    // Tracked from now, so a quit also waits for the resolution.
-    track(handed.then(() => undefined));
-    return handed;
+    track(
+      resolveHelper().then((path) => {
+        live--;
+        if (path === undefined) return warn?.();
+        return start(path, json);
+      }),
+    );
   });
 }

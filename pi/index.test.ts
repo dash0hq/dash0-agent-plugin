@@ -14,26 +14,17 @@ import {
 } from "./index";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
-/** The `own` that register hands to send. */
-type Own = Parameters<Parameters<typeof register>[1]>[2];
-/** How a test's send answers: a fixed result, or through own. */
-type Send = boolean | ((own: Own) => boolean | Promise<boolean>);
 
-function setup(
-  session = "019a-session",
-  parentSession?: string,
-  handedOff: Send = true,
-) {
+function setup(session = "019a-session", parentSession?: string) {
   const handlers = new Map<string, Handler>();
   const sent: Turn[] = [];
   const encoded: string[] = [];
   const api = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
   } as unknown as ExtensionAPI;
-  register(api, (turn, json, own) => {
+  register(api, (turn, json) => {
     sent.push(turn);
     encoded.push(json);
-    return typeof handedOff === "boolean" ? handedOff : handedOff(own);
   });
   const ctx = {
     sessionManager: {
@@ -537,28 +528,13 @@ test("another extension's subagent tool gives no children", () => {
   ).toHaveLength(1);
 });
 
-// The child's two model calls; together they are childRow()'s total.
-const callA = { input: 1, output: 160, cacheRead: 2000, cacheWrite: 5211 };
-const callB = { input: 3, output: 300, cacheRead: 3145, cacheWrite: 0 };
-
-/** A child session runs one turn per entry of calls. */
-function child(handedOff: Send, ...turns: Record<string, number>[][]) {
-  const c = setup("019a-child", undefined, handedOff);
-  c.fire("session_start", { reason: "startup" });
-  for (const calls of turns) {
-    c.fire("before_agent_start", { messageType: "user", prompt: "task" });
-    for (const usage of calls)
-      c.fire(
-        "message_end",
-        assistant("claude-haiku-4-5", "claude-code", [], { usage }),
-      );
-    c.fire("agent_settled", { aborted: false });
-  }
-}
-
-/** The parent reads the child's row; its own turn is handed off or not. */
-function parentReads(handedOff: Send = true, beforeSettle = () => {}) {
-  const parent = setup("019a-session", undefined, handedOff);
+/** A child session runs one turn, and its parent then reads the child's row. */
+function childThenParent() {
+  const child = setup("019a-child");
+  child.fire("session_start", { reason: "startup" });
+  child.fire("before_agent_start", { messageType: "user", prompt: "task" });
+  child.fire("agent_settled", { aborted: false });
+  const parent = setup();
   parent.fire("before_agent_start", { messageType: "user", prompt: "x" });
   parent.fire("tool_execution_start", {
     toolCallId: "c1",
@@ -572,166 +548,24 @@ function parentReads(handedOff: Send = true, beforeSettle = () => {}) {
       childRow(),
     ]),
   });
-  beforeSettle();
   parent.fire("agent_settled", { aborted: false });
-  const sent = JSON.parse(parent.encoded[0]) as Turn;
-  return sent.tools[0].subagents ?? [];
+  return parent.sent[0].tools[0].subagents ?? [];
 }
-
-const zero = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
 
 // With pi-subagents' defaultSubagentOnlyExtensions, this extension also loads
 // into a foreground child, in the same process. The child then exports its
 // own session, and the parent must not count the same tokens again.
 test("a child that exported itself keeps its agent but not its tokens", () => {
-  child(true, [callA, callB]);
-  const [own, other] = parentReads();
+  const [own, other] = childThenParent();
   expect(own.agent).toBe("delegate");
   expect(own.model).toBeUndefined();
-  expect(own.usage).toEqual(zero);
-  expect(own.turns).toBe(0);
-  expect(other.model).toBe("claude-code/claude-haiku-4-5");
-});
-
-// A child that started but could not hand its turn to a helper, for example
-// at the helper cap, exported nothing. Its tokens then stay with the parent.
-test("a child whose export did not start keeps its tokens in the parent", () => {
-  child(false, [callA, callB]);
-  const [own] = parentReads();
-  expect(own.model).toBe("claude-code/claude-haiku-4-5");
-  expect(own.usage.output).toBe(460);
-});
-
-// One exported turn does not stand for the whole child: the parent keeps
-// the tokens of the turns that the child did not export.
-test("a parent keeps the tokens of a child's turns that were not exported", () => {
-  let first = true;
-  child(
-    (own) => {
-      if (first) return (first = false);
-      return own(() => true);
-    },
-    [callA],
-    [callB],
-  );
-  const [own] = parentReads();
-  expect(own.model).toBe("claude-code/claude-haiku-4-5");
   expect(own.usage).toEqual({
-    input: 1,
-    output: 160,
-    cache_read: 2000,
-    cache_write: 5211,
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write: 0,
   });
-  expect(own.turns).toBe(1);
-});
-
-// Node reports a helper that cannot run after spawn returned. The child's
-// tokens then stay with the parent.
-test("a helper that fails after spawn gives the tokens back", () => {
-  let failed = () => {};
-  child(
-    (own) => own((_json, ok) => ((failed = () => ok(false)), true)),
-    [callA, callB],
-  );
-  failed();
-  expect(parentReads()[0].usage.output).toBe(460);
-
-  // Two turns that both recorded, then both failed, give both back.
-  const failures: (() => void)[] = [];
-  child(
-    (own) => own((_json, ok) => (failures.push(() => ok(false)), true)),
-    [callA],
-    [callB],
-  );
-  for (const f of failures) f();
-  expect(parentReads()[0].usage.output).toBe(460);
-
-  // The parent read first: the failure gives the tokens back to its row,
-  // which it has not sent yet.
-  child(
-    (own) => own((_json, ok) => ((failed = () => ok(false)), true)),
-    [callA, callB],
-  );
-  const [row] = parentReads(true, () => failed());
-  expect(row.usage.output).toBe(460);
-  expect(row.turns).toBe(2);
-  expect(row.model).toBe("claude-code/claude-haiku-4-5");
-});
-
-/** A child turn that waits for its helper until release() is called. */
-function waitingChild(...turns: Record<string, number>[][]) {
-  let release: () => void = () => {};
-  const resolved = new Promise<void>((r) => (release = r));
-  const envelopes: Turn[] = [];
-  child(
-    async (own) => {
-      await resolved;
-      return own((json) => (envelopes.push(JSON.parse(json) as Turn), true));
-    },
-    ...turns,
-  );
-  const settle = async () => {
-    release();
-    for (let i = 0; i < 5; i++) await Bun.sleep(0);
-  };
-  const tokens = () =>
-    envelopes.map((t) => t.calls.reduce((n, c) => n + c.usage.output, 0));
-  return { settle, tokens };
-}
-
-// A child whose turn waits for its helper settles before the parent reads,
-// but may start its helper after. Whichever comes first decides who counts
-// the tokens, so they are counted once, and a parent that is not exported
-// itself leaves them to the child.
-test("a child waiting for its helper is counted once, by whoever goes first", async () => {
-  // The helper starts first: the parent leaves the tokens out.
-  let w = waitingChild([callA, callB]);
-  await w.settle();
-  expect(w.tokens()).toEqual([460]);
-  expect(parentReads()[0].usage.output).toBe(0);
-
-  // The parent reads first and is exported: it keeps the tokens, and the
-  // child exports its turn without them.
-  w = waitingChild([callA, callB]);
-  expect(parentReads()[0].usage.output).toBe(460);
-  await w.settle();
-  expect(w.tokens()).toEqual([0]);
-  // A later read finds nothing exported, so it keeps the tokens too.
-  expect(parentReads()[0].usage.output).toBe(460);
-
-  // The parent reads first but is not exported, for example at the helper
-  // cap: the child exports its turn with its tokens.
-  w = waitingChild([callA, callB]);
-  parentReads(false);
-  await w.settle();
-  expect(w.tokens()).toEqual([460]);
-
-  // The parent's helper spawns but then fails to run: the child waits for
-  // that and exports its turn with its tokens.
-  for (const ran of [false, true]) {
-    w = waitingChild([callA, callB]);
-    let report: (ok: boolean) => void = () => {};
-    parentReads((own) => own((_json, ok) => ((report = ok), true)));
-    await w.settle();
-    expect(w.tokens()).toEqual([]);
-    report(ran);
-    await w.settle();
-    expect(w.tokens()).toEqual([ran ? 0 : 460]);
-  }
-});
-
-// Two turns of one session can both wait for the same download. Both start
-// their helper, without tokens when a parent claimed them first.
-test("every waiting turn of a session starts its helper", async () => {
-  let w = waitingChild([callA], [callB]);
-  await w.settle();
-  expect(w.tokens()).toEqual([160, 300]);
-  expect(parentReads()[0].usage.output).toBe(0);
-
-  w = waitingChild([callA], [callB]);
-  expect(parentReads()[0].usage.output).toBe(460);
-  await w.settle();
-  expect(w.tokens()).toEqual([0, 0]);
+  expect(other.model).toBe("claude-code/claude-haiku-4-5");
 });
 
 // The helper drops a part count that is larger than its total. The bridge

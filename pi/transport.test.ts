@@ -236,7 +236,7 @@ test("a missing helper or a failing export never throws into Pi", async () => {
 
 // The npm package ships index.ts and the bootstraps, no helper. The extension
 // asks the bootstrap for the helper's path and runs the helper itself. A
-// bootstrap that fails open prints no path, so the turn is not handed off.
+// bootstrap that fails open prints no path, so the turn is not exported.
 test.skipIf(process.platform === "win32")(
   "without a local helper the extension runs the helper the bootstrap resolves",
   async () => {
@@ -266,7 +266,7 @@ test.skipIf(process.platform === "win32")(
 
     const { fire, notices } = await load(dir);
     // The turn waits for the bootstrap, which fails open with exit 0 and no
-    // path: no handoff, and the notice.
+    // path: no export, and the notice.
     await turn(fire);
     for (let i = 0; i < 100 && notices.length === 0; i++) await Bun.sleep(20);
     expect(notices).toEqual(["dash0: telemetry unavailable"]);
@@ -337,7 +337,7 @@ test.skipIf(process.platform === "win32")(
     };
 
     // The turn waits for the first resolution, which prints no path, as on a
-    // failed download. The turn is not handed off, and the user gets the
+    // failed download. The turn is not exported, and the user gets the
     // notice.
     await turn(fire);
     for (let i = 0; i < 100 && notices.length === 0; i++) await Bun.sleep(20);

@@ -63,3 +63,19 @@ No per-session record of these calls exists on disk (`~/.claude/sessions/<pid>.j
 process metadata; `~/.claude/stats-cache.json` is a global rollup with no session
 dimension), so closing the gap needs a second telemetry source rather than a fix to the
 transcript reader.
+
+### Per-turn usage is unreliable when two processes write one transcript
+
+A session can be open in two Claude Code processes at the same time, for example in
+the VS Code extension and in the desktop app. Both processes append to the same
+transcript file, so their turns interleave. The transcript readers in
+`internal/transcript` see one sequence of entries and do not know which process wrote
+each entry.
+
+A turn starts at a typed prompt, or at an `isMeta` prompt with a `promptId` not seen
+before in the transcript (for example a `/loop` wake-up). When the second process
+starts a turn while the first process's turn still runs, the first process's `Stop`
+reports only the calls after that start. Its earlier calls are not reported on any
+`chat` span. Calls from the other process can also be counted on the wrong span.
+
+Matching each `Stop` to its own prompt (issue #208) would remove this limitation.

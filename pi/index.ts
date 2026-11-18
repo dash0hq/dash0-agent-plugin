@@ -3,7 +3,8 @@
 
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import type { Socket } from "node:net";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   ExtensionAPI,
@@ -102,7 +103,9 @@ const maxSubagents = 64;
  * Session files that an instance of this extension exports. A foreground
  * child that loads this extension, for example through pi-subagents'
  * `defaultSubagentOnlyExtensions`, runs in the parent's process but with its
- * own copy of this module, so only a global is shared with the parent.
+ * own copy of this module, so only a global is shared with the parent. As in
+ * the OpenCode plugin, such a child reports its own tokens and the parent
+ * leaves them out.
  */
 const exportedSessions = ((globalThis as Record<symbol, unknown>)[
   Symbol.for("dash0.pi.exported-sessions")
@@ -436,8 +439,7 @@ export function fit(turn: Turn): string {
 }
 
 /**
- * Collect each user turn and hand it to `send` once Pi settles. `send`
- * returns false when it could not hand the turn to a helper.
+ * Collect each user turn and hand it to `send` once Pi settles.
  *
  * A turn starts at before_agent_start and ends at agent_settled, not at
  * agent_end: Pi can retry, compact and retry, or run queued follow-ups after
@@ -445,7 +447,7 @@ export function fit(turn: Turn): string {
  */
 export function register(
   pi: ExtensionAPI,
-  send: (turn: Turn, json: string) => boolean,
+  send: (turn: Turn, json: string) => void,
 ) {
   let state: Active | undefined;
   // SKILL.md path to skill name, from the skills Pi loaded for this run. A
@@ -619,16 +621,17 @@ export function register(
     // IDs, names and counts are outside the content budget, and escaping
     // grows control-heavy text, so shed parts of the turn, never the turn.
     const json = fit(turn);
-    // A parent in this process leaves out the tokens of a child that handed
-    // its turn to a helper. A child that could not keep them in the parent.
-    if (send(turn, json)) {
-      try {
-        const file = ctx.sessionManager.getSessionFile();
-        if (typeof file === "string") exportedSessions.add(file);
-      } catch {
-        // No session file: no parent can look this session up.
-      }
+    // A parent in this process leaves out the tokens of a child that exports
+    // itself. The child marks its session before its helper starts, which
+    // may wait for a download, so the parent reads the mark in time. A turn
+    // whose helper then fails is lost, as for any session.
+    try {
+      const file = ctx.sessionManager.getSessionFile();
+      if (typeof file === "string") exportedSessions.add(file);
+    } catch {
+      // No session file: no parent can look this session up.
     }
+    send(turn, json);
   });
 
   // A session switch, fork or reload replaces this extension instance, so a
@@ -649,15 +652,85 @@ export default function (pi: ExtensionAPI) {
   // uses the plain name.
   const arch = process.arch === "x64" ? "amd64" : process.arch;
   const perPlatform = beside(`./pi-on-event-${os}-${arch}${exe}`);
-  const binary = existsSync(perPlatform)
+  const plain = beside(`./pi-on-event${exe}`);
+  const local = existsSync(perPlatform)
     ? perPlatform
-    : beside(`./pi-on-event${exe}`);
+    : existsSync(plain)
+      ? plain
+      : undefined;
   // `pi install` from git or npm does not keep the exec bit everywhere.
   try {
-    chmodSync(binary, 0o755);
+    if (local) chmodSync(local, 0o755);
   } catch {
-    // Read-only or absent: spawn reports the real problem.
+    // Read-only: spawn reports the real problem.
   }
+  // The npm package ships no helper. Its bootstrap, run with
+  // --resolve-binary, downloads the release helper, verifies its checksum,
+  // caches it and prints its path; the helper is then spawned directly. The
+  // bootstrap fails open with exit 0, so only a printed path shows that a
+  // helper exists. On Windows a PowerShell between Pi and the helper would
+  // also decode the envelope with the console code page and open a console
+  // window.
+  const windows = process.platform === "win32";
+  // A full path, because Windows looks for a bare name in the cwd (the
+  // user's project) before PATH.
+  const powershell = join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  // The resolved helper, cached for the turns after the first.
+  let helper: string | undefined;
+  let resolving: Promise<string | undefined> | undefined;
+  const resolveHelper = () =>
+    (resolving ??= new Promise<string | undefined>((done) => {
+      let out = "";
+      try {
+        const child = spawn(
+          windows ? powershell : "bash",
+          windows
+            ? [
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                beside("./pi-on-event.ps1"),
+                "--resolve-binary",
+              ]
+            : [beside("./pi-on-event.sh"), "--resolve-binary"],
+          {
+            // A relative cache directory then names the same place for the
+            // resolver and for the helper, which runs in this cwd too.
+            cwd,
+            stdio: ["ignore", "pipe", "ignore"],
+            detached: true,
+            windowsHide: true,
+          },
+        );
+        // A download must not keep a Pi that is done from exiting, and must
+        // outlive it: Windows kills a child that is not detached when Pi
+        // exits. The download then completes for the next run.
+        child.unref();
+        // A pipe is a Socket, which Node types as a plain Readable.
+        (child.stdout as Socket).unref();
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (data: string) => (out += data));
+        child.on("error", () => done(undefined));
+        child.on("close", (code) =>
+          done(code === 0 && out.trim() !== "" ? out.trim() : undefined),
+        );
+      } catch {
+        done(undefined);
+      }
+    }).then((path) => {
+      // The bootstrap fails open with no path. The next turn tries again.
+      if (path === undefined) resolving = undefined;
+      helper = path;
+      return path;
+    }));
 
   let cwd: string | undefined;
   let warned = false;
@@ -667,6 +740,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     cwd = ctx.cwd;
+    // Started with the session, so the helper is usually ready before the
+    // first turn settles.
+    if (!local) void resolveHelper();
     warn = () => {
       if (warned) return;
       warned = true;
@@ -697,15 +773,16 @@ export default function (pi: ExtensionAPI) {
     clearTimeout(timer);
   });
 
-  register(pi, (_turn, json) => {
-    // The turn is lost, so the user hears about it as for a failed export.
-    if (live >= maxHelpers) {
-      warn?.();
-      return false;
-    }
+  const track = (promise: Promise<void>) => {
+    pending.add(promise);
+    void promise.then(() => pending.delete(promise));
+  };
+
+  /** Starts a detached helper; the promise settles when its envelope is written. */
+  const start = (command: string, json: string): Promise<void> | undefined => {
     let child;
     try {
-      child = spawn(binary, [], {
+      child = spawn(command, [], {
         // The helper resolves the project configuration and the repository
         // from its working directory.
         cwd,
@@ -717,7 +794,7 @@ export default function (pi: ExtensionAPI) {
       });
     } catch {
       warn?.();
-      return false;
+      return undefined;
     }
     live++;
     child.unref();
@@ -728,14 +805,42 @@ export default function (pi: ExtensionAPI) {
       live--;
       if (failed) warn?.();
     };
-    child.on("error", () => end(true));
+    // Node reports a missing or unrunnable helper here, after spawn returned.
+    child.on("error", () => {
+      // The cached helper is gone, so the next turn resolves it again.
+      resolving = undefined;
+      helper = undefined;
+      end(true);
+    });
     child.on("close", (code) => end(code !== 0));
-    const written = new Promise<void>((resolve) => {
+    return new Promise<void>((resolve) => {
       child.stdin.on("error", () => resolve());
       child.stdin.end(json, () => resolve());
     });
-    pending.add(written);
-    void written.then(() => pending.delete(written));
-    return true;
+  };
+
+  register(pi, (_turn, json) => {
+    // The turn is lost, so the user hears about it as for a failed export.
+    if (live >= maxHelpers) {
+      warn?.();
+      return;
+    }
+    const command = local ?? helper;
+    if (command !== undefined) {
+      const written = start(command, json);
+      if (written) track(written);
+      return;
+    }
+    // The helper is still being resolved, for example during the first
+    // download or in a print-mode run whose turn beat it. The turn waits,
+    // counted toward the cap, and a quit waits for it too.
+    live++;
+    track(
+      resolveHelper().then((path) => {
+        live--;
+        if (path === undefined) return warn?.();
+        return start(path, json);
+      }),
+    );
   });
 }

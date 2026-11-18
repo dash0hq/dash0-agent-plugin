@@ -43,8 +43,15 @@ events, so the session-state contracts below do not apply to it.
 
 Pi follows the Amp design. `pi/index.ts` runs in Pi's process and collects one
 user turn, from the prompt until Pi settles. It then spawns `cmd/pi-on-event`
-detached with the turn on stdin. `internal/source/pi` builds the spans. Pi also
-keeps no state on disk between events.
+detached with the turn on stdin: directly when a helper sits next to
+`index.ts`, else the cached release helper. `pi/pi-on-event.sh
+--resolve-binary` (`.ps1` on Windows), the shared fail-open bootstrap,
+downloads and verifies that helper and prints its path, as
+`opencode-v2/index.js` does on Windows. A bootstrap that fails open prints no
+path, so the extension hands a turn off only to a helper it has started.
+The npm package ships no helper, so it always takes the bootstrap.
+`internal/source/pi` builds the spans. Pi also keeps no state on disk between
+events, apart from the cached helper.
 
 ## Package ownership
 

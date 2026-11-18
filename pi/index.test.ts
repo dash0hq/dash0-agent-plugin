@@ -15,11 +15,7 @@ import {
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
-function setup(
-  session = "019a-session",
-  parentSession?: string,
-  handedOff = true,
-) {
+function setup(session = "019a-session", parentSession?: string) {
   const handlers = new Map<string, Handler>();
   const sent: Turn[] = [];
   const encoded: string[] = [];
@@ -29,7 +25,6 @@ function setup(
   register(api, (turn, json) => {
     sent.push(turn);
     encoded.push(json);
-    return handedOff;
   });
   const ctx = {
     sessionManager: {
@@ -534,8 +529,8 @@ test("another extension's subagent tool gives no children", () => {
 });
 
 /** A child session runs one turn, and its parent then reads the child's row. */
-function childThenParent(childHandedOff: boolean) {
-  const child = setup("019a-child", undefined, childHandedOff);
+function childThenParent() {
+  const child = setup("019a-child");
   child.fire("session_start", { reason: "startup" });
   child.fire("before_agent_start", { messageType: "user", prompt: "task" });
   child.fire("agent_settled", { aborted: false });
@@ -561,7 +556,7 @@ function childThenParent(childHandedOff: boolean) {
 // into a foreground child, in the same process. The child then exports its
 // own session, and the parent must not count the same tokens again.
 test("a child that exported itself keeps its agent but not its tokens", () => {
-  const [own, other] = childThenParent(true);
+  const [own, other] = childThenParent();
   expect(own.agent).toBe("delegate");
   expect(own.model).toBeUndefined();
   expect(own.usage).toEqual({
@@ -571,14 +566,6 @@ test("a child that exported itself keeps its agent but not its tokens", () => {
     cache_write: 0,
   });
   expect(other.model).toBe("claude-code/claude-haiku-4-5");
-});
-
-// A child that started but could not hand its turn to a helper, for example
-// at the helper cap, exported nothing. Its tokens then stay with the parent.
-test("a child whose export did not start keeps its tokens in the parent", () => {
-  const [own] = childThenParent(false);
-  expect(own.model).toBe("claude-code/claude-haiku-4-5");
-  expect(own.usage.output).toBe(460);
 });
 
 // The helper drops a part count that is larger than its total. The bridge

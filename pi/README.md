@@ -7,10 +7,11 @@ does not wrap the `pi` command.
 ## How it works
 
 `index.ts` listens to Pi's extension events. It collects one user turn and
-gives it to `pi-on-event`, a Go helper next to `index.ts`. The helper builds the
-spans with the shared `internal/otlp` builders and sends them. This is the same
-design as the [Amp plugin](../amp/README.md): there is no hook, no bootstrap
-and no state on disk between turns.
+gives it to `pi-on-event`, a Go helper. The helper builds the spans with the
+shared `internal/otlp` builders and sends them. This is the same design as the
+[Amp plugin](../amp/README.md): there is no hook and no state on disk between
+turns, apart from the cached helper. The helper comes from the GitHub release, through a bootstrap that
+caches it, or from a build next to `index.ts`. See [Install](#install).
 
 | Pi event                          | Use                                                                          |
 | --------------------------------- | ---------------------------------------------------------------------------- |
@@ -28,10 +29,45 @@ The extension starts the helper detached and does not wait for it. A turn
 never waits for an export. When the export fails, the extension shows
 `dash0: telemetry unavailable` one time per session.
 
+## Install
+
+```sh
+pi install npm:@dash0/agent-plugin-pi
+```
+
+Pi installs the package from npm and adds it to `packages` in
+`~/.pi/agent/settings.json`. Add `-l` to install it for the current project
+only, in `.pi/settings.json`. To try it for one run without installing, use
+`pi -e npm:@dash0/agent-plugin-pi`.
+
+Then, in a Pi session, run `/skill:dash0-configure`. The skill ships with the
+package and writes the OTLP URL, token and options to
+`~/.pi/dash0-agent-plugin.local.md`. No reload is needed: the helper reads the
+file on every turn.
+
+The package holds `index.ts`, the `dash0-configure` skill and a bootstrap, but
+no binary. When a session starts, the extension runs the bootstrap
+(`pi-on-event.sh`, or `pi-on-event.ps1` on Windows). The first time, it
+downloads `pi-on-event-<os>-<arch>` for the package's version from the GitHub
+release, verifies it against the release's `checksums.txt`, and caches it.
+The bootstrap only prints the helper's path; the extension then starts the
+helper directly for each turn. The cache is `$PI_PLUGIN_DATA/bin`, else
+`$DASH0_PLUGIN_DATA/bin`, else `$XDG_STATE_HOME/dash0-agent-plugin/pi/bin`,
+else `~/.local/state/dash0-agent-plugin/pi/bin`.
+
+A turn that settles before the helper is ready, for example during the first
+download, waits for it. When the download fails, that turn is not exported,
+Pi shows `dash0: telemetry unavailable`, and the next turn tries again. When
+Pi exits within 2 seconds of a turn that is still waiting, for example in print mode during the first download, that turn
+is lost. The download outlives Pi, so the next run exports.
+
+`pi update --extensions` moves an unpinned install to the newest version. A
+new version downloads its own helper in its first session.
+
 ## Install from source
 
-Releases build `pi-on-event-<os>-<arch>` from the next version on. There is no
-installer or Pi package yet. Until then, build the helper next to `index.ts`:
+Build the helper next to `index.ts`. A helper there takes precedence over the
+bootstrap, so a local build never downloads a release:
 
 ```sh
 go build -o pi/pi-on-event ./cmd/pi-on-event
@@ -40,12 +76,20 @@ go build -o pi/pi-on-event ./cmd/pi-on-event
 Then load the extension in one of these ways:
 
 - For one run: `pi -e /path/to/dash0-agent-plugin/pi/index.ts`
-- For all runs: add the `pi` directory to `extensions` in the `settings.json`
-  of your Pi agent directory, or run `pi install /path/to/dash0-agent-plugin/pi`.
-  The `pi` field in `package.json` names `index.ts` as the entry point.
+- For all runs: run `pi install /path/to/dash0-agent-plugin/pi`, or add the
+  `pi` directory to `extensions` in the `settings.json` of your Pi agent
+  directory. The `pi` field in `package.json` names `index.ts` as the
+  extension and `skills` as the skill directory.
 
 `index.ts` looks for `pi-on-event-<os>-<arch>` first, then for `pi-on-event`.
-On Windows, both names end in `.exe`.
+On Windows, both names end in `.exe`. When it finds neither, it runs the
+bootstrap.
+
+## Uninstall
+
+Run `pi remove npm:@dash0/agent-plugin-pi` (add `-l` for a project install).
+Remove `~/.pi/dash0-agent-plugin.local.md` if you no longer need its settings,
+and the helper cache above.
 
 ## Configure
 
@@ -178,9 +222,9 @@ children too, with the pi-subagents setting in Pi's `settings.json`:
 
 The child then exports its own session, as a background child does. The
 parent still sends the `invoke_agent` span, but without a model or tokens, so
-the child's tokens are counted one time. When the child could not start its
-helper, the parent keeps the child's model and tokens. A helper that starts
-and then fails loses the child's turn, as it would for any session.
+the child's tokens are counted one time. As in the OpenCode plugin, the child
+reports its own tokens: when its helper fails, that turn is lost, as it would
+be for any session.
 
 ## Limits
 

@@ -5,8 +5,10 @@ import { expect, onTestFinished, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -232,6 +234,139 @@ test("a missing helper or a failing export never throws into Pi", async () => {
   expect(notices).toHaveLength(1);
 });
 
+// The npm package ships index.ts and the bootstraps, no helper. The extension
+// asks the bootstrap for the helper's path and runs the helper itself. A
+// bootstrap that fails open prints no path, so the turn is not exported.
+test.skipIf(process.platform === "win32")(
+  "without a local helper the extension runs the helper the bootstrap resolves",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    copyFileSync(
+      fileURLToPath(new URL("./pi-on-event.sh", import.meta.url)),
+      join(dir, "pi-on-event.sh"),
+    );
+    isolate(home);
+    const data = join(dir, "data");
+    process.env.PI_PLUGIN_DATA = data;
+    // A download that fails, without the network.
+    const bin = join(dir, "fake-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "curl"), "#!/bin/sh\nexit 22\n", { mode: 0o755 });
+    process.env.PATH = `${bin}:${process.env.PATH}`;
+    const version = /^VERSION="(.+)"$/m.exec(
+      readFileSync(join(dir, "pi-on-event.sh"), "utf8"),
+    )![1];
+    const os = process.platform;
+    const arch = process.arch === "x64" ? "amd64" : process.arch;
+    const received = join(dir, "received.json");
+
+    const { fire, notices } = await load(dir);
+    // The turn waits for the bootstrap, which fails open with exit 0 and no
+    // path: no export, and the notice.
+    await turn(fire);
+    for (let i = 0; i < 100 && notices.length === 0; i++) await Bun.sleep(20);
+    expect(notices).toEqual(["dash0: telemetry unavailable"]);
+
+    // A cached helper, as a download leaves it. The next turn resolves it.
+    mkdirSync(join(data, "bin"), { recursive: true });
+    writeFileSync(
+      join(data, "bin", `pi-on-event-${version}-${os}-${arch}`),
+      `#!/bin/sh\ncat >"${received}.tmp" && mv "${received}.tmp" "${received}"\n`,
+      { mode: 0o755 },
+    );
+    await turn(fire);
+    await fire("session_shutdown", { reason: "quit" });
+    for (let i = 0; i < 100 && !existsSync(received); i++) await Bun.sleep(50);
+
+    expect(JSON.parse(readFileSync(received, "utf8")).session_id).toBe(
+      "019a-transport",
+    );
+  },
+);
+
+// On Windows, PowerShell only resolves the helper; the extension spawns the
+// helper itself, so the envelope's bytes reach it unchanged. Runs the Windows
+// branch on a POSIX host, with a stand-in for System32's powershell.exe.
+test.skipIf(process.platform === "win32")(
+  "on Windows the bootstrap resolves the helper and the extension runs it",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    isolate(home);
+    const received = join(dir, "received.json");
+    const helper = join(dir, "cache", "pi-on-event.exe");
+    mkdirSync(join(dir, "cache"));
+    writeFileSync(
+      helper,
+      `#!/bin/sh\ncat >"${received}.tmp" && mv "${received}.tmp" "${received}"\n`,
+      { mode: 0o755 },
+    );
+    const system = join(dir, "System32", "WindowsPowerShell", "v1.0");
+    mkdirSync(system, { recursive: true });
+    const calls = join(dir, "powershell-args");
+    writeFileSync(
+      join(system, "powershell.exe"),
+      // Fails open with no path the first time, as on a failed download.
+      `#!/bin/sh\necho "$@" >>"${calls}"\n[ -e "${calls}.ok" ] && echo "${helper}"\ntouch "${calls}.ok"\n`,
+      { mode: 0o755 },
+    );
+    process.env.SystemRoot = dir;
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    let loaded;
+    try {
+      loaded = await load(dir);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+    const { fire, notices } = loaded;
+    const resolutions = () =>
+      existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : [];
+    const resolved = async (n: number) => {
+      for (let i = 0; i < 100 && resolutions().length < n; i++)
+        await Bun.sleep(20);
+      // The resolver has written its line; let its output and exit land.
+      await Bun.sleep(150);
+    };
+
+    // The turn waits for the first resolution, which prints no path, as on a
+    // failed download. The turn is not exported, and the user gets the
+    // notice.
+    await turn(fire);
+    for (let i = 0; i < 100 && notices.length === 0; i++) await Bun.sleep(20);
+    expect(notices).toEqual(["dash0: telemetry unavailable"]);
+    expect(existsSync(received)).toBe(false);
+
+    // The failed resolution is retried, and the next turn reaches the helper.
+    await resolved(1);
+    await fire("session_start", { reason: "startup" });
+    await resolved(2);
+    await turn(fire);
+    for (let i = 0; i < 100 && !existsSync(received); i++) await Bun.sleep(50);
+    const envelope = JSON.parse(readFileSync(received, "utf8"));
+    expect(envelope.session_id).toBe("019a-transport");
+    expect(resolutions()).toEqual([
+      `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${join(dir, "pi-on-event.ps1")} --resolve-binary`,
+      `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${join(dir, "pi-on-event.ps1")} --resolve-binary`,
+    ]);
+
+    // A resolved path is kept for later turns.
+    rmSync(received);
+    await turn(fire);
+    for (let i = 0; i < 100 && !existsSync(received); i++) await Bun.sleep(50);
+    expect(existsSync(received)).toBe(true);
+    expect(resolutions()).toHaveLength(2);
+    await fire("session_shutdown", { reason: "quit" });
+  },
+);
+
 // The extension caps detached helpers. A turn over the cap is not exported,
 // so the user gets the same notice as for a failed export.
 test.skipIf(process.platform === "win32")(
@@ -287,6 +422,80 @@ test("a failing export after the session ended does not crash Pi", async () => {
   expect(reads).toBe(1);
   expect(crashes).toEqual([]);
 });
+
+// A turn that waited for the helper is written after the quit began. The
+// quit still waits for that write, or print mode exits mid-envelope.
+test.skipIf(process.platform === "win32")(
+  "a quit waits for the envelope of a turn that waited for its helper",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    isolate(home);
+    // A helper that reads only after a while, so an envelope larger than the
+    // pipe buffer stays pending.
+    const helper = join(dir, "helper");
+    const received = join(dir, "received.json");
+    writeFileSync(
+      helper,
+      `#!/bin/sh\nsleep 1\ncat >"${received}.tmp" && mv "${received}.tmp" "${received}"\n`,
+      { mode: 0o755 },
+    );
+    // A bootstrap that resolves it after a short download.
+    writeFileSync(join(dir, "pi-on-event.sh"), `sleep 0.3\necho "${helper}"\n`);
+
+    const { fire } = await load(dir);
+    await fire("session_start", { reason: "startup" });
+    await fire("before_agent_start", { messageType: "user", prompt: "x" });
+    for (let i = 0; i < 16; i++) {
+      await fire("tool_execution_start", {
+        toolCallId: `t${i}`,
+        toolName: "bash",
+        args: { command: "x".repeat(16_000) },
+      });
+      await fire("tool_execution_end", {
+        toolCallId: `t${i}`,
+        toolName: "bash",
+      });
+    }
+    await fire("agent_settled", { aborted: false });
+    const started = Date.now();
+    await fire("session_shutdown", { reason: "quit" });
+    // Resolution, then the helper's delay before it reads. The quit ended
+    // because the write did, not because its 2-second grace ran out.
+    const waited = Date.now() - started;
+    expect(waited).toBeGreaterThanOrEqual(1100);
+    expect(waited).toBeLessThan(1900);
+    for (let i = 0; i < 40 && !existsSync(received); i++) await Bun.sleep(25);
+    expect(JSON.parse(readFileSync(received, "utf8")).session_id).toBe(
+      "019a-transport",
+    );
+  },
+);
+
+// A turn that waits for its helper holds a helper slot, so a stuck download
+// cannot queue turns without bound. The turn over the cap is dropped.
+test.skipIf(process.platform === "win32")(
+  "turns waiting for the helper count toward the helper cap",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dash0-pi-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const home = join(dir, "home");
+    mkdirSync(home);
+    install(dir);
+    isolate(home);
+    // A bootstrap that does not finish while the test runs.
+    writeFileSync(join(dir, "pi-on-event.sh"), "exec sleep 5\n");
+
+    const { fire, notices } = await load(dir);
+    for (let i = 0; i < 16; i++) await turn(fire);
+    expect(notices).toEqual([]);
+    await turn(fire);
+    expect(notices).toEqual(["dash0: telemetry unavailable"]);
+  },
+);
 
 // Only a quit ends the Pi process. A session switch, fork or reload must not
 // wait for a helper that is slow to read its envelope.

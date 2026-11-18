@@ -1,16 +1,41 @@
 {
-  "name": "dash0-pi-extension",
-  "private": true,
+  "name": "@dash0/agent-plugin-pi",
+  "version": "0.1.32",
+  "description": "Sends every Pi turn, with its model calls, tools and tokens, to Dash0 as OpenTelemetry spans.",
   "type": "module",
+  "keywords": [
+    "pi-package",
+    "dash0",
+    "opentelemetry"
+  ],
   "pi": {
     "extensions": [
       "./index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
+  },
+  "files": [
+    "index.ts",
+    "pi-on-event.sh",
+    "pi-on-event.ps1",
+    "skills/",
+    "README.md"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dash0hq/dash0-agent-plugin.git",
+    "directory": "pi"
   },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "prettier --check ."
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.5.0",

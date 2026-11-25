@@ -1,6 +1,6 @@
 {
   "name": "@dash0/agent-plugin-pi",
-  "version": "0.1.33",
+  "version": "0.1.34",
   "description": "Sends every Pi turn, with its model calls, tools and tokens, to Dash0 as OpenTelemetry spans.",
   "type": "module",
   "keywords": [

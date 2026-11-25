@@ -21,7 +21,7 @@
 set -u
 
 AGENT="pi"
-VERSION="0.1.33"
+VERSION="0.1.34"
 
 # Where the downloaded binary lives. Mirrors the per-source scratch root layout
 # from internal/harness so a user can clean up the whole tree at once.
